@@ -35,17 +35,15 @@ static char* str_tolower_dup(const char* src) {
 typedef struct MangleType {
     int kind;
     char *type_id;
-    int real_size;
 } MangleType;
 
-static MangleType *create_mangle_type(int kind, const char *type_id, int real_size)
+static MangleType *create_mangle_type(int kind, const char *type_id)
 {
     MangleType *mt = (MangleType *)malloc(sizeof(MangleType));
     if (mt == NULL)
         return NULL;
     mt->kind = kind;
     mt->type_id = type_id != NULL ? strdup(type_id) : NULL;
-    mt->real_size = real_size;
     return mt;
 }
 
@@ -73,26 +71,6 @@ static const char *type_ref_base_name_or_id(const TypeRef *ref, const char *fall
 {
     const char *base = type_ref_base_name(ref);
     return base != NULL ? base : fallback;
-}
-
-static int normalize_real_mangle_size(long long size)
-{
-    if (size <= 4)
-        return 4;
-    return 8;
-}
-
-static int real_mangle_size_from_type_name(const char *type_name)
-{
-    if (type_name == NULL)
-        return 0;
-    if (strcasecmp(type_name, "Single") == 0)
-        return 4;
-    if (strcasecmp(type_name, "Real") == 0 ||
-        strcasecmp(type_name, "Double") == 0 ||
-        strcasecmp(type_name, "Extended") == 0)
-        return 8;
-    return 0;
 }
 
 static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
@@ -394,7 +372,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
         Tree_t* decl_tree = (Tree_t*)arg_cur->cur;
         enum VarType resolved_type = HASHVAR_UNTYPED; // Default to untyped
         const char *record_type_id = NULL;
-        int real_size = 0;
         ListNode_t* ids;
 
         if (decl_tree->type == TREE_VAR_DECL) {
@@ -451,8 +428,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
                     type_ref_base_name_or_id(type_ref, type_id));
-                real_size = real_mangle_size_from_type_name(
-                    type_ref_base_name_or_id(type_ref, type_id));
                 
                 // If not a built-in type, look it up in the symbol table
                 if (resolved_type == HASHVAR_UNTYPED) {
@@ -487,13 +462,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                             {
                                 record_type_id = type_node->type->info.points_to->info.record_info->type_id;
                             }
-                        }
-                        if (resolved_type == HASHVAR_REAL && real_size == 0 &&
-                            type_node->type != NULL)
-                        {
-                            long long size = kgpc_type_sizeof(type_node->type);
-                            if (size > 0)
-                                real_size = normalize_real_mangle_size(size);
                         }
                     }
                 }
@@ -563,7 +531,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
 
         ListNode_t* id_cur = ids;
         while (id_cur != NULL) {
-            MangleType *mt = create_mangle_type(resolved_type, record_type_id, real_size);
+            MangleType *mt = create_mangle_type(resolved_type, record_type_id);
             assert(mt != NULL);
             if (type_list == NULL) {
                 type_list = CreateListNode(mt, LIST_UNSPECIFIED);
@@ -664,12 +632,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
                 case HASHVAR_LONGINT: type_suffix = "_li"; break;
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
-                case HASHVAR_REAL:
-                    if (mt != NULL && mt->real_size == 4)
-                        type_suffix = "_r4";
-                    else
-                        type_suffix = "_r";
-                    break;
+                case HASHVAR_REAL:    type_suffix = "_r"; break;
                 case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
                 case HASHVAR_SHORTSTRING: type_suffix = "_ss"; break; // ShortString
                 case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
@@ -723,7 +686,6 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
         struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
         enum VarType resolved_type = HASHVAR_UNTYPED;
         const char *record_type_id = NULL;
-        int real_size = 0;
         if (arg_expr != NULL && arg_expr->type == EXPR_RECORD_CONSTRUCTOR)
         {
             resolved_type = HASHVAR_RECORD;
@@ -800,12 +762,6 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 }
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
-                if (resolved_type == HASHVAR_REAL)
-                {
-                    long long size = kgpc_type_sizeof(kgpc_type);
-                    if (size > 0)
-                        real_size = normalize_real_mangle_size(size);
-                }
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
@@ -920,7 +876,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
             }
         }
 
-        MangleType *mt = create_mangle_type(resolved_type, record_type_id, real_size);
+        MangleType *mt = create_mangle_type(resolved_type, record_type_id);
         assert(mt != NULL);
         if (type_list == NULL) {
             type_list = CreateListNode(mt, LIST_UNSPECIFIED);

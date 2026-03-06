@@ -2908,8 +2908,6 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
-    if (ret > 0 && stmt != NULL && getenv("KGPC_FPC_RTL") != NULL && stmt->line_num <= 0)
-        ret = 0;
     if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
     {
         fprintf(stderr,
@@ -2923,8 +2921,6 @@ int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
-    if (ret > 0 && stmt != NULL && getenv("KGPC_FPC_RTL") != NULL && stmt->line_num <= 0)
-        ret = 0;
     if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
     {
         fprintf(stderr,
@@ -5770,8 +5766,7 @@ skip_type_receiver_rewrite:
                                 int formal_type = resolve_param_type(formal_decl, symtab);
                                 int actual_type = UNKNOWN_TYPE;
                                 semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
-                                if (formal_type != UNKNOWN_TYPE && formal_type != BUILTIN_ANY_TYPE &&
-                                    actual_type != UNKNOWN_TYPE && actual_type != BUILTIN_ANY_TYPE &&
+                                if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
                                     formal_type != actual_type)
                                 {
                                     if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||

@@ -33,103 +33,6 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
-static struct RecordType *codegen_stmt_lookup_record_type_for_class(SymTab_t *symtab,
-    const char *class_name)
-{
-    if (symtab == NULL || class_name == NULL)
-        return NULL;
-
-    HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, (char *)class_name) < 0 || node == NULL || node->type == NULL)
-        return NULL;
-
-    if (node->type->kind == TYPE_KIND_RECORD)
-        return node->type->info.record_info;
-
-    if (node->type->kind == TYPE_KIND_POINTER &&
-        node->type->info.points_to != NULL &&
-        node->type->info.points_to->kind == TYPE_KIND_RECORD)
-        return node->type->info.points_to->info.record_info;
-
-    return NULL;
-}
-
-static int codegen_stmt_lookup_virtual_vmt_index(SymTab_t *symtab,
-    const char *class_name, const char *method_name, int param_count)
-{
-    struct RecordType *record =
-        codegen_stmt_lookup_record_type_for_class(symtab, class_name);
-    if (record == NULL || record->methods == NULL || method_name == NULL)
-        return -1;
-
-    for (ListNode_t *me = record->methods; me != NULL; me = me->next)
-    {
-        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
-        if (mi == NULL || mi->name == NULL)
-            continue;
-        if (!(mi->is_virtual || mi->is_override) || mi->vmt_index < 0)
-            continue;
-        if (strcasecmp(mi->name, method_name) != 0)
-            continue;
-        if (param_count >= 0 && mi->param_count >= 0 && mi->param_count != param_count)
-            continue;
-        return mi->vmt_index;
-    }
-
-    return -1;
-}
-
-static int asm_block_looks_intel(const char *text)
-{
-    if (text == NULL)
-        return 0;
-    if (strstr(text, " ptr") != NULL || strstr(text, "ptr ") != NULL)
-        return 1;
-    if (strstr(text, "[") != NULL && strstr(text, "]") != NULL)
-        return 1;
-    return 0;
-}
-
-static const char *asm_reg_for_syntax(const char *reg, int intel, char *buf, size_t buf_len)
-{
-    if (reg == NULL)
-        return NULL;
-    if (!intel)
-        return reg;
-    if (reg[0] == '%')
-        reg++;
-    snprintf(buf, buf_len, "%s", reg);
-    return buf;
-}
-
-static int asm_ident_in_brackets(const char *text, size_t start, size_t end)
-{
-    if (text == NULL || end <= start)
-        return 0;
-    size_t i = start;
-    while (i > 0 && isspace((unsigned char)text[i - 1]))
-        i--;
-    if (i == 0 || text[i - 1] != '[')
-        return 0;
-    size_t j = end;
-    while (text[j] != '\0' && isspace((unsigned char)text[j]))
-        j++;
-    return text[j] == ']';
-}
-
-static const AsmParamMap *codegen_find_asm_param(const CodeGenContext *ctx, const char *name)
-{
-    if (ctx == NULL || name == NULL)
-        return NULL;
-    for (int i = 0; i < ctx->asm_param_count; i++)
-    {
-        if (ctx->asm_params[i].name != NULL &&
-            pascal_identifier_equals(ctx->asm_params[i].name, name))
-            return &ctx->asm_params[i];
-    }
-    return NULL;
-}
-
 static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label);
 static void codegen_pop_loop(CodeGenContext *ctx);
 static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
@@ -1724,11 +1627,9 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
         }
         if (inner != NULL &&
-            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE ||
-             target_type == SHORTSTRING_TYPE || target_type == POINTER_TYPE || target_type == SET_TYPE))
+            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE ||
+             target_type == POINTER_TYPE))
         {
-            /* Reinterpret casts to aggregate/pointer/set preserve storage identity.
-             * Taking their address must forward to the underlying lvalue. */
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
             goto cleanup;
         }
@@ -3172,18 +3073,6 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
             if (call_returns_record || is_constructor)
             {
-                if (getenv("KGPC_DEBUG_CTOR_ALLOC") != NULL)
-                {
-                    int argn = (src_expr != NULL && src_expr->expr_data.function_call_data.args_expr != NULL) ?
-                        ListLength(src_expr->expr_data.function_call_data.args_expr) : 0;
-                    const char *dest_id = (dest_expr != NULL && dest_expr->type == EXPR_VAR_ID) ?
-                        dest_expr->expr_data.id : "<non-var>";
-                    fprintf(stderr,
-                        "[ctor-alloc] current=%s func=%s is_ctor=%d call_returns_record=%d dest=%s argn=%d\n",
-                        ctx != NULL && ctx->current_subprogram_id != NULL ? ctx->current_subprogram_id : "<none>",
-                        func_mangled_name != NULL ? func_mangled_name : "<null>",
-                        is_constructor, call_returns_record, dest_id != NULL ? dest_id : "<null>", argn);
-                }
                 /* For constructors, allocate heap memory and initialize VMT */
                 Register_t *constructor_instance_reg = NULL;
                 if (is_constructor)
@@ -4448,7 +4337,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         size_t sub_alloc = clen * 3 + 4096;
                         char *substituted = malloc(sub_alloc);
                         if (substituted != NULL) {
-                            int asm_is_intel = asm_block_looks_intel(cleaned);
                             size_t si = 0, sj = 0;
                             while (si < clen && sj < sub_alloc - 64) {
                                 if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
@@ -4465,55 +4353,31 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                     if (id_len < sizeof(id_buf)) {
                                         memcpy(id_buf, cleaned + id_start, id_len);
                                         id_buf[id_len] = '\0';
-                                        const AsmParamMap *ap = codegen_find_asm_param(ctx, id_buf);
-
-                                        /* Prefer ABI registers for nostackframe asm, or for reference params. */
-                                        if (ap != NULL && (ctx->is_nostackframe || ap->is_reference)) {
-                                            const char *reg = NULL;
-                                            if (ap->gpr_index >= 0)
-                                                reg = current_arg_reg64(ap->gpr_index);
-                                            else if (ap->sse_index >= 0)
-                                                reg = current_arg_reg_xmm(ap->sse_index);
-                                            if (reg != NULL) {
-                                                char reg_buf[32];
-                                                const char *render = asm_reg_for_syntax(reg, asm_is_intel, reg_buf, sizeof(reg_buf));
-                                                int n = snprintf(substituted + sj, sub_alloc - sj, "%s", render);
-                                                sj += (n > 0 ? (size_t)n : 0);
-                                                did_substitute = 1;
+                                        /* Try nostackframe parameter substitution first */
+                                        if (ctx->is_nostackframe && ctx->asm_param_count > 0) {
+                                            for (int pi = 0; pi < ctx->asm_param_count; pi++) {
+                                                if (ctx->asm_params[pi].name != NULL &&
+                                                    strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
+                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    if (reg != NULL) {
+                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
+                                                        sj += (n > 0 ? (size_t)n : 0);
+                                                        did_substitute = 1;
+                                                    }
+                                                    break;
+                                                }
                                             }
                                         }
-
-                                        /* Try resolving local or global variables by name. */
+                                        /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
                                             StackNode_t *var = find_label(id_buf);
-                                            if (var != NULL) {
-                                                if (var->is_static && var->static_label != NULL) {
-                                                    const char *label = var->static_label;
-                                                    size_t llen = strlen(label);
-                                                    if (sj + llen < sub_alloc - 64) {
-                                                        memcpy(substituted + sj, label, llen);
-                                                        sj += llen;
-                                                        did_substitute = 1;
-                                                    }
-                                                } else {
-                                                    int in_brackets = asm_is_intel ?
-                                                        asm_ident_in_brackets(cleaned, id_start, id_start + id_len) : 0;
-                                                    if (asm_is_intel) {
-                                                        int n;
-                                                        if (in_brackets)
-                                                            n = snprintf(substituted + sj, sub_alloc - sj,
-                                                                "rbp-%d", var->offset);
-                                                        else
-                                                            n = snprintf(substituted + sj, sub_alloc - sj,
-                                                                "[rbp-%d]", var->offset);
-                                                        sj += (n > 0 ? (size_t)n : 0);
-                                                        did_substitute = 1;
-                                                    } else {
-                                                        int n = snprintf(substituted + sj, sub_alloc - sj,
-                                                            "-%d(%%rbp)", var->offset);
-                                                        sj += (n > 0 ? (size_t)n : 0);
-                                                        did_substitute = 1;
-                                                    }
+                                            if (var != NULL && var->is_static && var->static_label != NULL) {
+                                                const char *label = var->static_label;
+                                                size_t llen = strlen(label);
+                                                if (sj + llen < sub_alloc - 64) {
+                                                    memcpy(substituted + sj, label, llen);
+                                                    sj += llen;
+                                                    did_substitute = 1;
                                                 }
                                             }
                                         }
@@ -4527,27 +4391,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                 }
                             }
                             substituted[sj] = '\0';
-                            if (asm_block_looks_intel(substituted))
-                            {
-                                size_t wrap_len = strlen(substituted) + 64;
-                                char *wrapped = malloc(wrap_len);
-                                if (wrapped != NULL)
-                                {
-                                    snprintf(wrapped, wrap_len,
-                                        "\t.intel_syntax noprefix\n%s\n\t.att_syntax\n",
-                                        substituted);
-                                    inst_list = add_inst(inst_list, wrapped);
-                                    free(wrapped);
-                                }
-                                else
-                                {
-                                    inst_list = add_inst(inst_list, substituted);
-                                }
-                            }
-                            else
-                            {
-                                inst_list = add_inst(inst_list, substituted);
-                            }
+                            inst_list = add_inst(inst_list, substituted);
                             free(substituted);
                         } else {
                             inst_list = add_inst(inst_list, cleaned);
@@ -7699,14 +7543,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         var_expr = var_expr->expr_data.typecast_data.expr;
     }
 
-    if (getenv("KGPC_FPC_RTL") != NULL && stmt->line_num <= 0 &&
-        (var_expr == NULL || assign_expr == NULL))
-    {
-        /* Ignore malformed synthetic RTL assignments with no source location.
-         * Keep valid compiler-generated assignments (e.g. FOR-loop updates). */
-        return inst_list;
-    }
-
     if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
     {
         fprintf(stderr, "[codegen] var_assignment: var_expr->type=%d, assign_expr->type=%d\n",
@@ -9363,110 +9199,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             codegen_end_expression(ctx);
         }
 
-        int emit_virtual_call = stmt->stmt_data.procedure_call_data.is_virtual_call &&
-            stmt->stmt_data.procedure_call_data.vmt_index >= 0;
-        int virtual_vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
-        int is_class_method_call = stmt->stmt_data.procedure_call_data.is_class_method_call;
-
-        /* Guard against stale semcheck virtual-call flags on non-virtual overload calls.
-         * Re-confirm VMT dispatch eligibility from class method metadata. */
-        if (emit_virtual_call && ctx != NULL && ctx->symtab != NULL)
-        {
-            int confirmed_vmt_index = -1;
-            int has_method_metadata = 0;
-
-            if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
-                call_kgpc_type->info.proc_info.definition != NULL)
-            {
-                Tree_t *def = call_kgpc_type->info.proc_info.definition;
-                const char *owner_class = def->tree_data.subprogram_data.owner_class;
-                const char *method_name = def->tree_data.subprogram_data.method_name;
-                if (owner_class != NULL && method_name != NULL)
-                {
-                    has_method_metadata = 1;
-                    int param_count = ListLength(call_kgpc_type->info.proc_info.params);
-                    if (!def->tree_data.subprogram_data.is_static_method && param_count > 0)
-                        param_count -= 1;
-                    confirmed_vmt_index = codegen_stmt_lookup_virtual_vmt_index(ctx->symtab,
-                        owner_class, method_name, param_count);
-                }
-            }
-
-            if (!has_method_metadata)
-            {
-                const char *lookup_name = proc_name != NULL ? proc_name : unmangled_name;
-                if (lookup_name != NULL)
-                {
-                    HashNode_t *callee_node = NULL;
-                    if (FindIdent(&callee_node, ctx->symtab, lookup_name) == 0 &&
-                        callee_node != NULL && callee_node->owner_class != NULL &&
-                        callee_node->method_name != NULL)
-                    {
-                        has_method_metadata = 1;
-                        int param_count = -1;
-                        if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
-                        {
-                            param_count = ListLength(call_kgpc_type->info.proc_info.params);
-                            if (!from_cparser_is_method_static(callee_node->owner_class,
-                                    callee_node->method_name) && param_count > 0)
-                                param_count -= 1;
-                        }
-
-                        confirmed_vmt_index = codegen_stmt_lookup_virtual_vmt_index(ctx->symtab,
-                            callee_node->owner_class, callee_node->method_name, param_count);
-                    }
-                }
-            }
-
-            if (has_method_metadata)
-            {
-                if (getenv("KGPC_DEBUG_VCALL_GUARD") != NULL)
-                {
-                    fprintf(stderr,
-                        "[vcall-guard-stmt] proc=%s id=%s sem_vmt=%d confirmed=%d has_meta=%d\n",
-                        proc_name != NULL ? proc_name : "<null>",
-                        unmangled_name != NULL ? unmangled_name : "<null>",
-                        stmt->stmt_data.procedure_call_data.vmt_index,
-                        confirmed_vmt_index,
-                        has_method_metadata);
-                }
-                if (confirmed_vmt_index < 0)
-                {
-                    emit_virtual_call = 0;
-                }
-                else
-                {
-                    virtual_vmt_index = confirmed_vmt_index;
-                }
-            }
-        }
-
-        if (emit_virtual_call)
-        {
-            const char *self_reg = current_arg_reg64(0);
-            if (self_reg != NULL)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
-                inst_list = add_inst(inst_list, buffer);
-                if (!is_class_method_call)
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n",
-                    virtual_vmt_index * 8);
-                inst_list = add_inst(inst_list, buffer);
-                CallerSaveState caller_state;
-                regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
-                snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
-                inst_list = add_inst(inst_list, buffer);
-                regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
-                inst_list = codegen_cleanup_call_stack(inst_list, ctx);
-                return inst_list;
-            }
-        }
-
-        inst_list = codegen_vect_reg(inst_list, 0);
+     inst_list = codegen_vect_reg(inst_list, 0);
         CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);

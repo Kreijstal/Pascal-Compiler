@@ -11157,19 +11157,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 632));
     add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 632));
 
-    {
-        const char *fpc_rtl_env = getenv("KGPC_FPC_RTL");
-        int fpc_rtl_mode = 0;
-        if (fpc_rtl_env != NULL)
-        {
-            if (strcmp(fpc_rtl_env, "1") == 0 ||
-                pascal_identifier_equals(fpc_rtl_env, "true") ||
-                pascal_identifier_equals(fpc_rtl_env, "yes"))
-                fpc_rtl_mode = 1;
-        }
-        if (!fpc_rtl_mode)
-            AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
-    }
+    AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 
     /* Builtin procedures - procedures have no return type */
     {
@@ -11753,7 +11741,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
     double t0 = 0.0;
-    const char *debug_steps = getenv("KGPC_DEBUG_SEMSTEPS");
     if (SEMCHECK_TIMINGS_ENABLED())
         t0 = semcheck_now_ms();
 
@@ -11773,7 +11760,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     return_val += semcheck_args(symtab, tree->tree_data.program_data.args_char,
       tree->line_num);
     semcheck_timing_step("args", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] args total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
 #endif
@@ -11782,7 +11768,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
     semcheck_timing_step("predeclare types", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] predeclare types total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
@@ -11790,7 +11775,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* Predeclare subprograms so they can be referenced in const initializers */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     semcheck_timing_step("predeclare subprograms", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] predeclare subprograms total=%d\n", return_val);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
@@ -11825,7 +11809,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* Pass 1: Imported unit untyped constants */
     return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
     semcheck_timing_step("consts pass1 imported untyped", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] const pass1 total=%d\n", return_val);
 
     /* Pass 2: Imported unit typed constants */
     ListNode_t *unit_typed_consts = collect_typed_const_decls_filtered(symtab,
@@ -11836,12 +11819,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         DestroyList(unit_typed_consts);
     }
     semcheck_timing_step("consts pass2 imported typed", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] const pass2 total=%d\n", return_val);
 
     /* Pass 3: Local untyped constants */
     return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
     semcheck_timing_step("consts pass3 local untyped", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] const pass3 total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
 #endif
@@ -11855,11 +11836,9 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         DestroyList(local_typed_consts);
     }
     semcheck_timing_step("consts pass4 local typed", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] const pass4 total=%d\n", return_val);
 
     return_val += semcheck_type_decls(symtab, tree->tree_data.program_data.type_declaration);
     semcheck_timing_step("type decls", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] type decls total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
@@ -11871,21 +11850,18 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         DestroyList(program_vars);
     }
     semcheck_timing_step("var decls", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] var decls total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
 #endif
 
     return_val += semcheck_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     semcheck_timing_step("subprograms", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] subprograms total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
     semcheck_timing_step("body", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] body total=%d\n", return_val);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
@@ -11902,7 +11878,6 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         }
     }
     semcheck_timing_step("finalization", &t0);
-    if (debug_steps != NULL) fprintf(stderr, "[SEMSTEP] finalization total=%d\n", return_val);
 
     if(optimize_flag() > 0 && return_val == 0)
     {
@@ -13441,34 +13416,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                             if (element_type == NULL)
                             {
-                                const char *missing_id = tree->tree_data.arr_decl_data.type_id;
-                                if (missing_id == NULL && element_type_ref != NULL)
-                                    missing_id = type_ref_base_name(element_type_ref);
-                                /* Allow generic placeholder element types like T/U. */
-                                if (missing_id != NULL &&
-                                    missing_id[0] >= 'A' && missing_id[0] <= 'Z' &&
-                                    missing_id[1] == '\0')
-                                {
-                                    HashNode_t *generic_node = NULL;
-                                    if (FindIdent(&generic_node, symtab, missing_id) == 0 &&
-                                        generic_node != NULL && generic_node->type != NULL)
-                                    {
-                                        element_type = generic_node->type;
-                                        element_type_borrowed = 1;
-                                    }
-                                    else
-                                    {
-                                        /* Use an opaque pointer type for unresolved generic params. */
-                                        element_type = create_primitive_type(POINTER_TYPE);
-                                        element_type_borrowed = 0;
-                                    }
-                                }
-                                if (element_type == NULL)
-                                {
-                                    semcheck_error_with_context("Error on line %d: undefined type %s\n",
-                                        tree->line_num, tree->tree_data.arr_decl_data.type_id);
-                                    return_val++;
-                                }
+                                semcheck_error_with_context("Error on line %d: undefined type %s\n",
+                                    tree->line_num, tree->tree_data.arr_decl_data.type_id);
+                                return_val++;
                             }
                         }
                     }
@@ -14859,11 +14809,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 if (arg_tree->type == TREE_VAR_DECL)
                     type_id = arg_tree->tree_data.var_decl_data.type_id;
                 else if (arg_tree->type == TREE_ARR_DECL)
-                {
                     type_id = arg_tree->tree_data.arr_decl_data.type_id;
-                    if (type_id == NULL && arg_tree->tree_data.arr_decl_data.type_ref != NULL)
-                        type_id = type_ref_base_name(arg_tree->tree_data.arr_decl_data.type_ref);
-                }
                 if (type_id != NULL && type_id[0] >= 'A' && type_id[0] <= 'Z' &&
                     type_id[1] == '\0')
                 {
@@ -15636,17 +15582,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             cur = cur->next;
             continue;
         }
-        {
-            int saved_unit_ctx = semcheck_save_unit_context();
-            if (child != NULL &&
-                child->tree_data.subprogram_data.defined_in_unit &&
-                child->tree_data.subprogram_data.source_unit_index > 0)
-            {
-                semcheck_restore_unit_context(child->tree_data.subprogram_data.source_unit_index);
-            }
-            return_val += semcheck_subprogram(symtab, child, max_scope_lev);
-            semcheck_restore_unit_context(saved_unit_ctx);
-        }
+        return_val += semcheck_subprogram(symtab, child, max_scope_lev);
         /* If child needs a static link, mark parent as having nested children that need links.
          * This is used by codegen to know when to PASS a static link when calling nested functions.
          * We do NOT propagate requires_static_link to parent - the parent only needs to RECEIVE

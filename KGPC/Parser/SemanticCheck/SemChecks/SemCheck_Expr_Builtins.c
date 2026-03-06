@@ -2989,17 +2989,6 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
     }
 
-    if (error_count != 0 && getenv("KGPC_FPC_RTL") != NULL &&
-        arg != NULL && arg->type == EXPR_POINTER_DEREF)
-    {
-        /* FPC RTL generic helpers may dereference placeholder pointer types whose
-         * pointee size cannot be resolved during semantic import. FPC treats these
-         * as pointer-sized slots in this context; fall back to machine pointer size. */
-        error_count = 0;
-        computed_size = 8;
-        size_computed = 1;
-    }
-
     if (error_count == 0)
     {
         if (computed_size < 0)

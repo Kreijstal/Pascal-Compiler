@@ -501,70 +501,55 @@ int semcheck_append_default_args(ListNode_t **args_head, ListNode_t *formal_para
         return 0;
 
     ListNode_t *formal = formal_params;
-    int actual_remaining = ListLength(*args_head);
+    ListNode_t *actual = *args_head;
     ListNode_t *tail = *args_head;
 
     while (tail != NULL && tail->next != NULL)
         tail = tail->next;
 
+    while (formal != NULL && actual != NULL)
+    {
+        formal = formal->next;
+        actual = actual->next;
+    }
+
     while (formal != NULL)
     {
         Tree_t *param_decl = (Tree_t *)formal->cur;
-        int slots = count_param_decl_ids(param_decl);
-        if (slots <= 0)
+        if (!param_has_default_value(param_decl))
+            break;
+
+        struct Expression *default_expr = get_param_default_value(param_decl);
+        if (default_expr == NULL)
         {
-            formal = formal->next;
-            continue;
+            semcheck_error_with_context("Error on line %d, missing default value expression.\n", line_num);
+            return 1;
         }
 
-        for (int slot = 0; slot < slots; ++slot)
+        struct Expression *default_clone = clone_expression(default_expr);
+        if (default_clone == NULL)
         {
-            if (actual_remaining > 0)
-            {
-                actual_remaining--;
-                continue;
-            }
+            semcheck_error_with_context("Error on line %d, failed to clone default argument expression.\n", line_num);
+            return 1;
+        }
 
-            struct Expression *default_clone = NULL;
-            struct Expression *default_expr = get_param_default_value(param_decl);
-            if (default_expr != NULL)
-            {
-                default_clone = clone_expression(default_expr);
-                if (default_clone == NULL)
-                {
-                    semcheck_error_with_context("Error on line %d, failed to clone default argument expression.\n", line_num);
-                    return 1;
-                }
-            }
-            else if (getenv("KGPC_FPC_RTL") != NULL)
-            {
-                /* FPC RTL fallback: synthesize zero for omitted trailing args
-                 * when parser metadata dropped default expressions. */
-                default_clone = mk_inum(line_num, 0);
-            }
-            else
-            {
-                return 0;
-            }
+        ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
+        if (node == NULL)
+        {
+            destroy_expr(default_clone);
+            semcheck_error_with_context("Error on line %d, failed to allocate default argument node.\n", line_num);
+            return 1;
+        }
 
-            ListNode_t *node = CreateListNode(default_clone, LIST_EXPR);
-            if (node == NULL)
-            {
-                destroy_expr(default_clone);
-                semcheck_error_with_context("Error on line %d, failed to allocate default argument node.\n", line_num);
-                return 1;
-            }
-
-            if (*args_head == NULL)
-            {
-                *args_head = node;
-                tail = node;
-            }
-            else
-            {
-                tail->next = node;
-                tail = node;
-            }
+        if (*args_head == NULL)
+        {
+            *args_head = node;
+            tail = node;
+        }
+        else
+        {
+            tail->next = node;
+            tail = node;
         }
 
         formal = formal->next;
@@ -918,19 +903,6 @@ static MatchQuality semcheck_make_quality(MatchQualityKind kind)
     return q;
 }
 
-static int semcheck_real_size_from_kgpc(KgpcType *type)
-{
-    if (type == NULL)
-        return 0;
-    if (type->kind != TYPE_KIND_PRIMITIVE ||
-        type->info.primitive_type_tag != REAL_TYPE)
-        return 0;
-    long long size = kgpc_type_sizeof(type);
-    if (size == 4 || size == 8 || size == 10 || size == 12 || size == 16)
-        return (int)size;
-    return 0;
-}
-
 static MatchQuality semcheck_match_from_rank(int rank)
 {
     if (rank == 0)
@@ -1054,20 +1026,6 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     if (formal_tag == VARIANT_TYPE || actual_tag == VARIANT_TYPE)
         return semcheck_make_quality(MATCH_CONVERSION);
     /* For pointer types, don't return early - need to compare subtypes */
-    if (actual_tag == REAL_TYPE && formal_tag == REAL_TYPE &&
-        actual_kgpc != NULL && formal_kgpc != NULL)
-    {
-        int actual_size = semcheck_real_size_from_kgpc(actual_kgpc);
-        int formal_size = semcheck_real_size_from_kgpc(formal_kgpc);
-        if (actual_size > 0 && formal_size > 0)
-        {
-            if (actual_size == formal_size)
-                return semcheck_make_quality(MATCH_EXACT);
-            if (actual_size < formal_size)
-                return semcheck_make_quality(MATCH_PROMOTION);
-            return semcheck_make_quality(MATCH_CONVERSION);
-        }
-    }
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
         return semcheck_make_quality(MATCH_EXACT);
     /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
@@ -1098,14 +1056,6 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                         struct RecordType *actual_rec = actual_inner->info.record_info;
                         struct RecordType *formal_rec = formal_inner->info.record_info;
                         if (actual_rec == formal_rec)
-                        {
-                            MatchQuality q = semcheck_make_quality(MATCH_EXACT);
-                            q.exact_pointer_subtype = 1;
-                            return q;
-                        }
-                        /* Cached unit imports can materialize the same record as distinct
-                         * RecordType instances; accept deep-equal pointee records as exact. */
-                        if (kgpc_type_equals(actual_inner, formal_inner))
                         {
                             MatchQuality q = semcheck_make_quality(MATCH_EXACT);
                             q.exact_pointer_subtype = 1;
@@ -1706,10 +1656,6 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
     if (overload_candidates == NULL)
         return 1;
 
-    const char *call_id = NULL;
-    if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
-        call_id = call_expr->expr_data.function_call_data.id;
-
     HashNode_t *best_match = NULL;
     MatchQuality *best_qualities = NULL;
     int best_missing = 0;
@@ -1806,18 +1752,11 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             }
         }
 
-        int rtl_unsafefrom_missing_defaults = 0;
-        if (getenv("KGPC_FPC_RTL") != NULL && candidate->id != NULL &&
-            strstr(candidate->id, "UnsafeFrom") != NULL &&
-            given_count < required_params && given_count <= total_params)
-            rtl_unsafefrom_missing_defaults = 1;
-
         int arity_matches = ((given_count >= required_params && given_count <= total_params) ||
             (total_params == 0 && given_count > 0 &&
              candidate->type != NULL &&
              candidate->type->info.proc_info.definition == NULL) ||
-            (candidate->is_varargs && given_count >= required_params) ||
-            rtl_unsafefrom_missing_defaults);
+            (candidate->is_varargs && given_count >= required_params));
         if (!arity_matches && allow_implicit_leading_self)
         {
             int adj_total = total_params - 1;
@@ -2439,40 +2378,6 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                 quality.exact_pointer_subtype = 1;
                         }
                     }
-                }
-
-                if (getenv("KGPC_DEBUG_PROPGET") != NULL && call_id != NULL &&
-                    pascal_identifier_equals(call_id, "PropDataGetProp"))
-                {
-                    const char *formal_id_dbg = semcheck_get_param_type_id(formal_decl);
-                    const char *formal_rec = NULL;
-                    const char *actual_rec = NULL;
-                    int formal_kind = formal_kgpc != NULL ? formal_kgpc->kind : -1;
-                    int actual_kind = arg_kgpc != NULL ? arg_kgpc->kind : -1;
-                    int formal_sub = (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_POINTER)
-                        ? kgpc_type_get_pointer_subtype_tag(formal_kgpc) : -1;
-                    int actual_sub = (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_POINTER)
-                        ? kgpc_type_get_pointer_subtype_tag(arg_kgpc) : -1;
-                    if (formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_POINTER &&
-                        formal_kgpc->info.points_to != NULL &&
-                        formal_kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
-                        formal_kgpc->info.points_to->info.record_info != NULL)
-                        formal_rec = formal_kgpc->info.points_to->info.record_info->type_id;
-                    if (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_POINTER &&
-                        arg_kgpc->info.points_to != NULL &&
-                        arg_kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
-                        arg_kgpc->info.points_to->info.record_info != NULL)
-                        actual_rec = arg_kgpc->info.points_to->info.record_info->type_id;
-                    fprintf(stderr,
-                        "[KGPC_PROPGET] cand=%s arg_idx=%d arg_tag=%d formal_tag=%d formal_id=%s quality=%d int_rank=%d ak=%d fk=%d as=%d fs=%d arec=%s frec=%s\n",
-                        candidate->mangled_id != NULL ? candidate->mangled_id :
-                        (candidate->id != NULL ? candidate->id : "<anon>"),
-                        arg_index, arg_tag, formal_tag,
-                        formal_id_dbg != NULL ? formal_id_dbg : "<null>",
-                        quality.kind, quality.int_promo_rank,
-                        actual_kind, formal_kind, actual_sub, formal_sub,
-                        actual_rec != NULL ? actual_rec : "<null>",
-                        formal_rec != NULL ? formal_rec : "<null>");
                 }
 
                 if (owns_formal && formal_kgpc != NULL)

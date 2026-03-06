@@ -1969,8 +1969,9 @@ void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int 
     codegen_function_header_ex_alias_vis(func_name, ctx, nostackframe, cname_override, 0);
 }
 
-/* Emit the function header. When emit_weak is non-zero, we still emit .globl
- * for portability (no weak symbols). */
+/* Emit the function header. When emit_weak is non-zero, emit .weak instead of
+ * .globl so that the runtime library can provide strong overrides (e.g. for
+ * FPC RTL heap functions that require uninitialised HeapInc). */
 void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak)
 {
     #ifdef DEBUG_CODEGEN
@@ -2299,145 +2300,6 @@ static int codegen_const_symbol_emitted(ListNode_t *emitted_symbols, const char 
     return 0;
 }
 
-static ListNode_t *codegen_emitted_virtual_thunks = NULL;
-
-static int codegen_symtab_has_defined_mangled_proc(SymTab_t *symtab, const char *mangled_id)
-{
-    if (symtab == NULL || mangled_id == NULL)
-        return 0;
-
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next)
-    {
-        HashTable_t *table = (HashTable_t *)scope->cur;
-        if (table == NULL)
-            continue;
-        for (int b = 0; b < TABLE_SIZE; ++b)
-        {
-            for (ListNode_t *node = table->table[b]; node != NULL; node = node->next)
-            {
-                HashNode_t *hn = (HashNode_t *)node->cur;
-                if (hn == NULL || hn->mangled_id == NULL)
-                    continue;
-                if (strcmp(hn->mangled_id, mangled_id) != 0)
-                    continue;
-                if (hn->type != NULL && hn->type->kind == TYPE_KIND_PROCEDURE &&
-                    hn->type->info.proc_info.definition != NULL)
-                    return 1;
-            }
-        }
-    }
-
-    return 0;
-}
-
-
-static struct RecordType *codegen_find_class_record(SymTab_t *symtab, const char *class_name)
-{
-    if (symtab == NULL || class_name == NULL)
-        return NULL;
-
-    HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, class_name) != 0 || node == NULL)
-        return NULL;
-
-    struct RecordType *record = get_record_type_from_node(node);
-    if (record != NULL)
-        return record;
-
-    if (node->type != NULL && node->type->kind == TYPE_KIND_POINTER &&
-        node->type->info.points_to != NULL &&
-        node->type->info.points_to->kind == TYPE_KIND_RECORD)
-        return node->type->info.points_to->info.record_info;
-
-    return NULL;
-}
-
-static int codegen_class_max_vmt_index(SymTab_t *symtab, struct RecordType *record_info)
-{
-    int max_vmt_index = -1;
-    struct RecordType *cur = record_info;
-    int guard = 0;
-
-    while (cur != NULL && guard++ < 512)
-    {
-        for (ListNode_t *node = cur->methods; node != NULL; node = node->next)
-        {
-            struct MethodInfo *method = (struct MethodInfo *)node->cur;
-            if (method == NULL)
-                continue;
-            if (!(method->is_virtual || method->is_override) || method->vmt_index < 12)
-                continue;
-            if (method->vmt_index > max_vmt_index)
-                max_vmt_index = method->vmt_index;
-        }
-
-        if (cur->parent_class_name == NULL)
-            break;
-        cur = codegen_find_class_record(symtab, cur->parent_class_name);
-    }
-
-    return max_vmt_index;
-}
-
-static int codegen_method_signature_matches(const struct MethodInfo *lhs,
-    const struct MethodInfo *rhs)
-{
-    if (lhs == NULL || rhs == NULL)
-        return 0;
-    if (lhs->name == NULL || rhs->name == NULL)
-        return 0;
-    if (strcasecmp(lhs->name, rhs->name) != 0)
-        return 0;
-
-    if (lhs->param_sig != NULL && rhs->param_sig != NULL)
-        return strcmp(lhs->param_sig, rhs->param_sig) == 0;
-
-    return lhs->param_count >= 0 && rhs->param_count >= 0 &&
-        lhs->param_count == rhs->param_count;
-}
-
-static struct MethodInfo *codegen_find_method_for_vmt_slot(SymTab_t *symtab,
-    struct RecordType *record_info, int slot)
-{
-    if (record_info == NULL)
-        return NULL;
-
-    struct MethodInfo *parent_method = NULL;
-    if (record_info->parent_class_name != NULL)
-    {
-        struct RecordType *parent_record =
-            codegen_find_class_record(symtab, record_info->parent_class_name);
-        if (parent_record != NULL)
-            parent_method = codegen_find_method_for_vmt_slot(symtab, parent_record, slot);
-    }
-
-    struct MethodInfo *candidate = NULL;
-    for (ListNode_t *node = record_info->methods; node != NULL; node = node->next)
-    {
-        struct MethodInfo *method = (struct MethodInfo *)node->cur;
-        if (method == NULL || method->vmt_index != slot)
-            continue;
-        if (!(method->is_virtual || method->is_override))
-            continue;
-
-        if (parent_method != NULL)
-        {
-            if (method->is_override &&
-                codegen_method_signature_matches(parent_method, method))
-                return method;
-            continue;
-        }
-
-        if (candidate == NULL)
-            candidate = method;
-    }
-
-    if (parent_method != NULL)
-        return parent_method;
-
-    return candidate;
-}
-
 static void codegen_emit_integer_const_equivs_from_table(CodeGenContext *ctx,
     HashTable_t *table, ListNode_t **emitted_symbols)
 {
@@ -2695,7 +2557,7 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
 }
 
 /* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
-#define MAX_EMITTED_CLASSES 4096
+#define MAX_EMITTED_CLASSES 256
 
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
@@ -2703,20 +2565,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 {
     if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
         return;
-
-    const char *parent_label = record_info->parent_class_name;
-    if (parent_label != NULL && symtab != NULL)
-    {
-        HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, parent_label) >= 0 && parent_node != NULL)
-        {
-            struct RecordType *parent_record = get_record_type_from_node(parent_node);
-            if (parent_record != NULL && parent_record->type_id != NULL)
-                parent_label = parent_record->type_id;
-            else if (parent_node->id != NULL)
-                parent_label = parent_node->id;
-        }
-    }
 
     int already_emitted = 0;
     for (int i = 0; i < *emitted_count; i++) {
@@ -2784,8 +2632,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
     fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
-    if (parent_label != NULL)
-        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", parent_label);
+    if (record_info->parent_class_name != NULL)
+        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
 
@@ -2834,10 +2682,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     }
 
     /* Emit parent VMT reference storage for vParentRef (PPVmt) */
-    if (parent_label != NULL) {
+    if (record_info->parent_class_name != NULL) {
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
-        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", parent_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
     }
 
     /* Compute instance size for vInstanceSize */
@@ -2869,7 +2717,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Slot 1: vInstanceSize2 = -InstanceSize */
     fprintf(ctx->output_file, "\t.quad\t%lld\n", -instance_size);
     /* Slot 2: vParentRef (PPVmt - pointer to location storing parent VMT pointer) */
-    if (parent_label != NULL)
+    if (record_info->parent_class_name != NULL)
         fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_parentref_%s\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
@@ -2895,213 +2743,174 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Slot 11: vMsgStrPtr */
     fprintf(ctx->output_file, "\t.quad\t0\n");
 
-    /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset).
-     * Emit slot-by-slot so inherited layouts stay stable and match dispatch offsets. */
-    {
-        int max_vmt_index = codegen_class_max_vmt_index(symtab, record_info);
-        for (int slot = 12; slot <= max_vmt_index; ++slot)
-        {
-            struct MethodInfo *method = codegen_find_method_for_vmt_slot(symtab, record_info, slot);
-            if (method == NULL || method->mangled_name == NULL)
-            {
-                fprintf(ctx->output_file, "	.quad	__kgpc_abstract_method_error\n");
-                continue;
-            }
-
-            /* Look up the actual function symbol to get its full mangled name.
-             * Only use it if the method has a definition (body), not just a declaration. */
-            HashNode_t *func_sym = NULL;
-            const char *full_mangled = NULL;
-            if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
-                func_sym != NULL && func_sym->mangled_id != NULL &&
-                func_sym->type != NULL &&
-                func_sym->type->kind == TYPE_KIND_PROCEDURE &&
-                func_sym->type->info.proc_info.definition != NULL) {
-                full_mangled = func_sym->mangled_id;
-            } else if (class_label != NULL && method->name != NULL) {
-                /* Fallback: resolve by base name + param count for overloaded methods. */
-                const char *base_owner = class_label;
-                size_t owner_len = strlen(base_owner);
-                if (method->mangled_name != NULL) {
-                    const char *sep = strstr(method->mangled_name, "__");
-                    if (sep != NULL && sep != method->mangled_name) {
-                        base_owner = method->mangled_name;
-                        owner_len = (size_t)(sep - method->mangled_name);
+    /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
+    if (record_info->methods != NULL) {
+        ListNode_t *method_node = record_info->methods;
+        while (method_node != NULL) {
+            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+            if (method != NULL && method->mangled_name != NULL) {
+                /* Look up the actual function symbol to get its full mangled name.
+                 * Only use it if the method has a definition (body), not just a declaration. */
+                HashNode_t *func_sym = NULL;
+                const char *full_mangled = NULL;
+                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
+                    func_sym != NULL && func_sym->mangled_id != NULL &&
+                    func_sym->type != NULL &&
+                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                    func_sym->type->info.proc_info.definition != NULL) {
+                    full_mangled = func_sym->mangled_id;
+                } else if (class_label != NULL && method->name != NULL) {
+                    /* Fallback: resolve by base name + param count for overloaded methods. */
+                    const char *base_owner = class_label;
+                    size_t owner_len = strlen(base_owner);
+                    if (method->mangled_name != NULL) {
+                        const char *sep = strstr(method->mangled_name, "__");
+                        if (sep != NULL && sep != method->mangled_name) {
+                            base_owner = method->mangled_name;
+                            owner_len = (size_t)(sep - method->mangled_name);
+                        }
                     }
-                }
-                size_t base_len = owner_len + 2 + strlen(method->name) + 1;
-                char *base_name = (char *)malloc(base_len);
-                if (base_name != NULL) {
-                    snprintf(base_name, base_len, "%.*s__%s",
-                        (int)owner_len, base_owner, method->name);
-                    ListNode_t *matches = FindAllIdents(symtab, base_name);
-                    HashNode_t *candidate = NULL;
-                    HashNode_t *def_candidate = NULL;
-                    const char *def_candidate_mangled = NULL;
-                    const char *unique_mangled = NULL;
-                    int unique_ok = 1;
-                    int match_count = 0;
-                    int def_match_count = 0;
-                    if (getenv("KGPC_DEBUG_VMT") != NULL &&
-                        strcmp(class_label, "TUnicodeEncoding") == 0 &&
-                        (strcmp(method->name, "GetByteCount") == 0 ||
-                         strcmp(method->name, "GetAnsiString") == 0))
-                    {
-                        fprintf(stderr,
-                            "[KGPC VMT] fallback search %s matches=%s\n",
-                            base_name, matches != NULL ? "yes" : "no");
-                    }
-                    for (ListNode_t *m = matches; m != NULL; m = m->next) {
-                        HashNode_t *cand = (HashNode_t *)m->cur;
-                        if (cand == NULL || cand->type == NULL ||
-                            cand->type->kind != TYPE_KIND_PROCEDURE)
-                            continue;
-                        char *cand_sig = NULL;
-                        if (method->param_sig != NULL) {
-                            cand_sig = codegen_param_sig_from_params(
-                                cand->type->info.proc_info.params, 1);
-                            if (cand_sig == NULL || strcmp(cand_sig, method->param_sig) != 0) {
-                                if (cand_sig != NULL)
-                                    free(cand_sig);
+                    size_t base_len = owner_len + 2 + strlen(method->name) + 1;
+                    char *base_name = (char *)malloc(base_len);
+                    if (base_name != NULL) {
+                        snprintf(base_name, base_len, "%.*s__%s",
+                            (int)owner_len, base_owner, method->name);
+                        ListNode_t *matches = FindAllIdents(symtab, base_name);
+                        HashNode_t *candidate = NULL;
+                        HashNode_t *def_candidate = NULL;
+                        const char *def_candidate_mangled = NULL;
+                        const char *unique_mangled = NULL;
+                        int unique_ok = 1;
+                        int match_count = 0;
+                        int def_match_count = 0;
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            strcmp(class_label, "TUnicodeEncoding") == 0 &&
+                            (strcmp(method->name, "GetByteCount") == 0 ||
+                             strcmp(method->name, "GetAnsiString") == 0))
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] fallback search %s matches=%s\n",
+                                base_name, matches != NULL ? "yes" : "no");
+                        }
+                        for (ListNode_t *m = matches; m != NULL; m = m->next) {
+                            HashNode_t *cand = (HashNode_t *)m->cur;
+                            if (cand == NULL || cand->type == NULL ||
+                                cand->type->kind != TYPE_KIND_PROCEDURE)
                                 continue;
+                            char *cand_sig = NULL;
+                            if (method->param_sig != NULL) {
+                                cand_sig = codegen_param_sig_from_params(
+                                    cand->type->info.proc_info.params, 1);
+                                if (cand_sig == NULL || strcmp(cand_sig, method->param_sig) != 0) {
+                                    if (cand_sig != NULL)
+                                        free(cand_sig);
+                                    continue;
+                                }
                             }
+                            if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                                strcmp(class_label, "TUnicodeEncoding") == 0 &&
+                                (strcmp(method->name, "GetByteCount") == 0 ||
+                                 strcmp(method->name, "GetAnsiString") == 0))
+                            {
+                                const char *def_mangled = NULL;
+                                if (cand->type != NULL &&
+                                    cand->type->kind == TYPE_KIND_PROCEDURE &&
+                                    cand->type->info.proc_info.definition != NULL)
+                                {
+                                    Tree_t *def = cand->type->info.proc_info.definition;
+                                    def_mangled = def->tree_data.subprogram_data.mangled_id;
+                                }
+                                fprintf(stderr,
+                                    "[KGPC VMT] cand id=%s mangled=%s sig=%s has_def=%d def_mangled=%s\n",
+                                    cand->id != NULL ? cand->id : "<null>",
+                                    cand->mangled_id != NULL ? cand->mangled_id : "<null>",
+                                    cand_sig != NULL ? cand_sig : "<null>",
+                                    (cand->type->info.proc_info.definition != NULL) ? 1 : 0,
+                                    def_mangled != NULL ? def_mangled : "<null>");
+                            }
+                            int count = ListLength(cand->type->info.proc_info.params);
+                            if (count > 0)
+                                count -= 1; /* drop implicit Self */
+                            if (method->param_count >= 0) {
+                                if (count != method->param_count)
+                                {
+                                    if (cand_sig != NULL)
+                                        free(cand_sig);
+                                    continue;
+                                }
+                            }
+                            match_count++;
+                            candidate = cand;
+                            const char *cand_mangled = cand->mangled_id;
+                            if (cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE &&
+                                cand->type->info.proc_info.definition != NULL)
+                            {
+                                Tree_t *def = cand->type->info.proc_info.definition;
+                                if (def != NULL &&
+                                    def->tree_data.subprogram_data.mangled_id != NULL)
+                                    cand_mangled = def->tree_data.subprogram_data.mangled_id;
+                                def_match_count++;
+                                def_candidate = cand;
+                                def_candidate_mangled = cand_mangled;
+                            }
+                            if (cand_mangled != NULL) {
+                                if (unique_mangled == NULL)
+                                    unique_mangled = cand_mangled;
+                                else if (strcmp(unique_mangled, cand_mangled) != 0)
+                                    unique_ok = 0;
+                            } else {
+                                unique_ok = 0;
+                            }
+                            if (cand_sig != NULL)
+                                free(cand_sig);
                         }
                         if (getenv("KGPC_DEBUG_VMT") != NULL &&
                             strcmp(class_label, "TUnicodeEncoding") == 0 &&
                             (strcmp(method->name, "GetByteCount") == 0 ||
                              strcmp(method->name, "GetAnsiString") == 0))
                         {
-                            const char *def_mangled = NULL;
-                            if (cand->type != NULL &&
-                                cand->type->kind == TYPE_KIND_PROCEDURE &&
-                                cand->type->info.proc_info.definition != NULL)
-                            {
-                                Tree_t *def = cand->type->info.proc_info.definition;
-                                def_mangled = def->tree_data.subprogram_data.mangled_id;
-                            }
                             fprintf(stderr,
-                                "[KGPC VMT] cand id=%s mangled=%s sig=%s has_def=%d def_mangled=%s\n",
-                                cand->id != NULL ? cand->id : "<null>",
-                                cand->mangled_id != NULL ? cand->mangled_id : "<null>",
-                                cand_sig != NULL ? cand_sig : "<null>",
-                                (cand->type->info.proc_info.definition != NULL) ? 1 : 0,
-                                def_mangled != NULL ? def_mangled : "<null>");
+                                "[KGPC VMT] fallback count=%d def_count=%d unique_ok=%d unique=%s candidate=%s def_candidate=%s\n",
+                                match_count, def_match_count, unique_ok,
+                                unique_mangled != NULL ? unique_mangled : "<null>",
+                                candidate != NULL && candidate->mangled_id != NULL ? candidate->mangled_id : "<null>",
+                                def_candidate != NULL && def_candidate->mangled_id != NULL ? def_candidate->mangled_id : "<null>");
                         }
-                        int count = ListLength(cand->type->info.proc_info.params);
-                        if (count > 0)
-                            count -= 1; /* drop implicit Self */
-                        if (method->param_count >= 0) {
-                            if (count != method->param_count)
-                            {
-                                if (cand_sig != NULL)
-                                    free(cand_sig);
-                                continue;
-                            }
+                        if (unique_ok && unique_mangled != NULL && def_match_count > 0) {
+                            full_mangled = unique_mangled;
+                        } else if (def_match_count == 1 && def_candidate_mangled != NULL) {
+                            full_mangled = def_candidate_mangled;
+                        } else if (match_count == 1 && candidate != NULL &&
+                            candidate->mangled_id != NULL &&
+                            candidate->type != NULL &&
+                            candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                            candidate->type->info.proc_info.definition != NULL) {
+                            full_mangled = candidate->mangled_id;
                         }
-                        match_count++;
-                        candidate = cand;
-                        const char *cand_mangled = cand->mangled_id;
-                        if (cand->type != NULL &&
-                            cand->type->kind == TYPE_KIND_PROCEDURE &&
-                            cand->type->info.proc_info.definition != NULL)
-                        {
-                            Tree_t *def = cand->type->info.proc_info.definition;
-                            if (def != NULL &&
-                                def->tree_data.subprogram_data.mangled_id != NULL)
-                                cand_mangled = def->tree_data.subprogram_data.mangled_id;
-                            def_match_count++;
-                            def_candidate = cand;
-                            def_candidate_mangled = cand_mangled;
-                        }
-                        if (cand_mangled != NULL) {
-                            if (unique_mangled == NULL)
-                                unique_mangled = cand_mangled;
-                            else if (strcmp(unique_mangled, cand_mangled) != 0)
-                                unique_ok = 0;
-                        } else {
-                            unique_ok = 0;
-                        }
-                        if (cand_sig != NULL)
-                            free(cand_sig);
+                        if (matches != NULL)
+                            DestroyList(matches);
+                        free(base_name);
                     }
-                    if (getenv("KGPC_DEBUG_VMT") != NULL &&
-                        strcmp(class_label, "TUnicodeEncoding") == 0 &&
-                        (strcmp(method->name, "GetByteCount") == 0 ||
-                         strcmp(method->name, "GetAnsiString") == 0))
-                    {
+                }
+                if (full_mangled != NULL) {
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                } else {
+                    if (getenv("KGPC_DEBUG_VMT") != NULL) {
                         fprintf(stderr,
-                            "[KGPC VMT] fallback count=%d def_count=%d unique_ok=%d unique=%s candidate=%s def_candidate=%s\n",
-                            match_count, def_match_count, unique_ok,
-                            unique_mangled != NULL ? unique_mangled : "<null>",
-                            candidate != NULL && candidate->mangled_id != NULL ? candidate->mangled_id : "<null>",
-                            def_candidate != NULL && def_candidate->mangled_id != NULL ? def_candidate->mangled_id : "<null>");
+                            "[KGPC VMT] abstract slot for %s (lookup=%s, found=%s, has_def=%d)\n",
+                            method->name != NULL ? method->name : "<null>",
+                            method->mangled_name != NULL ? method->mangled_name : "<null>",
+                            func_sym != NULL ? "yes" : "no",
+                            (func_sym != NULL && func_sym->type != NULL &&
+                             func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                             func_sym->type->info.proc_info.definition != NULL) ? 1 : 0);
                     }
-                    if (unique_ok && unique_mangled != NULL && def_match_count > 0) {
-                        full_mangled = unique_mangled;
-                    } else if (def_match_count == 1 && def_candidate_mangled != NULL) {
-                        full_mangled = def_candidate_mangled;
-                    } else if (match_count == 1 && candidate != NULL &&
-                        candidate->mangled_id != NULL &&
-                        candidate->type != NULL &&
-                        candidate->type->kind == TYPE_KIND_PROCEDURE &&
-                        candidate->type->info.proc_info.definition != NULL) {
-                        full_mangled = candidate->mangled_id;
-                    }
-                    if (matches != NULL)
-                        DestroyList(matches);
-                    free(base_name);
+                    /* Abstract method or no definition - emit reference to runtime error handler */
+                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
                 }
             }
-            if (full_mangled != NULL) {
-                fprintf(ctx->output_file, "	.quad	%s\n", full_mangled);
-            } else {
-                if (getenv("KGPC_DEBUG_VMT") != NULL) {
-                    fprintf(stderr,
-                        "[KGPC VMT] abstract slot for %s (lookup=%s, found=%s, has_def=%d)\n",
-                        method->name != NULL ? method->name : "<null>",
-                        method->mangled_name != NULL ? method->mangled_name : "<null>",
-                        func_sym != NULL ? "yes" : "no",
-                        (func_sym != NULL && func_sym->type != NULL &&
-                         func_sym->type->kind == TYPE_KIND_PROCEDURE &&
-                         func_sym->type->info.proc_info.definition != NULL) ? 1 : 0);
-                }
-                /* Abstract method or no definition - emit reference to runtime error handler */
-                fprintf(ctx->output_file, "	.quad	__kgpc_abstract_method_error\n");
-                /* Emit a virtual dispatch thunk for unresolved abstract methods so
-                 * direct symbol calls can still bind and dispatch via VMT. */
-                if ((func_sym == NULL || func_sym->type == NULL ||
-                     func_sym->type->kind != TYPE_KIND_PROCEDURE ||
-                     func_sym->type->info.proc_info.definition == NULL) &&
-                    method->mangled_name != NULL && slot >= 0 &&
-                    !codegen_symtab_has_defined_mangled_proc(symtab, method->mangled_name) &&
-                    !codegen_const_symbol_emitted(codegen_emitted_virtual_thunks, method->mangled_name))
-                {
-                    fprintf(ctx->output_file, "\n\t.text\n");
-                    fprintf(ctx->output_file, ".globl %s\n", method->mangled_name);
-                    fprintf(ctx->output_file, "%s:\n", method->mangled_name);
-                    fprintf(ctx->output_file, "	movq	%%rdi, %%r11\n");
-                    fprintf(ctx->output_file, "	movq	(%%r11), %%r11\n");
-                    fprintf(ctx->output_file, "	movq	%d(%%r11), %%r11\n", slot * 8);
-                    fprintf(ctx->output_file, "	jmp	*%%r11\n");
-                    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-                    char *thunk_name = strdup(method->mangled_name);
-                    if (thunk_name != NULL)
-                    {
-                        ListNode_t *node = CreateListNode(thunk_name, LIST_STRING);
-                        if (node != NULL)
-                        {
-                            if (codegen_emitted_virtual_thunks == NULL)
-                                codegen_emitted_virtual_thunks = node;
-                            else
-                                codegen_emitted_virtual_thunks = PushListNodeBack(codegen_emitted_virtual_thunks, node);
-                        }
-                        else
-                        {
-                            free(thunk_name);
-                        }
-                    }
-                }
-            }
+            method_node = method_node->next;
         }
     }
 
@@ -3187,8 +2996,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (record_type_is_class(record_info) || record_has_class_vars(record_info) ||
         record_has_class_method_templates(record_info) || record_has_method_decls(record_info))
     {
-        int include_all_fields = (!record_type_is_class(record_info) &&
-            !record_has_class_vars(record_info) &&
+        int include_all_fields = (!record_has_class_vars(record_info) &&
             (record_has_class_method_templates(record_info) || record_has_method_decls(record_info)));
         long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
             include_all_fields ? 1 : 0);
@@ -3270,7 +3078,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.data\n");
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
-    /* Emit an alias from the bare type name to the _CLASSVAR label
+    /* Emit a weak alias from the bare type name to the _CLASSVAR label
        so that codegen references like "leaq HeapInc(%rip)" resolve. */
     fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), class_label);
     fprintf(ctx->output_file, "%s:\n", class_label);
@@ -3292,7 +3100,7 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
                     long long pad = aligned_off - offset;
                     if (pad > 0)
                         fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
-                    /* Emit a label with the bare field name, but only for
+                    /* Emit a weak label with the bare field name, but only for
                        actual class vars (not regular fields that happen to be included). */
                     if (f->name != NULL && f->is_class_var == 1) {
                         fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
@@ -3767,7 +3575,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                                                  strncmp(alias, "KGPC_", 5) == 0);
 
                         /* If this node has a body AND was emitted, emit alias directly.
-                           Use a distinct alias name to avoid overriding C library symbols. */
+                           Use .weak so we don't override C library symbols. */
                         if (is_internal_alias &&
                             sub->tree_data.subprogram_data.statement_list != NULL &&
                             label != NULL && strcmp(alias, label) != 0 &&
@@ -4349,57 +4157,41 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 /* External variable: don't allocate storage, just reference the symbol */
                                 /* No .comm directive needed - the symbol is defined elsewhere */
                             } else {
-                                if (id_list->cur != NULL &&
-                                    pascal_identifier_equals((const char *)id_list->cur, "widestringmanager")) {
-                                    /* Bind FPC RTL widestringmanager storage directly to runtime defaults.
-                                     * This keeps Unicode2Ansi callbacks initialized even when unit init paths
-                                     * differ from stock FPC startup sequencing. */
-                                    fprintf(ctx->output_file, "	.globl	%s\n", static_label);
-                                    fprintf(ctx->output_file, "	.set	%s, kgpc_widestringmanager\n", static_label);
-                                    if (cname_override == NULL &&
-                                        tree->tree_data.var_decl_data.defined_in_unit &&
-                                        strcmp((const char *)id_list->cur, static_label) != 0) {
-                                        fprintf(ctx->output_file, "	.globl	%s\n", (const char *)id_list->cur);
-                                        fprintf(ctx->output_file, "	.set	%s, kgpc_widestringmanager\n",
-                                            (const char *)id_list->cur);
+                                int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
+                                /* Check whether we need a bare-name alias for inline asm references.
+                                   .set cannot target .comm symbols, so use .bss allocation instead. */
+                                int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&
+                                                       tree->tree_data.var_decl_data.defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, static_label) != 0);
+                                if (need_bare_alias) {
+                                    /* Use .bss section with explicit label so .set can reference it.
+                                       .comm symbols can't be the target of .set, so we allocate
+                                       explicitly and switch to .bss then back to .text. */
+                                    if (codegen_target_is_windows()) {
+                                        /* PE/COFF: .pushsection is not supported; use explicit section switches */
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
+                                    fprintf(ctx->output_file, "%s:\n", static_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", alloc_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, static_label);
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
                                     }
                                 } else {
-                                    int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
-                                    /* Check whether we need a bare-name alias for inline asm references.
-                                       .set cannot target .comm symbols, so use .bss allocation instead. */
-                                    int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&
-                                                           tree->tree_data.var_decl_data.defined_in_unit &&
-                                                           strcmp((const char *)id_list->cur, static_label) != 0);
-                                    if (need_bare_alias) {
-                                        /* Use .bss section with explicit label so .set can reference it.
-                                           .comm symbols can't be the target of .set, so we allocate
-                                           explicitly and switch to .bss then back to .text. */
-                                        if (codegen_target_is_windows()) {
-                                            /* PE/COFF: .pushsection is not supported; use explicit section switches */
-                                            fprintf(ctx->output_file, "	.section .bss\n");
-                                        } else {
-                                            fprintf(ctx->output_file, "	.pushsection .bss\n");
-                                        }
-                                        fprintf(ctx->output_file, "	.align	%d\n", alignment);
-                                        fprintf(ctx->output_file, ".globl	%s\n", static_label);
-                                        fprintf(ctx->output_file, "%s:\n", static_label);
-                                        fprintf(ctx->output_file, "	.zero	%d\n", alloc_size);
-                                        fprintf(ctx->output_file, ".globl	%s\n", (const char *)id_list->cur);
-                                        fprintf(ctx->output_file, "	.set	%s, %s\n",
-                                            (const char *)id_list->cur, static_label);
-                                        if (codegen_target_is_windows()) {
-                                            fprintf(ctx->output_file, "	.section .text\n");
-                                        } else {
-                                            fprintf(ctx->output_file, "	.popsection\n");
-                                        }
-                                    } else {
-                                        if (cname_override != NULL) {
-                                            /* Public name: make it globally visible */
-                                            fprintf(ctx->output_file, "	.globl	%s\n", static_label);
-                                        }
-                                        fprintf(ctx->output_file, "	.comm	%s,%d,%d\n",
-                                            static_label, alloc_size, alignment);
+                                    if (cname_override != NULL) {
+                                        /* Public name: make it globally visible */
+                                        fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
                                     }
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, alloc_size, alignment);
                                 }
                             }
                         }
@@ -4812,8 +4604,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
-    int prev_is_nostackframe = ctx->is_nostackframe;
-    int prev_asm_param_count = ctx->asm_param_count;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -4881,7 +4671,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
-    ctx->asm_param_count = 0;
     /* For nostackframe functions, skip parameter saves — there is no frame,
      * so stores relative to %rbp would corrupt the caller's stack. */
     if (!proc_tree->tree_data.subprogram_data.nostackframe)
@@ -4929,9 +4718,11 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* Set up asm parameter mapping for nostackframe functions.
        These functions skip the frame prologue, so inline asm should use
        ABI registers directly instead of stack offsets. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
     ctx->is_nostackframe = proc->nostackframe;
+    ctx->asm_param_count = 0;
     if (proc->nostackframe && proc->args_var != NULL) {
-        ctx->asm_param_count = 0;
         int pi = arg_start_index;
         ListNode_t *a = proc->args_var;
         while (a != NULL && pi < 16) {
@@ -4942,9 +4733,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
-                            ctx->asm_params[ctx->asm_param_count].gpr_index = pi;
-                            ctx->asm_params[ctx->asm_param_count].sse_index = -1;
-                            ctx->asm_params[ctx->asm_param_count].is_reference = 0;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
                             ctx->asm_param_count++;
                             pi++;
                         }
@@ -5058,8 +4847,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
-    int prev_is_nostackframe = ctx->is_nostackframe;
-    int prev_asm_param_count = ctx->asm_param_count;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -5378,7 +5165,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (will_need_static_link && num_args > 0)
         arg_start_index++;
     
-    ctx->asm_param_count = 0;
     /* For nostackframe functions, skip parameter saves — there is no frame,
      * so stores relative to %rbp would corrupt the caller's stack. */
     if (!func_tree->tree_data.subprogram_data.nostackframe)
@@ -5543,9 +5329,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
 
     /* Set up asm parameter mapping for nostackframe functions. */
+    int prev_is_nostackframe = ctx->is_nostackframe;
+    int prev_asm_param_count = ctx->asm_param_count;
     ctx->is_nostackframe = func->nostackframe;
+    ctx->asm_param_count = 0;
     if (func->nostackframe && func->args_var != NULL) {
-        ctx->asm_param_count = 0;
         int pi = arg_start_index;
         ListNode_t *a = func->args_var;
         while (a != NULL && pi < 16) {
@@ -5556,9 +5344,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
-                            ctx->asm_params[ctx->asm_param_count].gpr_index = pi;
-                            ctx->asm_params[ctx->asm_param_count].sse_index = -1;
-                            ctx->asm_params[ctx->asm_param_count].is_reference = 0;
+                            ctx->asm_params[ctx->asm_param_count].reg_index = pi;
                             ctx->asm_param_count++;
                             pi++;
                         }
@@ -5713,26 +5499,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         /* Use movss for Single (4-byte), movsd for Double/Real (8-byte), return in xmm0.
          * Check element_size which stores the unaligned size, not size which may be padded. */
         long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-        if (is_real_return && func->nostackframe)
-        {
-            /* Nostackframe asm routines often leave the result in x87 ST(0).
-             * Preserve the ABI by storing to the stack and reloading into xmm0. */
-            if (unaligned_return_size <= 4)
-            {
-                inst_list = add_inst(inst_list, "\tsubq\t$16, %rsp\n");
-                inst_list = add_inst(inst_list, "\tfstps\t(%rsp)\n");
-                inst_list = add_inst(inst_list, "\tmovss\t(%rsp), %xmm0\n");
-                inst_list = add_inst(inst_list, "\taddq\t$16, %rsp\n");
-            }
-            else
-            {
-                inst_list = add_inst(inst_list, "\tsubq\t$16, %rsp\n");
-                inst_list = add_inst(inst_list, "\tfstpl\t(%rsp)\n");
-                inst_list = add_inst(inst_list, "\tmovsd\t(%rsp), %xmm0\n");
-                inst_list = add_inst(inst_list, "\taddq\t$16, %rsp\n");
-            }
-        }
-        else if (is_real_return && unaligned_return_size <= 4)
+        if (is_real_return && unaligned_return_size <= 4)
             snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -5757,8 +5524,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             else
                 snprintf(buffer, 50, "\tmovl\t-%d(%%rbp), %s\n", return_var->offset, RETURN_REG_32);
         }
-        if (!is_real_return || !func->nostackframe)
-            inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     codegen_emit_local_const_equivs(ctx, symtab);
@@ -6052,8 +5818,6 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
-    int prev_is_nostackframe = ctx->is_nostackframe;
-    int prev_asm_param_count = ctx->asm_param_count;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -6082,7 +5846,6 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
 
     /* Process parameters (convert from TREE_VAR_DECL to stack allocations) */
-    ctx->asm_param_count = 0;
     inst_list = codegen_subprogram_arguments(anon->parameters, inst_list, ctx, symtab, arg_start_index);
 
     /* Add static link after parameters */
@@ -6177,8 +5940,6 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     ctx->callee_save_r13_offset = prev_callee_r13;
     ctx->callee_save_r14_offset = prev_callee_r14;
     ctx->callee_save_r15_offset = prev_callee_r15;
-    ctx->is_nostackframe = prev_is_nostackframe;
-    ctx->asm_param_count = prev_asm_param_count;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -6186,21 +5947,6 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
 }
 
 /* Code generation for subprogram arguments */
-static void codegen_record_asm_param(CodeGenContext *ctx, const char *name,
-    int gpr_index, int sse_index, int is_reference)
-{
-    if (ctx == NULL || name == NULL)
-        return;
-    int capacity = (int)(sizeof(ctx->asm_params) / sizeof(ctx->asm_params[0]));
-    if (ctx->asm_param_count >= capacity)
-        return;
-    ctx->asm_params[ctx->asm_param_count].name = name;
-    ctx->asm_params[ctx->asm_param_count].gpr_index = gpr_index;
-    ctx->asm_params[ctx->asm_param_count].sse_index = sse_index;
-    ctx->asm_params[ctx->asm_param_count].is_reference = is_reference;
-    ctx->asm_param_count++;
-}
-
 ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab, int arg_start_index)
 {
@@ -6571,10 +6317,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         work->size = (int)record_size;
                         work->stack_arg_offset = 0;
                         work->has_stack_arg = 0;
-                        int record_gpr_index = next_gpr_index;
                         work->arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
-                        codegen_record_asm_param(ctx, work->id,
-                            work->arg_reg != NULL ? record_gpr_index : -1, -1, 0);
                         work->is_dynarray = is_dynarray_param;
                         work->dynarray_elem_size = dynarray_elem_size;
                         work->dynarray_lower_bound = 0;
@@ -6664,14 +6407,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (!is_var_param && !is_array_type && !is_shortstring_param &&
                         inferred_type_tag == REAL_TYPE)
                         use_sse_reg = 1;
-                    int param_is_reference = (symbol_is_var_param || is_array_type || is_shortstring_param);
                     arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && param_is_reference)
+                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
                     if (use_sse_reg)
                     {
-                        int asm_sse_index = (next_sse_index < kgpc_max_sse_arg_regs()) ? next_sse_index : -1;
-                        codegen_record_asm_param(ctx, (const char *)arg_ids->cur, -1, asm_sse_index, param_is_reference);
                         if (next_sse_index < kgpc_max_sse_arg_regs())
                         {
                             const char *xmm_reg = alloc_sse_arg_reg(&next_sse_index);
@@ -6707,8 +6447,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     }
                     else
                     {
-                        int asm_gpr_index = (next_gpr_index < kgpc_max_int_arg_regs()) ? next_gpr_index : -1;
-                        codegen_record_asm_param(ctx, (const char *)arg_ids->cur, asm_gpr_index, -1, param_is_reference);
                         arg_reg = alloc_integer_arg_reg(use_64bit, &next_gpr_index);
                         Register_t *stack_value_reg = NULL;
                         const char *value_source = NULL;
@@ -6791,8 +6529,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.arr_decl_data.ids;
                 while(arg_ids != NULL)
                 {
-                    int asm_gpr_index = (next_gpr_index < kgpc_max_int_arg_regs()) ? next_gpr_index : -1;
-                    codegen_record_asm_param(ctx, (const char *)arg_ids->cur, asm_gpr_index, -1, 1);
                     arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
                     arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)

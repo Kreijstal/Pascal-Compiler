@@ -13265,8 +13265,6 @@ tuple_cleanup:
         return mk_anonymous_procedure(expr_node->line, generated_name, parameters, body);
     }
     default: {
-        if (expr_node->typ == 0 && getenv("KGPC_FPC_RTL") != NULL)
-            return NULL;
         const char *name = tag_name(expr_node->typ);
         fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
                 expr_node->typ, name, expr_node->line);

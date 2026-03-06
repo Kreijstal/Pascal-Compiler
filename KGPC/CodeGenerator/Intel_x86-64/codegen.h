@@ -117,10 +117,11 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
-/* Avoid weak symbols for portability; always emit strong globals. */
+/* .weak is ELF-only; PE/COFF (Windows) resolves unmatched weak externs to
+ * NULL, causing crashes.  Always fall back to .globl on Windows targets. */
 static inline const char *codegen_weak_or_globl(void)
 {
-    return ".globl";
+    return codegen_target_is_windows() ? ".globl" : ".weak";
 }
 
 static inline const char *codegen_readonly_section_directive(void)
@@ -141,13 +142,6 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include <stdlib.h>
 #include <stdio.h>
 #include "stackmng/stackmng.h"
-
-typedef struct {
-    const char *name;   /* Pascal parameter name */
-    int gpr_index;      /* SysV ABI GPR index (0=%rdi,1=%rsi,...) or -1 */
-    int sse_index;      /* SysV ABI XMM index (0=%xmm0,...) or -1 */
-    int is_reference;   /* var/out/array/shortstring parameter */
-} AsmParamMap;
 #include "../../Parser/List/List.h"
 #include "../../Parser/ParseTree/tree.h"
 #include "../../Parser/ParseTree/tree_types.h"
@@ -256,12 +250,14 @@ typedef struct {
     int with_depth;
     int with_capacity;
 
-    /* Asm parameter substitution for inline asm blocks.
-       When is_nostackframe is set, asm blocks substitute param names with ABI registers.
-       For non-nostackframe, reference params may still substitute to their ABI regs. */
+    /* Asm parameter substitution for nostackframe functions.
+       When is_nostackframe is set, asm blocks substitute param names with ABI registers. */
     int is_nostackframe;
     int asm_param_count;
-    AsmParamMap asm_params[16];
+    struct {
+        const char *name;   /* Pascal parameter name */
+        int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+    } asm_params[16];
 
     /* Callee-saved register save slot offsets (from %rbp).
        Set to 0 when not used (e.g. nostackframe functions). */

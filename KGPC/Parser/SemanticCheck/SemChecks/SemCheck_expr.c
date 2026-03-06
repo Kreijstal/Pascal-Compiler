@@ -1739,13 +1739,5 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
     }
     if (out_type != NULL)
         *out_type = expr->resolved_kgpc_type;
-    if (return_val != 0 && getenv("KGPC_DEBUG_SEMERR") != NULL)
-    {
-        fprintf(stderr, "[KGPC_DEBUG_SEMERR] expr_type=%d line=%d col=%d return=%d\n",
-            expr != NULL ? expr->type : -1,
-            expr != NULL ? expr->line_num : -1,
-            expr != NULL ? expr->col_num : -1,
-            return_val);
-    }
     return return_val;
 }

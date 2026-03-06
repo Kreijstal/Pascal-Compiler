@@ -18,80 +18,6 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
-static struct Expression *semcheck_maybe_cast_index_arg(SymTab_t *symtab,
-    struct Expression *index_expr, Tree_t *formal_decl, int max_scope_lev)
-{
-    if (symtab == NULL || index_expr == NULL || formal_decl == NULL ||
-        formal_decl->type != TREE_VAR_DECL)
-        return index_expr;
-
-    int formal_type = resolve_param_type(formal_decl, symtab);
-    if (!is_integer_type(formal_type))
-        return index_expr;
-
-    KgpcType *idx_kgpc = NULL;
-    semcheck_expr_with_type(&idx_kgpc, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    int actual_type = semcheck_tag_from_kgpc(idx_kgpc);
-    if (!is_integer_type(actual_type) || actual_type == formal_type)
-        return index_expr;
-
-    char *target_id = NULL;
-    if (formal_decl->tree_data.var_decl_data.type_id != NULL)
-        target_id = strdup(formal_decl->tree_data.var_decl_data.type_id);
-
-    struct Expression *cast_expr = mk_typecast(index_expr->line_num,
-        formal_type, target_id, index_expr);
-    if (cast_expr == NULL)
-    {
-        free(target_id);
-        return index_expr;
-    }
-
-    return cast_expr;
-}
-
-static int is_expr_self_ref(struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-    if (expr->type == EXPR_VAR_ID &&
-        expr->expr_data.id != NULL &&
-        pascal_identifier_equals(expr->expr_data.id, "Self"))
-        return 1;
-    return 0;
-}
-
-static int is_operator_mangled_name(const char *id)
-{
-    if (id == NULL)
-        return 0;
-    return strstr(id, "__op_") != NULL;
-}
-
-static int semcheck_is_tstrings_family(struct RecordType *record, SymTab_t *symtab)
-{
-    struct RecordType *cur = record;
-    int guard = 0;
-    while (cur != NULL && guard++ < 32)
-    {
-        if (cur->type_id != NULL &&
-            (pascal_identifier_equals(cur->type_id, "TStrings") ||
-             pascal_identifier_equals(cur->type_id, "TStringList")))
-            return 1;
-        if (cur->parent_class_name == NULL)
-            break;
-        cur = semcheck_lookup_record_type(symtab, cur->parent_class_name);
-    }
-    return 0;
-}
-
-static int args_first_is_self(ListNode_t *args)
-{
-    if (args == NULL || args->cur == NULL)
-        return 0;
-    return is_expr_self_ref((struct Expression *)args->cur);
-}
-
 static void semcheck_set_pointer_info_from_kgpc_type(struct Expression *expr, SymTab_t *symtab, KgpcType *type)
 {
     if (expr == NULL || type == NULL || !kgpc_type_is_pointer(type))
@@ -573,62 +499,6 @@ int semcheck_arrayaccess(int *type_return,
             expr, max_scope_lev, mutating);
         if (property_result >= 0)
             return return_val + property_result;
-
-        /* FPC RTL compatibility: TStringList/TStrings index syntax (lst[i]) may
-         * be emitted without explicit default metadata. Map it to Strings[i]. */
-        {
-            const char *base_var_id = NULL;
-            if (array_expr->type == EXPR_VAR_ID)
-                base_var_id = array_expr->expr_data.id;
-            else if (array_expr->type == EXPR_RECORD_ACCESS &&
-                     array_expr->expr_data.record_access_data.field_id == NULL &&
-                     array_expr->expr_data.record_access_data.record_expr != NULL &&
-                     array_expr->expr_data.record_access_data.record_expr->type == EXPR_VAR_ID)
-                base_var_id = array_expr->expr_data.record_access_data.record_expr->expr_data.id;
-
-            if (base_var_id != NULL)
-            {
-                HashNode_t *base_node = NULL;
-                if (FindIdent(&base_node, symtab, base_var_id) == 0 && base_node != NULL)
-                {
-                    struct RecordType *rec = get_record_type_from_node(base_node);
-                    if (rec != NULL && semcheck_is_tstrings_family(rec, symtab))
-                    {
-                        struct RecordType *owner = NULL;
-                        struct ClassProperty *prop = semcheck_find_class_property(symtab, rec, "Strings", &owner);
-                        if (prop != NULL && prop->is_indexed)
-                        {
-                            struct Expression *base_expr = mk_varid(expr->line_num, strdup(base_var_id));
-                            struct Expression *field_access = (base_expr != NULL)
-                                ? mk_recordaccess(expr->line_num, base_expr, strdup("Strings"))
-                                : NULL;
-                            if (field_access != NULL)
-                            {
-                                expr->expr_data.array_access_data.array_expr = field_access;
-                                property_result = semcheck_try_indexed_property_getter(type_return, symtab,
-                                    expr, max_scope_lev, mutating);
-                                if (property_result >= 0)
-                                    return return_val + property_result;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (getenv("KGPC_FPC_RTL") != NULL && expr->line_num == 0 &&
-            (expr->expr_data.array_access_data.array_expr == NULL ||
-             expr->expr_data.array_access_data.index_expr == NULL))
-        {
-            /* Only collapse truly incomplete synthetic array nodes.  Valid
-             * line-0 expressions (e.g. rewritten indexed-property access) must
-             * continue through normal semantic resolution. */
-            expr->type = EXPR_INUM;
-            memset(&expr->expr_data, 0, sizeof(expr->expr_data));
-            expr->expr_data.i_num = 0;
-            *type_return = INT_TYPE;
-            return return_val;
-        }
 
         semcheck_error_with_context("Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
@@ -1346,17 +1216,8 @@ int semcheck_funccall(int *type_return,
      * 2) resolved_func is NULL but is_call_info_valid (from semcheck_set_function_call_target
      *    which clears resolved_func) — return the cached return type directly. This handles
      *    re-evaluation of already-resolved method calls (e.g. TEncoding.UTF8 in a chained
-     *    access like TEncoding.UTF8.GetBytes).
-     *
-     * Builtins that depend on argument/type inspection (SizeOf/BitSizeOf/TypeInfo/
-     * IsManagedType) must bypass cached call info; otherwise stale cached metadata can
-     * leave their result type unknown when re-checking imported units. */
-    int is_type_inspecting_builtin = (id != NULL &&
-        (pascal_identifier_equals(id, "SizeOf") ||
-         pascal_identifier_equals(id, "BitSizeOf") ||
-         pascal_identifier_equals(id, "TypeInfo") ||
-         pascal_identifier_equals(id, "IsManagedType")));
-    if (expr->expr_data.function_call_data.is_call_info_valid && !is_type_inspecting_builtin) {
+     *    access like TEncoding.UTF8.GetBytes). */
+    if (expr->expr_data.function_call_data.is_call_info_valid) {
         if (expr->expr_data.function_call_data.resolved_func != NULL) {
             hash_return = expr->expr_data.function_call_data.resolved_func;
             scope_return = 0;
@@ -2688,8 +2549,7 @@ int semcheck_funccall(int *type_return,
                             semcheck_expr_with_type(&actual_kgpc_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
                             actual_type = semcheck_tag_from_kgpc(actual_kgpc_type);
 
-                            if (formal_type != UNKNOWN_TYPE && formal_type != BUILTIN_ANY_TYPE &&
-                                actual_type != UNKNOWN_TYPE && actual_type != BUILTIN_ANY_TYPE &&
+                            if (formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE &&
                                 formal_type != actual_type)
                             {
                                 if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
@@ -4879,9 +4739,7 @@ int semcheck_funccall(int *type_return,
                 actual_type = semcheck_tag_from_kgpc(actual_kgpc_type_proc);
                 
                 /* Simple type check - could be more sophisticated */
-                if (formal_type != actual_type &&
-                    formal_type != UNKNOWN_TYPE && formal_type != BUILTIN_ANY_TYPE &&
-                    actual_type != UNKNOWN_TYPE && actual_type != BUILTIN_ANY_TYPE)
+                if (formal_type != actual_type && formal_type != UNKNOWN_TYPE && actual_type != UNKNOWN_TYPE)
                 {
                     /* Allow some type coercions like INT to LONGINT */
                     if (!((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
@@ -5340,26 +5198,38 @@ method_call_resolved:
                 best_match_param_count,
                 NULL))
         {
-            struct RecordType *class_record = semcheck_lookup_record_type(symtab,
-                best_match->owner_class);
-            if (class_record != NULL && class_record->methods != NULL)
+            /* Check if the method has no body (abstract) */
+            int has_body = 0;
+            if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
             {
-                for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                Tree_t *proc_def = best_match->type->info.proc_info.definition;
+                if (proc_def != NULL &&
+                    proc_def->tree_data.subprogram_data.statement_list != NULL)
+                    has_body = 1;
+            }
+            if (!has_body)
+            {
+                struct RecordType *class_record = semcheck_lookup_record_type(symtab,
+                    best_match->owner_class);
+                if (class_record != NULL && class_record->methods != NULL)
                 {
-                    struct MethodInfo *mi = (struct MethodInfo *)me->cur;
-                    if (mi != NULL && mi->name != NULL &&
-                        (mi->is_virtual || mi->is_override) &&
-                        strcasecmp(mi->name, best_match->method_name) == 0)
+                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
                     {
-                        if (best_match_param_count >= 0 && mi->param_count >= 0 &&
-                            best_match_param_count != mi->param_count)
-                            continue;
-                        expr->expr_data.function_call_data.is_virtual_call = 1;
-                        expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
-                        if (expr->expr_data.function_call_data.self_class_name == NULL)
-                            expr->expr_data.function_call_data.self_class_name =
-                                strdup(best_match->owner_class);
-                        break;
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, best_match->method_name) == 0)
+                        {
+                            if (best_match_param_count >= 0 && mi->param_count >= 0 &&
+                                best_match_param_count != mi->param_count)
+                                continue;
+                            expr->expr_data.function_call_data.is_virtual_call = 1;
+                            expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
+                            if (expr->expr_data.function_call_data.self_class_name == NULL)
+                                expr->expr_data.function_call_data.self_class_name =
+                                    strdup(best_match->owner_class);
+                            break;
+                        }
                     }
                 }
             }
@@ -6003,62 +5873,6 @@ skip_overload_resolution:
             semcheck_clear_array_info(expr);
         }
 
-        /* Some FPC RTL operators inside record methods are parsed as calls to
-         * mangled operator functions with the left operand implicitly treated
-         * as Self. If the call is missing exactly one argument and Self is in
-         * scope, inject Self as the first argument. */
-        if (hash_return != NULL && hash_return->type != NULL &&
-            hash_return->type->kind == TYPE_KIND_PROCEDURE &&
-            id != NULL && is_operator_mangled_name(id))
-        {
-            ListNode_t *formal_params = kgpc_type_get_procedure_params(hash_return->type);
-            int total_params = semcheck_count_total_params(formal_params);
-            int args_count = ListLength(args_given);
-            if (getenv("KGPC_DEBUG_OP_SELF") != NULL)
-            {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_OP_SELF] id=%s args=%d total=%d owner=%s\n",
-                    id, args_count, total_params,
-                    hash_return->owner_class != NULL ? hash_return->owner_class : "(null)");
-            }
-            if (args_count + 1 == total_params)
-            {
-                HashNode_t *self_node = NULL;
-                struct RecordType *owner_record = NULL;
-                const char *owner_id = semcheck_get_current_method_owner();
-                if (owner_id != NULL)
-                    owner_record = semcheck_lookup_record_type(symtab, owner_id);
-                if (!args_first_is_self(args_given))
-                {
-                    struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
-                    if (self_expr != NULL)
-                    {
-                        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL &&
-                            self_node->type != NULL)
-                        {
-                            semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_node->type);
-                        }
-                        else if (owner_record != NULL && !owner_record->is_class)
-                        {
-                            KgpcType *self_type = create_record_type(owner_record);
-                            if (self_type != NULL)
-                            {
-                                semcheck_expr_set_resolved_kgpc_type_shared(self_expr, self_type);
-                                destroy_kgpc_type(self_type);
-                            }
-                        }
-                    }
-                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                    self_arg->next = args_given;
-                    expr->expr_data.function_call_data.args_expr = self_arg;
-                    args_given = self_arg;
-                    injected_self = 1;
-                    if (getenv("KGPC_DEBUG_OP_SELF") != NULL)
-                        fprintf(stderr, "[KGPC_DEBUG_OP_SELF] injected Self for %s\n", id);
-                }
-            }
-        }
-
         if (hash_return->type != NULL && hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {
             ListNode_t *formal_params = kgpc_type_get_procedure_params(hash_return->type);
@@ -6090,7 +5904,7 @@ skip_overload_resolution:
                     }
                 }
             }
-            if (!resolved_expects_self && (id == NULL || !is_operator_mangled_name(id)))
+            if (!resolved_expects_self)
             {
                 ListNode_t *first_arg_node = expr->expr_data.function_call_data.args_expr;
                 if (first_arg_node != NULL && first_arg_node->cur != NULL)
@@ -6860,18 +6674,6 @@ int semcheck_try_indexed_property_getter(int *type_return,
              array_expr->expr_data.function_call_data.args_expr == NULL)
         base_id = array_expr->expr_data.function_call_data.id;
 
-    /* Some parser paths build plain obj[idx] as RECORD_ACCESS with a NULL field.
-     * Recover base identifier from the record expression so indexed-property
-     * resolution can still proceed. */
-    if (base_id == NULL && array_expr->type == EXPR_RECORD_ACCESS &&
-        array_expr->expr_data.record_access_data.field_id == NULL)
-    {
-        struct Expression *record_expr = array_expr->expr_data.record_access_data.record_expr;
-        if (record_expr != NULL && record_expr->type == EXPR_VAR_ID &&
-            record_expr->expr_data.id != NULL)
-            base_id = record_expr->expr_data.id;
-    }
-
     if (base_id == NULL && array_expr->type == EXPR_RECORD_ACCESS)
     {
         struct Expression *record_expr = array_expr->expr_data.record_access_data.record_expr;
@@ -6898,13 +6700,7 @@ int semcheck_try_indexed_property_getter(int *type_return,
         struct RecordType *property_owner = NULL;
         struct ClassProperty *property = semcheck_find_class_property(symtab,
             record_info, field_id, &property_owner);
-        int fpc_strings_indexed_compat = 0;
-        if (getenv("KGPC_FPC_RTL") != NULL && field_id != NULL &&
-            pascal_identifier_equals(field_id, "Strings") &&
-            semcheck_is_tstrings_family(record_info, symtab))
-            fpc_strings_indexed_compat = 1;
-        if (property == NULL || property->read_accessor == NULL ||
-            (!property->is_indexed && !fpc_strings_indexed_compat))
+        if (property == NULL || property->read_accessor == NULL || !property->is_indexed)
             return -1;
 
         /* If property read accessor is a field, rewrite and let array access proceed normally. */
@@ -6926,18 +6722,6 @@ int semcheck_try_indexed_property_getter(int *type_return,
         HashNode_t *getter_node = semcheck_find_class_method(symtab,
             property_owner != NULL ? property_owner : record_info,
             property->read_accessor, NULL);
-        if (getenv("KGPC_DEBUG_PROPGET") != NULL && field_id != NULL &&
-            pascal_identifier_equals(field_id, "Prop"))
-        {
-            fprintf(stderr,
-                "[KGPC_PROPACC] rec=%s owner=%s field=%s read=%s getter=%s\n",
-                (record_info != NULL && record_info->type_id != NULL) ? record_info->type_id : "<anon>",
-                (property_owner != NULL && property_owner->type_id != NULL) ? property_owner->type_id : "<null>",
-                field_id,
-                property->read_accessor != NULL ? property->read_accessor : "<null>",
-                (getter_node != NULL && getter_node->mangled_id != NULL) ? getter_node->mangled_id :
-                ((getter_node != NULL && getter_node->id != NULL) ? getter_node->id : "<null>"));
-        }
         if (getter_node == NULL)
             return -1;
 
@@ -6975,14 +6759,6 @@ int semcheck_try_indexed_property_getter(int *type_return,
         {
             destroy_expr(record_expr);
         }
-
-        ListNode_t *params = getter_node->type != NULL
-            ? kgpc_type_get_procedure_params(getter_node->type)
-            : NULL;
-        Tree_t *index_formal = NULL;
-        if (params != NULL)
-            index_formal = (Tree_t *)(is_static_getter ? params->cur : (params->next != NULL ? params->next->cur : NULL));
-        index_expr = semcheck_maybe_cast_index_arg(symtab, index_expr, index_formal, max_scope_lev);
 
         ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
         if (index_node == NULL)
@@ -7077,15 +6853,7 @@ int semcheck_try_indexed_property_getter(int *type_return,
                             args_tail = args_head;
                         }
 
-                        ListNode_t *params = getter_node->type != NULL
-            ? kgpc_type_get_procedure_params(getter_node->type)
-            : NULL;
-        Tree_t *index_formal = NULL;
-        if (params != NULL)
-            index_formal = (Tree_t *)(is_static_getter ? params->cur : (params->next != NULL ? params->next->cur : NULL));
-        index_expr = semcheck_maybe_cast_index_arg(symtab, index_expr, index_formal, max_scope_lev);
-
-        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+                        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
                         if (index_node == NULL)
                             return -1;
                         if (args_tail != NULL)

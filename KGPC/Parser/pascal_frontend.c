@@ -13,7 +13,6 @@
 #include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
-#include "../identifier_utils.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -788,8 +787,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
         "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS",
         "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
-        // FPC floating-point type availability
-        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE"
+        // FPC floating-point type availability (x86_64 supports all three)
+        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE", "FPC_HAS_TYPE_EXTENDED"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
@@ -804,38 +803,12 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
 
-    /* Extended reals are not fully supported in codegen yet.
-     * Allow opting in explicitly for experiments. */
-    const char *enable_extended = getenv("KGPC_ENABLE_EXTENDED");
-    if (enable_extended != NULL &&
-        (strcmp(enable_extended, "1") == 0 ||
-         pascal_identifier_equals(enable_extended, "true") ||
-         pascal_identifier_equals(enable_extended, "yes")))
-    {
-        if (!pascal_preprocessor_define(preprocessor, "FPC_HAS_TYPE_EXTENDED"))
-        {
-            report_preprocessor_error(error_out, path,
-                "unable to define FPC_HAS_TYPE_EXTENDED");
-            pascal_preprocessor_free(preprocessor);
-            free(buffer);
-            return false;
-        }
-    }
-
     if (is_fpc_rtl_source_path(path))
     {
         if (!pascal_preprocessor_define(preprocessor, "FPC_WIDESTRING_EQUAL_UNICODESTRING"))
         {
             report_preprocessor_error(error_out, path,
                 "unable to define FPC_WIDESTRING_EQUAL_UNICODESTRING for FPC RTL source");
-            pascal_preprocessor_free(preprocessor);
-            free(buffer);
-            return false;
-        }
-        if (!pascal_preprocessor_define(preprocessor, "FPC_HAS_BUILTIN_WIDESTR_MANAGER"))
-        {
-            report_preprocessor_error(error_out, path,
-                "unable to define FPC_HAS_BUILTIN_WIDESTR_MANAGER for FPC RTL source");
             pascal_preprocessor_free(preprocessor);
             free(buffer);
             return false;

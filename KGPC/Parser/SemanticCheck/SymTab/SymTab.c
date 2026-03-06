@@ -17,66 +17,6 @@
 #include "../../List/List.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
-#include "../../identifier_utils.h"
-#include "../SemCheck.h"
-
-static HashNode_t *find_preferred_ident_in_table(HashTable_t *table, const char *id, int current_unit)
-{
-    assert(table != NULL);
-    assert(id != NULL);
-
-    char *canonical_id = pascal_identifier_lower_dup(id);
-    if (canonical_id == NULL)
-        return NULL;
-
-    int hash = hashpjw(canonical_id);
-    ListNode_t *list = table->table[hash];
-    if (list == NULL)
-    {
-        free(canonical_id);
-        return NULL;
-    }
-
-    HashNode_t *best = NULL;
-    int best_rank = 999;
-    ListNode_t *cur = list;
-    while (cur != NULL)
-    {
-        HashNode_t *node = (HashNode_t *)cur->cur;
-        if (node != NULL && strcmp(node->canonical_id, canonical_id) == 0)
-        {
-            int rank;
-            if (current_unit > 0)
-            {
-                if (node->source_unit_index == current_unit)
-                    rank = 0;
-                else if (node->defined_in_unit)
-                    rank = 1;
-                else
-                    rank = 2;
-            }
-            else
-            {
-                if (!node->defined_in_unit)
-                    rank = 0;
-                else
-                    rank = 1;
-            }
-
-            if (best == NULL || rank < best_rank)
-            {
-                best = node;
-                best_rank = rank;
-                if (best_rank == 0)
-                    break;
-            }
-        }
-        cur = cur->next;
-    }
-
-    free(canonical_id);
-    return best;
-}
 
 /* Initializes the SymTab with stack_head pointing to NULL */
 SymTab_t *InitSymTab()
@@ -312,8 +252,7 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     cur = symtab->stack_head;
     while(cur != NULL)
     {
-        int current_unit = semcheck_save_unit_context();
-        hash_node = find_preferred_ident_in_table((HashTable_t *)cur->cur, id, current_unit);
+        hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
         if(hash_node != NULL)
         {
             *hash_return = hash_node;

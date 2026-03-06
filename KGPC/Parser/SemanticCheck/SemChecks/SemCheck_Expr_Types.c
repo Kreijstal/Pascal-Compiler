@@ -1461,60 +1461,6 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
-    expr->expr_data.function_call_data.is_virtual_call = 0;
-    expr->expr_data.function_call_data.vmt_index = -1;
-    expr->expr_data.function_call_data.self_class_name = NULL;
-    expr->expr_data.function_call_data.is_class_method_call = 0;
-    if (!is_static_getter && owner_record != NULL && owner_record->type_id != NULL)
-    {
-        const char *class_name = owner_record->type_id;
-        const char *method_name = method_node->method_name != NULL ?
-            method_node->method_name : method_node->id;
-        int method_param_count = -1;
-        if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
-        {
-            method_param_count = ListLength(method_node->type->info.proc_info.params);
-            if (method_name != NULL && !from_cparser_is_method_static(class_name, method_name))
-            {
-                if (method_param_count > 0)
-                    method_param_count -= 1;
-                else
-                    method_param_count = 0;
-            }
-        }
-        if (method_name != NULL &&
-            from_cparser_is_method_virtual_with_signature(class_name, method_name,
-                method_param_count, NULL) &&
-            !from_cparser_is_method_static(class_name, method_name))
-        {
-            expr->expr_data.function_call_data.is_virtual_call = 1;
-            int vmt_index = -1;
-            if (owner_record->methods != NULL)
-            {
-                ListNode_t *method_entry = owner_record->methods;
-                while (method_entry != NULL)
-                {
-                    struct MethodInfo *info = (struct MethodInfo *)method_entry->cur;
-                    if (info != NULL && info->name != NULL &&
-                        (info->is_virtual || info->is_override) &&
-                        strcasecmp(info->name, method_name) == 0)
-                    {
-                        if (method_param_count >= 0 && info->param_count >= 0 &&
-                            method_param_count != info->param_count)
-                        {
-                            method_entry = method_entry->next;
-                            continue;
-                        }
-                        vmt_index = info->vmt_index;
-                        break;
-                    }
-                    method_entry = method_entry->next;
-                }
-            }
-            expr->expr_data.function_call_data.vmt_index = vmt_index;
-            expr->expr_data.function_call_data.self_class_name = strdup(class_name);
-        }
-    }
     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
@@ -5005,27 +4951,6 @@ static int semcheck_parse_specialize_addr_target(const char *buffer, size_t leng
     memcpy(method, buffer + method_start, method_len);
     method[method_len] = '\0';
 
-    /* Accept generic method suffixes (e.g. UnfixArray<T>) by consuming
-     * the angle-bracket section after the method identifier. */
-    if (i < length && buffer[i] == '<')
-    {
-        int method_depth = 0;
-        while (i < length)
-        {
-            char mch = buffer[i++];
-            if (mch == '<')
-                method_depth++;
-            else if (mch == '>')
-            {
-                method_depth--;
-                if (method_depth <= 0)
-                    break;
-            }
-            else if ((mch == '\n' || mch == '\r' || mch == ';') && method_depth <= 0)
-                break;
-        }
-    }
-
     char *type_mangled = semcheck_mangle_specialized_type_text(type_raw);
     free(type_raw);
     if (type_mangled == NULL)
@@ -5082,60 +5007,6 @@ int semcheck_addressof(int *type_return,
         char *method_id = NULL;
         int parsed_target = semcheck_parse_specialize_addr_target(preprocessed_source, preprocessed_length,
                 expr->source_index, &type_id, &method_id);
-        if (!parsed_target)
-        {
-            size_t line_start = (size_t)expr->source_index;
-            while (line_start > 0 && preprocessed_source[line_start - 1] != '\n' &&
-                   preprocessed_source[line_start - 1] != '\r' &&
-                   preprocessed_source[line_start - 1] != ';')
-                line_start--;
-            if ((int)line_start != expr->source_index)
-                parsed_target = semcheck_parse_specialize_addr_target(preprocessed_source,
-                    preprocessed_length, (int)line_start, &type_id, &method_id);
-        }
-        if (!parsed_target)
-        {
-            /* source_index may point inside the specialized type token. Walk backwards
-             * a short window to find the preceding '@specialize ...' start. */
-            size_t start = (size_t)expr->source_index;
-            size_t floor = (start > 256) ? (start - 256) : 0;
-            for (size_t pos = start; pos > floor && !parsed_target; --pos)
-            {
-                if (preprocessed_source[pos - 1] == '@')
-                    parsed_target = semcheck_parse_specialize_addr_target(
-                        preprocessed_source, preprocessed_length, (int)(pos - 1),
-                        &type_id, &method_id);
-            }
-        }
-        if (!parsed_target && expr->source_index >= 0 &&
-            (size_t)expr->source_index >= preprocessed_length)
-        {
-            /* Imported/cached units may carry source_index values from their original
-             * preprocessed buffers. If we cannot recover @specialize target text in the
-             * current buffer, fall back to a safe no-op unfix callback. */
-            char *noop_id = strdup("kgpc_unfix_noop");
-            char *noop_mangled = strdup("kgpc_unfix_noop");
-            if (noop_id != NULL && noop_mangled != NULL)
-            {
-                destroy_expr(inner);
-                expr->expr_data.addr_data.expr = NULL;
-                expr->type = EXPR_ADDR_OF_PROC;
-                memset(&expr->expr_data.addr_of_proc_data, 0,
-                    sizeof(expr->expr_data.addr_of_proc_data));
-                expr->expr_data.addr_of_proc_data.proc_id = noop_id;
-                expr->expr_data.addr_of_proc_data.proc_mangled_id = noop_mangled;
-                if (expr->resolved_kgpc_type != NULL)
-                {
-                    destroy_kgpc_type(expr->resolved_kgpc_type);
-                    expr->resolved_kgpc_type = NULL;
-                }
-                expr->resolved_kgpc_type = create_pointer_type(NULL);
-                *type_return = POINTER_TYPE;
-                return 0;
-            }
-            free(noop_id);
-            free(noop_mangled);
-        }
         if (dbg_specialize_addr)
             fprintf(stderr, "[ADDR-SPECIALIZE] line=%d source_index=%d parsed=%d type=%s method=%s\n",
                 expr->line_num, expr->source_index, parsed_target,

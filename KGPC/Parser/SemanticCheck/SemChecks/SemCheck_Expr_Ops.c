@@ -464,7 +464,6 @@ relop_fallback:
                 /* Allow comparison of pointers AND procedures */
                 int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
-                int any_ok = (type_first == BUILTIN_ANY_TYPE || type_second == BUILTIN_ANY_TYPE);
                 if (!pointer_ok && expr1 != NULL && expr2 != NULL)
                 {
                     KgpcType *kgpc1 = expr1->resolved_kgpc_type;
@@ -630,7 +629,7 @@ relop_fallback:
                     }
                 }
                 int unknown_nil_ok = 0;
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !any_ok &&
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok &&
                     !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok &&
                     !record_ok && !set_ok && !class_record_ok &&
                     (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE) &&
@@ -649,7 +648,7 @@ relop_fallback:
                 /* Fallback for record/scalar equality where only implicit casts are
                  * available at this point (e.g. TUInt24Rec overload bodies in FPC RTL).
                  * Try to cast the record operand to the scalar operand type and re-check. */
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !any_ok &&
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok &&
                     !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok &&
                     !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok &&
                     expr1 != NULL && expr2 != NULL)
@@ -690,18 +689,15 @@ relop_fallback:
                     }
                 }
                 
-                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !any_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
+                if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {
-                    if (getenv("KGPC_FPC_RTL") == NULL)
-                    {
-                        semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
-                            expr->line_num);
-                        ++return_val;
-                    }
+                    semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
+                        expr->line_num);
+                    ++return_val;
                 }
             }
             else
@@ -976,32 +972,6 @@ int semcheck_addop(int *type_return,
     return_val += semcheck_expr_with_type(&kgpc_type_second, symtab, expr2, max_scope_lev, mutating);
     type_first = semcheck_tag_from_kgpc(kgpc_type_first);
     type_second = semcheck_tag_from_kgpc(kgpc_type_second);
-
-    /* Re-evaluate unresolved SizeOf/BitSizeOf nodes on imported AST.
-     * Some cached call-info paths can leave these builtins tagged unknown,
-     * which then breaks pointer arithmetic in FPC RTL units. */
-    if (type_first == UNKNOWN_TYPE && expr1 != NULL && expr1->type == EXPR_FUNCTION_CALL &&
-        expr1->expr_data.function_call_data.id != NULL)
-    {
-        int rebuilt = UNKNOWN_TYPE;
-        if (pascal_identifier_equals(expr1->expr_data.function_call_data.id, "SizeOf") &&
-            semcheck_builtin_sizeof(&rebuilt, symtab, expr1, max_scope_lev) == 0)
-            type_first = rebuilt;
-        else if (pascal_identifier_equals(expr1->expr_data.function_call_data.id, "BitSizeOf") &&
-                 semcheck_builtin_bitsizeof(&rebuilt, symtab, expr1, max_scope_lev) == 0)
-            type_first = rebuilt;
-    }
-    if (type_second == UNKNOWN_TYPE && expr2 != NULL && expr2->type == EXPR_FUNCTION_CALL &&
-        expr2->expr_data.function_call_data.id != NULL)
-    {
-        int rebuilt = UNKNOWN_TYPE;
-        if (pascal_identifier_equals(expr2->expr_data.function_call_data.id, "SizeOf") &&
-            semcheck_builtin_sizeof(&rebuilt, symtab, expr2, max_scope_lev) == 0)
-            type_second = rebuilt;
-        else if (pascal_identifier_equals(expr2->expr_data.function_call_data.id, "BitSizeOf") &&
-                 semcheck_builtin_bitsizeof(&rebuilt, symtab, expr2, max_scope_lev) == 0)
-            type_second = rebuilt;
-    }
 
     int op_type = expr->expr_data.addop_data.addop_type;
     if (op_type == OR)

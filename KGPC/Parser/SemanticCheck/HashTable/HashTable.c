@@ -567,12 +567,6 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
-    /* Allow constants to shadow procedures/functions (Pascal lets consts hide
-     * imported unit routines like Min/Max). */
-    if (is_existing_proc_func && new_hash_type == HASHTYPE_CONST) {
-        return 1;
-    }
-
     /* Allow local constants to shadow imported unit constants. */
     if (existing_node->hash_type == HASHTYPE_CONST &&
         existing_node->defined_in_unit &&
@@ -584,13 +578,6 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     if (existing_node->hash_type == HASHTYPE_TYPE &&
         existing_node->defined_in_unit &&
         new_hash_type == HASHTYPE_TYPE) {
-        return 1;
-    }
-
-    /* Allow local variables/arrays to shadow imported unit variables. */
-    if (existing_node->hash_type == HASHTYPE_VAR &&
-        existing_node->defined_in_unit &&
-        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
         return 1;
     }
 

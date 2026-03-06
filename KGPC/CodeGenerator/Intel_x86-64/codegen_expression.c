@@ -8,7 +8,6 @@
 #include <assert.h>
 #include <string.h>
 #include <limits.h>
-#include <stdint.h>
 #if defined(__GLIBC__) || (defined(__APPLE__) && defined(__MACH__)) || \
     defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__)
 #define HAVE_EXECINFO 1
@@ -28,7 +27,6 @@
 #include "../../identifier_utils.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../identifier_utils.h"
@@ -2789,14 +2787,7 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
     }
 
     if (record_type != NULL)
-    {
-        if (record_type_is_class(record_type))
-        {
-            *size_out = CODEGEN_POINTER_SIZE_BYTES;
-            return 0;
-        }
         return codegen_sizeof_record(ctx, record_type, size_out, depth + 1);
-    }
 
     if (type_tag == RECORD_TYPE && type_id == NULL)
     {
@@ -2841,15 +2832,6 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
 static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *variant,
     long long *size_out, int depth);
 
-static long long codegen_normalize_cached_size(long long cached)
-{
-    if (cached > INT32_MAX && cached <= UINT32_MAX)
-        cached = (long long)(int32_t)(uint32_t)cached;
-    if (cached <= 0 || cached > (1LL << 26))
-        return -1;
-    return cached;
-}
-
 static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *members,
     long long *size_out, int depth)
 {
@@ -2871,13 +2853,6 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
             struct RecordField *field = (struct RecordField *)cur->cur;
             long long field_size = 0;
 
-            if (field->is_pointer || (field->type_ref != NULL && field->type_ref->is_class_reference))
-            {
-                total += CODEGEN_POINTER_SIZE_BYTES;
-                cur = cur->next;
-                continue;
-            }
-
             if (field->is_array)
             {
                 if (field->array_is_open || field->array_end < field->array_start)
@@ -2887,17 +2862,10 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
                 else
                 {
                     long long element_size = 0;
-                    if (field->array_element_record != NULL &&
-                        record_type_is_class(field->array_element_record))
-                    {
-                        element_size = CODEGEN_POINTER_SIZE_BYTES;
-                    }
-                    else if (codegen_sizeof_type(ctx, field->array_element_type,
+                    if (codegen_sizeof_type(ctx, field->array_element_type,
                             field->array_element_type_id, NULL,
                             &element_size, depth + 1) != 0)
-                    {
                         return 1;
-                    }
 
                     long long count = (long long)field->array_end - (long long)field->array_start + 1;
                     if (count < 0)
@@ -2918,48 +2886,12 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
 
             if (field->nested_record != NULL)
             {
-                if (record_type_is_class(field->nested_record))
-                    field_size = CODEGEN_POINTER_SIZE_BYTES;
-                else if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
+                if (codegen_sizeof_record(ctx, field->nested_record, &field_size, depth + 1) != 0)
                     return 1;
             }
             else
             {
-                int handled_special_ref = 0;
-                if (field->type_id != NULL && ctx != NULL && ctx->symtab != NULL)
-                {
-                    HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, ctx->symtab, field->type_id) >= 0 &&
-                        type_node != NULL)
-                    {
-                        if (type_node->type != NULL && kgpc_type_is_pointer(type_node->type))
-                        {
-                            field_size = CODEGEN_POINTER_SIZE_BYTES;
-                            handled_special_ref = 1;
-                        }
-                        else
-                        {
-                            struct TypeAlias *field_alias = codegen_get_type_alias_from_node(type_node);
-                            if (field_alias != NULL && (field_alias->is_class_reference || field_alias->is_pointer))
-                            {
-                                field_size = CODEGEN_POINTER_SIZE_BYTES;
-                                handled_special_ref = 1;
-                            }
-                            else
-                            {
-                                struct RecordType *field_record = codegen_get_record_type_from_node(type_node);
-                                if (field_record != NULL && record_type_is_class(field_record))
-                                {
-                                    field_size = CODEGEN_POINTER_SIZE_BYTES;
-                                    handled_special_ref = 1;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                if (!handled_special_ref &&
-                    codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
+                if (codegen_sizeof_type(ctx, field->type, field->type_id, NULL,
                         &field_size, depth + 1) != 0)
                     return 1;
             }
@@ -2996,13 +2928,8 @@ static int codegen_sizeof_variant_part(CodeGenContext *ctx, struct VariantPart *
 
     if (variant->has_cached_size)
     {
-        long long cached = codegen_normalize_cached_size(variant->cached_size);
-        if (cached > 0)
-        {
-            *size_out = cached;
-            return 0;
-        }
-        variant->has_cached_size = 0;
+        *size_out = variant->cached_size;
+        return 0;
     }
 
     if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
@@ -3045,20 +2972,10 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         return 0;
     }
 
-    if (record->has_cached_size)
+    if (record->has_cached_size && record->cached_size > 0)
     {
-        long long cached = codegen_normalize_cached_size(record->cached_size);
-        if (cached > 0)
-        {
-            /* Imported FPC class caches can contain stale inflated values;
-             * prefer recomputing when class sizes are implausibly large. */
-            if (!(record_type_is_class(record) && cached > (1LL << 16)))
-            {
-                *size_out = cached;
-                return 0;
-            }
-        }
-        record->has_cached_size = 0;
+        *size_out = record->cached_size;
+        return 0;
     }
 
     if (depth > CODEGEN_SIZEOF_RECURSION_LIMIT)
@@ -3099,12 +3016,6 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
     {
         codegen_report_error(ctx, "ERROR: Incomplete type alias encountered during size computation.");
         return 1;
-    }
-
-    if (alias->is_class_reference || alias->is_pointer)
-    {
-        *size_out = CODEGEN_POINTER_SIZE_BYTES;
-        return 0;
     }
 
     if (alias->storage_size > 0 && !alias->is_array && !alias->is_set &&
@@ -3197,16 +3108,7 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     {
         struct RecordType *record = codegen_get_record_type_from_node(node);
         if (record != NULL)
-        {
-            /* Named class types in value positions are references (8-byte pointers).
-             * Full class instance size is computed only from explicit RecordType contexts. */
-            if (record_type_is_class(record))
-            {
-                *size_out = CODEGEN_POINTER_SIZE_BYTES;
-                return 0;
-            }
             return codegen_sizeof_record(ctx, record, size_out, depth + 1);
-        }
         struct TypeAlias *alias = codegen_get_type_alias_from_node(node);
         if (alias != NULL)
             return codegen_sizeof_alias(ctx, alias, size_out, depth + 1);
@@ -4157,116 +4059,6 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
 /* Recompute the field offset for a class var access when the CLASSVAR storage
  * only contains class var fields (not the full instance layout).  Returns the
  * class-var-only offset for the field named `field_id`, or -1 if not found. */
-static long long codegen_decl_field_size(CodeGenContext *ctx, const struct RecordField *field)
-{
-    if (field == NULL)
-        return 0;
-
-    if (field->is_class_var)
-        return 0;
-
-    if (field->is_pointer || (field->type_ref != NULL && field->type_ref->is_class_reference))
-        return CODEGEN_POINTER_SIZE_BYTES;
-
-    if (field->is_array)
-    {
-        long long elem_size = 0;
-        if (field->array_element_record != NULL)
-        {
-            if (record_type_is_class(field->array_element_record))
-                elem_size = CODEGEN_POINTER_SIZE_BYTES;
-            else
-                codegen_sizeof_record_type(ctx, field->array_element_record, &elem_size);
-        }
-        if (elem_size <= 0 && field->array_element_type != UNKNOWN_TYPE)
-            elem_size = codegen_sizeof_type_tag(field->array_element_type);
-        if (elem_size <= 0)
-            elem_size = CODEGEN_POINTER_SIZE_BYTES;
-        if (field->array_is_open)
-            return CODEGEN_POINTER_SIZE_BYTES;
-        long long count = (long long)field->array_end - (long long)field->array_start + 1;
-        if (count < 0)
-            count = 0;
-        return elem_size * count;
-    }
-
-    if (field->is_pointer)
-        return CODEGEN_POINTER_SIZE_BYTES;
-
-    if (field->nested_record != NULL)
-    {
-        if (record_type_is_class(field->nested_record))
-            return CODEGEN_POINTER_SIZE_BYTES;
-
-        long long rec_size = 0;
-        if (codegen_sizeof_record_type(ctx, field->nested_record, &rec_size) == 0 && rec_size > 0)
-            return rec_size;
-    }
-
-    long long size = codegen_sizeof_type_tag(field->type);
-    if (size <= 0)
-        size = CODEGEN_POINTER_SIZE_BYTES;
-    return size;
-}
-
-static int codegen_recompute_decl_field_offset_linear(CodeGenContext *ctx,
-    const struct RecordType *record_type, const char *field_id,
-    int treat_as_class, int classvar_only, long long *out_offset)
-{
-    if (record_type == NULL || field_id == NULL || out_offset == NULL)
-        return 0;
-
-    long long current = (treat_as_class && !classvar_only)
-        ? CODEGEN_POINTER_SIZE_BYTES
-        : 0;
-
-    for (ListNode_t *node = record_type->fields; node != NULL; node = node->next)
-    {
-        if (node->cur == NULL)
-            continue;
-
-        const struct RecordField *field = (const struct RecordField *)node->cur;
-        if (field->is_class_var && !classvar_only)
-            continue;
-        if (!field->is_class_var && classvar_only)
-            continue;
-
-        if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
-        {
-            *out_offset = current;
-            return 1;
-        }
-
-        long long fsz = codegen_decl_field_size(ctx, field);
-        if (fsz <= 0)
-            fsz = 1;
-        current += fsz;
-    }
-
-    return 0;
-}
-
-static int codegen_recompute_record_field_offset(CodeGenContext *ctx,
-    struct Expression *record_expr, const char *field_id, long long *out_offset)
-{
-    if (ctx == NULL || ctx->symtab == NULL || record_expr == NULL ||
-        field_id == NULL || out_offset == NULL)
-        return 0;
-
-    struct RecordType *record_type = codegen_expr_record_type(record_expr, ctx->symtab);
-    if (record_type == NULL)
-        return 0;
-
-    struct RecordField *field_desc = NULL;
-    long long resolved_offset = 0;
-    if (resolve_record_field(ctx->symtab, record_type, field_id,
-            &field_desc, &resolved_offset, 0, 1) != 0 || field_desc == NULL)
-        return 0;
-
-    *out_offset = resolved_offset;
-    return 1;
-}
-
 ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -4340,24 +4132,6 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     long long offset = expr->expr_data.record_access_data.field_offset;
-    /* FPC metadata can surface signed 32-bit offsets through unsigned constants. */
-    if (offset > INT32_MAX && offset <= UINT32_MAX)
-        offset = (long long)(int32_t)(uint32_t)offset;
-
-    /* Prefer semantic-field re-resolution when available: it is more stable than
-     * cached offsets when imported units have incomplete layout metadata. */
-    {
-        long long resolved_offset = 0;
-        if (codegen_recompute_record_field_offset(ctx, record_expr,
-                expr->expr_data.record_access_data.field_id, &resolved_offset))
-        {
-            if (resolved_offset > INT32_MAX && resolved_offset <= UINT32_MAX)
-                resolved_offset = (long long)(int32_t)(uint32_t)resolved_offset;
-            if (llabs(resolved_offset) <= (1LL << 20))
-                offset = resolved_offset;
-        }
-    }
-
     /* When accessing a class var via type reference (TMyClass.FValue), the
      * CLASSVAR storage layout starts at offset 0, but the semcheck computes
      * field offsets with a POINTER_SIZE_BYTES (8) prefix for the VMT pointer
@@ -4365,92 +4139,11 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
      * Subtract the VMT size so the offset matches the CLASSVAR layout. */
     if (is_type_ref && is_class_field && offset >= 8)
         offset -= 8;
-
-    /* Guard against bogus cached offsets from incomplete semantic metadata.
-     * Recompute from declaration order when possible. */
-    if (llabs(offset) > (1LL << 15))
-    {
-        int fixed_offset = 0;
-        if (record_expr_record != NULL &&
-            expr->expr_data.record_access_data.field_id != NULL)
-        {
-            long long linear_offset = 0;
-            int treat_as_class = record_type_is_class(record_expr_record);
-            int classvar_only = (is_type_ref && treat_as_class);
-
-            if (codegen_recompute_decl_field_offset_linear(ctx, record_expr_record,
-                    expr->expr_data.record_access_data.field_id,
-                    treat_as_class, classvar_only, &linear_offset) &&
-                llabs(linear_offset) <= (1LL << 20))
-            {
-                offset = linear_offset;
-                fixed_offset = 1;
-            }
-        }
-
-        if (!fixed_offset && ctx != NULL && ctx->symtab != NULL &&
-            expr->expr_data.record_access_data.field_id != NULL)
-        {
-            struct RecordType *unique_record = NULL;
-            if (codegen_find_unique_record_field(ctx->symtab,
-                    expr->expr_data.record_access_data.field_id,
-                    &unique_record) != NULL && unique_record != NULL)
-            {
-                long long unique_offset = 0;
-                int unique_treat_as_class = record_type_is_class(unique_record);
-                if (codegen_recompute_decl_field_offset_linear(ctx, unique_record,
-                        expr->expr_data.record_access_data.field_id,
-                        unique_treat_as_class, 0, &unique_offset) &&
-                    llabs(unique_offset) <= (1LL << 20))
-                {
-                    offset = unique_offset;
-                    fixed_offset = 1;
-                }
-            }
-        }
-
-        if (!fixed_offset)
-        {
-            if (is_class_field)
-            {
-                long long compact_offset = offset & 0x7f;
-                if (compact_offset >= CODEGEN_POINTER_SIZE_BYTES)
-                    offset = compact_offset;
-                else
-                    offset = CODEGEN_POINTER_SIZE_BYTES;
-            }
-            else
-                offset = 0;
-        }
-    }
     if (offset != 0)
     {
-        if (offset >= INT32_MIN && offset <= INT32_MAX)
-        {
-            char buffer[64];
-            snprintf(buffer, sizeof(buffer), "	addq	$%lld, %s\n", offset, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            Register_t *tmp_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (tmp_reg == NULL)
-                tmp_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-            if (tmp_reg == NULL)
-            {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to allocate register for large field offset.");
-                *out_reg = addr_reg;
-                return inst_list;
-            }
-
-            char buffer[96];
-            snprintf(buffer, sizeof(buffer), "	movabsq	$%lld, %s\n", offset, tmp_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "	addq	%s, %s\n", tmp_reg->bit_64, addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), tmp_reg);
-        }
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     *out_reg = addr_reg;
@@ -4507,17 +4200,7 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     }
     int type_tag = expr_get_type_tag(expr);
     int is_single_real_field = (expr_has_type_tag(expr, REAL_TYPE) && field_size == 4);
-    int force_qword_load = 0;
-    if (type_tag == POINTER_TYPE ||
-        (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type)))
-    {
-        /* Some imported FPC record-field metadata reports pointer fields as 32-bit;
-         * force pointer loads to 64-bit on x86_64 to avoid pointer truncation. */
-        force_qword_load = 1;
-        field_size = 8;
-    }
-
-    if (!is_single_real_field && (force_qword_load || expr_uses_qword_kgpctype(expr) || field_size == 8))
+    if (!is_single_real_field && (expr_uses_qword_kgpctype(expr) || field_size == 8))
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
     else if (field_size == 1 || expr_has_type_tag(expr, CHAR_TYPE))
     {
