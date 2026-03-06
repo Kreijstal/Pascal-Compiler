@@ -1027,7 +1027,26 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_CONVERSION);
     /* For pointer types, don't return early - need to compare subtypes */
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
+    {
+        /* REAL_TYPE is used as a catch-all tag for all floating-point types
+         * (Single, Double, Extended, Real, ValReal, Currency, etc.).
+         * When both actual and formal have the same REAL_TYPE tag, compare
+         * the type_alias names for exact equality so that e.g.
+         * Double actual vs Extended formal is scored as PROMOTION rather
+         * than EXACT.  This prevents ambiguity among Max(Single), Max(Double),
+         * Max(Extended) overloads. */
+        if (formal_tag == REAL_TYPE && actual_kgpc != NULL && formal_kgpc != NULL)
+        {
+            const char *actual_alias = (actual_kgpc->type_alias != NULL) ?
+                actual_kgpc->type_alias->alias_name : NULL;
+            const char *formal_alias = (formal_kgpc->type_alias != NULL) ?
+                formal_kgpc->type_alias->alias_name : NULL;
+            if (actual_alias != NULL && formal_alias != NULL &&
+                !pascal_identifier_equals(actual_alias, formal_alias))
+                return semcheck_make_quality(MATCH_PROMOTION);
+        }
         return semcheck_make_quality(MATCH_EXACT);
+    }
     /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
         return semcheck_make_quality(MATCH_PROMOTION);
@@ -1181,7 +1200,14 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
         if (rank >= 0)
             return semcheck_match_from_rank(rank);
-        if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+        /* Skip are_types_compatible_for_assignment when the actual is a
+         * floating-point type and the formal is an integer type.  In Pascal,
+         * Real→Integer is NOT an implicit conversion (requires Trunc/Round).
+         * The generic compatibility check is too permissive here and would
+         * allow Real→Integer as MATCH_CONVERSION, causing ambiguity between
+         * Max(Extended) and Max(Integer) overloads. */
+        if (!(actual_tag == REAL_TYPE && is_integer_type(formal_tag)) &&
+            are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
             return semcheck_make_quality(MATCH_CONVERSION);
     }
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
