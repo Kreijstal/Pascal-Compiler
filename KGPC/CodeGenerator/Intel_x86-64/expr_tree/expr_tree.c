@@ -977,6 +977,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
         case EXPR_TYPEINFO:
+        case EXPR_IS:
+        case EXPR_AS:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
@@ -2786,6 +2788,44 @@ cleanup_constructor:
                 snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
                 inst_list = add_inst(inst_list, tmp_buf);
                 free(tmp_buf);
+            }
+        }
+        return inst_list;
+    }
+    else if (expr->type == EXPR_IS)
+    {
+        /* EXPR_IS is a complex runtime expression that cannot be inlined as
+         * a simple leaf operand. Emit the VMT-based type check and move
+         * the boolean result to the target register. */
+        inst_list = codegen_emit_is_expr(expr, inst_list, ctx, NULL);
+        /* codegen_emit_is_expr leaves result in %eax (0 or 1) */
+        if (target_reg->reg_id != REG_RAX)
+        {
+            char mov_buf[128];
+            snprintf(mov_buf, sizeof(mov_buf), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            inst_list = add_inst(inst_list, mov_buf);
+        }
+        return inst_list;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        /* EXPR_AS performs a checked class cast at runtime. Evaluate the
+         * inner expression and emit the cast check. */
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+            if (addr_reg != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+                if (target_reg->reg_id != addr_reg->reg_id)
+                {
+                    char mov_buf[128];
+                    snprintf(mov_buf, sizeof(mov_buf), "\tmovq\t%s, %s\n",
+                        addr_reg->bit_64, target_reg->bit_64);
+                    inst_list = add_inst(inst_list, mov_buf);
+                }
+                free_reg(get_reg_stack(), addr_reg);
             }
         }
         return inst_list;
