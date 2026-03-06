@@ -9499,6 +9499,23 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             alias_record->type_id = strdup(tree->tree_data.type_decl_data.id);
                         }
+
+                        /* For generic specializations that are classes with a parent,
+                         * merge parent class fields into the specialized record.
+                         * This handles e.g. TFPGList<TMyRecord> inheriting FCapacity,
+                         * FList etc. from TFPSList. */
+                        if (alias_record->parent_class_name != NULL &&
+                            alias_record->is_class)
+                        {
+                            int merge_result = merge_parent_class_fields(symtab, alias_record,
+                                tree->tree_data.type_decl_data.id, tree->line_num);
+                            if (merge_result > 0)
+                                return_val += merge_result;
+                        }
+                        else if (alias_record->is_class)
+                        {
+                            detect_default_indexed_property(alias_record, NULL);
+                        }
                         
                         /* Skip size computation for generic templates (not yet specialized)
                          * Size can only be computed after type parameters are substituted */
