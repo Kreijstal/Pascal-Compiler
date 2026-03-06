@@ -2840,11 +2840,6 @@ static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt,
     return return_val;
 }
 
-static int semcheck_builtin_setcodepage(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
-}
-
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -5525,12 +5520,6 @@ skip_type_receiver_rewrite:
         return return_val;
 
     handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetCodePage",
-        semcheck_builtin_setcodepage, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "Val",
         semcheck_builtin_val, max_scope_lev, &handled_builtin);
     if (handled_builtin)
@@ -7061,7 +7050,7 @@ proccall_parent_resolve_done:
             }
             else
             {
-                if (proc_id != NULL && proc_id[0] == '_' && proc_id[1] == '_')
+                if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
                 {
                     HashNode_t *synth_node = NULL;
                     if (FindIdent(&synth_node, symtab, proc_id) < 0)
