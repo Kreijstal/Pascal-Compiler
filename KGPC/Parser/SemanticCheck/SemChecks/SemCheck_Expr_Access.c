@@ -423,6 +423,23 @@ int semcheck_arrayaccess(int *type_return,
                 if (ipg_result >= 0)
                     return return_val + ipg_result;
 
+                /* When mutating (LHS of assignment), the getter bails out because
+                 * it only handles read access.  Resolve the property element type
+                 * from the class property declaration without rewriting the AST —
+                 * the actual setter rewrite will happen later in
+                 * semcheck_try_indexed_property_assignment. */
+                if (mutating != NO_MUTATE && rec != NULL)
+                {
+                    struct RecordType *prop_owner = NULL;
+                    struct ClassProperty *prop = semcheck_find_class_property(symtab,
+                        rec, rec->default_indexed_property, &prop_owner);
+                    if (prop != NULL && prop->is_indexed && prop->write_accessor != NULL)
+                    {
+                        *type_return = prop->type;
+                        return return_val;
+                    }
+                }
+
                 /* Not an indexed property — evaluate the field access so array info
                  * is populated (e.g. for a default-indexed field like FItems). */
                 int field_type = UNKNOWN_TYPE;

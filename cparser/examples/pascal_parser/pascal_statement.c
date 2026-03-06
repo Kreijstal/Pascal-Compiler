@@ -1398,7 +1398,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* specialize_typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(keyword_ci("specialize")),
         specialize_type_base,
-        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        between(token(match("(")), token(match(")")),
+            sep_by(lazy(expr_parser), token(match(",")))),
         NULL
     );
     // Require pointer suffix followed by optional additional suffixes
@@ -1423,7 +1424,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* specialize_lvalue_simple = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(keyword_ci("specialize")),
         specialize_type_base,
-        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        between(token(match("(")), token(match(")")),
+            sep_by(lazy(expr_parser), token(match(",")))),
         NULL
     );
 

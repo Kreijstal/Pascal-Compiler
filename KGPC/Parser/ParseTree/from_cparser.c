@@ -13936,9 +13936,24 @@ static struct Expression *convert_member_access_chain(int line,
                 }
             }
         } else if (cast_value_node != NULL) {
-            struct Expression *arg_expr = convert_expression(cast_value_node);
-            if (arg_expr != NULL)
-                args_list = CreateListNode(arg_expr, LIST_EXPR);
+            /* Convert all argument expressions (siblings linked via ->next).
+             * With sep_by in the parser, multi-argument specialize calls
+             * produce sibling nodes rather than a single expression. */
+            for (ast_t *arg = cast_value_node; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                    continue;
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
         }
 
         args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
