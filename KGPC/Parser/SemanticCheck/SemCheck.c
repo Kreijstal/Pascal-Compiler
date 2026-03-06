@@ -3326,7 +3326,15 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                 }
                 else if (type_tag == UNKNOWN_TYPE)
                 {
-                    allow = 0;
+                    if (tree->type == TREE_ARR_DECL &&
+                        tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                    {
+                        allow = 1;
+                    }
+                    else
+                    {
+                        allow = 0;
+                    }
                 }
 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
@@ -4769,14 +4777,27 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             switch (target_type)
             {
                 case CHAR_TYPE:
-                    if (inner_value < 0 || inner_value > 255)
+                {
+                    int is_wide_char = 0;
+                    if (id != NULL &&
+                        (strcasecmp(id, "WideChar") == 0 ||
+                         strcasecmp(id, "UnicodeChar") == 0))
                     {
-                        fprintf(stderr, "Error: typecast value %lld out of range for Char.\n",
-                            inner_value);
+                        is_wide_char = 1;
+                    }
+                    long long max_char_value = is_wide_char ? 65535LL : 255LL;
+                    if (inner_value < 0 || inner_value > max_char_value)
+                    {
+                        fprintf(stderr, "Error: typecast value %lld out of range for %s.\n",
+                            inner_value, is_wide_char ? "WideChar" : "Char");
                         return 1;
                     }
-                    *out_value = (unsigned char)inner_value;
+                    if (is_wide_char)
+                        *out_value = (uint16_t)inner_value;
+                    else
+                        *out_value = (unsigned char)inner_value;
                     return 0;
+                }
                 case BOOL:
                     *out_value = (inner_value != 0);
                     return 0;
@@ -7505,7 +7526,11 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         
         while (cur != NULL)
         {
-            assert(cur->type == LIST_RECORD_FIELD);
+            if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            {
+                cur = cur->next;
+                continue;
+            }
             struct RecordField *original_field = (struct RecordField *)cur->cur;
             
             /* Clone the field */
@@ -7647,6 +7672,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
 }
 
 /* Build Virtual Method Table for a class */
+static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
@@ -7682,6 +7708,9 @@ if (record_info->parent_class_name != NULL) {
                             cloned->is_virtual = parent_method->is_virtual;
                             cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
                             cloned->vmt_index = parent_method->vmt_index;
+                            cloned->param_count = parent_method->param_count;
+                            cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
+                            cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
                             
                             ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                             if (node != NULL) {
@@ -7694,6 +7723,7 @@ if (record_info->parent_class_name != NULL) {
                             } else {
                                 free(cloned->name);
                                 free(cloned->mangled_name);
+                                free(cloned->param_sig);
                                 free(cloned);
                             }
                         }
@@ -7709,30 +7739,136 @@ if (record_info->parent_class_name != NULL) {
     while (cur_method != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
         if (binding != NULL && binding->method_name != NULL) {
-            /* Build mangled name: ClassName__MethodName */
+            /* Resolve the full mangled name for this method overload when possible. */
             size_t class_len = strlen(class_name);
             size_t method_len = strlen(binding->method_name);
-            char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
-            if (mangled != NULL) {
-                snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s", 
+            char *base_name = (char *)malloc(class_len + 2 + method_len + 1);
+            if (base_name != NULL) {
+                snprintf(base_name, class_len + 2 + method_len + 1, "%s__%s",
                          class_name, binding->method_name);
             }
+            char *mangled = NULL;
+            if (base_name != NULL && symtab != NULL)
+            {
+                ListNode_t *matches = FindAllIdents(symtab, base_name);
+                HashNode_t *best = NULL;
+                if (binding->param_sig != NULL)
+                {
+                    for (ListNode_t *m = matches; m != NULL; m = m->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)m->cur;
+                        if (cand == NULL || cand->type == NULL ||
+                            cand->type->kind != TYPE_KIND_PROCEDURE)
+                            continue;
+                        int skip_self = (!binding->is_static);
+                        char *sig = semcheck_param_sig_from_params(
+                            cand->type->info.proc_info.params, skip_self);
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TEncoding") == 0 &&
+                            strcasecmp(binding->method_name, "GetAnsiString") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] %s.%s binding sig=%s cand=%s sig=%s\n",
+                                class_name, binding->method_name,
+                                binding->param_sig,
+                                cand->mangled_id != NULL ? cand->mangled_id : "<null>",
+                                sig != NULL ? sig : "<null>");
+                        }
+                        if (sig != NULL && strcmp(sig, binding->param_sig) == 0)
+                        {
+                            best = cand;
+                            free(sig);
+                            break;
+                        }
+                        if (sig != NULL)
+                            free(sig);
+                    }
+                }
+                if (best == NULL && binding->param_count >= 0)
+                {
+                    int match_count = 0;
+                    HashNode_t *last_match = NULL;
+                    for (ListNode_t *m = matches; m != NULL; m = m->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)m->cur;
+                        if (cand == NULL || cand->type == NULL ||
+                            cand->type->kind != TYPE_KIND_PROCEDURE)
+                            continue;
+                        int count = ListLength(cand->type->info.proc_info.params);
+                        if (!binding->is_static && count > 0)
+                            count -= 1; /* drop implicit Self */
+                        if (count == binding->param_count)
+                        {
+                            match_count++;
+                            last_match = cand;
+                        }
+                    }
+                    if (match_count == 1)
+                        best = last_match;
+                }
+                if (best != NULL && best->mangled_id != NULL)
+                    mangled = strdup(best->mangled_id);
+                DestroyList(matches);
+            }
+            if (mangled == NULL && base_name != NULL)
+                mangled = strdup(base_name);
+            if (base_name != NULL)
+                free(base_name);
             
             /* Check if this method overrides a parent method */
             int is_actual_override = 0;
             if (binding->is_virtual || binding->is_override) {
-                /* Check if a method with this name exists in the parent VMT */
+                /* Check if a method with this name/signature exists in the parent VMT */
                 ListNode_t *vmt_entry = vmt;
                 while (vmt_entry != NULL) {
                     struct MethodInfo *info = (struct MethodInfo *)vmt_entry->cur;
                     if (info != NULL && info->name != NULL &&
                         strcasecmp(info->name, binding->method_name) == 0) {
+                        int signature_matches = 0;
+                        if (binding->param_sig != NULL && info->param_sig != NULL) {
+                            if (strcmp(binding->param_sig, info->param_sig) == 0)
+                                signature_matches = 1;
+                        } else if (binding->param_count >= 0 && info->param_count >= 0) {
+                            if (binding->param_count == info->param_count)
+                                signature_matches = 1;
+                        } else {
+                            signature_matches = 1;
+                        }
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] override check %s.%s bind_sig=%s info_sig=%s match=%d\n",
+                                class_name, binding->method_name,
+                                binding->param_sig != NULL ? binding->param_sig : "<null>",
+                                info->param_sig != NULL ? info->param_sig : "<null>",
+                                signature_matches);
+                        }
+                        if (!signature_matches) {
+                            vmt_entry = vmt_entry->next;
+                            continue;
+                        }
                         /* Method exists in parent - this is an override */
                         is_actual_override = 1;
                         /* Replace with derived class's version */
                         free(info->mangled_name);
                         info->mangled_name = mangled ? strdup(mangled) : NULL;
                         info->is_override = 1;
+                        if (info->param_count < 0 && binding->param_count >= 0)
+                            info->param_count = binding->param_count;
+                        if (info->param_sig == NULL && binding->param_sig != NULL)
+                            info->param_sig = strdup(binding->param_sig);
+                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
+                            class_name != NULL && binding->method_name != NULL &&
+                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
+                        {
+                            fprintf(stderr,
+                                "[KGPC VMT] override set %s.%s mangled=%s\n",
+                                class_name, binding->method_name,
+                                info->mangled_name != NULL ? info->mangled_name : "<null>");
+                        }
                         break;
                     }
                     vmt_entry = vmt_entry->next;
@@ -7754,6 +7890,9 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
+                    new_method->param_count = binding->param_count;
+                    new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
+                    new_method->resolved_mangled_id = NULL;
                     /* FPC VMT has 12 metadata slots (96 bytes) before virtual methods:
                      * vInstanceSize, vInstanceSize2, vParentRef, vClassName,
                      * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
@@ -7780,6 +7919,7 @@ if (record_info->parent_class_name != NULL) {
                     } else {
                         free(new_method->name);
                         free(new_method->mangled_name);
+                        free(new_method->param_sig);
                         free(new_method);
                     }
                 }
@@ -7792,6 +7932,94 @@ if (record_info->parent_class_name != NULL) {
     
     /* Store VMT in record */
     record_info->methods = vmt;
+
+    /* Resolve mangled IDs for VMT entries so codegen doesn't need to
+     * do symbol table lookups or parse mangled names. */
+    for (ListNode_t *vmt_node = vmt; vmt_node != NULL; vmt_node = vmt_node->next) {
+        struct MethodInfo *mi = (struct MethodInfo *)vmt_node->cur;
+        if (mi == NULL || mi->mangled_name == NULL)
+            continue;
+        if (mi->resolved_mangled_id != NULL)
+            continue;  /* Already resolved (e.g. cloned from parent) */
+
+        /* Primary lookup: direct symbol table lookup by mangled_name */
+        HashNode_t *func_sym = NULL;
+        if (FindIdent(&func_sym, symtab, mi->mangled_name) == 0 &&
+            func_sym != NULL && func_sym->mangled_id != NULL &&
+            func_sym->type != NULL &&
+            func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+            func_sym->type->info.proc_info.definition != NULL) {
+            mi->resolved_mangled_id = strdup(func_sym->mangled_id);
+            continue;
+        }
+
+        /* Fallback: search by class_name + method_name with param matching */
+        if (mi->name == NULL)
+            continue;
+        size_t base_len = strlen(class_name) + 2 + strlen(mi->name) + 1;
+        char *base_name = (char *)malloc(base_len);
+        if (base_name == NULL)
+            continue;
+        snprintf(base_name, base_len, "%s__%s", class_name, mi->name);
+        ListNode_t *matches = FindAllIdents(symtab, base_name);
+        const char *unique_mangled = NULL;
+        const char *def_candidate_mangled = NULL;
+        const char *single_mangled = NULL;
+        int unique_ok = 1;
+        int match_count = 0;
+        int def_match_count = 0;
+        for (ListNode_t *m = matches; m != NULL; m = m->next) {
+            HashNode_t *cand = (HashNode_t *)m->cur;
+            if (cand == NULL || cand->type == NULL ||
+                cand->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            /* Match by param signature if available */
+            if (mi->param_sig != NULL) {
+                char *cand_sig = semcheck_param_sig_from_params(
+                    cand->type->info.proc_info.params, 1);
+                int sig_match = (cand_sig != NULL && strcmp(cand_sig, mi->param_sig) == 0);
+                free(cand_sig);
+                if (!sig_match)
+                    continue;
+            }
+            /* Match by param count */
+            int count = ListLength(cand->type->info.proc_info.params);
+            if (count > 0) count -= 1; /* drop implicit Self */
+            if (mi->param_count >= 0 && count != mi->param_count)
+                continue;
+
+            match_count++;
+            const char *cand_mangled = cand->mangled_id;
+            if (cand->type->info.proc_info.definition != NULL) {
+                Tree_t *def = cand->type->info.proc_info.definition;
+                if (def != NULL &&
+                    def->tree_data.subprogram_data.mangled_id != NULL)
+                    cand_mangled = def->tree_data.subprogram_data.mangled_id;
+                def_match_count++;
+                def_candidate_mangled = cand_mangled;
+            }
+            if (cand_mangled != NULL) {
+                if (unique_mangled == NULL)
+                    unique_mangled = cand_mangled;
+                else if (strcmp(unique_mangled, cand_mangled) != 0)
+                    unique_ok = 0;
+            } else {
+                unique_ok = 0;
+            }
+            if (match_count == 1)
+                single_mangled = (cand->type->info.proc_info.definition != NULL)
+                    ? cand_mangled : NULL;
+        }
+        if (unique_ok && unique_mangled != NULL && def_match_count > 0)
+            mi->resolved_mangled_id = strdup(unique_mangled);
+        else if (def_match_count == 1 && def_candidate_mangled != NULL)
+            mi->resolved_mangled_id = strdup(def_candidate_mangled);
+        else if (match_count == 1 && single_mangled != NULL)
+            mi->resolved_mangled_id = strdup(single_mangled);
+        if (matches != NULL)
+            DestroyList(matches);
+        free(base_name);
+    }
     
     
     /* Clean up class_methods list (shallow - we don't own the bindings) */
@@ -7860,6 +8088,83 @@ static int semcheck_try_resolve_enum_literal_by_base(SymTab_t *symtab, const cha
     if (matches != NULL)
         DestroyList(matches);
     return 0;
+}
+
+static char *semcheck_append_param_sig(char *sig, const char *type_str)
+{
+    const char *part = (type_str != NULL) ? type_str : "<unknown>";
+    size_t part_len = strlen(part);
+    if (sig == NULL)
+    {
+        char *out = (char *)malloc(part_len + 1);
+        if (out == NULL)
+            return NULL;
+        memcpy(out, part, part_len + 1);
+        return out;
+    }
+    size_t sig_len = strlen(sig);
+    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
+    if (out == NULL)
+    {
+        free(sig);
+        return NULL;
+    }
+    out[sig_len] = ',';
+    memcpy(out + sig_len + 1, part, part_len + 1);
+    return out;
+}
+
+static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param)
+{
+    if (params == NULL)
+        return NULL;
+
+    char *sig = NULL;
+    ListNode_t *cur = params;
+    int skipped = 0;
+    while (cur != NULL)
+    {
+        Tree_t *param = (Tree_t *)cur->cur;
+        cur = cur->next;
+        if (skip_first_param && !skipped)
+        {
+            skipped = 1;
+            continue;
+        }
+        if (param == NULL)
+            continue;
+
+        char *type_str = NULL;
+        int name_count = 1;
+        if (param->type == TREE_VAR_DECL)
+        {
+            if (param->tree_data.var_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.var_decl_data.type_ref);
+            else if (param->tree_data.var_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.var_decl_data.type_id);
+            if (param->tree_data.var_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.var_decl_data.ids);
+        }
+        else if (param->type == TREE_ARR_DECL)
+        {
+            if (param->tree_data.arr_decl_data.type_ref != NULL)
+                type_str = type_ref_render_mangled(param->tree_data.arr_decl_data.type_ref);
+            else if (param->tree_data.arr_decl_data.type_id != NULL)
+                type_str = strdup(param->tree_data.arr_decl_data.type_id);
+            if (param->tree_data.arr_decl_data.ids != NULL)
+                name_count = ListLength(param->tree_data.arr_decl_data.ids);
+        }
+
+        if (name_count <= 0)
+            name_count = 1;
+        for (int i = 0; i < name_count; i++)
+            sig = semcheck_append_param_sig(sig, type_str);
+
+        if (type_str != NULL)
+            free(type_str);
+    }
+
+    return sig;
 }
 
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
@@ -8929,6 +9234,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info->alias_name == NULL && tree->tree_data.type_decl_data.id != NULL)
                     alias_info->alias_name = strdup(tree->tree_data.type_decl_data.id);
+
+                if (alias_info->alias_name != NULL &&
+                    (pascal_identifier_equals(alias_info->alias_name, "UnicodeString") ||
+                     pascal_identifier_equals(alias_info->alias_name, "WideString")))
+                {
+                    alias_info->is_wide_string = 1;
+                }
+                else if (alias_info->target_type_id != NULL &&
+                         (pascal_identifier_equals(alias_info->target_type_id, "UnicodeString") ||
+                          pascal_identifier_equals(alias_info->target_type_id, "WideString")))
+                {
+                    alias_info->is_wide_string = 1;
+                }
                 
                 alias_info->is_char_alias = semcheck_alias_should_be_char_like(
                     tree->tree_data.type_decl_data.id, alias_info->target_type_id) &&
@@ -10936,7 +11254,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         static const char *simple_procs[] = {
             "SetLength", "SetString", "write", "writeln", "writestr",
             "read", "readln", "Halt", "Error", "Assign", "Close",
-            "SetTextCodePage", "GetMem", "ReallocMem", "SetCodePage",
+            "SetTextCodePage", "GetMem", "ReallocMem",
             "FreeMem", "Val", "Str", "Insert", "Delete", "Inc", "Dec",
             "Include", "Exclude", "New", "Dispose", "Assert"
         };
@@ -12938,6 +13256,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 int element_type_borrowed = 0;  /* Track if borrowed from symbol table */
                 int is_array_of_const = (tree->tree_data.arr_decl_data.type == ARRAY_OF_CONST_TYPE);
 
+                if (!is_array_of_const &&
+                    tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                {
+                    element_type = tree->tree_data.arr_decl_data.element_kgpc_type;
+                    element_type_borrowed = 1;
+                }
+
                 /* If type_id is specified, resolve it to get the element type */
                 const TypeRef *element_type_ref = tree->tree_data.arr_decl_data.type_ref;
                 if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
@@ -12951,7 +13276,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         tree->tree_data.arr_decl_data.type_id ? tree->tree_data.arr_decl_data.type_id : "(null)",
                         element_type_ref ? type_ref_base_name(element_type_ref) : "(null)");
                 }
-                if (!is_array_of_const &&
+                if (element_type == NULL &&
+                    !is_array_of_const &&
                     (tree->tree_data.arr_decl_data.type_id != NULL || element_type_ref != NULL))
                 {
                     if (getenv("KGPC_DEBUG_TFLOAT") != NULL)
@@ -13849,6 +14175,37 @@ next_identifier:
                                     if (alias != NULL && alias->is_pointer)
                                         compatible = 1;
                                 }
+                            }
+
+                            /* Allow string literal initializer for PAnsiChar / PChar
+                             * pointer-to-char types.  The variable's KgpcType is
+                             * TYPE_KIND_POINTER with a CHAR_TYPE subtarget, e.g.:
+                             *   const signature: PAnsiChar = 'TPF0'; */
+                            if (!compatible &&
+                                (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE))
+                            {
+                                int var_is_pchar = 0;
+                                if (var_node != NULL && var_node->type != NULL &&
+                                    kgpc_type_is_pointer(var_node->type))
+                                {
+                                    int sub_tag = kgpc_type_get_pointer_subtype_tag(var_node->type);
+                                    if (sub_tag == CHAR_TYPE)
+                                        var_is_pchar = 1;
+                                }
+                                /* Also check by type_id (PAnsiChar, PChar, PWideChar) */
+                                if (!var_is_pchar)
+                                {
+                                    const char *tid = tree->tree_data.var_decl_data.type_id;
+                                    if (tid != NULL &&
+                                        (strcasecmp(tid, "PAnsiChar") == 0 ||
+                                         strcasecmp(tid, "PChar") == 0 ||
+                                         strcasecmp(tid, "PWideChar") == 0))
+                                    {
+                                        var_is_pchar = 1;
+                                    }
+                                }
+                                if (var_is_pchar)
+                                    compatible = 1;
                             }
 
                             if (!compatible && current_var_type == HASHVAR_RECORD &&

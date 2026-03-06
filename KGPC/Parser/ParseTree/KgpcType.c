@@ -1162,6 +1162,23 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             return 1;
         if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
             return are_types_compatible_for_assignment(lhs_type, rhs_proc, symtab);
+        if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_proc->info.primitive_type_tag == PROCEDURE)
+            return 1;
+        return 0;
+    }
+    if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
+        lhs_type->info.primitive_type_tag == PROCEDURE &&
+        rhs_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *rhs_proc = rhs_type->info.points_to;
+        if (rhs_proc == NULL)
+            return 1;
+        if (rhs_proc->kind == TYPE_KIND_PROCEDURE)
+            return 1;
+        if (rhs_proc->kind == TYPE_KIND_PRIMITIVE &&
+            rhs_proc->info.primitive_type_tag == PROCEDURE)
+            return 1;
         return 0;
     }
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_PROCEDURE)
@@ -2532,6 +2549,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->is_wide_string = src->is_wide_string;
     dst->is_open_array = src->is_open_array;
     dst->is_pointer = src->is_pointer;
+    dst->is_class_reference = src->is_class_reference;
     dst->pointer_type = src->pointer_type;
     dst->is_set = src->is_set;
     dst->set_element_type = src->set_element_type;

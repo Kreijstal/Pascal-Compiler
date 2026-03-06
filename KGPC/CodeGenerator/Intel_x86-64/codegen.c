@@ -28,6 +28,7 @@
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+
 #include "../../identifier_utils.h"
 
 int codegen_tag_from_kgpc(const KgpcType *type)
@@ -2671,17 +2672,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         while (method_node != NULL) {
             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
             if (method != NULL && method->mangled_name != NULL) {
-                /* Look up the actual function symbol to get its full mangled name.
-                 * Only use it if the method has a definition (body), not just a declaration. */
-                HashNode_t *func_sym = NULL;
-                const char *full_mangled = NULL;
-                if (FindIdent(&func_sym, symtab, method->mangled_name) == 0 &&
-                    func_sym != NULL && func_sym->mangled_id != NULL &&
-                    func_sym->type != NULL &&
-                    func_sym->type->kind == TYPE_KIND_PROCEDURE &&
-                    func_sym->type->info.proc_info.definition != NULL) {
-                    full_mangled = func_sym->mangled_id;
-                }
+                const char *full_mangled = method->resolved_mangled_id;
                 if (full_mangled != NULL) {
                     fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
                 } else {
@@ -4891,6 +4882,35 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             codegen_report_error(ctx,
                 "ERROR: Unable to determine size for array return value of %s.", func->id);
             record_return_size = 0;
+        }
+    }
+
+    /* Resolve dynamic array return types that were not found via func_node,
+     * especially for class methods returning aliased dynamic arrays
+     * (e.g. TUnicodeCharArray). */
+    if (!returns_dynamic_array && func->return_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *return_type_node = NULL;
+        FindIdent(&return_type_node, symtab, func->return_type_id);
+        if (return_type_node != NULL)
+        {
+            KgpcType *return_type = return_type_node->type;
+            if (return_type == NULL)
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(return_type_node);
+                if (alias != NULL)
+                    return_type = create_kgpc_type_from_type_alias(alias, symtab, 0);
+            }
+            if (return_type != NULL && return_type->kind == TYPE_KIND_ARRAY &&
+                kgpc_type_is_dynamic_array(return_type))
+            {
+                returns_dynamic_array = 1;
+                dynamic_array_element_size =
+                    codegen_dynamic_array_element_size_from_type(ctx, return_type);
+                dynamic_array_descriptor_size =
+                    codegen_dynamic_array_descriptor_bytes(dynamic_array_element_size);
+                dynamic_array_lower_bound = return_type->info.array_info.start_index;
+            }
         }
     }
 

@@ -2840,11 +2840,6 @@ static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt,
     return return_val;
 }
 
-static int semcheck_builtin_setcodepage(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
-{
-    return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 0);
-}
-
 static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val = 0;
@@ -4439,6 +4434,19 @@ assignment_types_ok:
 
         if (!types_compatible)
         {
+            if (getenv("KGPC_DEBUG_ASSIGN") != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ASSIGN] legacy mismatch line=%d col=%d lhs_type=%d rhs_type=%d lhs_expr_type=%d rhs_expr_type=%d\n",
+                    stmt->line_num,
+                    stmt->col_num,
+                    type_first,
+                    type_second,
+                    var != NULL ? var->type : -1,
+                    expr != NULL ? expr->type : -1);
+                semcheck_debug_expr_brief(var, "legacy assign lhs");
+                semcheck_debug_expr_brief(expr, "legacy assign rhs");
+            }
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
@@ -4490,6 +4498,18 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
     const char *prop_name = lhs->expr_data.id;
     if (prop_name == NULL)
         return -1;
+
+    /* WITH-context fields must be resolved as assignments on the active record,
+     * not rewritten as module-property setter calls. */
+    if (with_context_count > 0)
+    {
+        struct Expression *with_expr = NULL;
+        int with_status = semcheck_with_try_resolve(prop_name, symtab, &with_expr, stmt->line_num);
+        if (with_expr != NULL)
+            destroy_expr(with_expr);
+        if (with_status == 0)
+            return -1;
+    }
 
     ListNode_t *matches = FindAllIdents(symtab, prop_name);
     HashNode_t *setter = NULL;
@@ -4980,7 +5000,7 @@ skip_type_receiver_rewrite:
             if (!is_unit_qualifier &&
                 FindIdent(&unit_check, symtab, potential_unit_name) == -1)
             {
-                int looks_like_self_field = 0;
+                int looks_like_self_member = 0;
                 HashNode_t *self_node = NULL;
                 if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
                 {
@@ -4989,11 +5009,23 @@ skip_type_receiver_rewrite:
                         semcheck_find_class_field_including_hidden(symtab, self_record,
                             potential_unit_name, NULL) != NULL)
                     {
-                        looks_like_self_field = 1;
+                        looks_like_self_member = 1;
+                    }
+                    if (!looks_like_self_member &&
+                        semcheck_find_class_property(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_member = 1;
+                    }
+                    if (!looks_like_self_member &&
+                        semcheck_find_class_method(symtab, self_record,
+                            potential_unit_name, NULL) != NULL)
+                    {
+                        looks_like_self_member = 1;
                     }
                 }
 
-                if (!looks_like_self_field)
+                if (!looks_like_self_member)
                     is_unit_qualifier = 1;
             }
 
@@ -5205,8 +5237,27 @@ skip_type_receiver_rewrite:
                 /* Check if this is a virtual/abstract method call that needs VMT dispatch.
                  * Only for instance methods (not class/static methods), since class methods
                  * use a different VMT dispatch convention (single indirection). */
+                int method_param_count = -1;
+                if (method_node != NULL && method_node->type != NULL &&
+                    method_node->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    method_param_count = ListLength(method_node->type->info.proc_info.params);
+                    if (method_node->owner_class != NULL &&
+                        !from_cparser_is_method_static(method_node->owner_class,
+                            method_node->method_name != NULL ? method_node->method_name : bare_method_name))
+                    {
+                        if (method_param_count > 0)
+                            method_param_count -= 1;
+                        else
+                            method_param_count = 0;
+                    }
+                }
                 if (self_record->type_id != NULL && bare_method_name != NULL &&
-                    from_cparser_is_method_virtual(self_record->type_id, bare_method_name) &&
+                    from_cparser_is_method_virtual_with_signature(
+                        self_record->type_id,
+                        bare_method_name,
+                        method_param_count,
+                        NULL) &&
                     !from_cparser_is_method_static(self_record->type_id, bare_method_name))
                 {
                     stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
@@ -5221,6 +5272,12 @@ skip_type_receiver_rewrite:
                                 (info->is_virtual || info->is_override) &&
                                 strcasecmp(info->name, bare_method_name) == 0)
                             {
+                                if (method_param_count >= 0 && info->param_count >= 0 &&
+                                    method_param_count != info->param_count)
+                                {
+                                    method_entry = method_entry->next;
+                                    continue;
+                                }
                                 vmt_index = info->vmt_index;
                                 break;
                             }
@@ -5459,12 +5516,6 @@ skip_type_receiver_rewrite:
     handled_builtin = 0;
     return_val += try_resolve_builtin_procedure(symtab, stmt, "ReallocMem",
         semcheck_builtin_reallocmem, max_scope_lev, &handled_builtin);
-    if (handled_builtin)
-        return return_val;
-
-    handled_builtin = 0;
-    return_val += try_resolve_builtin_procedure(symtab, stmt, "SetCodePage",
-        semcheck_builtin_setcodepage, max_scope_lev, &handled_builtin);
     if (handled_builtin)
         return return_val;
 
@@ -5714,6 +5765,8 @@ skip_type_receiver_rewrite:
                                           (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
                                           (formal_type == VARIANT_TYPE) ||
                                           (actual_type == VARIANT_TYPE) ||
+                                          (formal_type == BUILTIN_ANY_TYPE) ||
+                                          (actual_type == BUILTIN_ANY_TYPE) ||
                                           (formal_type == RECORD_TYPE) ||
                                           (actual_type == RECORD_TYPE) ||
                                           (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
@@ -6683,12 +6736,28 @@ proccall_parent_resolve_done:
          * that weren't detected by the early Self-injection check. Only applies to
          * methods without a body (abstract) and not class/static methods (which use
          * single-indirection VMT dispatch that codegen doesn't support yet). */
+        int resolved_param_count = -1;
+        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            resolved_param_count = ListLength(resolved_proc->type->info.proc_info.params);
+            if (resolved_proc->owner_class != NULL &&
+                !from_cparser_is_method_static(resolved_proc->owner_class,
+                    resolved_proc->method_name))
+            {
+                if (resolved_param_count > 0)
+                    resolved_param_count -= 1;
+                else
+                    resolved_param_count = 0;
+            }
+        }
         if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
             !stmt->stmt_data.procedure_call_data.is_virtual_call &&
             !from_cparser_is_method_static(resolved_proc->owner_class,
                 resolved_proc->method_name) &&
-            from_cparser_is_method_virtual(resolved_proc->owner_class,
-                resolved_proc->method_name))
+            from_cparser_is_method_virtual_with_signature(resolved_proc->owner_class,
+                resolved_proc->method_name,
+                resolved_param_count,
+                NULL))
         {
             int has_body = 0;
             if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
@@ -6711,6 +6780,9 @@ proccall_parent_resolve_done:
                             (mi->is_virtual || mi->is_override) &&
                             strcasecmp(mi->name, resolved_proc->method_name) == 0)
                         {
+                            if (resolved_param_count >= 0 && mi->param_count >= 0 &&
+                                resolved_param_count != mi->param_count)
+                                continue;
                             stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
                             stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
                             if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
@@ -6978,6 +7050,30 @@ proccall_parent_resolve_done:
             }
             else
             {
+                if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+                {
+                    HashNode_t *synth_node = NULL;
+                    if (FindIdent(&synth_node, symtab, proc_id) < 0)
+                    {
+                        KgpcType *synth_type = create_procedure_type(NULL, NULL);
+                        if (synth_type != NULL)
+                        {
+                            char *id_dup = strdup(proc_id);
+                            char *mangled_dup = strdup(proc_id);
+                            if (id_dup != NULL && mangled_dup != NULL)
+                                (void)PushProcedureOntoScope_Typed(symtab, id_dup, mangled_dup, synth_type);
+                            else
+                            {
+                                free(id_dup);
+                                free(mangled_dup);
+                            }
+                            destroy_kgpc_type(synth_type);
+                        }
+                    }
+                    DestroyList(overload_candidates);
+                    free(mangled_name);
+                    return return_val;
+                }
                 /* No overloads found - procedure is not declared */
                 semcheck_error_with_context(
                     "Error on line %d, procedure %s%s is not declared.\n",
@@ -7006,6 +7102,53 @@ proccall_parent_resolve_done:
     }
     else
     {
+        if (with_context_count > 0 &&
+            proc_id != NULL &&
+            sym_return != NULL &&
+            sym_return->owner_class == NULL &&
+            !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+        {
+            int try_with_override = 0;
+            if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ListNode_t *params = kgpc_type_get_procedure_params(sym_return->type);
+                if (params != NULL && params->cur != NULL)
+                {
+                    Tree_t *first_decl = (Tree_t *)params->cur;
+                    const char *first_type_id = NULL;
+                    if (first_decl != NULL && first_decl->type == TREE_VAR_DECL)
+                        first_type_id = first_decl->tree_data.var_decl_data.type_id;
+                    else if (first_decl != NULL && first_decl->type == TREE_ARR_DECL)
+                        first_type_id = first_decl->tree_data.arr_decl_data.type_id;
+                    if (first_type_id != NULL &&
+                        strlen(first_type_id) == 1 &&
+                        first_type_id[0] >= 'A' && first_type_id[0] <= 'Z')
+                    {
+                        try_with_override = 1;
+                    }
+                }
+            }
+            if (try_with_override)
+            {
+                struct Expression *with_expr = NULL;
+                int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+                if (wm == 0 && with_expr != NULL)
+                {
+                    ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+                    if (self_node != NULL)
+                    {
+                        self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                        stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name == NULL)
+                            stmt->stmt_data.procedure_call_data.placeholder_method_name = strdup(proc_id);
+                        return semcheck_proccall(symtab, stmt, max_scope_lev);
+                    }
+                    destroy_expr(with_expr);
+                }
+            }
+        }
+
         sym_return->referenced += 1; /* Moved here: only access if sym_return is valid */
 
         if (sym_return->type != NULL && sym_return->type->kind == TYPE_KIND_PROCEDURE)

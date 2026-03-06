@@ -5132,6 +5132,24 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
         return inst_list;
     }
 
+    /* If buffer is a typecast of a dynamic array to a pointer (e.g. PUnicodeChar(Chars)),
+     * load the data pointer from the dynarray descriptor. */
+    int buffer_needs_dynarray_data = 0;
+    if (buffer_expr != NULL && buffer_expr->type == EXPR_TYPECAST &&
+        buffer_expr->expr_data.typecast_data.expr != NULL)
+    {
+        struct Expression *inner = buffer_expr->expr_data.typecast_data.expr;
+        KgpcType *inner_type = expr_get_kgpc_type(inner);
+        if (inner_type != NULL && kgpc_type_is_dynamic_array(inner_type))
+            buffer_needs_dynarray_data = 1;
+    }
+    if (buffer_needs_dynarray_data)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                 buffer_reg->bit_64, buffer_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     /* Spill buffer_reg */
     StackNode_t *buffer_slot = codegen_alloc_temp_slot("setstring_buf");
     if (buffer_slot == NULL)
@@ -5160,6 +5178,61 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
         inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
 
     const char *call_target = "kgpc_setstring";
+    if (target_expr != NULL && target_expr->resolved_kgpc_type == NULL &&
+        target_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *sym_node = NULL;
+        if (FindIdent(&sym_node, ctx->symtab, target_expr->expr_data.id) >= 0 &&
+            sym_node != NULL && sym_node->type != NULL)
+        {
+            target_expr->resolved_kgpc_type = sym_node->type;
+        }
+    }
+    if (target_expr != NULL && target_expr->resolved_kgpc_type != NULL)
+    {
+        int is_wide = kgpc_type_is_wide_string(target_expr->resolved_kgpc_type);
+        if (!is_wide && target_expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = target_expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = target_expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                is_wide = 1;
+            }
+        }
+        if (!is_wide && target_expr->type == EXPR_VAR_ID &&
+            target_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(target_expr->expr_data.id, "Result") &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *sub_id = ctx->current_subprogram_mangled;
+            if (sub_id == NULL || sub_id[0] == '\0')
+                sub_id = ctx->current_subprogram_id;
+            if (sub_id != NULL)
+            {
+                HashNode_t *sub_node = NULL;
+                if (FindIdent(&sub_node, ctx->symtab, sub_id) >= 0 &&
+                    sub_node != NULL && sub_node->type != NULL &&
+                    kgpc_type_is_procedure(sub_node->type))
+                {
+                    const char *ret_id = sub_node->type->info.proc_info.return_type_id;
+                    if (ret_id != NULL &&
+                        (pascal_identifier_equals(ret_id, "WideString") ||
+                         pascal_identifier_equals(ret_id, "UnicodeString")))
+                    {
+                        is_wide = 1;
+                    }
+                }
+            }
+        }
+        if (is_wide)
+            call_target = "kgpc_setstring_unicode";
+    }
     const char *mangled = stmt->stmt_data.procedure_call_data.mangled_id;
     if (mangled != NULL && strcmp(mangled, "kgpc_shortstring_setstring") == 0)
         call_target = "kgpc_shortstring_setstring";
@@ -6521,6 +6594,26 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         {
             treat_as_string = 1;
         }
+
+        int expr_is_wide_string = 0;
+        if (expr != NULL && expr->resolved_kgpc_type != NULL)
+        {
+            expr_is_wide_string = kgpc_type_is_wide_string(expr->resolved_kgpc_type);
+            if (!expr_is_wide_string && expr->resolved_kgpc_type->type_alias != NULL)
+            {
+                const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
+                const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
+                if ((alias_name != NULL &&
+                     (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                      pascal_identifier_equals(alias_name, "WideString"))) ||
+                    (target_name != NULL &&
+                     (pascal_identifier_equals(target_name, "UnicodeString") ||
+                      pascal_identifier_equals(target_name, "WideString"))))
+                {
+                    expr_is_wide_string = 1;
+                }
+            }
+        }
         
         /* Also treat PAnsiChar (pointer to char) as string */
         if (expr != NULL && expr->resolved_kgpc_type != NULL && 
@@ -6810,7 +6903,7 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             }
             else
             {
-                call_target = "kgpc_write_string";
+                call_target = expr_is_wide_string ? "kgpc_write_unicodestring" : "kgpc_write_string";
             }
         }
         else if (expr_type == BOOL)
@@ -8942,8 +9035,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         addr_reg = NULL;
         
         /* 4. Pass arguments as usual */
-        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, 0, NULL);
+        const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
+        inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
+            proc_name_hint, 0, NULL);
         
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -9055,8 +9149,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         
         /* When passing static link, shift arguments by 1 register position */
         int arg_start_index = should_pass_static_link ? 1 : 0;
-        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type, 
-            unmangled_name, arg_start_index, NULL);
+        const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
+        inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type,
+            proc_name_hint, arg_start_index, NULL);
 
         if (should_pass_static_link)
         {
@@ -9104,7 +9199,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             codegen_end_expression(ctx);
         }
 
-     inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_vect_reg(inst_list, 0);
         CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
         snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
         inst_list = add_inst(inst_list, buffer);

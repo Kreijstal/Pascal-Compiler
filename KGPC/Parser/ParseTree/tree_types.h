@@ -47,6 +47,7 @@ struct TypeAlias
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
+    int is_class_reference;  /* 1 if declared as "class of T" */
     int pointer_type;
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;
@@ -130,6 +131,9 @@ struct MethodInfo
     int is_virtual;           /* 1 if declared virtual */
     int is_override;          /* 1 if declared override */
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
+    int param_count;          /* Parameter count (excluding implicit Self) */
+    char *param_sig;          /* Optional parameter signature string */
+    char *resolved_mangled_id; /* Fully resolved mangled ID for codegen (set by semcheck) */
 };
 
 enum MethodTemplateKind
@@ -648,6 +652,7 @@ struct Expression
     int array_is_dynamic;
     struct RecordType *array_element_record_type;
     int is_default_initializer;
+    int is_specialize_addr_target;
 };
 
 struct SetElement

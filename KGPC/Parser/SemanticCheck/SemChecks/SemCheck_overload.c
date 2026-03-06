@@ -181,6 +181,29 @@ static int are_primitive_tags_compatible(int tag_a, int tag_b)
     return 0;
 }
 
+static int semcheck_is_widechar_like_type(KgpcType *type)
+{
+    if (type == NULL || !kgpc_type_is_char(type))
+        return 0;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL)
+    {
+        if ((alias->alias_name != NULL &&
+             (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+              pascal_identifier_equals(alias->alias_name, "UnicodeChar"))) ||
+            (alias->target_type_id != NULL &&
+             (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+              pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))))
+        {
+            return 1;
+        }
+    }
+
+    /* WideChar/UnicodeChar are 2-byte CHAR_TYPE in KGPC. */
+    return kgpc_type_sizeof(type) == 2;
+}
+
 int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
 {
     if (a == NULL || b == NULL || a->type == NULL || b->type == NULL)
@@ -679,6 +702,31 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     if (arg_expr == NULL)
         return UNKNOWN_TYPE;
 
+    if (arg_expr->type == EXPR_FUNCTION_CALL &&
+        arg_expr->expr_data.function_call_data.args_expr == NULL &&
+        arg_expr->expr_data.function_call_data.id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+            arg_expr->expr_data.function_call_data.id);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE &&
+            type_node->type != NULL)
+        {
+            KgpcType *resolved = type_node->type;
+            struct RecordType *type_record = get_record_type_from_node(type_node);
+            if (type_record != NULL && type_record->is_interface)
+            {
+                HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
+                if (tguid_node != NULL && tguid_node->type != NULL)
+                    resolved = tguid_node->type;
+            }
+            if (arg_type_out != NULL)
+                *arg_type_out = resolved;
+            if (owns_type_out != NULL)
+                *owns_type_out = 0;
+            return semcheck_tag_from_kgpc(resolved);
+        }
+    }
+
     int arg_tag = UNKNOWN_TYPE;
     KgpcType *arg_kgpc_type = NULL;
     semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
@@ -979,7 +1027,26 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_CONVERSION);
     /* For pointer types, don't return early - need to compare subtypes */
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
+    {
+        /* REAL_TYPE is used as a catch-all tag for all floating-point types
+         * (Single, Double, Extended, Real, ValReal, Currency, etc.).
+         * When both actual and formal have the same REAL_TYPE tag, compare
+         * the type_alias names for exact equality so that e.g.
+         * Double actual vs Extended formal is scored as PROMOTION rather
+         * than EXACT.  This prevents ambiguity among Max(Single), Max(Double),
+         * Max(Extended) overloads. */
+        if (formal_tag == REAL_TYPE && actual_kgpc != NULL && formal_kgpc != NULL)
+        {
+            const char *actual_alias = (actual_kgpc->type_alias != NULL) ?
+                actual_kgpc->type_alias->alias_name : NULL;
+            const char *formal_alias = (formal_kgpc->type_alias != NULL) ?
+                formal_kgpc->type_alias->alias_name : NULL;
+            if (actual_alias != NULL && formal_alias != NULL &&
+                !pascal_identifier_equals(actual_alias, formal_alias))
+                return semcheck_make_quality(MATCH_PROMOTION);
+        }
         return semcheck_make_quality(MATCH_EXACT);
+    }
     /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
         return semcheck_make_quality(MATCH_PROMOTION);
@@ -1033,12 +1100,56 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
              * integer types in value parameter contexts. */
             if (is_integer_type(actual_sub) && is_integer_type(formal_sub))
                 return semcheck_make_quality(MATCH_CONVERSION);
+            /* Accept char/integer pointee conversions as implicit pointer
+             * conversions (needed by RTL helpers using char/word aliases). */
+            if ((is_integer_type(actual_sub) || actual_sub == CHAR_TYPE) &&
+                (is_integer_type(formal_sub) || formal_sub == CHAR_TYPE))
+            {
+                return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* Also allow WideChar/UnicodeChar pointers to match word-like
+             * integer pointers (used by RTL Unicode map helpers). */
+            if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
+            {
+                int actual_is_widechar = semcheck_is_widechar_like_type(actual_kgpc->info.points_to);
+                int formal_is_widechar = semcheck_is_widechar_like_type(formal_kgpc->info.points_to);
+                if ((actual_is_widechar && is_integer_type(formal_sub)) ||
+                    (formal_is_widechar && is_integer_type(actual_sub)))
+                {
+                    return semcheck_make_quality(MATCH_CONVERSION);
+                }
+            }
             /* Also try kgpc_type_conversion_rank on the pointed-to types */
             if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
             {
                 int rank = kgpc_type_conversion_rank(actual_kgpc->info.points_to, formal_kgpc->info.points_to);
                 if (rank >= 0)
                     return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* "class of T" compatibility: when a class type name (^record)
+             * is passed where a class reference (^^record = class of T)
+             * is expected, allow it as a conversion.  The formal's pointee
+             * is itself a pointer-to-record (the class instance type). */
+            if (actual_sub == RECORD_TYPE && formal_sub == POINTER_TYPE &&
+                actual_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to->kind == TYPE_KIND_POINTER &&
+                formal_kgpc->info.points_to->info.points_to != NULL &&
+                formal_kgpc->info.points_to->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                /* Check if the actual class is compatible with the formal's
+                 * base class (the record inside the class reference). */
+                KgpcType *actual_inner = actual_kgpc->info.points_to;
+                KgpcType *formal_inner = formal_kgpc->info.points_to->info.points_to;
+                if (actual_inner->kind == TYPE_KIND_RECORD &&
+                    formal_inner->kind == TYPE_KIND_RECORD)
+                {
+                    if (actual_inner->info.record_info == formal_inner->info.record_info ||
+                        are_types_compatible_for_assignment(formal_inner, actual_inner, symtab))
+                    {
+                        return semcheck_make_quality(MATCH_CONVERSION);
+                    }
+                }
             }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
@@ -1089,7 +1200,14 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
         if (rank >= 0)
             return semcheck_match_from_rank(rank);
-        if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+        /* Skip are_types_compatible_for_assignment when the actual is a
+         * floating-point type and the formal is an integer type.  In Pascal,
+         * Real→Integer is NOT an implicit conversion (requires Trunc/Round).
+         * The generic compatibility check is too permissive here and would
+         * allow Real→Integer as MATCH_CONVERSION, causing ambiguity between
+         * Max(Extended) and Max(Integer) overloads. */
+        if (!(actual_tag == REAL_TYPE && is_integer_type(formal_tag)) &&
+            are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
             return semcheck_make_quality(MATCH_CONVERSION);
     }
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
@@ -1414,26 +1532,6 @@ static int semcheck_compare_match_quality(int arg_count,
         return 1;
     /* Otherwise ambiguous (either equal everywhere, or mixed) */
     return 0;
-}
-
-static int semcheck_quality_penalty_sum(int arg_count, const MatchQuality *q)
-{
-    if (q == NULL || arg_count <= 0)
-        return 0;
-
-    int total = 0;
-    for (int i = 0; i < arg_count; ++i)
-    {
-        int p = 0;
-        p += q[i].kind * 100;
-        p += q[i].int_promo_rank * 10;
-        p += q[i].char_promo_rank * 10;
-        p -= q[i].exact_type_id ? 3 : 0;
-        p -= q[i].exact_pointer_subtype ? 2 : 0;
-        p -= q[i].exact_array_elem ? 1 : 0;
-        total += p;
-    }
-    return total;
 }
 
 /* Compute class inheritance depth from a KgpcType that points to a class record.
@@ -2041,6 +2139,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     !(arg_tag == UNKNOWN_TYPE && arg_kgpc == NULL))
                 {
                     int allow_string_to_char_array = 0;
+                    int allow_pointer_backed_array = 0;
                     if (is_string_type(arg_tag) || arg_tag == CHAR_TYPE)
                     {
                         /* Check if formal element type is Char */
@@ -2053,7 +2152,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (elem_tag == CHAR_TYPE)
                             allow_string_to_char_array = 1;
                     }
-                    if (!allow_string_to_char_array)
+                    /* Generic/dynamic array values can flow through as pointer-typed
+                     * expressions (notably with specialize TArray<T> aliases).  Do not
+                     * reject these before quality classification. */
+                    if (!allow_string_to_char_array &&
+                        (arg_tag == POINTER_TYPE ||
+                         (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_POINTER)))
+                    {
+                        allow_pointer_backed_array = 1;
+                    }
+                    if (!allow_string_to_char_array && !allow_pointer_backed_array)
                     {
                         candidate_valid = 0;
                         if (owns_formal && formal_kgpc != NULL)
@@ -2481,25 +2589,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 else
                 {
                     num_best++;
-                    /* Mixed partial-order tie: choose lower aggregate penalty
-                     * before declaring true ambiguity. This helps pick the
-                     * more specific candidate in bootstrap overload sets where
-                     * alias/pointer exactness and promotions otherwise produce
-                     * non-dominating vectors. */
-                    int cand_penalty = semcheck_quality_penalty_sum(given_count, qualities);
-                    int best_penalty = semcheck_quality_penalty_sum(given_count, best_qualities);
-                    if (cand_penalty < best_penalty)
-                    {
-                        free(best_qualities);
-                        best_match = candidate;
-                        best_qualities = qualities;
-                        best_missing = missing_args;
-                        num_best = 1;
-                    }
-                    else
-                    {
-                        free(qualities);
-                    }
+                    free(qualities);
                 }
             }
         }

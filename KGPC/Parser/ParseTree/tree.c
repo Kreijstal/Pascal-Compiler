@@ -1897,6 +1897,8 @@ void destroy_record_type(struct RecordType *record_type)
             if (method != NULL) {
                 free(method->name);
                 free(method->mangled_name);
+                free(method->param_sig);
+                free(method->resolved_mangled_id);
                 free(method);
             }
             ListNode_t *next = cur->next;
@@ -2903,6 +2905,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->array_element_size = 0;
     expr->array_is_dynamic = 0;
     expr->array_element_record_type = NULL;
+    expr->is_specialize_addr_target = 0;
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;

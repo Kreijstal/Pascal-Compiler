@@ -549,6 +549,14 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
         return 1;
     }
+
+    /* Allow callable symbol and FUNCTION_RETURN helper symbol to coexist.
+     * This is required for recursive calls and operator overload lookup inside
+     * function bodies where the return pseudo-variable shares the function name. */
+    if ((existing_node->hash_type == HASHTYPE_FUNCTION_RETURN && is_new_proc_func) ||
+        (new_hash_type == HASHTYPE_FUNCTION_RETURN && is_existing_proc_func)) {
+        return 1;
+    }
     
     /* Allow parameters (VAR) to shadow procedures/functions in the same scope.
      * This is needed when a procedure's parameter has the same name as the procedure itself.
