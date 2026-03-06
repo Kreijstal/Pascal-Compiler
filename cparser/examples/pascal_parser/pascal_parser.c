@@ -236,7 +236,9 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
     #define QID_APPEND(ch) do { \
         if (buf_len + 1 >= buf_cap) { \
             buf_cap *= 2; \
-            buf = (char *)realloc(buf, buf_cap); \
+            char *tmp = (char *)realloc(buf, buf_cap); \
+            if (!tmp) { free(buf); abort(); } \
+            buf = tmp; \
         } \
         buf[buf_len++] = (ch); \
     } while (0)
