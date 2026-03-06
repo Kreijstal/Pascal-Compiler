@@ -265,6 +265,94 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+typedef struct EmittedClassSet
+{
+    const char **labels;
+    int count;
+    int capacity;
+} EmittedClassSet;
+
+static int emitted_class_set_contains(const EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 0;
+
+    for (int i = 0; i < set->count; ++i)
+    {
+        if (set->labels[i] != NULL && strcmp(set->labels[i], label) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int emitted_class_set_add(EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 1;
+
+    if (emitted_class_set_contains(set, label))
+        return 0;
+
+    if (set->count == set->capacity)
+    {
+        int new_capacity = (set->capacity > 0) ? set->capacity * 2 : 64;
+        const char **new_labels = (const char **)realloc(set->labels,
+            sizeof(const char *) * (size_t)new_capacity);
+        if (new_labels == NULL)
+            return 1;
+        set->labels = new_labels;
+        set->capacity = new_capacity;
+    }
+
+    set->labels[set->count++] = label;
+    return 0;
+}
+
+static void emitted_class_set_destroy(EmittedClassSet *set)
+{
+    if (set == NULL)
+        return;
+
+    free((void *)set->labels);
+    set->labels = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+static int codegen_type_decl_suppressed(const Tree_t *decl)
+{
+    return (decl != NULL &&
+        decl->type == TREE_TYPE_DECL &&
+        decl->tree_data.type_decl_data.suppress_codegen);
+}
+
+static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_TYPE_DECL)
+        return NULL;
+
+    KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+    if (kgpc != NULL)
+    {
+        if (kgpc->kind == TYPE_KIND_RECORD && kgpc->info.record_info != NULL)
+            return kgpc->info.record_info;
+        if (kgpc->kind == TYPE_KIND_POINTER &&
+            kgpc->info.points_to != NULL &&
+            kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
+            kgpc->info.points_to->info.record_info != NULL)
+            return kgpc->info.points_to->info.record_info;
+    }
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+        return decl->tree_data.type_decl_data.info.record;
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        return decl->tree_data.type_decl_data.info.alias.inline_record_type;
+
+    return NULL;
+}
+
 /* Get field offset within a record by field name.
  * Returns -1 if field not found. */
 static int record_type_get_field_offset(SymTab_t *symtab, struct RecordType *record,
@@ -945,6 +1033,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
             continue;
+        if (codegen_type_decl_suppressed(decl))
+            continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
             continue;
 
@@ -974,6 +1064,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         Tree_t *decl = (Tree_t *)cur->cur;
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (codegen_type_decl_suppressed(decl))
             continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS)
             continue;
@@ -2479,28 +2571,18 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
-/* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
-#define MAX_EMITTED_CLASSES 256
-
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++) {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     /* Emit interface entry table if this class implements interfaces */
     int actual_iface_count = 0;
@@ -2813,7 +2895,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 
 static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || record_type_is_class(record_info) || class_label == NULL)
         return;
@@ -2824,20 +2906,11 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     if (!has_class_vars && !has_class_methods)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++)
-    {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
-        {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
         has_class_vars ? 0 : 1);
@@ -2924,27 +2997,31 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
-    const char *emitted_classes[MAX_EMITTED_CLASSES];
-    int emitted_count = 0;
+    EmittedClassSet emitted_classes = {0};
 
     /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            if (codegen_type_decl_suppressed(type_tree))
+            {
+                cur = cur->next;
+                continue;
+            }
             struct RecordType *record_info = NULL;
             const char *class_label = NULL;
             
             /* Check if this is a record/class type with methods */
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                record_info = type_tree->tree_data.type_decl_data.info.record;
+                record_info = codegen_record_from_type_decl(type_tree);
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
                 class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
             }
             /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                record_info = codegen_record_from_type_decl(type_tree);
                 if (record_info != NULL && record_info->type_id != NULL) {
                     /* Check if this is a specialized generic */
                     if (record_info->is_generic_specialization) {
@@ -2954,9 +3031,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
         }
         cur = cur->next;
     }
@@ -2995,9 +3072,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         class_label = hash_node->id;
 
                     codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                     codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                 }
                 node = node->next;
             }
@@ -3010,18 +3087,13 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
+            !codegen_type_decl_suppressed(type_tree) &&
             type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
             const char *alias_name = type_tree->tree_data.type_decl_data.id;
             const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
             if (alias_name != NULL && target_name != NULL) {
                 /* Check if the target type has been emitted as a class/interface */
-                int target_emitted = 0;
-                for (int i = 0; i < emitted_count; i++) {
-                    if (strcasecmp(emitted_classes[i], target_name) == 0) {
-                        target_emitted = 1;
-                        break;
-                    }
-                }
+                int target_emitted = emitted_class_set_contains(&emitted_classes, target_name);
                 if (target_emitted) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
@@ -3034,6 +3106,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
         cur = cur->next;
     }
 
+    emitted_class_set_destroy(&emitted_classes);
     fprintf(ctx->output_file, ".text\n");
 
     #ifdef DEBUG_CODEGEN

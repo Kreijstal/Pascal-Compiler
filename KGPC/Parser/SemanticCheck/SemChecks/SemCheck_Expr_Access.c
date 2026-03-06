@@ -910,6 +910,34 @@ static int semcheck_detach_unary_not_from_receiver(struct Expression *receiver_e
     return 0;
 }
 
+static int semcheck_funccall_id_is_operator_dispatch(const char *id)
+{
+    if (id == NULL)
+        return 0;
+    if (strcmp(id, "+") == 0 || strcmp(id, "-") == 0 ||
+        strcmp(id, "*") == 0 || strcmp(id, "/") == 0 ||
+        strcmp(id, "=") == 0 || strcmp(id, "<>") == 0 ||
+        strcmp(id, "<") == 0 || strcmp(id, ">") == 0 ||
+        strcmp(id, "<=") == 0 || strcmp(id, ">=") == 0 ||
+        strcmp(id, "**") == 0 || strcmp(id, ":=") == 0 ||
+        strcasecmp(id, "div") == 0 || strcasecmp(id, "mod") == 0 ||
+        strcasecmp(id, "and") == 0 || strcasecmp(id, "or") == 0 ||
+        strcasecmp(id, "not") == 0 || strcasecmp(id, "xor") == 0 ||
+        strcasecmp(id, "shl") == 0 || strcasecmp(id, "shr") == 0 ||
+        strcasecmp(id, "in") == 0 || strcasecmp(id, "is") == 0 ||
+        strcasecmp(id, "as") == 0 ||
+        strcasecmp(id, "Implicit") == 0 || strcasecmp(id, "Explicit") == 0 ||
+        strcasecmp(id, "Equal") == 0 || strcasecmp(id, "NotEqual") == 0 ||
+        strcasecmp(id, "GreaterThan") == 0 ||
+        strcasecmp(id, "GreaterThanOrEqual") == 0 ||
+        strcasecmp(id, "LessThan") == 0 ||
+        strcasecmp(id, "LessThanOrEqual") == 0)
+        return 1;
+    if (strncmp(id, "op_", 3) == 0)
+        return 1;
+    return strstr(id, "__op_") != NULL;
+}
+
 int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 {
     assert(decl != NULL);
@@ -1365,6 +1393,7 @@ int semcheck_funccall(int *type_return,
 
     args_given = expr->expr_data.function_call_data.args_expr;
     int injected_self = 0;
+    int is_operator_dispatch = semcheck_funccall_id_is_operator_dispatch(id);
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
@@ -1825,7 +1854,8 @@ int semcheck_funccall(int *type_return,
 
         /* If no explicit receiver was provided (not a method call placeholder), but Self is in scope
          * and defines this method, prepend Self so unqualified method calls resolve correctly. */
-        if (!was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
+        if (!is_operator_dispatch &&
+            !was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
             HashNode_t *global_node = NULL;
             if (FindIdent(&global_node, symtab, id) >= 0 && global_node != NULL &&
@@ -2923,7 +2953,8 @@ int semcheck_funccall(int *type_return,
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
     /* Resolve unqualified calls against the current static method owner (helpers/class methods). */
-    if (!was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
+    if (!is_operator_dispatch &&
+        !was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
     {
         const char *current_owner = semcheck_get_current_method_owner();
         if (current_owner != NULL)
@@ -5897,7 +5928,8 @@ skip_overload_resolution:
                 ++return_val;
             expr->expr_data.function_call_data.args_expr = args_given;
         }
-        if (injected_self && hash_return != NULL && hash_return->type != NULL &&
+        if (!semcheck_funccall_id_is_operator_dispatch(id) &&
+            injected_self && hash_return != NULL && hash_return->type != NULL &&
             hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {
             int resolved_expects_self = 0;

@@ -292,6 +292,62 @@ static void semcheck_mark_type_decl_units(ListNode_t *type_decls, int unit_index
     }
 }
 
+static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode_t *limit,
+    const char *type_id, int source_unit_index, const struct RecordType *canonical_record)
+{
+    if (type_decls == NULL || type_id == NULL || canonical_record == NULL)
+        return;
+
+    for (ListNode_t *cur = type_decls; cur != NULL && cur != limit; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_TYPE_DECL ||
+            tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD ||
+            tree->tree_data.type_decl_data.id == NULL)
+            continue;
+
+        if (!pascal_identifier_equals(tree->tree_data.type_decl_data.id, type_id))
+            continue;
+
+        if (source_unit_index != 0 &&
+            tree->tree_data.type_decl_data.source_unit_index != 0 &&
+            tree->tree_data.type_decl_data.source_unit_index != source_unit_index)
+            continue;
+
+        if (tree->tree_data.type_decl_data.info.record != canonical_record)
+            continue;
+
+        tree->tree_data.type_decl_data.suppress_codegen = 1;
+        return;
+    }
+}
+
+static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
+{
+    if (tree == NULL || tree->type != TREE_TYPE_DECL)
+        return NULL;
+
+    KgpcType *kgpc = tree->tree_data.type_decl_data.kgpc_type;
+    if (kgpc != NULL)
+    {
+        if (kgpc->kind == TYPE_KIND_RECORD && kgpc->info.record_info != NULL)
+            return kgpc->info.record_info;
+        if (kgpc->kind == TYPE_KIND_POINTER &&
+            kgpc->info.points_to != NULL &&
+            kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
+            kgpc->info.points_to->info.record_info != NULL)
+            return kgpc->info.points_to->info.record_info;
+    }
+
+    if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+        return tree->tree_data.type_decl_data.info.record;
+
+    return NULL;
+}
+
 int semcheck_is_unit_name(const char *name)
 {
     if (name == NULL || name[0] == '\0')
@@ -6475,6 +6531,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.defined_in_unit,
                                     tree->tree_data.type_decl_data.unit_is_public);
                                 mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                                semcheck_mark_resolved_forward_stub(type_decls, cur,
+                                    type_id,
+                                    tree->tree_data.type_decl_data.source_unit_index,
+                                    existing_record);
                             }
                             cur = cur->next;
                             continue;
@@ -6607,6 +6667,10 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                 record_info->interface_names = NULL;
                                                 record_info->num_interfaces = 0;
                                             }
+                                            semcheck_mark_resolved_forward_stub(type_decls, cur,
+                                                type_id,
+                                                tree->tree_data.type_decl_data.source_unit_index,
+                                                existing_record);
                                             result = 0; /* Suppress the error */
                                         }
                                     }
@@ -8668,7 +8732,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         {
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
-                record_info = tree->tree_data.type_decl_data.info.record;
+                record_info = semcheck_record_from_type_decl(tree);
                 
                 /* Set the type_id on the RecordType so operator overloading can find it */
                 if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
@@ -8809,7 +8873,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     ListNode_t *params = NULL;
                                     if (tmpl->params_ast != NULL)
                                         params = from_cparser_convert_params_ast(tmpl->params_ast);
-                                    if (!tmpl->is_static)
+                                    if (!tmpl->is_static &&
+                                        tmpl->kind != METHOD_TEMPLATE_OPERATOR)
                                     {
                                         const char *self_type_id = tree->tree_data.type_decl_data.id;
                                         int self_is_var = 1;
