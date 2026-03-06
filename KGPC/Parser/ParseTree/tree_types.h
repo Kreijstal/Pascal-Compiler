@@ -133,6 +133,7 @@ struct MethodInfo
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
     int param_count;          /* Parameter count (excluding implicit Self) */
     char *param_sig;          /* Optional parameter signature string */
+    char *resolved_mangled_id; /* Fully resolved mangled ID for codegen (set by semcheck) */
 };
 
 enum MethodTemplateKind

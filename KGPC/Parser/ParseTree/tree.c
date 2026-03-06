@@ -1897,6 +1897,8 @@ void destroy_record_type(struct RecordType *record_type)
             if (method != NULL) {
                 free(method->name);
                 free(method->mangled_name);
+                free(method->param_sig);
+                free(method->resolved_mangled_id);
                 free(method);
             }
             ListNode_t *next = cur->next;

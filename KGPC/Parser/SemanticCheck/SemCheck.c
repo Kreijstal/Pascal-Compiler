@@ -7710,6 +7710,7 @@ if (record_info->parent_class_name != NULL) {
                             cloned->vmt_index = parent_method->vmt_index;
                             cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
+                            cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
                             
                             ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                             if (node != NULL) {
@@ -7891,6 +7892,7 @@ if (record_info->parent_class_name != NULL) {
                     new_method->is_override = 0;
                     new_method->param_count = binding->param_count;
                     new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
+                    new_method->resolved_mangled_id = NULL;
                     /* FPC VMT has 12 metadata slots (96 bytes) before virtual methods:
                      * vInstanceSize, vInstanceSize2, vParentRef, vClassName,
                      * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
@@ -7930,6 +7932,95 @@ if (record_info->parent_class_name != NULL) {
     
     /* Store VMT in record */
     record_info->methods = vmt;
+
+    /* Resolve mangled IDs for VMT entries so codegen doesn't need to
+     * do symbol table lookups or parse mangled names. */
+    for (ListNode_t *vmt_node = vmt; vmt_node != NULL; vmt_node = vmt_node->next) {
+        struct MethodInfo *mi = (struct MethodInfo *)vmt_node->cur;
+        if (mi == NULL || mi->mangled_name == NULL)
+            continue;
+        if (mi->resolved_mangled_id != NULL)
+            continue;  /* Already resolved (e.g. cloned from parent) */
+
+        /* Primary lookup: direct symbol table lookup by mangled_name */
+        HashNode_t *func_sym = NULL;
+        if (FindIdent(&func_sym, symtab, mi->mangled_name) == 0 &&
+            func_sym != NULL && func_sym->mangled_id != NULL &&
+            func_sym->type != NULL &&
+            func_sym->type->kind == TYPE_KIND_PROCEDURE &&
+            func_sym->type->info.proc_info.definition != NULL) {
+            mi->resolved_mangled_id = strdup(func_sym->mangled_id);
+            continue;
+        }
+
+        /* Fallback: search by class_name + method_name with param matching */
+        if (mi->name == NULL)
+            continue;
+        size_t base_len = strlen(class_name) + 2 + strlen(mi->name) + 1;
+        char *base_name = (char *)malloc(base_len);
+        if (base_name == NULL)
+            continue;
+        snprintf(base_name, base_len, "%s__%s", class_name, mi->name);
+        ListNode_t *matches = FindAllIdents(symtab, base_name);
+        const char *unique_mangled = NULL;
+        const char *def_candidate_mangled = NULL;
+        const char *single_mangled = NULL;
+        int unique_ok = 1;
+        int match_count = 0;
+        int def_match_count = 0;
+        for (ListNode_t *m = matches; m != NULL; m = m->next) {
+            HashNode_t *cand = (HashNode_t *)m->cur;
+            if (cand == NULL || cand->type == NULL ||
+                cand->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            /* Match by param signature if available */
+            if (mi->param_sig != NULL) {
+                char *cand_sig = semcheck_param_sig_from_params(
+                    cand->type->info.proc_info.params, 1);
+                if (cand_sig == NULL || strcmp(cand_sig, mi->param_sig) != 0) {
+                    free(cand_sig);
+                    continue;
+                }
+                free(cand_sig);
+            }
+            /* Match by param count */
+            int count = ListLength(cand->type->info.proc_info.params);
+            if (count > 0) count -= 1; /* drop implicit Self */
+            if (mi->param_count >= 0 && count != mi->param_count)
+                continue;
+
+            match_count++;
+            const char *cand_mangled = cand->mangled_id;
+            if (cand->type->info.proc_info.definition != NULL) {
+                Tree_t *def = cand->type->info.proc_info.definition;
+                if (def != NULL &&
+                    def->tree_data.subprogram_data.mangled_id != NULL)
+                    cand_mangled = def->tree_data.subprogram_data.mangled_id;
+                def_match_count++;
+                def_candidate_mangled = cand_mangled;
+            }
+            if (cand_mangled != NULL) {
+                if (unique_mangled == NULL)
+                    unique_mangled = cand_mangled;
+                else if (strcmp(unique_mangled, cand_mangled) != 0)
+                    unique_ok = 0;
+            } else {
+                unique_ok = 0;
+            }
+            if (match_count == 1)
+                single_mangled = (cand->type->info.proc_info.definition != NULL)
+                    ? cand_mangled : NULL;
+        }
+        if (unique_ok && unique_mangled != NULL && def_match_count > 0)
+            mi->resolved_mangled_id = strdup(unique_mangled);
+        else if (def_match_count == 1 && def_candidate_mangled != NULL)
+            mi->resolved_mangled_id = strdup(def_candidate_mangled);
+        else if (match_count == 1 && single_mangled != NULL)
+            mi->resolved_mangled_id = strdup(single_mangled);
+        if (matches != NULL)
+            DestroyList(matches);
+        free(base_name);
+    }
     
     
     /* Clean up class_methods list (shallow - we don't own the bindings) */
