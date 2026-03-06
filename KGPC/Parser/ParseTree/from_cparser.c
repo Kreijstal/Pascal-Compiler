@@ -2204,6 +2204,51 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     arg_types = NULL;
 
     substitute_record_type_parameters(record, generic, record->generic_args);
+
+    /* Rewrite references to nested types within the generic class.
+     * E.g. field FOnCompare with type_id="TCompareFunc" needs to become
+     * "TFPGList$TMyRecord.TCompareFunc" for proper resolution. */
+    if (generic->nested_type_decls != NULL) {
+        /* Collect the short names of nested types (without the prefix) */
+        size_t gen_prefix_len = strlen(base_name);
+        ListNode_t *field_node = record->fields;
+        while (field_node != NULL) {
+            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL) {
+                struct RecordField *field = (struct RecordField *)field_node->cur;
+                if (field->type_id != NULL) {
+                    /* Check if this type_id matches a nested type name */
+                    ListNode_t *nt = generic->nested_type_decls;
+                    while (nt != NULL) {
+                        if (nt->type == LIST_TREE && nt->cur != NULL) {
+                            Tree_t *nt_tree = (Tree_t *)nt->cur;
+                            if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL) {
+                                const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                                /* nested type id is like "TFPGList.TCompareFunc" */
+                                if (strncmp(nt_id, base_name, gen_prefix_len) == 0 &&
+                                    nt_id[gen_prefix_len] == '.') {
+                                    const char *short_name = nt_id + gen_prefix_len + 1;
+                                    if (strcasecmp(field->type_id, short_name) == 0) {
+                                        /* Rewrite to specialized: "TFPGList$TMyRecord.TCompareFunc" */
+                                        size_t new_len = strlen(specialized_name) + 1 + strlen(short_name) + 1;
+                                        char *new_id = (char *)malloc(new_len);
+                                        if (new_id != NULL) {
+                                            snprintf(new_id, new_len, "%s.%s", specialized_name, short_name);
+                                            free(field->type_id);
+                                            field->type_id = new_id;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        nt = nt->next;
+                    }
+                }
+            }
+            field_node = field_node->next;
+        }
+    }
+
     generic_registry_add_specialization(base_name, record->generic_args, arg_count);
 
     if (specialized_name_out != NULL)
@@ -3245,14 +3290,152 @@ void append_generic_method_clones(Tree_t *program_tree)
     }
 }
 
+/* Clone nested type declarations from a generic class for a specialization.
+ * For example, if TFPGList has nested type TFPGList.PT = ^T, then specializing
+ * TFPGList<TMyRecord> produces TFPGList$TMyRecord.PT = ^TMyRecord.
+ * The cloned declarations are appended to the program's type declaration list. */
+static void clone_nested_types_for_specialization(
+    GenericTypeDecl *generic_decl,
+    const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
+    ListNode_t *type_args,        /* concrete type arguments */
+    ListNode_t **type_list_out)   /* where to append new type decls */
+{
+    if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
+        specialized_name == NULL || type_list_out == NULL)
+        return;
+
+    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *generic_name = generic_decl->name;
+    size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
+    /* Build arg_types array for substitution */
+    int arg_count = 0;
+    ListNode_t *arg_cur = type_args;
+    while (arg_cur != NULL) {
+        if (arg_cur->type == LIST_STRING) arg_count++;
+        arg_cur = arg_cur->next;
+    }
+
+    ListNode_t *cur = generic_decl->nested_type_decls;
+    while (cur != NULL) {
+        if (cur->type == LIST_TREE && cur->cur != NULL) {
+            Tree_t *orig = (Tree_t *)cur->cur;
+            if (orig->type == TREE_TYPE_DECL && orig->tree_data.type_decl_data.id != NULL) {
+                const char *orig_id = orig->tree_data.type_decl_data.id;
+                /* Check that orig_id starts with generic_name + "." */
+                if (prefix_len > 0 && strncmp(orig_id, generic_name, prefix_len) == 0 &&
+                    orig_id[prefix_len] == '.')
+                {
+                    const char *suffix = orig_id + prefix_len; /* e.g., ".PT" */
+                    /* Build new id: specialized_name + suffix */
+                    size_t new_id_len = strlen(specialized_name) + strlen(suffix) + 1;
+                    char *new_id = (char *)malloc(new_id_len);
+                    if (new_id == NULL) { cur = cur->next; continue; }
+                    snprintf(new_id, new_id_len, "%s%s", specialized_name, suffix);
+
+                    Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
+                    if (clone == NULL) { free(new_id); cur = cur->next; continue; }
+
+                    clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
+                    clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
+
+                    if (orig->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *src_alias = &orig->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        *dst_alias = *src_alias; /* Shallow copy */
+                        dst_alias->target_type_id = src_alias->target_type_id ?
+                            strdup(src_alias->target_type_id) : NULL;
+                        dst_alias->pointer_type_id = src_alias->pointer_type_id ?
+                            strdup(src_alias->pointer_type_id) : NULL;
+                        dst_alias->array_element_type_id = src_alias->array_element_type_id ?
+                            strdup(src_alias->array_element_type_id) : NULL;
+                        dst_alias->inline_record_type = NULL;
+                        dst_alias->target_type_ref = src_alias->target_type_ref ?
+                            type_ref_clone(src_alias->target_type_ref) : NULL;
+                        dst_alias->array_element_type_ref = src_alias->array_element_type_ref ?
+                            type_ref_clone(src_alias->array_element_type_ref) : NULL;
+
+                        /* Substitute generic type parameters in type identifiers.
+                         * For example, if T → TMyRecord, then "T" → "TMyRecord",
+                         * and pointer_type_id "T" → "TMyRecord". */
+                        for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                            const char *param = generic_decl->type_parameters[pi];
+                            /* Get the concrete type for this parameter */
+                            ListNode_t *a = type_args;
+                            for (int ai = 0; ai < pi && a != NULL; ai++)
+                                a = a->next;
+                            if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                continue;
+                            const char *concrete = (const char *)a->cur;
+
+                            if (dst_alias->target_type_id != NULL &&
+                                strcasecmp(dst_alias->target_type_id, param) == 0) {
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->pointer_type_id != NULL &&
+                                strcasecmp(dst_alias->pointer_type_id, param) == 0) {
+                                free(dst_alias->pointer_type_id);
+                                dst_alias->pointer_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->array_element_type_id != NULL &&
+                                strcasecmp(dst_alias->array_element_type_id, param) == 0) {
+                                free(dst_alias->array_element_type_id);
+                                dst_alias->array_element_type_id = strdup(concrete);
+                            }
+                        }
+
+                        /* Also substitute qualified names: if target_type_id refers
+                         * to another nested type of the same generic (e.g., "TFPGList.PT"),
+                         * rewrite to "TFPGList$TMyRecord.PT" */
+                        if (dst_alias->target_type_id != NULL &&
+                            strncmp(dst_alias->target_type_id, generic_name, prefix_len) == 0 &&
+                            dst_alias->target_type_id[prefix_len] == '.') {
+                            const char *inner_suffix = dst_alias->target_type_id + prefix_len;
+                            size_t new_target_len = strlen(specialized_name) + strlen(inner_suffix) + 1;
+                            char *new_target = (char *)malloc(new_target_len);
+                            if (new_target != NULL) {
+                                snprintf(new_target, new_target_len, "%s%s", specialized_name, inner_suffix);
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = new_target;
+                            }
+                        }
+                    }
+
+                    /* Also handle procedure/function type declarations */
+                    if (orig->tree_data.type_decl_data.kgpc_type != NULL) {
+                        clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
+                        kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
+                    }
+
+                    ListNode_t *node = CreateListNode(clone, LIST_TREE);
+                    if (node != NULL) {
+                        node->next = *type_list_out;
+                        *type_list_out = node;
+                    } else {
+                        destroy_tree(clone);
+                    }
+
+                    if (debug_env != NULL)
+                        fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 void resolve_pending_generic_aliases(Tree_t *program_tree)
 {
     PendingGenericAlias *cur = g_pending_generic_aliases;
     g_pending_generic_aliases = NULL;
     ListNode_t **clone_dest = NULL;
+    ListNode_t **type_list = NULL;
     const char *debug_env = getenv("KGPC_DEBUG_TFPG");
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
         clone_dest = &program_tree->tree_data.program_data.subprograms;
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+    }
 
     while (cur != NULL) {
         PendingGenericAlias *next = cur->next;
@@ -3278,6 +3461,16 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
             }
             if (clone_dest != NULL)
                 append_specialized_method_clones(cur->decl, clone_dest);
+
+            /* Clone nested type declarations for this specialization */
+            if (type_list != NULL && specialized_name != NULL && cur->base_name != NULL) {
+                GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
+                if (generic != NULL && generic->nested_type_decls != NULL) {
+                    clone_nested_types_for_specialization(generic, specialized_name,
+                        cur->type_args, type_list);
+                }
+            }
+
             if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
                 cur->base_name != NULL)
             {
@@ -10561,6 +10754,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    ListNode_t *generic_nested_types = NULL;
     if (type_spec_node != NULL) {
         ast_t *spec_body = type_spec_node;
         if (spec_body->typ == PASCAL_T_TYPE_SPEC && spec_body->child != NULL)
@@ -10568,9 +10762,28 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         if (spec_body != NULL) {
             if (spec_body->typ == PASCAL_T_CLASS_TYPE)
             {
+                ListNode_t *nested_type_sections = NULL;
                 if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
-                record_template = convert_class_type_ex(id, spec_body, NULL);
+                record_template = convert_class_type_ex(id, spec_body, &nested_type_sections);
+                /* Convert nested type sections into type declarations for later specialization */
+                if (nested_type_sections != NULL) {
+                    ListNode_t *section_cursor = nested_type_sections;
+                    while (section_cursor != NULL) {
+                        ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                        if (type_section_ast != NULL) {
+                            append_type_decls_from_section(type_section_ast, &generic_nested_types,
+                                NULL, NULL, NULL, id);
+                        }
+                        section_cursor = section_cursor->next;
+                    }
+                    /* Clean up section list (not AST nodes) */
+                    while (nested_type_sections != NULL) {
+                        ListNode_t *next = nested_type_sections->next;
+                        free(nested_type_sections);
+                        nested_type_sections = next;
+                    }
+                }
             }
             else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
@@ -10598,7 +10811,16 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
-    generic_registry_add_decl(id, param_names, param_count, decl);
+    GenericTypeDecl *generic_decl = generic_registry_add_decl(id, param_names, param_count, decl);
+    if (generic_decl != NULL && generic_nested_types != NULL) {
+        generic_decl->nested_type_decls = generic_nested_types;
+        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
+            int count = 0;
+            ListNode_t *cur = generic_nested_types;
+            while (cur != NULL) { count++; cur = cur->next; }
+            fprintf(stderr, "[KGPC] stored %d nested type decls for generic %s\n", count, id);
+        }
+    }
 
     (void)type_spec_node; /* Placeholder for future template storage */
 
