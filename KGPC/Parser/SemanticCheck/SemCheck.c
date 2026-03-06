@@ -7977,11 +7977,10 @@ if (record_info->parent_class_name != NULL) {
             if (mi->param_sig != NULL) {
                 char *cand_sig = semcheck_param_sig_from_params(
                     cand->type->info.proc_info.params, 1);
-                if (cand_sig == NULL || strcmp(cand_sig, mi->param_sig) != 0) {
-                    free(cand_sig);
-                    continue;
-                }
+                int sig_match = (cand_sig != NULL && strcmp(cand_sig, mi->param_sig) == 0);
                 free(cand_sig);
+                if (!sig_match)
+                    continue;
             }
             /* Match by param count */
             int count = ListLength(cand->type->info.proc_info.params);
