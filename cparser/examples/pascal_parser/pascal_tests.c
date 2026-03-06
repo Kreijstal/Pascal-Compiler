@@ -3993,6 +3993,18 @@ void test_pascal_generic_class_tfpg_declaration(void) {
     assert_pascal_unit_parses_snippet("generic_class_tfpg.pas");
 }
 
+void test_pascal_generic_class_public_type_specialize(void) {
+    assert_pascal_unit_parses_snippet("generic_class_public_type_specialize.pas");
+}
+
+void test_pascal_advanced_record_private_type_var_section(void) {
+    assert_pascal_unit_parses_snippet("advanced_record_private_type_var_section.pas");
+}
+
+void test_pascal_advanced_record_private_type_object_directives(void) {
+    assert_pascal_unit_parses_snippet("advanced_record_private_type_object_directives.pas");
+}
+
 void test_pascal_specialize_alias(void) {
     assert_pascal_unit_parses_snippet("specialize_alias.pas");
 }
@@ -5701,6 +5713,9 @@ TEST_LIST = {
     { "test_pascal_generic_type_declaration", test_pascal_generic_type_declaration },
     { "test_pascal_generic_record_type_declaration", test_pascal_generic_record_type_declaration },
     { "test_pascal_generic_class_tfpg_declaration", test_pascal_generic_class_tfpg_declaration },
+    { "test_pascal_generic_class_public_type_specialize", test_pascal_generic_class_public_type_specialize },
+    { "test_pascal_advanced_record_private_type_var_section", test_pascal_advanced_record_private_type_var_section },
+    { "test_pascal_advanced_record_private_type_object_directives", test_pascal_advanced_record_private_type_object_directives },
     { "test_pascal_specialize_alias", test_pascal_specialize_alias },
     { "test_pascal_class_function_modifier", test_pascal_class_function_modifier },
     { "test_pascal_class_operator_overload", test_pascal_class_operator_overload },

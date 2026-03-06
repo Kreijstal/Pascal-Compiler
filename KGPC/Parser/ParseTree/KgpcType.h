@@ -145,6 +145,7 @@ int kgpc_type_is_procedure(const KgpcType *type);
 
 int kgpc_type_is_char(const KgpcType *type);
 int kgpc_type_is_string(const KgpcType *type);
+int kgpc_type_is_wide_string(const KgpcType *type);
 int kgpc_type_is_shortstring(const KgpcType *type);
 int kgpc_type_is_integer(const KgpcType *type);
 int kgpc_type_is_real(const KgpcType *type);

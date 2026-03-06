@@ -1,0 +1,5 @@
+non-nil: TRUE
+hello
+world
+test
+null-term: TRUE

@@ -71,4 +71,11 @@ const char *semcheck_get_current_subprogram_owner_class_full(void);
 const char *semcheck_get_current_subprogram_owner_class_outer(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
 
+/* Save/restore the current unit context for field type resolution.
+ * When resolving field types of a record defined in another unit,
+ * temporarily set the unit context to that unit so type lookups
+ * prefer same-unit types (e.g., system's pstring vs objpas's PString). */
+int semcheck_save_unit_context(void);
+void semcheck_restore_unit_context(int saved);
+
 #endif

@@ -42,6 +42,7 @@
 #include "../../pascal_frontend.h"
 #include "../../../identifier_utils.h"
 #include "../../../format_arg.h"
+#include "../../../unit_registry.h"
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const struct TypeRef *type_ref, const char *type_id);

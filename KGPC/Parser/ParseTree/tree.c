@@ -1307,6 +1307,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.var_decl_data.absolute_base_id);
           if (tree->tree_data.var_decl_data.absolute_field_id != NULL)
               free(tree->tree_data.var_decl_data.absolute_field_id);
+          if (tree->tree_data.var_decl_data.cname_override != NULL)
+              free(tree->tree_data.var_decl_data.cname_override);
           break;
 
         case TREE_ARR_DECL:
@@ -1895,6 +1897,8 @@ void destroy_record_type(struct RecordType *record_type)
             if (method != NULL) {
                 free(method->name);
                 free(method->mangled_name);
+                free(method->param_sig);
+                free(method->resolved_mangled_id);
                 free(method);
             }
             ListNode_t *next = cur->next;
@@ -2273,6 +2277,9 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }
@@ -2313,6 +2320,9 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }
@@ -2895,6 +2905,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->array_element_size = 0;
     expr->array_is_dynamic = 0;
     expr->array_element_record_type = NULL;
+    expr->is_specialize_addr_target = 0;
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;
@@ -3111,6 +3122,11 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
     new_expr->expr_data.function_call_data.call_qualifier = NULL;
+    new_expr->expr_data.function_call_data.is_virtual_call = 0;
+    new_expr->expr_data.function_call_data.vmt_index = -1;
+    new_expr->expr_data.function_call_data.self_class_name = NULL;
+    new_expr->expr_data.function_call_data.is_class_method_call = 0;
+    new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
 
     return new_expr;
 }

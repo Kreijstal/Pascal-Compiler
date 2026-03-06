@@ -123,6 +123,39 @@ LINK_ARGS_BY_ASM = {}
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
 
+# FPC RTL test mode: compile test cases against the Free Pascal Compiler RTL
+# instead of KGPC's own runtime. Set KGPC_FPC_RTL=1 to enable.
+FPC_RTL_MODE = os.environ.get("KGPC_FPC_RTL", "").lower() in ("1", "true", "yes")
+FPC_RTL_DIR = os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "rtl")
+
+# AST cache directory for FPC RTL mode — avoids re-parsing system.pp + objpas.pp
+# for every test (saves ~3.5s per test).
+_FPC_RTL_AST_CACHE_DIR = None
+if FPC_RTL_MODE:
+    _FPC_RTL_AST_CACHE_DIR = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_ast_cache"
+    )
+    os.makedirs(_FPC_RTL_AST_CACHE_DIR, exist_ok=True)
+
+FPC_RTL_FLAGS = [
+    "--no-stdlib",
+    "-I" + os.path.join(FPC_RTL_DIR, "linux"),
+    "-I" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+    "-I" + os.path.join(FPC_RTL_DIR, "inc"),
+    "-I" + os.path.join(FPC_RTL_DIR, "unix"),
+    "-I" + os.path.join(FPC_RTL_DIR, "x86_64"),
+    "-I" + os.path.join(FPC_RTL_DIR, "objpas", "sysutils"),
+    "-I" + os.path.join(FPC_RTL_DIR, "objpas", "classes"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "objpas"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "inc"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "linux"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "x86_64"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
+]
+if _FPC_RTL_AST_CACHE_DIR is not None:
+    FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
 UNIT_ONLY_TESTS = {
     "directives_and_properties_unit",
     "dotted_alias_base_unit",
@@ -1003,6 +1036,38 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
+        # Warm the AST cache for FPC RTL mode: compile a minimal dummy program
+        # so system.pp + objpas.pp are cached before individual tests run.
+        if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
+            dummy_src = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.p")
+            dummy_asm = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.s")
+            try:
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup; begin end.\n")
+                print("--- Warming FPC RTL AST cache ---", file=sys.stderr)
+                sys.stderr.flush()
+                run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
+                sys.stderr.flush()
+                # Also try to warm SysUtils/Classes/Math caches (may fail
+                # due to unsupported constructs, but AST caches are still
+                # written for successfully parsed units).
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
+                try:
+                    run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                    print("--- FPC RTL extended cache warmed ---", file=sys.stderr)
+                except Exception:
+                    print("--- FPC RTL extended cache partially warmed ---", file=sys.stderr)
+                sys.stderr.flush()
+            except Exception as e:
+                print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
+                sys.stderr.flush()
+            finally:
+                for tmp in (dummy_src, dummy_asm):
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+
         cc_raw = os.environ.get("CC")
         if not cc_raw:
             # Attempt to infer CC from Meson build directory for local pytest runs.
@@ -1105,10 +1170,13 @@ class TestCompiler(unittest.TestCase):
         if cls.ctypes_helper_library is not None and not os.path.exists(
             cls.ctypes_helper_library
         ):
-            raise RuntimeError(
-                "ctypes helper shared library provided by Meson does not exist: "
-                f"{cls.ctypes_helper_library}"
-            )
+            if FPC_RTL_MODE:
+                cls.ctypes_helper_library = None  # Not needed for FPC RTL tests
+            else:
+                raise RuntimeError(
+                    "ctypes helper shared library provided by Meson does not exist: "
+                    f"{cls.ctypes_helper_library}"
+                )
 
         raw_ctypes_helper_link = os.environ.get("KGPC_CTYPES_HELPER_LINK")
         if raw_ctypes_helper_link is None and cls.ctypes_helper_library is not None:
@@ -3121,11 +3189,120 @@ def _discover_and_add_auto_tests():
         setattr(TestCompiler, method_name, make_test_method(base_name))
 
 
+
+# Tests that use KGPC-only extensions not available in FPC RTL mode.
+KGPC_ONLY_TESTS = {
+    'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+
+def _discover_and_add_fpc_rtl_tests():
+    """
+    When KGPC_FPC_RTL=1, replace auto-discovered tests with FPC RTL variants.
+    Each test compiles with --no-stdlib and FPC RTL include/unit paths.
+    Tests that fail to compile are skipped (not failed).
+    Tests in KGPC_ONLY_TESTS are skipped entirely.
+    """
+    if not FPC_RTL_MODE:
+        return
+    if not os.path.isdir(FPC_RTL_DIR):
+        return
+
+    if not os.path.isdir(TEST_CASES_DIR):
+        return
+
+    expected_files = []
+    for filename in os.listdir(TEST_CASES_DIR):
+        if filename.endswith('.expected'):
+            base_name = filename[:-9]
+            pascal_file = os.path.join(TEST_CASES_DIR, base_name + '.p')
+            if os.path.isfile(pascal_file):
+                expected_files.append(base_name)
+
+    expected_files.sort()
+
+    for base_name in expected_files:
+        if base_name in KGPC_ONLY_TESTS:
+            continue
+
+        method_name = 'test_fpcrtl_' + base_name.replace('-', '_').replace(' ', '_')
+
+        if hasattr(TestCompiler, method_name):
+            continue
+
+        def make_fpc_rtl_test(test_base_name):
+            def test_method(self):
+                """FPC RTL test case."""
+                input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl.s")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl")
+                expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
+                input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
+
+                try:
+                    compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
+                except subprocess.CalledProcessError:
+                    self.fail(f"FPC RTL compilation failed for {test_base_name}")
+                    return
+
+                try:
+                    self.compile_executable(asm_file, executable_file)
+                except Exception:
+                    self.fail(f"FPC RTL linking failed for {test_base_name}")
+                    return
+
+                stdin_input = None
+                if os.path.exists(input_data_file):
+                    stdin_input = read_file_content(input_data_file)
+
+                try:
+                    if stdin_input is not None:
+                        process = run_executable_with_valgrind(
+                            [executable_file],
+                            capture_output=True, text=True,
+                            timeout=EXEC_TIMEOUT, input=stdin_input,
+                        )
+                    else:
+                        process = run_executable_with_valgrind(
+                            [executable_file],
+                            capture_output=True, text=True,
+                            timeout=EXEC_TIMEOUT,
+                        )
+                except subprocess.TimeoutExpired:
+                    self.fail(f"FPC RTL test {test_base_name} timed out")
+                    return
+
+                expected_output = read_file_content(expected_output_file)
+                text = process.stdout or ""
+                while "\r\r\n" in text:
+                    text = text.replace("\r\r\n", "\r\n")
+                actual_output = text.replace("\r\n", "\n").replace("\r", "")
+
+                self.assertEqual(actual_output, expected_output)
+                self.assertEqual(process.returncode, 0)
+
+            test_method.__name__ = method_name
+            test_method.__doc__ = f"FPC RTL test for {test_base_name}.p"
+            return test_method
+
+        setattr(TestCompiler, method_name, make_fpc_rtl_test(base_name))
+
+
 # Auto-discover and add tests before loading the suite
-_discover_and_add_auto_tests()
+if FPC_RTL_MODE:
+    _discover_and_add_fpc_rtl_tests()
+else:
+    _discover_and_add_auto_tests()
 
 
 def _load_suite():
+    if FPC_RTL_MODE:
+        # Only load FPC RTL tests, skip manual tests
+        suite = unittest.TestSuite()
+        for name in sorted(dir(TestCompiler)):
+            if name.startswith('test_fpcrtl_'):
+                suite.addTest(TestCompiler(name))
+        return suite
     return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
 
 

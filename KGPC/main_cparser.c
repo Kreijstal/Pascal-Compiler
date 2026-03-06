@@ -131,6 +131,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
     fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
+    fprintf(stderr, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
     fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
     fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
@@ -491,6 +492,10 @@ static void set_flags(char **optional_args, int count)
         {
             g_skip_stdlib = true;
         }
+        else if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
+        {
+            pascal_frontend_set_ast_cache_dir(&arg[15]);
+        }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {
             /* Define: -DSYMBOL or -DSYMBOL=VALUE */
@@ -827,6 +832,13 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_
                 decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
                 if (unit_index > 0 && decl->tree_data.type_decl_data.source_unit_index == 0)
                     decl->tree_data.type_decl_data.source_unit_index = unit_index;
+                /* Propagate unit index to the RecordType so field type lookups
+                   can prefer the defining unit's types. */
+                if (unit_index > 0 &&
+                    decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                    decl->tree_data.type_decl_data.info.record != NULL &&
+                    decl->tree_data.type_decl_data.info.record->source_unit_index == 0)
+                    decl->tree_data.type_decl_data.info.record->source_unit_index = unit_index;
             }
         }
         node = node->next;
@@ -1001,6 +1013,50 @@ static ListNode_t *merge_unit_type_decls_before_locals(ListNode_t *head, ListNod
     return head;
 }
 
+/* Detach and return only public interface subprogram declarations from a unit subprogram list.
+ * Non-public implementation subprogram nodes remain in *list for the caller to dispose with the unit tree. */
+static ListNode_t *extract_public_unit_subprograms(ListNode_t **list)
+{
+    if (list == NULL || *list == NULL)
+        return NULL;
+
+    ListNode_t *public_head = NULL;
+    ListNode_t **public_tail = &public_head;
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = *list;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        int take = 0;
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM &&
+                sub->tree_data.subprogram_data.unit_is_public)
+            {
+                take = 1;
+            }
+        }
+
+        if (take)
+        {
+            if (prev != NULL)
+                prev->next = next;
+            else
+                *list = next;
+            cur->next = NULL;
+            *public_tail = cur;
+            public_tail = &cur->next;
+        }
+        else
+        {
+            prev = cur;
+        }
+        cur = next;
+    }
+    return public_head;
+}
+
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -1072,41 +1128,52 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
-                    decl->tree_data.type_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
-                            decl->tree_data.type_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+    if (target->type == TREE_PROGRAM_TYPE)
+    {
+        mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+        if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+            ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+            while (dbg != NULL) {
+                if (dbg->type == LIST_TREE) {
+                    Tree_t *decl = (Tree_t *)dbg->cur;
+                    if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                        decl->tree_data.type_decl_data.id != NULL)
+                    {
+                        fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                                decl->tree_data.type_decl_data.id,
+                                unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                    unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                    }
                 }
+                dbg = dbg->next;
             }
-            dbg = dbg->next;
         }
+        /* Append implementation types to keep dependencies ahead of targets. */
+        *type_list = merge_unit_type_decls_before_locals(*type_list,
+            unit_tree->tree_data.unit_data.implementation_type_decls);
+        unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
+        /* Append implementation constants to keep dependencies ahead of targets. */
+        *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
+        unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
+        *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
+        unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
+        unit_tree->tree_data.unit_data.subprograms = NULL;
     }
-    /* Append implementation types to keep dependencies ahead of targets. */
-    *type_list = merge_unit_type_decls_before_locals(*type_list,
-        unit_tree->tree_data.unit_data.implementation_type_decls);
-    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
-
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Append implementation constants to keep dependencies ahead of targets. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
-    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
-
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
-    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
-
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
-    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
-    unit_tree->tree_data.unit_data.subprograms = NULL;
+    else
+    {
+        /* When compiling a unit, only interface declarations from used units are visible.
+         * Keep implementation declarations private to their original unit tree. */
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        ListNode_t *public_subs = extract_public_unit_subprograms(&unit_tree->tree_data.unit_data.subprograms);
+        *sub_list = ConcatList(*sub_list, public_subs);
+    }
 
     /* Only programs accumulate initialization/finalization */
     if (target->type == TREE_PROGRAM_TYPE) {
@@ -1463,19 +1530,22 @@ int main(int argc, char **argv)
                 clear_prelude_subprograms(prelude_tree);
             }
 
-            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+            /* Skip merging prelude types/consts/vars when compiling the System unit itself,
+             * since System defines its own core types and constants. */
+            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
+
+            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.).
+             * For System itself, keep prelude types unmarked so real System declarations
+             * take precedence while still providing missing core aliases (e.g. Currency). */
             ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
             if (prelude_types != NULL)
             {
-                mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
+                if (!is_system_unit)
+                    mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
                 user_tree->tree_data.unit_data.interface_type_decls =
                     ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
                 clear_prelude_type_decls(prelude_tree);
             }
-
-            /* Skip merging prelude constants/vars when compiling the System unit itself,
-             * since System defines its own DirectorySeparator, IsLibrary, etc. */
-            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
 
             /* Merge prelude constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
             ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);

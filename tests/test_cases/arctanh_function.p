@@ -1,4 +1,5 @@
 program arctanh_function;
+uses Math;
 var
   r: real;
 begin

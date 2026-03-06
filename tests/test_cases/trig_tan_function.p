@@ -1,4 +1,5 @@
 program trig_tan_function;
+uses Math;
 var
   x: real;
 begin

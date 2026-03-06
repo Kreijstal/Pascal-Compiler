@@ -383,6 +383,92 @@ static const char* case_call_name(ast_t* call_node) {
     return NULL;
 }
 
+static const char* case_last_segment(const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    const char* last = name;
+    for (const char* p = name; *p; ++p) {
+        if (*p == '.') {
+            last = p + 1;
+        }
+    }
+    return last;
+}
+
+static bool case_typecast_name_allowed(const char* name) {
+    if (name == NULL) {
+        return false;
+    }
+    const char* last = case_last_segment(name);
+    if (last == NULL || *last == '\0') {
+        return false;
+    }
+    size_t len = strlen(last);
+    if (len >= 2 && last[len - 2] == '_' && tolower((unsigned char)last[len - 1]) == 't') {
+        return true;
+    }
+    return false;
+}
+
+static ParseResult case_allowed_call_name_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    combinator_t* ident = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult res = parse(in, ident);
+    free_combinator(ident);
+    if (!res.is_success) {
+        restore_input_state(in, &state);
+        return res;
+    }
+    ast_t* ast = res.value.ast;
+    const char* name = (ast != NULL && ast->sym != NULL) ? ast->sym->name : NULL;
+    if (!case_call_name_allowed(case_last_segment(name))) {
+        free_ast(ast);
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected allowed case function name"), NULL);
+    }
+    return make_success(ast);
+}
+
+static combinator_t* case_allowed_call_name(void) {
+    combinator_t* comb = new_combinator();
+    comb->fn = case_allowed_call_name_fn;
+    comb->args = NULL;
+    comb->name = strdup("case_allowed_call_name");
+    return comb;
+}
+
+static ParseResult case_typecast_name_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    combinator_t* ident = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult res = parse(in, ident);
+    free_combinator(ident);
+    if (!res.is_success) {
+        restore_input_state(in, &state);
+        return res;
+    }
+    ast_t* ast = res.value.ast;
+    const char* name = (ast != NULL && ast->sym != NULL) ? ast->sym->name : NULL;
+    if (!case_typecast_name_allowed(name)) {
+        free_ast(ast);
+        restore_input_state(in, &state);
+        return make_failure_v2(in, parser_name, strdup("Expected case typecast name"), NULL);
+    }
+    return make_success(ast);
+}
+
+static combinator_t* case_typecast_name(void) {
+    combinator_t* comb = new_combinator();
+    comb->fn = case_typecast_name_fn;
+    comb->args = NULL;
+    comb->name = strdup("case_typecast_name");
+    return comb;
+}
+
 static bool case_label_has_disallowed_call(ast_t* node) {
     if (node == NULL || node == ast_nil) {
         return false;
@@ -456,10 +542,15 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
     // Note: boolean literals (true/false) must come BEFORE cident to avoid being
     // parsed as identifiers.
     combinator_t* case_func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        pascal_qualified_identifier(PASCAL_T_IDENTIFIER),
+        case_allowed_call_name(),
         between(token(match("(")), token(match(")")),
             optional(sep_by(lazy(expr_parser), token(match(","))))
         ),
+        NULL
+    );
+    combinator_t* case_typecast = seq(new_combinator(), PASCAL_T_TYPECAST,
+        case_typecast_name(),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
@@ -474,6 +565,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
         token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
         case_func_call,
+        case_typecast,
         pascal_qualified_identifier(PASCAL_T_IDENTIFIER),  // supports dotted identifiers like THorzRectAlign.Left
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);

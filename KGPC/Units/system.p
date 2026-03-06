@@ -11,6 +11,7 @@ type
   ShortInt = -128..127;          { 8-bit signed }
   Word = 0..65535;               { 16-bit unsigned }
   SmallInt = -32768..32767;      { 16-bit signed }
+  Integer = LongInt;             { 32-bit signed (FPC objfpc mode default) }
   Cardinal = 0..4294967295;      { 32-bit unsigned }
   LongWord = Cardinal;           { 32-bit unsigned }
   DWord = Cardinal;              { 32-bit unsigned }
@@ -21,7 +22,7 @@ type
   QWord = Int64;
   UInt64 = QWord;
 
-  { Single, Double, Extended are now builtin types with correct sizes (4, 8, 8 bytes) }
+  { Single, Double, Extended are now builtin types with correct sizes (4, 8, 16 bytes) }
 
   { Size types - platform dependent }
   NativeInt = Int64;
@@ -502,11 +503,34 @@ var
   Example: UpCase('a') returns 'A'
 }
 
-{ Random - Returns a random number
-  Random: real - Returns a random real in [0, 1)
-  Random(upper: integer): integer - Returns random integer in [0, upper)
-  Random(upper: real): real - Returns random real in [0, upper)
-}
+{ Math intrinsics — declared with external name to map to runtime functions }
+{ Pi is injected as a builtin constant by the semantic checker }
+
+function Sqrt(x: Real): Real; cdecl; external name 'kgpc_sqrt';
+function Sin(x: Real): Real; cdecl; external name 'kgpc_sin';
+function Cos(x: Real): Real; cdecl; external name 'kgpc_cos';
+function ArcTan(x: Real): Real; cdecl; external name 'kgpc_arctan';
+function Ln(x: Real): Real; cdecl; external name 'kgpc_ln';
+function Exp(x: Real): Real; cdecl; external name 'kgpc_exp';
+function Frac(x: Real): Real; cdecl; external name 'kgpc_frac';
+function Int(x: Real): Real; cdecl; external name 'kgpc_int_real';
+function Round(x: Real): Int64; cdecl; external name 'kgpc_round';
+function Trunc(x: Real): Int64; cdecl; external name 'kgpc_trunc';
+
+function Abs(x: LongInt): LongInt; cdecl; external name 'kgpc_abs_int';
+function Abs(x: Int64): Int64; cdecl; external name 'kgpc_abs_longint';
+function Abs(x: Real): Real; cdecl; external name 'kgpc_abs_real';
+
+function Sqr(x: LongInt): LongInt; cdecl; external name 'kgpc_sqr_int64';
+function Sqr(x: Int64): Int64; cdecl; external name 'kgpc_sqr_int64';
+function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
+
+function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
+
+function Random: Real; cdecl; external name 'kgpc_random_real';
+function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
+function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
+function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper';
 
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.
@@ -877,10 +901,6 @@ begin
     ToSingleByteFileSystemEncodedFileName := S;
 end;
 
-function ArrayStringToPPchar(const S: array of RawByteString; reserveentries: LongInt): PPAnsiChar;
-begin
-    ArrayStringToPPchar := nil;
-end;
 
 procedure MkDir(path: string);
 begin
