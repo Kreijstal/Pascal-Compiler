@@ -13926,7 +13926,10 @@ static struct Expression *convert_member_access_chain(int line,
                     continue;
                 ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                 if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
                     continue;
+                }
                 if (args_list == NULL) {
                     args_list = new_node;
                     tail = new_node;
@@ -13945,7 +13948,10 @@ static struct Expression *convert_member_access_chain(int line,
                     continue;
                 ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                 if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
                     continue;
+                }
                 if (args_list == NULL) {
                     args_list = new_node;
                     tail = new_node;
