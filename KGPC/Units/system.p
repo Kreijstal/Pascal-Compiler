@@ -452,7 +452,7 @@ var
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
   RandSeed: LongWord; external name 'kgpc_randseed';
-  WideStringManager: TUnicodeStringManager;
+  widestringmanager: TUnicodeStringManager;
   DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
   DefaultUnicodeCodePage: TSystemCodePage;

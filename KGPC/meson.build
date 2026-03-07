@@ -127,6 +127,9 @@ else
   runtime_c_args += ['-DHAVE_GMP=0']
 endif
 
+pthread_dep = dependency('threads', required: true)
+runtime_deps += [pthread_dep]
+
 if host_machine.system() != 'windows'
   runtime_deps += [compiler.find_library('dl', required: true)]
 endif

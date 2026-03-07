@@ -39,9 +39,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
-#ifndef _WIN32
 #include <unistd.h>
-#endif
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations from KGPC runtime                              */
@@ -201,6 +199,50 @@ void assign_f_s(void *filerec, const char *path)
 }
 
 /* ------------------------------------------------------------------ */
+/* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
+/*                                                                     */
+/* In KGPC, all strings are AnsiStrings (1-byte chars).  FPC RTL's     */
+/* fileopen_us_i expects UnicodeString and converts via                */
+/* widestringmanager, which garbles KGPC's AnsiString data.            */
+/* These strong definitions bypass the conversion and call open()      */
+/* directly with the AnsiString's char data.                           */
+/* ------------------------------------------------------------------ */
+#include <fcntl.h>
+#include <sys/stat.h>
+
+/* FPC file mode constants (lower 2 bits) */
+#define FPC_FM_OPENREAD      0
+#define FPC_FM_OPENWRITE     1
+#define FPC_FM_OPENREADWRITE 2
+
+static int fpc_mode_to_posix_flags(int32_t mode)
+{
+    switch (mode & 3) {
+        case FPC_FM_OPENREAD:      return O_RDONLY;
+        case FPC_FM_OPENWRITE:     return O_WRONLY;
+        case FPC_FM_OPENREADWRITE: return O_RDWR;
+        default:                   return O_RDONLY;
+    }
+}
+
+/* fileopen_us_i: FileOpen(const FileName: UnicodeString; Mode: Integer): THandle
+ * In KGPC, UnicodeString IS AnsiString, so FileName is a char pointer. */
+int32_t fileopen_us_i(const char *filename, int32_t mode)
+{
+    if (filename == NULL)
+        return -1;
+    return open(filename, fpc_mode_to_posix_flags(mode));
+}
+
+/* fileopen_rbs_i: FileOpen(const FileName: RawByteString; Mode: Integer): THandle */
+int32_t fileopen_rbs_i(const char *filename, int32_t mode)
+{
+    if (filename == NULL)
+        return -1;
+    return open(filename, fpc_mode_to_posix_flags(mode));
+}
+
+/* ------------------------------------------------------------------ */
 /* MODE_OPEN: FPC constant S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH = 0666 octal = 438 */
 /* Referenced as a global variable by FPC RTL compiled code.           */
 /* ------------------------------------------------------------------ */
@@ -239,3 +281,153 @@ struct {
 /* ------------------------------------------------------------------ */
 void *dest = NULL;
 void *Dest = NULL;
+
+/* ------------------------------------------------------------------ */
+/* FPC TThreadManager implementation (single-threaded).                */
+/* FPC RTL's commoninit calls through CurrentTM function pointers.    */
+/* These are real implementations for a single-threaded runtime using  */
+/* POSIX primitives where needed.                                      */
+/*                                                                     */
+/* TThreadManager layout (each field is a function pointer, 8 bytes): */
+/*   0: InitManager       8: DoneManager      16: BeginThread         */
+/*  24: EndThread         32: SuspendThread    40: ResumeThread        */
+/*  48: KillThread        56: CloseThread      64: ThreadSwitch        */
+/*  72: WaitForTerminate  80: SetPriority      88: GetPriority         */
+/*  96: GetCurrentThreadId 104: SetDebugNameA  112: SetDebugNameU      */
+/* 120: InitCritSection   128: DoneCritSection 136: EnterCritSection   */
+/* 144: TryEnterCritSection 152: LeaveCritSection                      */
+/* 160: InitThreadVar     168: RelocateThreadVar                       */
+/* 176: AllocateThreadVars 184: ReleaseThreadVars                      */
+/* 192: BasicEventCreate  200: BasicEventDestroy                       */
+/* 208: BasicEventReset   216: BasicEventSet   224: BasicEventWaitFor  */
+/* 232: RTLEventCreate    240: RTLEventDestroy  248: RTLEventSetEvent  */
+/* 256: RTLEventResetEvent 264: RTLEventWaitFor 272: RTLEventWaitTimeout */
+/* ------------------------------------------------------------------ */
+
+#include <stdlib.h>
+#include <pthread.h>
+
+/* RTL events: malloc'd flag + mutex + condvar for proper wait semantics */
+typedef struct {
+    pthread_mutex_t mutex;
+    pthread_cond_t cond;
+    int signaled;
+} KgpcRTLEvent;
+
+static void *kgpc_rtlevent_create(void) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)calloc(1, sizeof(KgpcRTLEvent));
+    if (ev == NULL) return NULL;
+    pthread_mutex_init(&ev->mutex, NULL);
+    pthread_cond_init(&ev->cond, NULL);
+    return ev;
+}
+
+static void kgpc_rtlevent_destroy(void *event) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
+    if (ev == NULL) return;
+    pthread_cond_destroy(&ev->cond);
+    pthread_mutex_destroy(&ev->mutex);
+    free(ev);
+}
+
+static void kgpc_rtlevent_set(void *event) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
+    if (ev == NULL) return;
+    pthread_mutex_lock(&ev->mutex);
+    ev->signaled = 1;
+    pthread_cond_signal(&ev->cond);
+    pthread_mutex_unlock(&ev->mutex);
+}
+
+static void kgpc_rtlevent_reset(void *event) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
+    if (ev == NULL) return;
+    pthread_mutex_lock(&ev->mutex);
+    ev->signaled = 0;
+    pthread_mutex_unlock(&ev->mutex);
+}
+
+static void kgpc_rtlevent_wait(void *event) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
+    if (ev == NULL) return;
+    pthread_mutex_lock(&ev->mutex);
+    while (!ev->signaled)
+        pthread_cond_wait(&ev->cond, &ev->mutex);
+    ev->signaled = 0;
+    pthread_mutex_unlock(&ev->mutex);
+}
+
+static void kgpc_rtlevent_wait_timeout(void *event, int timeout) {
+    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
+    if (ev == NULL) return;
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += timeout / 1000;
+    ts.tv_nsec += (timeout % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+    pthread_mutex_lock(&ev->mutex);
+    while (!ev->signaled)
+        if (pthread_cond_timedwait(&ev->cond, &ev->mutex, &ts) != 0)
+            break;
+    ev->signaled = 0;
+    pthread_mutex_unlock(&ev->mutex);
+}
+
+/* Critical sections backed by pthread_mutex */
+static void kgpc_critsection_init(void *cs) {
+    pthread_mutex_init((pthread_mutex_t *)cs, NULL);
+}
+static void kgpc_critsection_done(void *cs) {
+    pthread_mutex_destroy((pthread_mutex_t *)cs);
+}
+static void kgpc_critsection_enter(void *cs) {
+    pthread_mutex_lock((pthread_mutex_t *)cs);
+}
+static int64_t kgpc_critsection_tryenter(void *cs) {
+    return pthread_mutex_trylock((pthread_mutex_t *)cs) == 0 ? 1 : 0;
+}
+static void kgpc_critsection_leave(void *cs) {
+    pthread_mutex_unlock((pthread_mutex_t *)cs);
+}
+
+static int64_t kgpc_tm_init(void) { return 1; }
+static int64_t kgpc_get_current_thread_id(void) {
+    return (int64_t)pthread_self();
+}
+
+/* CurrentTM: FPC's TThreadManager record (35 function pointers).
+ * Defined by the compiler in the generated assembly (.globl CurrentTM).
+ * In non-FPC-RTL mode it won't exist, but this file is only linked
+ * when it's needed — and kgpc_fpc_init_thread_manager is only called
+ * when CurrentTM is present. */
+extern void *CurrentTM[35];
+
+/* Called from kgpc_init_args to populate CurrentTM */
+void kgpc_fpc_init_thread_manager(void)
+{
+    if (CurrentTM[29] != NULL)  /* already initialized */
+        return;
+
+    CurrentTM[0]  = (void *)kgpc_tm_init;               /* InitManager */
+    CurrentTM[1]  = (void *)kgpc_tm_init;               /* DoneManager */
+    CurrentTM[12] = (void *)kgpc_get_current_thread_id;
+    CurrentTM[15] = (void *)kgpc_critsection_init;
+    CurrentTM[16] = (void *)kgpc_critsection_done;
+    CurrentTM[17] = (void *)kgpc_critsection_enter;
+    CurrentTM[18] = (void *)kgpc_critsection_tryenter;
+    CurrentTM[19] = (void *)kgpc_critsection_leave;
+    CurrentTM[24] = (void *)kgpc_rtlevent_create;       /* BasicEventCreate */
+    CurrentTM[25] = (void *)kgpc_rtlevent_destroy;
+    CurrentTM[26] = (void *)kgpc_rtlevent_reset;
+    CurrentTM[27] = (void *)kgpc_rtlevent_set;
+    CurrentTM[28] = (void *)kgpc_rtlevent_wait;
+    CurrentTM[29] = (void *)kgpc_rtlevent_create;       /* RTLEventCreate */
+    CurrentTM[30] = (void *)kgpc_rtlevent_destroy;
+    CurrentTM[31] = (void *)kgpc_rtlevent_set;
+    CurrentTM[32] = (void *)kgpc_rtlevent_reset;
+    CurrentTM[33] = (void *)kgpc_rtlevent_wait;
+    CurrentTM[34] = (void *)kgpc_rtlevent_wait_timeout;
+}

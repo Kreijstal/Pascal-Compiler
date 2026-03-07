@@ -79,7 +79,6 @@ size_t preprocessed_length = 0;
 char *preprocessed_path = NULL;
 static UnitSearchPaths g_unit_paths;
 static bool g_skip_stdlib = false;
-static int g_requires_pthread = 0;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
 
@@ -1224,8 +1223,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (normalized == NULL)
         return;
 
-    if (strcmp(normalized, "cthreads") == 0)
-        g_requires_pthread = 1;
     if (strcmp(normalized, "gmp") == 0)
         g_requires_gmp = 1;
 
@@ -1301,10 +1298,8 @@ static void emit_link_args(void)
         used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lm");
     }
 
-    if (g_requires_pthread && !target_windows_flag())
-    {
-        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
-    }
+    /* Runtime always requires pthread (thread manager in runtime_fpc_assign.c) */
+    used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
 
     if (g_requires_gmp)
     {

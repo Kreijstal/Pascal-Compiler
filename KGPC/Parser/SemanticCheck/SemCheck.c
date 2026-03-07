@@ -7761,12 +7761,27 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
-    
+
 if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
         HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
         if (parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_node(parent_node);
+            /* If parent has method bindings but VMT not built yet, build it first */
+            if (parent_record != NULL && parent_record->methods == NULL) {
+                ListNode_t *parent_bindings = NULL;
+                int parent_binding_count = 0;
+                const char *parent_name = record_info->parent_class_name;
+                /* Look up the parent's type_id from its record if available */
+                if (parent_record->type_id != NULL)
+                    parent_name = parent_record->type_id;
+                get_class_methods(parent_name, &parent_bindings, &parent_binding_count);
+                if (parent_binding_count > 0) {
+                    /* Parent has methods but VMT not built — build it now */
+                    build_class_vmt(symtab, parent_record, parent_name, line_num);
+                }
+                DestroyList(parent_bindings);
+            }
             if (parent_record != NULL && parent_record->methods != NULL) {
                 /* Clone parent's VMT */
                 ListNode_t *parent_vmt = parent_record->methods;
@@ -7957,7 +7972,7 @@ if (record_info->parent_class_name != NULL) {
                      * vInitTable, vAutoTable, vIntfTable, vMsgStrPtr.
                      * Virtual methods start at offset 96 (slot 12). */
                     new_method->vmt_index = vmt_size + 12;
-                    
+
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
                         node->type = LIST_UNSPECIFIED;

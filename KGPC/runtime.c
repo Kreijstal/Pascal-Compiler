@@ -2495,6 +2495,7 @@ char *kgpc_alloc_empty_string(void)
 void kgpc_init_widestringmanager(void);
 
 void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+void kgpc_fpc_init_thread_manager(void);
 
 void kgpc_init_args(int argc, char **argv, char **envp)
 {
@@ -2502,6 +2503,7 @@ void kgpc_init_args(int argc, char **argv, char **envp)
     kgpc_argv = argv;
     kgpc_fpc_init_os_params(argc, argv, envp);
     kgpc_init_widestringmanager();
+    kgpc_fpc_init_thread_manager();
 }
 
 int kgpc_param_count(void)
@@ -5633,7 +5635,7 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
                 long long value = arg->data.v_int;
                 if (arg->kind == KGPC_TVAR_KIND_BOOL || arg->kind == KGPC_TVAR_KIND_CHAR)
                     value = arg->data.v_int;
-                else if (arg->kind == KGPC_TVAR_KIND_POINTER || arg->kind == KGPC_TVAR_KIND_STRING)
+                else if (arg->kind == KGPC_TVAR_KIND_POINTER || arg->kind == KGPC_TVAR_KIND_STRING || arg->kind == KGPC_TVAR_KIND_ANSISTRING)
                     value = (long long)(intptr_t)arg->data.v_ptr;
                 else if (arg->kind != KGPC_TVAR_KIND_INT)
                 {
@@ -5723,7 +5725,7 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
                     }
                     break;
                 }
-                if (arg->kind != KGPC_TVAR_KIND_STRING && arg->kind != KGPC_TVAR_KIND_POINTER)
+                if (arg->kind != KGPC_TVAR_KIND_STRING && arg->kind != KGPC_TVAR_KIND_POINTER && arg->kind != KGPC_TVAR_KIND_ANSISTRING)
                 {
                     kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
                     break;
@@ -7070,9 +7072,9 @@ int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
  * ===================================================================== */
 
 /* The widestringmanager global — array of 25 function pointers for
- * FPC's TWideStringManager record.  Initialized to zero (no-ops)
- * and populated by kgpc_init_widestringmanager() at startup. */
-void *widestringmanager[25] = {0};
+ * FPC's TWideStringManager record.  Defined by the compiler from
+ * system.p (or FPC's system.pp), populated at startup. */
+extern void *widestringmanager[25];
 
 /* Default: convert wide/unicode chars to ansi by truncating to low byte.
    Signature: procedure(source:punicodechar; var dest:RawByteString;

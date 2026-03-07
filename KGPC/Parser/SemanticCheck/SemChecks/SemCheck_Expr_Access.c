@@ -2219,7 +2219,10 @@ int semcheck_funccall(int *type_return,
                             if (method_overloads != NULL)
                             {
                                 method_is_overloaded = (method_overloads->next != NULL);
-                                DestroyList(method_overloads);
+                                if (method_is_overloaded)
+                                    overload_candidates = method_overloads;
+                                else
+                                    DestroyList(method_overloads);
                             }
                         }
                         if (method_is_overloaded && mangled_name != NULL)
@@ -4533,7 +4536,7 @@ int semcheck_funccall(int *type_return,
         goto skip_overload_resolution;
     }
 
-    if (id != NULL) {
+    if (id != NULL && overload_candidates == NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
     /* When the call was unit-qualified (e.g. System.Foo), filter candidates to
@@ -5220,10 +5223,11 @@ method_call_resolved:
                 }
             }
         }
-        /* Centralized virtual dispatch fallback — catches abstract virtual methods
-         * that weren't detected by the early Self-injection check. Only applies to
-         * methods without a body (abstract) and not class/static methods (which use
-         * single-indirection VMT dispatch that codegen doesn't support yet). */
+        /* Centralized virtual dispatch fallback — catches virtual methods
+         * that weren't detected by the early Self-injection check (Path 1).
+         * This handles obj.Method() calls that go through placeholder resolution
+         * (Path 2 → Path 3) where the receiver is a parameter or field.
+         * Applies to all virtual/override methods, not just abstract ones. */
         int best_match_param_count = -1;
         if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -5246,16 +5250,6 @@ method_call_resolved:
                 best_match_param_count,
                 NULL))
         {
-            /* Check if the method has no body (abstract) */
-            int has_body = 0;
-            if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
-            {
-                Tree_t *proc_def = best_match->type->info.proc_info.definition;
-                if (proc_def != NULL &&
-                    proc_def->tree_data.subprogram_data.statement_list != NULL)
-                    has_body = 1;
-            }
-            if (!has_body)
             {
                 struct RecordType *class_record = semcheck_lookup_record_type(symtab,
                     best_match->owner_class);

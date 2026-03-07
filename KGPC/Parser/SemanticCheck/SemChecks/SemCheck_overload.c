@@ -1256,6 +1256,10 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_PROMOTION);
     }
 
+    /* Nil/Pointer should not implicitly convert to Boolean in overload resolution */
+    if (actual_tag == POINTER_TYPE && formal_tag == BOOL)
+        return semcheck_make_quality(MATCH_INCOMPATIBLE);
+
     if (actual_kgpc != NULL && formal_kgpc != NULL)
     {
         int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
@@ -2472,6 +2476,12 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
+        /* For class method overloads (id contains "__"), the current method
+         * being compiled sits at scope 0 (method body) while sibling overloads
+         * are at scope 1 (class level). Normalize them to prevent the scope
+         * filter from excluding sibling overloads. */
+        if (candidate->owner_class != NULL && candidate_scope == 0)
+            candidate_scope = 1;
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;
