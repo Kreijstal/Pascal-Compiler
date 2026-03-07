@@ -265,6 +265,94 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+typedef struct EmittedClassSet
+{
+    const char **labels;
+    int count;
+    int capacity;
+} EmittedClassSet;
+
+static int emitted_class_set_contains(const EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 0;
+
+    for (int i = 0; i < set->count; ++i)
+    {
+        if (set->labels[i] != NULL && strcmp(set->labels[i], label) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int emitted_class_set_add(EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 1;
+
+    if (emitted_class_set_contains(set, label))
+        return 0;
+
+    if (set->count == set->capacity)
+    {
+        int new_capacity = (set->capacity > 0) ? set->capacity * 2 : 64;
+        const char **new_labels = (const char **)realloc(set->labels,
+            sizeof(const char *) * (size_t)new_capacity);
+        if (new_labels == NULL)
+            return 1;
+        set->labels = new_labels;
+        set->capacity = new_capacity;
+    }
+
+    set->labels[set->count++] = label;
+    return 0;
+}
+
+static void emitted_class_set_destroy(EmittedClassSet *set)
+{
+    if (set == NULL)
+        return;
+
+    free((void *)set->labels);
+    set->labels = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+static int codegen_type_decl_suppressed(const Tree_t *decl)
+{
+    return (decl != NULL &&
+        decl->type == TREE_TYPE_DECL &&
+        decl->tree_data.type_decl_data.suppress_codegen);
+}
+
+static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_TYPE_DECL)
+        return NULL;
+
+    KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+    if (kgpc != NULL)
+    {
+        if (kgpc->kind == TYPE_KIND_RECORD && kgpc->info.record_info != NULL)
+            return kgpc->info.record_info;
+        if (kgpc->kind == TYPE_KIND_POINTER &&
+            kgpc->info.points_to != NULL &&
+            kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
+            kgpc->info.points_to->info.record_info != NULL)
+            return kgpc->info.points_to->info.record_info;
+    }
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+        return decl->tree_data.type_decl_data.info.record;
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        return decl->tree_data.type_decl_data.info.alias.inline_record_type;
+
+    return NULL;
+}
+
 /* Get field offset within a record by field name.
  * Returns -1 if field not found. */
 static int record_type_get_field_offset(SymTab_t *symtab, struct RecordType *record,
@@ -945,6 +1033,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
             continue;
+        if (codegen_type_decl_suppressed(decl))
+            continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
             continue;
 
@@ -974,6 +1064,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         Tree_t *decl = (Tree_t *)cur->cur;
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (codegen_type_decl_suppressed(decl))
             continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS)
             continue;
@@ -2479,28 +2571,18 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
-/* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
-#define MAX_EMITTED_CLASSES 256
-
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++) {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     /* Emit interface entry table if this class implements interfaces */
     int actual_iface_count = 0;
@@ -2551,12 +2633,27 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
+    /* Resolve the canonical label for the parent class (handles case mismatches
+     * e.g. math.pp declares "EInvalidArgument = class(ematherror)" with lowercase,
+     * but EMathError's VMT is emitted with its declaration-case label "EMathError"). */
+    const char *parent_vmt_label = record_info->parent_class_name;
+    if (parent_vmt_label != NULL) {
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, parent_vmt_label) == 0 && parent_node != NULL) {
+            struct RecordType *parent_rec = get_record_type_from_node(parent_node);
+            if (parent_rec != NULL && parent_rec->type_id != NULL)
+                parent_vmt_label = parent_rec->type_id;
+            else if (parent_node->id != NULL)
+                parent_vmt_label = parent_node->id;
+        }
+    }
+
     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
     fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
     if (record_info->parent_class_name != NULL)
-        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", parent_vmt_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
 
@@ -2608,7 +2705,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (record_info->parent_class_name != NULL) {
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
-        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", parent_vmt_label);
     }
 
     /* Compute instance size for vInstanceSize */
@@ -2813,7 +2910,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 
 static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || record_type_is_class(record_info) || class_label == NULL)
         return;
@@ -2824,20 +2921,11 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     if (!has_class_vars && !has_class_methods)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++)
-    {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
-        {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
         has_class_vars ? 0 : 1);
@@ -2924,27 +3012,31 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
-    const char *emitted_classes[MAX_EMITTED_CLASSES];
-    int emitted_count = 0;
+    EmittedClassSet emitted_classes = {0};
 
     /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            if (codegen_type_decl_suppressed(type_tree))
+            {
+                cur = cur->next;
+                continue;
+            }
             struct RecordType *record_info = NULL;
             const char *class_label = NULL;
             
             /* Check if this is a record/class type with methods */
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                record_info = type_tree->tree_data.type_decl_data.info.record;
+                record_info = codegen_record_from_type_decl(type_tree);
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
                 class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
             }
             /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                record_info = codegen_record_from_type_decl(type_tree);
                 if (record_info != NULL && record_info->type_id != NULL) {
                     /* Check if this is a specialized generic */
                     if (record_info->is_generic_specialization) {
@@ -2954,9 +3046,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
         }
         cur = cur->next;
     }
@@ -2995,9 +3087,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         class_label = hash_node->id;
 
                     codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                     codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                 }
                 node = node->next;
             }
@@ -3010,18 +3102,13 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
+            !codegen_type_decl_suppressed(type_tree) &&
             type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
             const char *alias_name = type_tree->tree_data.type_decl_data.id;
             const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
             if (alias_name != NULL && target_name != NULL) {
                 /* Check if the target type has been emitted as a class/interface */
-                int target_emitted = 0;
-                for (int i = 0; i < emitted_count; i++) {
-                    if (strcasecmp(emitted_classes[i], target_name) == 0) {
-                        target_emitted = 1;
-                        break;
-                    }
-                }
+                int target_emitted = emitted_class_set_contains(&emitted_classes, target_name);
                 if (target_emitted) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
@@ -3034,6 +3121,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
         cur = cur->next;
     }
 
+    emitted_class_set_destroy(&emitted_classes);
     fprintf(ctx->output_file, ".text\n");
 
     #ifdef DEBUG_CODEGEN
@@ -3478,38 +3566,6 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
             next_fwd:
             fwd_scan = fwd_scan->next;
         }
-    }
-
-    /* Emit .set aliases from unmangled Pascal id to mangled label for
-       subprograms that have bodies (so inline asm cross-references like
-       `jmp FillXxxx_MoreThanTwoXmms` resolve to the mangled label).
-       Only emit the first alias for each unmangled name to avoid
-       "redefined symbol" assembler errors from overloaded functions. */
-    if (ctx->output_file != NULL) {
-        CodeGenStringSet emitted_names;
-        memset(&emitted_names, 0, sizeof(emitted_names));
-
-        ListNode_t *id_alias_scan = data->subprograms;
-        while (id_alias_scan != NULL) {
-            if (id_alias_scan->type == LIST_TREE && id_alias_scan->cur != NULL) {
-                Tree_t *sub = (Tree_t *)id_alias_scan->cur;
-                if (sub->type == TREE_SUBPROGRAM &&
-                    sub->tree_data.subprogram_data.statement_list != NULL) {
-                    const char *id = sub->tree_data.subprogram_data.id;
-                    const char *mangled = sub->tree_data.subprogram_data.mangled_id;
-                    if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
-                        codegen_set_contains(&emitted_labels, mangled)) {
-                        if (!codegen_set_contains_ci(&emitted_names, id)) {
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), id);
-                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
-                            codegen_set_insert_ci(&emitted_names, id);
-                        }
-                    }
-                }
-            }
-            id_alias_scan = id_alias_scan->next;
-        }
-        codegen_set_destroy(&emitted_names);
     }
 
     codegen_set_destroy(&emitted_labels);
@@ -4234,6 +4290,47 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
     return add_inst(inst_list, buffer);
 }
 
+/* Returns the distance between the total declared size of value (non-var) float
+ * parameters and KGPC's native float size (8 bytes per param).  A distance of 0
+ * means all value float params are Double/Real (8 bytes) — the KGPC-native size.
+ * Used by has_later_override to prefer Double sincos over Single or Extended. */
+static int codegen_float_native_distance(Tree_t *sub)
+{
+    int n_value = 0;
+    int total_declared = 0;
+    ListNode_t *p = sub->tree_data.subprogram_data.args_var;
+    while (p != NULL)
+    {
+        Tree_t *decl = (Tree_t *)p->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            int is_var = decl->tree_data.var_decl_data.is_var_param;
+            if (!is_var)
+            {
+                n_value++;
+                const char *tid = decl->tree_data.var_decl_data.type_id;
+                int sz = 8; /* default: double/real/float → 8 bytes (KGPC native) */
+                if (tid != NULL)
+                {
+                    if (pascal_identifier_equals(tid, "single"))
+                        sz = 4;
+                    else if (pascal_identifier_equals(tid, "extended") ||
+                             pascal_identifier_equals(tid, "extended80"))
+                        sz = 16;
+                    /* double, real, float, currency, longreal → sz stays 8 */
+                }
+                total_declared += sz;
+            }
+        }
+        p = p->next;
+    }
+    if (n_value == 0)
+        return 0; /* no value params: distance 0 (use original later-wins rule) */
+    int native = n_value * 8;
+    int dist = total_declared - native;
+    return dist < 0 ? -dist : dist;
+}
+
 /* Codegen for a list of subprograms */
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -4291,6 +4388,11 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         {
             int this_unit = sub->tree_data.subprogram_data.source_unit_index;
             int has_later_override = 0;
+            /* For float overloads (e.g. sincos Single/Double/Extended), prefer the
+             * one whose value param sizes are closest to KGPC's native 8-byte float.
+             * Only skip the current if a later same-unit same-mangled body has a
+             * distance to native that is ≤ the current one's distance. */
+            int current_dist = codegen_float_native_distance(sub);
             ListNode_t *later = sub_list->next;
             while (later != NULL)
             {
@@ -4303,8 +4405,16 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                         later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
                         strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
                     {
-                        has_later_override = 1;
-                        break;
+                        int later_dist = codegen_float_native_distance(later_sub);
+                        if (later_dist <= current_dist)
+                        {
+                            has_later_override = 1;
+                            break;
+                        }
+                        /* later_dist > current_dist: the later body is farther from
+                         * KGPC's native float size (e.g. Single at dist=4 vs Double
+                         * at dist=0).  Don't let it override the current better one;
+                         * continue scanning for a yet-better later body. */
                     }
                 }
                 later = later->next;
@@ -4314,6 +4424,22 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub_list = sub_list->next;
                 continue;
             }
+        }
+
+        /* Skip FPC RTL functions that use the Extended stack ABI (nostackframe)
+         * which is incompatible with KGPC's xmm-register calling convention.
+         * The generated .s would emit a .weak definition that wins over the
+         * strong override in runtime_fpc_rtl_compat.S.  By skipping the body
+         * here, the symbol remains an external reference that the linker
+         * resolves from the runtime library (correct xmm convention). */
+        if (mangled_id != NULL &&
+            (strcmp(mangled_id, "arctan2_r_r")  == 0 ||
+             strcmp(mangled_id, "tan_r")         == 0 ||
+             strcmp(mangled_id, "cotan_r")       == 0 ||
+             strcmp(mangled_id, "copysign_r_r")  == 0))
+        {
+            sub_list = sub_list->next;
+            continue;
         }
 
         /* Skip unused functions (dead code elimination / reachability pass). */

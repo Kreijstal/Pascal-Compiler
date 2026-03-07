@@ -1534,11 +1534,30 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
+    /* First pass: search under exact class name. */
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_virtual || binding->is_override)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
+     * registered under the unqualified name before renaming. Only try if no exact match. */
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = dot + 1;
+    cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, unqualified) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
         {
             if (binding->is_virtual || binding->is_override)
@@ -1558,30 +1577,42 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
     if (param_sig == NULL && param_count < 0)
         return from_cparser_is_method_virtual(class_name, method_name);
 
+    /* Helper lambda-like: check bindings for a given class name string. */
+    #define CHECK_BINDINGS_FOR(cname) \
+        do { \
+            ListNode_t *_cur = class_method_bindings; \
+            while (_cur != NULL) { \
+                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
+                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
+                    strcasecmp(_b->class_name, (cname)) == 0 && \
+                    strcasecmp(_b->method_name, method_name) == 0) \
+                { \
+                    int _matches = 0; \
+                    if (param_sig != NULL && _b->param_sig != NULL) { \
+                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                    } else if (param_count >= 0 && _b->param_count == param_count) { \
+                        _matches = 1; \
+                    } \
+                    if (_matches) { \
+                        has_match = 1; \
+                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                    } \
+                } \
+                _cur = _cur->next; \
+            } \
+        } while (0)
+
     int has_match = 0;
     int has_virtual = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            int matches = 0;
-            if (param_sig != NULL && binding->param_sig != NULL) {
-                if (strcmp(binding->param_sig, param_sig) == 0)
-                    matches = 1;
-            } else if (param_count >= 0 && binding->param_count == param_count) {
-                matches = 1;
-            }
-            if (matches) {
-                has_match = 1;
-                if (binding->is_virtual || binding->is_override)
-                    has_virtual = 1;
-            }
-        }
-        cur = cur->next;
+    /* First pass: exact class name. */
+    CHECK_BINDINGS_FOR(class_name);
+    /* Second pass: unqualified fallback — only if nothing found under exact name. */
+    if (!has_match) {
+        const char *dot = strrchr(class_name, '.');
+        if (dot != NULL)
+            CHECK_BINDINGS_FOR(dot + 1);
     }
+    #undef CHECK_BINDINGS_FOR
     if (has_match)
         return has_virtual;
     return 0;
@@ -1778,14 +1809,14 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         *methods_out = NULL;
     if (count_out != NULL)
         *count_out = 0;
-    
+
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
-    
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
-    
+
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
@@ -1804,7 +1835,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         }
         cur = cur->next;
     }
-    
+
     *methods_out = head;
     *count_out = count;
 }
@@ -2204,6 +2235,51 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     arg_types = NULL;
 
     substitute_record_type_parameters(record, generic, record->generic_args);
+
+    /* Rewrite references to nested types within the generic class.
+     * E.g. field FOnCompare with type_id="TCompareFunc" needs to become
+     * "TFPGList$TMyRecord.TCompareFunc" for proper resolution. */
+    if (generic->nested_type_decls != NULL) {
+        /* Collect the short names of nested types (without the prefix) */
+        size_t gen_prefix_len = strlen(base_name);
+        ListNode_t *field_node = record->fields;
+        while (field_node != NULL) {
+            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL) {
+                struct RecordField *field = (struct RecordField *)field_node->cur;
+                if (field->type_id != NULL) {
+                    /* Check if this type_id matches a nested type name */
+                    ListNode_t *nt = generic->nested_type_decls;
+                    while (nt != NULL) {
+                        if (nt->type == LIST_TREE && nt->cur != NULL) {
+                            Tree_t *nt_tree = (Tree_t *)nt->cur;
+                            if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL) {
+                                const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                                /* nested type id is like "TFPGList.TCompareFunc" */
+                                if (strncmp(nt_id, base_name, gen_prefix_len) == 0 &&
+                                    nt_id[gen_prefix_len] == '.') {
+                                    const char *short_name = nt_id + gen_prefix_len + 1;
+                                    if (strcasecmp(field->type_id, short_name) == 0) {
+                                        /* Rewrite to specialized: "TFPGList$TMyRecord.TCompareFunc" */
+                                        size_t new_len = strlen(specialized_name) + 1 + strlen(short_name) + 1;
+                                        char *new_id = (char *)malloc(new_len);
+                                        if (new_id != NULL) {
+                                            snprintf(new_id, new_len, "%s.%s", specialized_name, short_name);
+                                            free(field->type_id);
+                                            field->type_id = new_id;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        nt = nt->next;
+                    }
+                }
+            }
+            field_node = field_node->next;
+        }
+    }
+
     generic_registry_add_specialization(base_name, record->generic_args, arg_count);
 
     if (specialized_name_out != NULL)
@@ -3245,14 +3321,152 @@ void append_generic_method_clones(Tree_t *program_tree)
     }
 }
 
+/* Clone nested type declarations from a generic class for a specialization.
+ * For example, if TFPGList has nested type TFPGList.PT = ^T, then specializing
+ * TFPGList<TMyRecord> produces TFPGList$TMyRecord.PT = ^TMyRecord.
+ * The cloned declarations are appended to the program's type declaration list. */
+static void clone_nested_types_for_specialization(
+    GenericTypeDecl *generic_decl,
+    const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
+    ListNode_t *type_args,        /* concrete type arguments */
+    ListNode_t **type_list_out)   /* where to append new type decls */
+{
+    if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
+        specialized_name == NULL || type_list_out == NULL)
+        return;
+
+    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *generic_name = generic_decl->name;
+    size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
+    /* Build arg_types array for substitution */
+    int arg_count = 0;
+    ListNode_t *arg_cur = type_args;
+    while (arg_cur != NULL) {
+        if (arg_cur->type == LIST_STRING) arg_count++;
+        arg_cur = arg_cur->next;
+    }
+
+    ListNode_t *cur = generic_decl->nested_type_decls;
+    while (cur != NULL) {
+        if (cur->type == LIST_TREE && cur->cur != NULL) {
+            Tree_t *orig = (Tree_t *)cur->cur;
+            if (orig->type == TREE_TYPE_DECL && orig->tree_data.type_decl_data.id != NULL) {
+                const char *orig_id = orig->tree_data.type_decl_data.id;
+                /* Check that orig_id starts with generic_name + "." */
+                if (prefix_len > 0 && strncmp(orig_id, generic_name, prefix_len) == 0 &&
+                    orig_id[prefix_len] == '.')
+                {
+                    const char *suffix = orig_id + prefix_len; /* e.g., ".PT" */
+                    /* Build new id: specialized_name + suffix */
+                    size_t new_id_len = strlen(specialized_name) + strlen(suffix) + 1;
+                    char *new_id = (char *)malloc(new_id_len);
+                    if (new_id == NULL) { cur = cur->next; continue; }
+                    snprintf(new_id, new_id_len, "%s%s", specialized_name, suffix);
+
+                    Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
+                    if (clone == NULL) { free(new_id); cur = cur->next; continue; }
+
+                    clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
+                    clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
+
+                    if (orig->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *src_alias = &orig->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        *dst_alias = *src_alias; /* Shallow copy */
+                        dst_alias->target_type_id = src_alias->target_type_id ?
+                            strdup(src_alias->target_type_id) : NULL;
+                        dst_alias->pointer_type_id = src_alias->pointer_type_id ?
+                            strdup(src_alias->pointer_type_id) : NULL;
+                        dst_alias->array_element_type_id = src_alias->array_element_type_id ?
+                            strdup(src_alias->array_element_type_id) : NULL;
+                        dst_alias->inline_record_type = NULL;
+                        dst_alias->target_type_ref = src_alias->target_type_ref ?
+                            type_ref_clone(src_alias->target_type_ref) : NULL;
+                        dst_alias->array_element_type_ref = src_alias->array_element_type_ref ?
+                            type_ref_clone(src_alias->array_element_type_ref) : NULL;
+
+                        /* Substitute generic type parameters in type identifiers.
+                         * For example, if T → TMyRecord, then "T" → "TMyRecord",
+                         * and pointer_type_id "T" → "TMyRecord". */
+                        for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                            const char *param = generic_decl->type_parameters[pi];
+                            /* Get the concrete type for this parameter */
+                            ListNode_t *a = type_args;
+                            for (int ai = 0; ai < pi && a != NULL; ai++)
+                                a = a->next;
+                            if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                continue;
+                            const char *concrete = (const char *)a->cur;
+
+                            if (dst_alias->target_type_id != NULL &&
+                                strcasecmp(dst_alias->target_type_id, param) == 0) {
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->pointer_type_id != NULL &&
+                                strcasecmp(dst_alias->pointer_type_id, param) == 0) {
+                                free(dst_alias->pointer_type_id);
+                                dst_alias->pointer_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->array_element_type_id != NULL &&
+                                strcasecmp(dst_alias->array_element_type_id, param) == 0) {
+                                free(dst_alias->array_element_type_id);
+                                dst_alias->array_element_type_id = strdup(concrete);
+                            }
+                        }
+
+                        /* Also substitute qualified names: if target_type_id refers
+                         * to another nested type of the same generic (e.g., "TFPGList.PT"),
+                         * rewrite to "TFPGList$TMyRecord.PT" */
+                        if (dst_alias->target_type_id != NULL &&
+                            strncmp(dst_alias->target_type_id, generic_name, prefix_len) == 0 &&
+                            dst_alias->target_type_id[prefix_len] == '.') {
+                            const char *inner_suffix = dst_alias->target_type_id + prefix_len;
+                            size_t new_target_len = strlen(specialized_name) + strlen(inner_suffix) + 1;
+                            char *new_target = (char *)malloc(new_target_len);
+                            if (new_target != NULL) {
+                                snprintf(new_target, new_target_len, "%s%s", specialized_name, inner_suffix);
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = new_target;
+                            }
+                        }
+                    }
+
+                    /* Also handle procedure/function type declarations */
+                    if (orig->tree_data.type_decl_data.kgpc_type != NULL) {
+                        clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
+                        kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
+                    }
+
+                    ListNode_t *node = CreateListNode(clone, LIST_TREE);
+                    if (node != NULL) {
+                        node->next = *type_list_out;
+                        *type_list_out = node;
+                    } else {
+                        destroy_tree(clone);
+                    }
+
+                    if (debug_env != NULL)
+                        fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 void resolve_pending_generic_aliases(Tree_t *program_tree)
 {
     PendingGenericAlias *cur = g_pending_generic_aliases;
     g_pending_generic_aliases = NULL;
     ListNode_t **clone_dest = NULL;
+    ListNode_t **type_list = NULL;
     const char *debug_env = getenv("KGPC_DEBUG_TFPG");
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
         clone_dest = &program_tree->tree_data.program_data.subprograms;
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+    }
 
     while (cur != NULL) {
         PendingGenericAlias *next = cur->next;
@@ -3278,6 +3492,16 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
             }
             if (clone_dest != NULL)
                 append_specialized_method_clones(cur->decl, clone_dest);
+
+            /* Clone nested type declarations for this specialization */
+            if (type_list != NULL && specialized_name != NULL && cur->base_name != NULL) {
+                GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
+                if (generic != NULL && generic->nested_type_decls != NULL) {
+                    clone_nested_types_for_specialization(generic, specialized_name,
+                        cur->type_args, type_list);
+                }
+            }
+
             if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
                 cur->base_name != NULL)
             {
@@ -10561,6 +10785,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    ListNode_t *generic_nested_types = NULL;
     if (type_spec_node != NULL) {
         ast_t *spec_body = type_spec_node;
         if (spec_body->typ == PASCAL_T_TYPE_SPEC && spec_body->child != NULL)
@@ -10568,9 +10793,28 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         if (spec_body != NULL) {
             if (spec_body->typ == PASCAL_T_CLASS_TYPE)
             {
+                ListNode_t *nested_type_sections = NULL;
                 if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
-                record_template = convert_class_type_ex(id, spec_body, NULL);
+                record_template = convert_class_type_ex(id, spec_body, &nested_type_sections);
+                /* Convert nested type sections into type declarations for later specialization */
+                if (nested_type_sections != NULL) {
+                    ListNode_t *section_cursor = nested_type_sections;
+                    while (section_cursor != NULL) {
+                        ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                        if (type_section_ast != NULL) {
+                            append_type_decls_from_section(type_section_ast, &generic_nested_types,
+                                NULL, NULL, NULL, id);
+                        }
+                        section_cursor = section_cursor->next;
+                    }
+                    /* Clean up section list (not AST nodes) */
+                    while (nested_type_sections != NULL) {
+                        ListNode_t *next = nested_type_sections->next;
+                        free(nested_type_sections);
+                        nested_type_sections = next;
+                    }
+                }
             }
             else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
@@ -10598,7 +10842,16 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
-    generic_registry_add_decl(id, param_names, param_count, decl);
+    GenericTypeDecl *generic_decl = generic_registry_add_decl(id, param_names, param_count, decl);
+    if (generic_decl != NULL && generic_nested_types != NULL) {
+        generic_decl->nested_type_decls = generic_nested_types;
+        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
+            int count = 0;
+            ListNode_t *cur = generic_nested_types;
+            while (cur != NULL) { count++; cur = cur->next; }
+            fprintf(stderr, "[KGPC] stored %d nested type decls for generic %s\n", count, id);
+        }
+    }
 
     (void)type_spec_node; /* Placeholder for future template storage */
 
@@ -13096,41 +13349,137 @@ tuple_cleanup:
         return set_expr_source_index(result, expr_node);
     }
     case PASCAL_T_ADDR:
-        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
-            expr_node != NULL && expr_node->line == 256)
+    {
+        /* Resolve @specialize Type<T>.Method at conversion time while
+         * preprocessed_source still points to the correct unit's buffer.
+         * Once units are merged into the program tree the source indices
+         * become invalid for the main program's buffer, so the semcheck
+         * fallback (which re-parses source text) would fail. */
+        ast_t *child = expr_node->child;
+        if (child != NULL && child->sym != NULL && child->sym->name != NULL &&
+            strcasecmp(child->sym->name, "specialize") == 0 &&
+            preprocessed_source != NULL && preprocessed_length > 0 &&
+            expr_node->index >= 0 && (size_t)expr_node->index < preprocessed_length)
         {
-            ast_t *child = expr_node->child;
-            fprintf(stderr,
-                "[KGPC_DEBUG_SPECIALIZE_CALLS] ADDR line=256 child=%d(%s:%s) child_child=%d(%s)\n",
-                child != NULL ? child->typ : -1,
-                child != NULL ? pascal_tag_to_string(child->typ) : "<null>",
-                (child != NULL && child->sym != NULL && child->sym->name != NULL)
-                    ? child->sym->name : "<null>",
-                (child != NULL && child->child != NULL) ? child->child->typ : -1,
-                (child != NULL && child->child != NULL)
-                    ? pascal_tag_to_string(child->child->typ) : "<null>");
-            for (ast_t *it = expr_node->next; it != NULL; it = it->next)
+            size_t idx = (size_t)expr_node->index;
+            /* Scan forward to find '@' on this line */
+            size_t line_end = idx;
+            while (line_end < preprocessed_length &&
+                   preprocessed_source[line_end] != '\n' &&
+                   preprocessed_source[line_end] != '\r' &&
+                   preprocessed_source[line_end] != ';')
+                line_end++;
+
+            size_t at_pos = idx;
+            for (size_t s = idx; s < line_end; ++s)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR expr.next typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                if (preprocessed_source[s] == '@') { at_pos = s; break; }
             }
-            for (ast_t *it = child != NULL ? child->next : NULL; it != NULL; it = it->next)
+            size_t i = at_pos;
+            if (i < line_end && preprocessed_source[i] == '@')
+                i++;
+            while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                i++;
+            /* Skip optional 'specialize' keyword */
+            const char *kw = "specialize";
+            size_t kw_len = 10;
+            if (i + kw_len <= line_end && strncasecmp(preprocessed_source + i, kw, kw_len) == 0)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR sibling typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                i += kw_len;
+                while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                    i++;
+            }
+            /* Parse type name including angle brackets: Type<T> */
+            size_t type_start = i;
+            int angle_depth = 0;
+            while (i < line_end)
+            {
+                char ch = preprocessed_source[i];
+                if (ch == '<') angle_depth++;
+                else if (ch == '>') { if (angle_depth > 0) angle_depth--; }
+                else if (ch == '.' && angle_depth == 0) break;
+                else if (ch == '\n' || ch == ';' || ch == '\r') break;
+                i++;
+            }
+            if (i < line_end && preprocessed_source[i] == '.' && i > type_start)
+            {
+                /* Extract type name */
+                size_t type_len = i - type_start;
+                char *type_raw = (char *)malloc(type_len + 1);
+                if (type_raw != NULL)
+                {
+                    memcpy(type_raw, preprocessed_source + type_start, type_len);
+                    type_raw[type_len] = '\0';
+                    i++; /* skip '.' */
+                    /* Parse method name */
+                    size_t method_start = i;
+                    while (i < line_end && (isalnum((unsigned char)preprocessed_source[i]) || preprocessed_source[i] == '_'))
+                        i++;
+                    if (i > method_start)
+                    {
+                        size_t method_len = i - method_start;
+                        char *method_id = (char *)malloc(method_len + 1);
+                        if (method_id != NULL)
+                        {
+                            memcpy(method_id, preprocessed_source + method_start, method_len);
+                            method_id[method_len] = '\0';
+                            /* Mangle generic type: Type<T> -> Type$T */
+                            char *lt = strchr(type_raw, '<');
+                            char *mangled = NULL;
+                            if (lt != NULL)
+                            {
+                                char *gt = strrchr(type_raw, '>');
+                                if (gt != NULL && gt > lt)
+                                {
+                                    size_t base_len = (size_t)(lt - type_raw);
+                                    char args_buf[256];
+                                    size_t args_len = 0;
+                                    int adepth = 0;
+                                    for (const char *p = lt + 1; p < gt; ++p)
+                                    {
+                                        char ac = *p;
+                                        if (ac == '<') { adepth++; continue; }
+                                        if (ac == '>') { if (adepth > 0) adepth--; continue; }
+                                        if (adepth == 0 && ac == ',') ac = '$';
+                                        if (adepth == 0 && ac == ' ') continue;
+                                        if (args_len + 1 < sizeof(args_buf))
+                                            args_buf[args_len++] = ac;
+                                    }
+                                    args_buf[args_len] = '\0';
+                                    size_t out_len = base_len + 1 + args_len;
+                                    mangled = (char *)malloc(out_len + 1);
+                                    if (mangled != NULL)
+                                        snprintf(mangled, out_len + 1, "%.*s$%s", (int)base_len, type_raw, args_buf);
+                                }
+                            }
+                            if (mangled == NULL)
+                                mangled = strdup(type_raw);
+
+                            if (mangled != NULL)
+                            {
+                                /* Rewrite: @(specialize) -> @(MangledType.Method) */
+                                struct Expression *base_expr = mk_varid(expr_node->line, mangled);
+                                struct Expression *access = mk_recordaccess(expr_node->line, base_expr, method_id);
+                                if (access != NULL)
+                                {
+                                    access->is_specialize_addr_target = 1;
+                                    struct Expression *result = mk_addressof(expr_node->line, access);
+                                    free(type_raw);
+                                    return set_expr_source_index(result, expr_node);
+                                }
+                                /* access creation failed; fall through */
+                                destroy_expr(base_expr);
+                            }
+                            else
+                            {
+                                free(method_id);
+                            }
+                        }
+                    }
+                    free(type_raw);
+                }
             }
         }
-    {
         struct Expression *result = mk_addressof(expr_node->line, convert_expression(expr_node->child));
         return set_expr_source_index(result, expr_node);
     }
@@ -13830,7 +14179,10 @@ static struct Expression *convert_member_access_chain(int line,
                     continue;
                 ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                 if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
                     continue;
+                }
                 if (args_list == NULL) {
                     args_list = new_node;
                     tail = new_node;
@@ -13840,9 +14192,27 @@ static struct Expression *convert_member_access_chain(int line,
                 }
             }
         } else if (cast_value_node != NULL) {
-            struct Expression *arg_expr = convert_expression(cast_value_node);
-            if (arg_expr != NULL)
-                args_list = CreateListNode(arg_expr, LIST_EXPR);
+            /* Convert all argument expressions (siblings linked via ->next).
+             * With sep_by in the parser, multi-argument specialize calls
+             * produce sibling nodes rather than a single expression. */
+            for (ast_t *arg = cast_value_node; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
+                    continue;
+                }
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
         }
 
         args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));

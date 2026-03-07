@@ -1587,6 +1587,7 @@ static int codegen_format_arg_kind_for_expr(struct Expression *expr)
         case REAL_TYPE:
             return KGPC_TVAR_KIND_REAL;
         case STRING_TYPE:
+            return KGPC_TVAR_KIND_ANSISTRING;
         case SHORTSTRING_TYPE:
             return KGPC_TVAR_KIND_STRING;
         case POINTER_TYPE:

@@ -1457,7 +1457,10 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.id = id_copy;
     expr->expr_data.function_call_data.mangled_id = mangled_copy;
     expr->expr_data.function_call_data.args_expr = arg_node;
-    expr->expr_data.function_call_data.resolved_func = NULL;
+    /* Set resolved_func so semcheck_funccall goes via method_call_resolved (which runs
+     * the VMT dispatch check at lines 5241-5283) rather than the funccall_cleanup
+     * fast-path (which skips VMT dispatch, causing direct calls to abstract methods). */
+    expr->expr_data.function_call_data.resolved_func = method_node;
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
@@ -2488,8 +2491,30 @@ SKIP_SELF_FIELD_REWRITE:
         {
             alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
         }
-        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
-            alias_type_name != NULL ? alias_type_name : expr_type_name);
+        /* When the record_expr is literally "Self" inside a type helper
+         * method body, use the current method's owning helper type rather
+         * than the most-recently-registered helper for this base type.
+         * This matters when multiple type helpers exist for the same base
+         * type (e.g. TWideStringHelper from SysUtils and a user-defined
+         * TWideHelper): Self.Length inside TWideStringHelper must resolve
+         * to TWideStringHelper's Length property, not TWideHelper's. */
+        struct RecordType *helper_record = NULL;
+        int is_self_expr = (record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(record_expr->expr_data.id, "Self"));
+        if (is_self_expr)
+        {
+            const char *current_owner = semcheck_get_current_method_owner();
+            if (current_owner != NULL)
+            {
+                struct RecordType *owner_rec = semcheck_lookup_record_type(symtab, current_owner);
+                if (owner_rec != NULL && owner_rec->is_type_helper)
+                    helper_record = owner_rec;
+            }
+        }
+        if (helper_record == NULL)
+            helper_record = semcheck_lookup_type_helper(symtab, record_type,
+                alias_type_name != NULL ? alias_type_name : expr_type_name);
         if (helper_record == NULL && record_type == REAL_TYPE)
         {
             const char *helper_base = alias_type_name != NULL ? alias_type_name : expr_type_name;

@@ -1940,7 +1940,7 @@ static void kgpc_string_set_insert(const void *value);
 static void kgpc_string_release(char *value);
 static void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
 extern void *widestringmanager[25];
-extern int32_t DefaultSystemCodePage __attribute__((weak));
+extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
 
 void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
@@ -2357,7 +2357,7 @@ void kgpc_string_assign_take(char **target, char *value);
 /* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
  * or a raw string pointer (by-value) to avoid crashes when call sites
  * accidentally pass the value. */
-void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
+void kgpc_setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
 {
     if (s_arg == NULL)
         return;
@@ -2399,9 +2399,9 @@ void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
 }
 
 /* 2-arg SetCodePage overload: Convert defaults to True in FPC. */
-void setcodepage_rbs_i(void *s_arg, int32_t codepage)
+void kgpc_setcodepage_rbs_i(void *s_arg, int32_t codepage)
 {
-    setcodepage_rbs_i_b(s_arg, codepage, 1);
+    kgpc_setcodepage_rbs_i_b(s_arg, codepage, 1);
 }
 
 /* FPC RTL compatibility: some bootstrap constants use WideChar literals
@@ -2494,11 +2494,16 @@ char *kgpc_alloc_empty_string(void)
 
 void kgpc_init_widestringmanager(void);
 
-void kgpc_init_args(int argc, char **argv)
+void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+void kgpc_fpc_init_thread_manager(void);
+
+void kgpc_init_args(int argc, char **argv, char **envp)
 {
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
+    kgpc_fpc_init_os_params(argc, argv, envp);
     kgpc_init_widestringmanager();
+    kgpc_fpc_init_thread_manager();
 }
 
 int kgpc_param_count(void)
@@ -4831,6 +4836,22 @@ int64_t popcnt_i64(uint64_t value)
     return (int64_t)__builtin_popcountll(value);
 }
 
+/* filecreate_rbs: FPC FileCreate(Filename: string): THandle
+ * Creates a new file (or truncates existing), returns file descriptor.
+ * The _i and _i_i suffixed variants (with Rights/Attributes params) redirect
+ * here via runtime_fpc_rtl_compat.S; extra parameters are ignored. */
+#include <fcntl.h>
+#include <sys/stat.h>
+int64_t filecreate_rbs(const char *filename)
+{
+#ifdef _WIN32
+    #include <io.h>
+    return (int64_t)_open(filename, _O_CREAT | _O_TRUNC | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+    return (int64_t)open(filename, O_CREAT | O_TRUNC | O_RDWR, 0666);
+#endif
+}
+
 /* Chr function - returns a character value as an integer */
 int64_t kgpc_chr(int64_t value)
 {
@@ -5614,7 +5635,7 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
                 long long value = arg->data.v_int;
                 if (arg->kind == KGPC_TVAR_KIND_BOOL || arg->kind == KGPC_TVAR_KIND_CHAR)
                     value = arg->data.v_int;
-                else if (arg->kind == KGPC_TVAR_KIND_POINTER || arg->kind == KGPC_TVAR_KIND_STRING)
+                else if (arg->kind == KGPC_TVAR_KIND_POINTER || arg->kind == KGPC_TVAR_KIND_STRING || arg->kind == KGPC_TVAR_KIND_ANSISTRING)
                     value = (long long)(intptr_t)arg->data.v_ptr;
                 else if (arg->kind != KGPC_TVAR_KIND_INT)
                 {
@@ -5704,7 +5725,7 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
                     }
                     break;
                 }
-                if (arg->kind != KGPC_TVAR_KIND_STRING && arg->kind != KGPC_TVAR_KIND_POINTER)
+                if (arg->kind != KGPC_TVAR_KIND_STRING && arg->kind != KGPC_TVAR_KIND_POINTER && arg->kind != KGPC_TVAR_KIND_ANSISTRING)
                 {
                     kgpc_format_builder_append_buf(&builder, "[Invalid]", strlen("[Invalid]"));
                     break;
@@ -6082,32 +6103,6 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
-/* Provide shims for Pascal mangled runtime helpers so the runtime always
- * satisfies references emitted by generated assembly. The COFF alternatename
- * directives make these symbols resolve to our implementations when no user
- * definition is present. MSVC/LLD handle this fine; MinGW’s ld does not,
- * so we also emit strong fallback symbols (see below) to satisfy MinGW. */
-/* Default implementations that can be adopted via COFF alternatename so
- * user-emitted stubs override when present, while ELF uses weak aliases. */
-uintptr_t kgpc_default_LoadLibrary_s(const char *path)
-{
-    return kgpc_load_library(path);
-}
-
-uintptr_t kgpc_default_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
-{
-    return kgpc_get_proc_address(handle, symbol);
-}
-
-int kgpc_default_FreeLibrary_li(uintptr_t handle)
-{
-    return kgpc_free_library(handle);
-}
-
-uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
-int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
-
 int kgpc_directory_create(const char *path)
 {
     if (path == NULL)
@@ -6329,7 +6324,11 @@ double kgpc_arctan(double value)
 
 double kgpc_arccot(double value)
 {
-    return (KGPC_PI / 2.0) - atan(value);
+    /* Match FPC's ArcCot: returns 0.5*pi for x=0, arctan(1/x) otherwise.
+     * Note: for x < 0 this gives (-pi/2, 0) not (pi/2, pi). */
+    if (value == 0.0)
+        return KGPC_PI / 2.0;
+    return atan(1.0 / value);
 }
 
 double kgpc_arctan2(double y, double x)
@@ -6460,9 +6459,11 @@ long long kgpc_round(double value)
 
 long long kgpc_trunc(double value)
 {
-    if (value >= 0.0)
-        return (long long)floor(value);
-    return (long long)ceil(value);
+    /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
+     * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
+     * which override C library's ceil/floor symbols when linked together,
+     * causing infinite recursion if we called ceil() or floor() here. */
+    return (long long)trunc(value);
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
@@ -6502,12 +6503,16 @@ double kgpc_frac(double value)
 
 long long kgpc_ceil(double value)
 {
-    return (long long)ceil(value);
+    /* Avoid C ceil() — FPC RTL aliases it to Pascal ceil_r. Use trunc+1. */
+    long long t = (long long)trunc(value);
+    return (value > (double)t) ? t + 1 : t;
 }
 
 long long kgpc_floor(double value)
 {
-    return (long long)floor(value);
+    /* Avoid C floor() — FPC RTL aliases it to Pascal floor_r. Use trunc-1. */
+    long long t = (long long)trunc(value);
+    return (value < (double)t) ? t - 1 : t;
 }
 
 static uint32_t kgpc_rol32(uint32_t value, uint32_t shift)
@@ -7040,11 +7045,10 @@ int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
  *   [24] GetStandardCodePageProc
  * ===================================================================== */
 
-/* The widestringmanager global — declared in the generated assembly as BSS.
- * Weak definition (not extern) so it works on both Linux and MinGW:
- * if codegen emits a widestringmanager symbol, the linker picks that one;
- * otherwise this zero-initialized fallback is used. */
-void *widestringmanager[25] __attribute__((weak)) = {0};
+/* The widestringmanager global — array of 25 function pointers for
+ * FPC's TWideStringManager record.  Defined by the compiler from
+ * system.p (or FPC's system.pp), populated at startup. */
+extern void *widestringmanager[25];
 
 /* Default: convert wide/unicode chars to ansi by truncating to low byte.
    Signature: procedure(source:punicodechar; var dest:RawByteString;
@@ -7228,8 +7232,8 @@ static int64_t kgpc_default_codepoint_length(const char *str, int64_t maxlookahe
 static void kgpc_stub_thread_noop(void) {}
 
 /* GetStandardCodePage: return 0 (system default) */
-extern int32_t DefaultSystemCodePage __attribute__((weak));
-extern int32_t DefaultFileSystemCodePage __attribute__((weak));
+extern int32_t DefaultSystemCodePage;
+extern int32_t DefaultFileSystemCodePage;
 static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
 {
     if (stdcp != 2)  /* scpFileSystemSingleByte = 2 */
@@ -7241,8 +7245,6 @@ static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
    Called from kgpc_init_args before the program body runs. */
 void kgpc_init_widestringmanager(void)
 {
-    /* With a weak definition, the address is always valid — init unconditionally. */
-
     widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
     widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
     widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */

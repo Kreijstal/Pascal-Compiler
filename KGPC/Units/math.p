@@ -181,10 +181,7 @@ end;
 
 function InRange(Value, RangeMin, RangeMax: Longint): Boolean;
 begin
-    if RangeMin > RangeMax then
-        InRange := (Value >= RangeMax) and (Value <= RangeMin)
-    else
-        InRange := (Value >= RangeMin) and (Value <= RangeMax);
+    InRange := (Value >= RangeMin) and (Value <= RangeMax);
 end;
 
 function Sign(Value: Longint): Longint;

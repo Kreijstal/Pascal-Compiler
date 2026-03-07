@@ -977,6 +977,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_ADDR:
         case EXPR_ADDR_OF_PROC:
         case EXPR_TYPEINFO:
+        case EXPR_IS:
+        case EXPR_AS:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
             new_node->left_expr = NULL;
@@ -2031,6 +2033,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
+            /* Constructor chaining: when a constructor calls a sibling constructor
+             * on Self, it's a regular method call — do not allocate a new instance. */
+            if (ctor_type_receiver && first_arg != NULL && first_arg->cur != NULL)
+            {
+                struct Expression *fa = (struct Expression *)first_arg->cur;
+                if (fa != NULL && fa->type == EXPR_VAR_ID &&
+                    fa->expr_data.id != NULL &&
+                    pascal_identifier_equals(fa->expr_data.id, "Self"))
+                    ctor_type_receiver = 0;
+            }
             if (ctor_type_receiver && class_record != NULL &&
                 record_type_is_class(class_record))
             {
@@ -2790,6 +2802,44 @@ cleanup_constructor:
         }
         return inst_list;
     }
+    else if (expr->type == EXPR_IS)
+    {
+        /* EXPR_IS is a complex runtime expression that cannot be inlined as
+         * a simple leaf operand. Emit the VMT-based type check and move
+         * the boolean result to the target register. */
+        inst_list = codegen_emit_is_expr(expr, inst_list, ctx, NULL);
+        /* codegen_emit_is_expr leaves result in %eax (0 or 1) */
+        if (target_reg->reg_id != REG_RAX)
+        {
+            char mov_buf[128];
+            snprintf(mov_buf, sizeof(mov_buf), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+            inst_list = add_inst(inst_list, mov_buf);
+        }
+        return inst_list;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        /* EXPR_AS performs a checked class cast at runtime. Evaluate the
+         * inner expression and emit the cast check. */
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+            if (addr_reg != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+                if (target_reg->reg_id != addr_reg->reg_id)
+                {
+                    char mov_buf[128];
+                    snprintf(mov_buf, sizeof(mov_buf), "\tmovq\t%s, %s\n",
+                        addr_reg->bit_64, target_reg->bit_64);
+                    inst_list = add_inst(inst_list, mov_buf);
+                }
+                free_reg(get_reg_stack(), addr_reg);
+            }
+        }
+        return inst_list;
+    }
 
     inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));
 
@@ -2803,12 +2853,15 @@ cleanup_constructor:
 
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
-         * otherwise this breaks function result variables that share the function name. */
+         * otherwise this breaks function result variables that share the function name.
+         * Skip if gencode_leaf_var already resolved the identifier to a constant immediate
+         * (e.g. Pi from FPC internproc shadowed by a builtin real constant). */
         if (stack_node == NULL &&
             symbol_node != NULL &&
             (symbol_node->hash_type == HASHTYPE_PROCEDURE ||
              symbol_node->hash_type == HASHTYPE_FUNCTION) &&
-            symbol_node->mangled_id != NULL)
+            symbol_node->mangled_id != NULL &&
+            buf_leaf[0] != '$')
         {
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                 symbol_node->mangled_id, target_reg->bit_64);
@@ -3330,6 +3383,18 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                     node != NULL);
+
+                /* If FindIdent returned a function but there's a builtin const with the same
+                 * name (e.g. FPC declares Pi as [internproc] function but we have it as a
+                 * real constant in builtins), prefer the builtin const. */
+                if (found && node != NULL && node->hash_type == HASHTYPE_FUNCTION &&
+                    ctx != NULL && ctx->symtab != NULL && ctx->symtab->builtins != NULL)
+                {
+                    HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
+                        expr->expr_data.id);
+                    if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
+                        node = builtin_node;
+                }
 
                 if (found && node->hash_type == HASHTYPE_CONST)
                 {

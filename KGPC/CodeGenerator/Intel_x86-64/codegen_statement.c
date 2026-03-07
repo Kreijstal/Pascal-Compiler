@@ -3054,6 +3054,19 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     is_constructor = 1;
             }
 
+            /* Constructor chaining: when a constructor calls another constructor
+             * on Self (e.g., Create(name, mode, 438) inside TFileStream.Create),
+             * it's a regular method call, not a new allocation. The first arg
+             * will be Self, injected by the semantic checker. */
+            if (is_constructor && src_expr->expr_data.function_call_data.args_expr != NULL)
+            {
+                struct Expression *first_arg = (struct Expression *)
+                    src_expr->expr_data.function_call_data.args_expr->cur;
+                if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                    first_arg->expr_data.id != NULL &&
+                    pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+                    is_constructor = 0;
+            }
             /* Record static factories can also be named Create but they are not
              * class constructors and must not use constructor/sret calling paths. */
             if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE))
@@ -4267,6 +4280,68 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             const char *src = stmt->stmt_data.asm_block_data.code;
             if (src != NULL)
             {
+                /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
+                 * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
+                 * "qword ptr" would be rejected by the assembler.  Skip the body entirely
+                 * and let the runtime library's strong symbol override the .weak stub. */
+                if (pascal_strcasestr(src, "dword ptr") != NULL ||
+                    pascal_strcasestr(src, "qword ptr") != NULL ||
+                    pascal_strcasestr(src, "byte ptr")  != NULL ||
+                    pascal_strcasestr(src, "word ptr")  != NULL)
+                {
+                    /* Special case: sincos_r_r_r — generate a fallback that calls
+                     * kgpc_sin / kgpc_cos so the function body is not empty.
+                     * The Intel-mode asm in FPC's mathu.inc computes:
+                     *   sinus   := sin(theta)
+                     *   cosinus := cos(theta)
+                     * theta may be Single (size=4) or Double (size=8); out-params are
+                     * always 8-byte Double vars (KGPC's Real type). */
+                    if (ctx->current_subprogram_mangled != NULL &&
+                        strcmp(ctx->current_subprogram_mangled, "sincos_r_r_r") == 0)
+                    {
+                        StackNode_t *theta_node   = find_label((char *)"theta");
+                        StackNode_t *sinus_node   = find_label((char *)"sinus");
+                        StackNode_t *cosinus_node = find_label((char *)"cosinus");
+                        if (theta_node != NULL && sinus_node != NULL && cosinus_node != NULL)
+                        {
+                            char buf[256];
+                            int theta_off   = theta_node->offset;
+                            int theta_size  = theta_node->size;
+                            int sinus_off   = sinus_node->offset;
+                            int cosinus_off = cosinus_node->offset;
+                            /* Load theta into xmm0 as Double */
+                            if (theta_size == 4)
+                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            else
+                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Load sinus* and cosinus* pointers */
+                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", sinus_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", cosinus_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Call kgpc_sin; write Double result to *sinus */
+                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_sin\n"));
+                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r12)\n"));
+                            /* Reload theta for kgpc_cos */
+                            if (theta_size == 4)
+                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            else
+                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Call kgpc_cos; write Double result to *cosinus */
+                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_cos\n"));
+                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
+                            break;
+                        }
+                    }
+                    fprintf(ctx->output_file,
+                        "\t# Intel-mode asm block skipped (not supported by AT&T assembler)\n");
+                    break;
+                }
+
                 static int asm_block_counter = 0;
                 int block_id = asm_block_counter++;
                 size_t len = strlen(src);
@@ -4338,7 +4413,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         char *substituted = malloc(sub_alloc);
                         if (substituted != NULL) {
                             size_t si = 0, sj = 0;
+                            /* Track whether we have seen the instruction mnemonic on
+                             * the current line.  In AT&T syntax the FIRST identifier on
+                             * each line (after optional whitespace / label) is the
+                             * mnemonic — it must never be substituted with a Pascal
+                             * variable name, or e.g. `sub %rdi,%rcx` becomes
+                             * `__kgpc_program_var_sub_N %rdi,%rcx` when the program
+                             * happens to declare a variable named "sub". */
+                            int line_has_mnemonic = 0;
                             while (si < clen && sj < sub_alloc - 64) {
+                                /* Reset mnemonic flag on each new line. */
+                                if (cleaned[si] == '\n') {
+                                    line_has_mnemonic = 0;
+                                    substituted[sj++] = cleaned[si++];
+                                    continue;
+                                }
                                 if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
                                     (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
                                                  cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
@@ -4348,9 +4437,19 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                     while (si < clen && (isalnum((unsigned char)cleaned[si]) || cleaned[si] == '_'))
                                         si++;
                                     size_t id_len = si - id_start;
+                                    /* Skip past a ':' that makes this a label (not mnemonic). */
+                                    size_t si_after = si;
+                                    while (si_after < clen && cleaned[si_after] == ' ')
+                                        si_after++;
+                                    int is_label = (si_after < clen && cleaned[si_after] == ':');
+                                    /* If we haven't seen a mnemonic yet and this is not a
+                                     * label, it IS the mnemonic — copy verbatim, no subst. */
+                                    int is_mnemonic = (!line_has_mnemonic && !is_label);
+                                    if (!is_label)
+                                        line_has_mnemonic = 1;
                                     char id_buf[256];
                                     int did_substitute = 0;
-                                    if (id_len < sizeof(id_buf)) {
+                                    if (!is_mnemonic && id_len < sizeof(id_buf)) {
                                         memcpy(id_buf, cleaned + id_start, id_len);
                                         id_buf[id_len] = '\0';
                                         /* Try nostackframe parameter substitution first */
@@ -4445,7 +4544,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
                         inst_list = add_inst(inst_list, buffer);
                     }
-                    /* For real types, result is already in xmm0 */
+                    else
+                    {
+                        /* For real types, arithmetic operations leave their result in
+                         * xmm0 as a side effect, but simple variable reads put the
+                         * 64-bit bit pattern into a GPR.  Always copy GPR → xmm0 so
+                         * the caller sees the correct float return value regardless of
+                         * which expression form was used. */
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", result_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
 
                     free_reg(get_reg_stack(), result_reg);
                 }
@@ -6562,7 +6670,10 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 sym_node != NULL && sym_node->type != NULL)
             {
                 int sym_type = codegen_tag_from_kgpc(sym_node->type);
-                if (sym_type != UNKNOWN_TYPE)
+                /* Only override the expression's own type when it is unknown.
+                 * If the semantic checker already resolved a type (e.g. Pi as REAL_TYPE
+                 * via the builtin const shadowing an FPC internproc function), trust it. */
+                if (sym_type != UNKNOWN_TYPE && expr_type == UNKNOWN_TYPE)
                     expr_type = sym_type;
                 if (expr->resolved_kgpc_type == NULL)
                     expr->resolved_kgpc_type = sym_node->type;
@@ -9201,8 +9312,32 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
         inst_list = codegen_vect_reg(inst_list, 0);
         CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
-        inst_list = add_inst(inst_list, buffer);
+        if (stmt->stmt_data.procedure_call_data.is_virtual_call &&
+            stmt->stmt_data.procedure_call_data.vmt_index >= 0)
+        {
+            /* Virtual method call through VMT for procedure (void return type).
+             * Self is the first argument register after the optional static link slot. */
+            int vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
+            int self_arg_index = should_pass_static_link ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            if (!stmt->stmt_data.procedure_call_data.is_class_method_call)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+            }
+            int vmt_offset = vmt_index * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
+            inst_list = add_inst(inst_list, buffer);
+        }
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

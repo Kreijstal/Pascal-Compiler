@@ -130,12 +130,27 @@ FPC_RTL_DIR = os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "rtl
 
 # AST cache directory for FPC RTL mode — avoids re-parsing system.pp + objpas.pp
 # for every test (saves ~3.5s per test).
+# The cache is automatically invalidated when the compiler binary changes.
 _FPC_RTL_AST_CACHE_DIR = None
 if FPC_RTL_MODE:
     _FPC_RTL_AST_CACHE_DIR = os.path.join(
         os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_ast_cache"
     )
+    # Invalidate cache when the compiler binary has been rebuilt
+    _cache_sentinel = os.path.join(_FPC_RTL_AST_CACHE_DIR, ".compiler_mtime")
+    _compiler_mtime = ""
+    if os.path.exists(KGPC_PATH):
+        _compiler_mtime = str(os.path.getmtime(KGPC_PATH))
+    _old_mtime = ""
+    if os.path.exists(_cache_sentinel):
+        with open(_cache_sentinel) as f:
+            _old_mtime = f.read().strip()
+    if _compiler_mtime != _old_mtime and os.path.isdir(_FPC_RTL_AST_CACHE_DIR):
+        shutil.rmtree(_FPC_RTL_AST_CACHE_DIR, ignore_errors=True)
     os.makedirs(_FPC_RTL_AST_CACHE_DIR, exist_ok=True)
+    if _compiler_mtime:
+        with open(_cache_sentinel, "w") as f:
+            f.write(_compiler_mtime)
 
 FPC_RTL_FLAGS = [
     "--no-stdlib",
@@ -1331,10 +1346,6 @@ class TestCompiler(unittest.TestCase):
             command.append("-O2")
             if not IS_WINDOWS_ABI:
                 command.append("-no-pie")
-            else:
-                # Allow user-provided shims (e.g., LoadLibrary_s) to override runtime
-                # fallbacks without duplicate-definition errors under MinGW.
-                command.append("-Wl,--allow-multiple-definition")
             if is_coverage_enabled():
                 command.append("--coverage")
             command.extend([

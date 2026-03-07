@@ -574,12 +574,24 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+    /* Allow local constants to shadow imported unit functions/procedures.
+     * In Pascal, user declarations at program scope can shadow unit-level
+     * symbols.  E.g. user 'const min = 5' shadows system 'function min',
+     * and user 'const pi = 3.14' shadows FPC's 'function Pi [internproc]'. */
+    if (is_existing_proc_func &&
+        existing_node->defined_in_unit &&
+        new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
+
     /* Allow local types to shadow imported unit types. */
     if (existing_node->hash_type == HASHTYPE_TYPE &&
         existing_node->defined_in_unit &&
         new_hash_type == HASHTYPE_TYPE) {
         return 1;
     }
+
+
 
     /* Allow const shadowing in the same scope (unit/system consts share the program scope). */
     if (existing_node->hash_type == HASHTYPE_CONST &&

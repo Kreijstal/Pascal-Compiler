@@ -9,8 +9,10 @@ typedef enum kgpc_tvar_kind
     KGPC_TVAR_KIND_BOOL = 1,
     KGPC_TVAR_KIND_CHAR = 2,
     KGPC_TVAR_KIND_REAL = 3,
-    KGPC_TVAR_KIND_STRING = 4,
-    KGPC_TVAR_KIND_POINTER = 5
+    KGPC_TVAR_KIND_STRING = 4,       /* vtString: PShortString */
+    KGPC_TVAR_KIND_POINTER = 5,
+    KGPC_TVAR_KIND_PCHAR = 6,        /* vtPChar */
+    KGPC_TVAR_KIND_ANSISTRING = 11   /* vtAnsiString */
 } kgpc_tvar_kind_t;
 
 typedef struct kgpc_tvarrec

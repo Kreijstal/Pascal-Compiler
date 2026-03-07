@@ -100,6 +100,67 @@ static int semcheck_total_param_size(ListNode_t *params, SymTab_t *symtab)
     return total;
 }
 
+/* Returns 1 if all parameters in the list are of float (REAL_TYPE) type.
+ * Used to detect float-specialized overloads (Single/Double/Extended) that
+ * share the same mangled name in KGPC's convention. */
+static int semcheck_all_params_float(ListNode_t *params, SymTab_t *symtab)
+{
+    if (params == NULL)
+        return 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        int owns = 0;
+        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
+        int is_float = 0;
+        if (kg != NULL && kg->kind == TYPE_KIND_PRIMITIVE)
+            is_float = (kg->info.primitive_type_tag == REAL_TYPE);
+        if (owns && kg != NULL)
+            destroy_kgpc_type(kg);
+        if (!is_float)
+            return 0;
+    }
+    return 1;
+}
+
+/* Returns the absolute distance between the total declared size of value
+ * (non-var) float parameters and KGPC's native float size (8 bytes each).
+ * A distance of 0 means all value float params are Double (8 bytes) — the
+ * KGPC-native size. Used to prefer the Double overload over Single (4 bytes)
+ * or Extended (16 bytes) when all overloads map to the same mangled name. */
+static int semcheck_value_float_param_distance(ListNode_t *params, SymTab_t *symtab)
+{
+    int n_value = 0;
+    int total_value_size = 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL)
+            continue;
+        int is_var = 0;
+        if (decl->type == TREE_VAR_DECL)
+            is_var = decl->tree_data.var_decl_data.is_var_param;
+        if (is_var)
+            continue; /* var/out params are always pointers — skip */
+        n_value++;
+        int owns = 0;
+        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
+        long long sz = 8;
+        if (kg != NULL)
+            sz = kgpc_type_sizeof(kg);
+        if (owns && kg != NULL)
+            destroy_kgpc_type(kg);
+        if (sz <= 0)
+            sz = 8;
+        total_value_size += (int)sz;
+    }
+    if (n_value == 0)
+        return 0;
+    int native = n_value * 8;
+    int dist = total_value_size - native;
+    return dist < 0 ? -dist : dist;
+}
+
 static const char *semcheck_get_param_type_id(Tree_t *decl)
 {
     if (decl == NULL)
@@ -1194,6 +1255,10 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         (void)is_integer_literal;
         return semcheck_make_quality(MATCH_PROMOTION);
     }
+
+    /* Nil/Pointer should not implicitly convert to Boolean in overload resolution */
+    if (actual_tag == POINTER_TYPE && formal_tag == BOOL)
+        return semcheck_make_quality(MATCH_INCOMPATIBLE);
 
     if (actual_kgpc != NULL && formal_kgpc != NULL)
     {
@@ -2411,6 +2476,12 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
+        /* For class method overloads (id contains "__"), the current method
+         * being compiled sits at scope 0 (method body) while sibling overloads
+         * are at scope 1 (class level). Normalize them to prevent the scope
+         * filter from excluding sibling overloads. */
+        if (candidate->owner_class != NULL && candidate_scope == 0)
+            candidate_scope = 1;
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;
@@ -2495,12 +2566,31 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     specificity_cmp = cand_int_max < best_int_max ? -1 : 1;
                 else
                 {
-                    int cand_param_size = semcheck_total_param_size(
-                        kgpc_type_get_procedure_params(candidate->type), symtab);
-                    int best_param_size = semcheck_total_param_size(
-                        kgpc_type_get_procedure_params(best_match->type), symtab);
-                    if (cand_param_size != best_param_size)
-                        specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                    ListNode_t *cand_params = kgpc_type_get_procedure_params(candidate->type);
+                    ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
+                    /* For same-mangled float overloads (Single/Double/Extended all map to _r),
+                     * prefer the one whose value param sizes are closest to KGPC's native
+                     * 8-byte float size (Double).  This ensures the generated body uses
+                     * movsd (8-byte) rather than movss (4-byte) or x87 Extended ABI. */
+                    int same_mangled = (best_match->mangled_id != NULL &&
+                        candidate->mangled_id != NULL &&
+                        pascal_identifier_equals(best_match->mangled_id, candidate->mangled_id));
+                    if (same_mangled &&
+                        semcheck_all_params_float(cand_params, symtab) &&
+                        semcheck_all_params_float(best_params, symtab))
+                    {
+                        int cand_dist = semcheck_value_float_param_distance(cand_params, symtab);
+                        int best_dist = semcheck_value_float_param_distance(best_params, symtab);
+                        if (cand_dist != best_dist)
+                            specificity_cmp = cand_dist < best_dist ? -1 : 1;
+                    }
+                    else
+                    {
+                        int cand_param_size = semcheck_total_param_size(cand_params, symtab);
+                        int best_param_size = semcheck_total_param_size(best_params, symtab);
+                        if (cand_param_size != best_param_size)
+                            specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                    }
                 }
                 if (specificity_cmp == 0)
                 {

@@ -452,7 +452,7 @@ var
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
   RandSeed: LongWord; external name 'kgpc_randseed';
-  WideStringManager: TUnicodeStringManager;
+  widestringmanager: TUnicodeStringManager;
   DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
   DefaultUnicodeCodePage: TSystemCodePage;
@@ -669,12 +669,14 @@ function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_c
 function kgpc_get_interface(self: Pointer; guid: Pointer; var intf): Integer; cdecl; external name 'kgpc_get_interface';
 procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
+procedure kgpc_assign_t_s(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_assign_t_s';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
 procedure kgpc_text_reset(var f: text); cdecl; external name 'kgpc_text_reset';
 procedure kgpc_text_close(var f: text); cdecl; external name 'kgpc_text_close';
 procedure kgpc_text_app(var f: text); cdecl; external name 'kgpc_text_app';
 procedure kgpc_text_setbuf(var f: text; buf: Pointer; size: LongInt); cdecl; external name 'kgpc_text_setbuf';
 procedure kgpc_tfile_assign(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_tfile_assign';
+procedure kgpc_assign_f_s(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_assign_f_s';
 procedure kgpc_tfile_rewrite(var f: file); cdecl; external name 'kgpc_tfile_rewrite';
 procedure kgpc_tfile_reset(var f: file); cdecl; external name 'kgpc_tfile_reset';
 procedure kgpc_tfile_close(var f: file); cdecl; external name 'kgpc_tfile_close';
@@ -776,13 +778,13 @@ end;
 
 procedure assign_text_internal(var f: text; filename: string);
 begin
-    kgpc_text_assign(f, PAnsiChar(filename));
+    kgpc_assign_t_s(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar - used by FPC bootstrap (objpas.pp) }
 procedure assign_text_pchar_internal(var f: text; filename: PAnsiChar);
 begin
-    kgpc_text_assign(f, filename);
+    kgpc_assign_t_s(f, filename);
 end;
 
 procedure rewrite_text_internal(var f: text);
@@ -959,13 +961,13 @@ end;
 
 procedure assign(var f: file; filename: string); overload;
 begin
-    kgpc_tfile_assign(f, PAnsiChar(filename));
+    kgpc_assign_f_s(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar for typed/untyped files - FPC bootstrap compatibility }
 procedure assign(var f: file; filename: PAnsiChar); overload;
 begin
-    kgpc_tfile_assign(f, filename);
+    kgpc_assign_f_s(f, filename);
 end;
 
 { Assign with AnsiChar (single character filename) for files - FPC bootstrap compatibility }

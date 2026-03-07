@@ -423,6 +423,23 @@ int semcheck_arrayaccess(int *type_return,
                 if (ipg_result >= 0)
                     return return_val + ipg_result;
 
+                /* When mutating (LHS of assignment), the getter bails out because
+                 * it only handles read access.  Resolve the property element type
+                 * from the class property declaration without rewriting the AST —
+                 * the actual setter rewrite will happen later in
+                 * semcheck_try_indexed_property_assignment. */
+                if (mutating != NO_MUTATE && rec != NULL)
+                {
+                    struct RecordType *prop_owner = NULL;
+                    struct ClassProperty *prop = semcheck_find_class_property(symtab,
+                        rec, rec->default_indexed_property, &prop_owner);
+                    if (prop != NULL && prop->is_indexed && prop->write_accessor != NULL)
+                    {
+                        *type_return = prop->type;
+                        return return_val;
+                    }
+                }
+
                 /* Not an indexed property — evaluate the field access so array info
                  * is populated (e.g. for a default-indexed field like FItems). */
                 int field_type = UNKNOWN_TYPE;
@@ -893,6 +910,34 @@ static int semcheck_detach_unary_not_from_receiver(struct Expression *receiver_e
     return 0;
 }
 
+static int semcheck_funccall_id_is_operator_dispatch(const char *id)
+{
+    if (id == NULL)
+        return 0;
+    if (strcmp(id, "+") == 0 || strcmp(id, "-") == 0 ||
+        strcmp(id, "*") == 0 || strcmp(id, "/") == 0 ||
+        strcmp(id, "=") == 0 || strcmp(id, "<>") == 0 ||
+        strcmp(id, "<") == 0 || strcmp(id, ">") == 0 ||
+        strcmp(id, "<=") == 0 || strcmp(id, ">=") == 0 ||
+        strcmp(id, "**") == 0 || strcmp(id, ":=") == 0 ||
+        strcasecmp(id, "div") == 0 || strcasecmp(id, "mod") == 0 ||
+        strcasecmp(id, "and") == 0 || strcasecmp(id, "or") == 0 ||
+        strcasecmp(id, "not") == 0 || strcasecmp(id, "xor") == 0 ||
+        strcasecmp(id, "shl") == 0 || strcasecmp(id, "shr") == 0 ||
+        strcasecmp(id, "in") == 0 || strcasecmp(id, "is") == 0 ||
+        strcasecmp(id, "as") == 0 ||
+        strcasecmp(id, "Implicit") == 0 || strcasecmp(id, "Explicit") == 0 ||
+        strcasecmp(id, "Equal") == 0 || strcasecmp(id, "NotEqual") == 0 ||
+        strcasecmp(id, "GreaterThan") == 0 ||
+        strcasecmp(id, "GreaterThanOrEqual") == 0 ||
+        strcasecmp(id, "LessThan") == 0 ||
+        strcasecmp(id, "LessThanOrEqual") == 0)
+        return 1;
+    if (strncmp(id, "op_", 3) == 0)
+        return 1;
+    return strstr(id, "__op_") != NULL;
+}
+
 int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 {
     assert(decl != NULL);
@@ -1348,6 +1393,7 @@ int semcheck_funccall(int *type_return,
 
     args_given = expr->expr_data.function_call_data.args_expr;
     int injected_self = 0;
+    int is_operator_dispatch = semcheck_funccall_id_is_operator_dispatch(id);
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
@@ -1808,7 +1854,8 @@ int semcheck_funccall(int *type_return,
 
         /* If no explicit receiver was provided (not a method call placeholder), but Self is in scope
          * and defines this method, prepend Self so unqualified method calls resolve correctly. */
-        if (!was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
+        if (!is_operator_dispatch &&
+            !was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
             HashNode_t *global_node = NULL;
             if (FindIdent(&global_node, symtab, id) >= 0 && global_node != NULL &&
@@ -1980,14 +2027,14 @@ int semcheck_funccall(int *type_return,
                     int args_count = ListLength(args_given);
                     int expects_self = 0;
                     ListNode_t *method_params = NULL;
-                    
+
                     /* Build the mangled method name */
                     char mangled_method_name[256];
                     if (self_record->type_id != NULL)
                     {
                         snprintf(mangled_method_name, sizeof(mangled_method_name), "%s__%s",
                             self_record->type_id, id);
-                        
+
                         /* Get ALL overloads of this method */
                         ListNode_t *all_methods = FindAllIdents(symtab, mangled_method_name);
                         if (all_methods != NULL)
@@ -2172,7 +2219,10 @@ int semcheck_funccall(int *type_return,
                             if (method_overloads != NULL)
                             {
                                 method_is_overloaded = (method_overloads->next != NULL);
-                                DestroyList(method_overloads);
+                                if (method_is_overloaded)
+                                    overload_candidates = method_overloads;
+                                else
+                                    DestroyList(method_overloads);
                             }
                         }
                         if (method_is_overloaded && mangled_name != NULL)
@@ -2906,7 +2956,8 @@ int semcheck_funccall(int *type_return,
     /***** FIRST VERIFY FUNCTION IDENTIFIER *****/
 
     /* Resolve unqualified calls against the current static method owner (helpers/class methods). */
-    if (!was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
+    if (!is_operator_dispatch &&
+        !was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
     {
         const char *current_owner = semcheck_get_current_method_owner();
         if (current_owner != NULL)
@@ -4485,7 +4536,7 @@ int semcheck_funccall(int *type_return,
         goto skip_overload_resolution;
     }
 
-    if (id != NULL) {
+    if (id != NULL && overload_candidates == NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }
     /* When the call was unit-qualified (e.g. System.Foo), filter candidates to
@@ -5172,10 +5223,11 @@ method_call_resolved:
                 }
             }
         }
-        /* Centralized virtual dispatch fallback — catches abstract virtual methods
-         * that weren't detected by the early Self-injection check. Only applies to
-         * methods without a body (abstract) and not class/static methods (which use
-         * single-indirection VMT dispatch that codegen doesn't support yet). */
+        /* Centralized virtual dispatch fallback — catches virtual methods
+         * that weren't detected by the early Self-injection check (Path 1).
+         * This handles obj.Method() calls that go through placeholder resolution
+         * (Path 2 → Path 3) where the receiver is a parameter or field.
+         * Applies to all virtual/override methods, not just abstract ones. */
         int best_match_param_count = -1;
         if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -5198,16 +5250,6 @@ method_call_resolved:
                 best_match_param_count,
                 NULL))
         {
-            /* Check if the method has no body (abstract) */
-            int has_body = 0;
-            if (best_match->type != NULL && best_match->type->kind == TYPE_KIND_PROCEDURE)
-            {
-                Tree_t *proc_def = best_match->type->info.proc_info.definition;
-                if (proc_def != NULL &&
-                    proc_def->tree_data.subprogram_data.statement_list != NULL)
-                    has_body = 1;
-            }
-            if (!has_body)
             {
                 struct RecordType *class_record = semcheck_lookup_record_type(symtab,
                     best_match->owner_class);
@@ -5880,7 +5922,8 @@ skip_overload_resolution:
                 ++return_val;
             expr->expr_data.function_call_data.args_expr = args_given;
         }
-        if (injected_self && hash_return != NULL && hash_return->type != NULL &&
+        if (!semcheck_funccall_id_is_operator_dispatch(id) &&
+            injected_self && hash_return != NULL && hash_return->type != NULL &&
             hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {
             int resolved_expects_self = 0;
@@ -6786,7 +6829,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
         expr->expr_data.function_call_data.id = id_copy;
         expr->expr_data.function_call_data.mangled_id = mangled_copy;
         expr->expr_data.function_call_data.args_expr = args_head;
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        /* Set resolved_func so semcheck_funccall goes via method_call_resolved
+         * (which semchecks arguments) rather than the funccall_cleanup fast-path
+         * (which skips argument semchecking, leaving e.g. FCount as EXPR_VAR_ID). */
+        expr->expr_data.function_call_data.resolved_func = getter_node;
         expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
         semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
         expr->expr_data.function_call_data.is_call_info_valid = 1;
@@ -6879,7 +6925,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
                         expr->expr_data.function_call_data.id = id_copy;
                         expr->expr_data.function_call_data.mangled_id = mangled_copy;
                         expr->expr_data.function_call_data.args_expr = args_head;
-                        expr->expr_data.function_call_data.resolved_func = NULL;
+                        /* Set resolved_func so semcheck_funccall goes via method_call_resolved
+                         * (which semchecks arguments) rather than the funccall_cleanup fast-path
+                         * (which skips argument semchecking, leaving e.g. FCount as EXPR_VAR_ID). */
+                        expr->expr_data.function_call_data.resolved_func = getter_node;
                         expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
                         semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
                         expr->expr_data.function_call_data.is_call_info_valid = 1;
