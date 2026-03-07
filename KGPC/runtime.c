@@ -1940,7 +1940,7 @@ static void kgpc_string_set_insert(const void *value);
 static void kgpc_string_release(char *value);
 static void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
 extern void *widestringmanager[25];
-extern int32_t DefaultSystemCodePage __attribute__((weak));
+extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
 
 void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
@@ -7069,11 +7069,10 @@ int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
  *   [24] GetStandardCodePageProc
  * ===================================================================== */
 
-/* The widestringmanager global — declared in the generated assembly as BSS.
- * Weak definition (not extern) so it works on both Linux and MinGW:
- * if codegen emits a widestringmanager symbol, the linker picks that one;
- * otherwise this zero-initialized fallback is used. */
-void *widestringmanager[25] __attribute__((weak)) = {0};
+/* The widestringmanager global — array of 25 function pointers for
+ * FPC's TWideStringManager record.  Initialized to zero (no-ops)
+ * and populated by kgpc_init_widestringmanager() at startup. */
+void *widestringmanager[25] = {0};
 
 /* Default: convert wide/unicode chars to ansi by truncating to low byte.
    Signature: procedure(source:punicodechar; var dest:RawByteString;
@@ -7257,8 +7256,8 @@ static int64_t kgpc_default_codepoint_length(const char *str, int64_t maxlookahe
 static void kgpc_stub_thread_noop(void) {}
 
 /* GetStandardCodePage: return 0 (system default) */
-extern int32_t DefaultSystemCodePage __attribute__((weak));
-extern int32_t DefaultFileSystemCodePage __attribute__((weak));
+extern int32_t DefaultSystemCodePage;
+extern int32_t DefaultFileSystemCodePage;
 static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
 {
     if (stdcp != 2)  /* scpFileSystemSingleByte = 2 */
@@ -7270,8 +7269,6 @@ static int32_t kgpc_default_get_standard_codepage(int32_t stdcp)
    Called from kgpc_init_args before the program body runs. */
 void kgpc_init_widestringmanager(void)
 {
-    /* With a weak definition, the address is always valid — init unconditionally. */
-
     widestringmanager[0]  = (void *)kgpc_default_wide2ansi_move;
     widestringmanager[1]  = (void *)kgpc_default_ansi2wide_move;
     widestringmanager[2]  = (void *)kgpc_stub_widecase;             /* UpperWide */

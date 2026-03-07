@@ -53,6 +53,9 @@ extern void kgpc_ioresult_set(int32_t value);
 /* Initializes a TextRec to KGPC defaults (zeros + name copy) */
 extern void kgpc_text_assign(void *file, const char *path);
 
+/* Initializes a FileRec to KGPC defaults */
+extern void kgpc_tfile_assign(void *file, const char *path);
+
 /* ------------------------------------------------------------------ */
 /* TextRec field offsets used by FPC RTL compiled code                 */
 /* ------------------------------------------------------------------ */
@@ -146,16 +149,16 @@ static void kgpc_fpc_openfunc(void *textrec)
 
 /* ------------------------------------------------------------------ */
 /* assign_t_s: Assign(var t: Text; const s: string)                    */
-/* Called by KGPC-compiled code when Assign(TextFile, filename) is     */
-/* compiled in FPC RTL mode (--no-stdlib).                             */
-/* rdi = TextRec*, rsi = PChar filename                                */
+/* Single implementation for both standard and FPC RTL mode.           */
+/* Calls kgpc_text_assign (KGPC proper init), then sets FPC I/O        */
+/* function pointers at offsets 296-320 (harmless in standard mode,    */
+/* required for FPC RTL compiled code).                                 */
 /* ------------------------------------------------------------------ */
 void assign_t_s(void *textrec, const char *path)
 {
     if (textrec == NULL)
         return;
 
-    /* Use KGPC's assign to initialize the TextRec (zeroes, copies name) */
     kgpc_text_assign(textrec, path);
 
     /* Set FPC RTL function pointers at the offsets FPC RTL code expects */
@@ -172,34 +175,23 @@ void assign_t_s(void *textrec, const char *path)
 
 /* ------------------------------------------------------------------ */
 /* assign_f_s: Assign(var f: File; const s: string)                    */
-/* FileRec layout (368 bytes, KGPC allocation).                        */
-/* FPC RTL code reads name at offset 52 (AnsiChar).                    */
+/* Single implementation for both standard and FPC RTL mode.           */
+/* Calls kgpc_tfile_assign (KGPC proper init), then copies filename    */
+/* to FPC's expected offset 52 for FPC RTL compatibility.              */
 /* ------------------------------------------------------------------ */
 
-#define FR_HANDLE   0
-#define FR_MODE     4
-#define FR_NAME_FPC 52   /* AnsiChar name used by do_open_u_pc_li_b */
+#define FR_NAME_FPC 52   /* AnsiChar name used by FPC RTL's do_open_u_pc_li_b */
 
 void assign_f_s(void *filerec, const char *path)
 {
     if (filerec == NULL)
         return;
 
-    /* Zero the FileRec (368 bytes) */
-    memset(filerec, 0, 368);
+    kgpc_tfile_assign(filerec, path);
 
-    char *fr = (char *)filerec;
-
-    /* Handle = -1 (unassigned) */
-    int32_t neg1 = -1;
-    memcpy(fr + FR_HANDLE, &neg1, sizeof(neg1));
-
-    /* Mode = fmClosed */
-    int32_t mode = (int32_t)KGPC_FM_CLOSED;
-    memcpy(fr + FR_MODE, &mode, sizeof(mode));
-
-    /* Copy filename to offset 52 (used by FPC RTL's do_open_u_pc_li_b) */
+    /* Also copy filename to offset 52 where FPC RTL code reads it */
     if (path != NULL) {
+        char *fr = (char *)filerec;
         size_t len = strlen(path);
         if (len > 255)
             len = 255;
