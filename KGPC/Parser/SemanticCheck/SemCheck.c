@@ -6486,23 +6486,55 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 ListNode_t *old_fields = existing_record->fields;
                                 existing_record->fields = new_record->fields;
                                 new_record->fields = NULL; /* Transfer ownership to existing */
-                                /* Re-add hidden fields from forward decl at front */
-                                while (old_fields != NULL)
+                                /* Mark the depleted record so merge_parent_class_fields
+                                 * won't re-merge parent fields into this empty shell. */
+                                new_record->parent_fields_merged = 1;
+                                /* Re-add hidden fields from forward decl at front,
+                                 * but ONLY if the full declaration has no parent class.
+                                 * When a parent exists, the hidden fields (e.g.
+                                 * __kgpc_class_typeinfo) will be inherited from the
+                                 * parent during merge_parent_class_fields, so re-adding
+                                 * them here would create duplicates. */
+                                if (new_record->parent_class_name == NULL)
                                 {
-                                    ListNode_t *next = old_fields->next;
-                                    if (old_fields->type == LIST_RECORD_FIELD && old_fields->cur != NULL)
+                                    while (old_fields != NULL)
                                     {
-                                        struct RecordField *f = (struct RecordField *)old_fields->cur;
-                                        if (record_field_is_hidden(f))
+                                        ListNode_t *next = old_fields->next;
+                                        if (old_fields->type == LIST_RECORD_FIELD && old_fields->cur != NULL)
                                         {
-                                            old_fields->next = NULL;
-                                            if (existing_record->fields != NULL)
-                                                existing_record->fields = PushListNodeFront(existing_record->fields, old_fields);
-                                            else
-                                                existing_record->fields = old_fields;
+                                            struct RecordField *f = (struct RecordField *)old_fields->cur;
+                                            if (record_field_is_hidden(f))
+                                            {
+                                                /* Skip if transferred fields already have this hidden field
+                                                 * (both forward and full root-class decls get __kgpc_class_typeinfo
+                                                 * from from_cparser.c, so re-adding would create duplicates). */
+                                                int already_has = 0;
+                                                if (f->name != NULL) {
+                                                    ListNode_t *chk = existing_record->fields;
+                                                    while (chk != NULL) {
+                                                        if (chk->type == LIST_RECORD_FIELD && chk->cur != NULL) {
+                                                            struct RecordField *ef = (struct RecordField *)chk->cur;
+                                                            if (record_field_is_hidden(ef) && ef->name != NULL &&
+                                                                strcmp(ef->name, f->name) == 0) {
+                                                                already_has = 1;
+                                                                break;
+                                                            }
+                                                        }
+                                                        chk = chk->next;
+                                                    }
+                                                }
+                                                if (!already_has)
+                                                {
+                                                    old_fields->next = NULL;
+                                                    if (existing_record->fields != NULL)
+                                                        existing_record->fields = PushListNodeFront(existing_record->fields, old_fields);
+                                                    else
+                                                        existing_record->fields = old_fields;
+                                                }
+                                            }
                                         }
+                                        old_fields = next;
                                     }
-                                    old_fields = next;
                                 }
                                 /* Transfer method templates, properties, parent class, interfaces */
                                 if (new_record->method_templates != NULL)
@@ -6515,8 +6547,11 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     existing_record->properties = new_record->properties;
                                     new_record->properties = NULL;
                                 }
-                                if (new_record->parent_class_name != NULL && existing_record->parent_class_name == NULL)
+                                if (new_record->parent_class_name != NULL)
+                                {
+                                    free(existing_record->parent_class_name);
                                     existing_record->parent_class_name = strdup(new_record->parent_class_name);
+                                }
                                 if (new_record->interface_names != NULL)
                                 {
                                     existing_record->interface_names = new_record->interface_names;
@@ -6632,7 +6667,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                             /* Prepend the hidden typeinfo field from existing to new record's fields */
                                             ListNode_t *existing_fields = existing_record->fields;
                                             existing_record->fields = record_info->fields;
-                                            /* Re-add hidden fields at front */
+                                            /* Re-add hidden fields at front, skipping duplicates */
                                             while (existing_fields != NULL)
                                             {
                                                 ListNode_t *next = existing_fields->next;
@@ -6641,8 +6676,26 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                     struct RecordField *f = (struct RecordField *)existing_fields->cur;
                                                     if (record_field_is_hidden(f))
                                                     {
-                                                        existing_fields->next = NULL;
-                                                        existing_record->fields = PushListNodeFront(existing_record->fields, existing_fields);
+                                                        int already_has = 0;
+                                                        if (f->name != NULL) {
+                                                            ListNode_t *chk = existing_record->fields;
+                                                            while (chk != NULL) {
+                                                                if (chk->type == LIST_RECORD_FIELD && chk->cur != NULL) {
+                                                                    struct RecordField *ef = (struct RecordField *)chk->cur;
+                                                                    if (record_field_is_hidden(ef) && ef->name != NULL &&
+                                                                        strcmp(ef->name, f->name) == 0) {
+                                                                        already_has = 1;
+                                                                        break;
+                                                                    }
+                                                                }
+                                                                chk = chk->next;
+                                                            }
+                                                        }
+                                                        if (!already_has)
+                                                        {
+                                                            existing_fields->next = NULL;
+                                                            existing_record->fields = PushListNodeFront(existing_record->fields, existing_fields);
+                                                        }
                                                     }
                                                     else
                                                     {
@@ -7558,6 +7611,22 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
 
     record_info->has_cached_size = 0;
 
+    /* Guard against double-merging: if parent fields have already been
+     * merged into this record, skip to avoid duplicating inherited fields.
+     * Also check the canonical RecordType in the symbol table — if another
+     * RecordType for the same class was already merged (e.g. forward decl
+     * vs full decl creating separate RecordType objects), skip this one. */
+    if (record_info->parent_fields_merged)
+        return 0;
+    if (class_name != NULL) {
+        HashNode_t *self_node = semcheck_find_preferred_type_node(symtab, class_name);
+        if (self_node != NULL) {
+            struct RecordType *canonical = get_record_type_from_node(self_node);
+            if (canonical != NULL && canonical != record_info && canonical->parent_fields_merged)
+                return 0;
+        }
+    }
+
     /* Check for circular inheritance */
     if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
     {
@@ -7583,7 +7652,16 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 line_num, record_info->parent_class_name);
         return 1;
     }
-    
+
+    /* Ensure parent has its own parent fields merged before we clone from it */
+    if (parent_record->parent_class_name != NULL && !parent_record->parent_fields_merged)
+    {
+        int parent_merge_result = merge_parent_class_fields(symtab, parent_record,
+            record_info->parent_class_name, line_num);
+        if (parent_merge_result > 0)
+            return parent_merge_result;
+    }
+
     /* Clone parent's fields and prepend them to this record's fields */
     ListNode_t *parent_fields = parent_record->fields;
     if (parent_fields != NULL)
@@ -7601,7 +7679,34 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 continue;
             }
             struct RecordField *original_field = (struct RecordField *)cur->cur;
-            
+
+            /* Skip hidden fields from parent if the record already has them
+             * (e.g., __kgpc_class_typeinfo added to forward declarations). */
+            if (record_field_is_hidden(original_field) && original_field->name != NULL)
+            {
+                int already_has = 0;
+                ListNode_t *own = record_info->fields;
+                while (own != NULL)
+                {
+                    if (own->type == LIST_RECORD_FIELD && own->cur != NULL)
+                    {
+                        struct RecordField *f = (struct RecordField *)own->cur;
+                        if (record_field_is_hidden(f) && f->name != NULL &&
+                            strcmp(f->name, original_field->name) == 0)
+                        {
+                            already_has = 1;
+                            break;
+                        }
+                    }
+                    own = own->next;
+                }
+                if (already_has)
+                {
+                    cur = cur->next;
+                    continue;
+                }
+            }
+
             /* Clone the field */
             struct RecordField *cloned_field = (struct RecordField *)calloc(1, sizeof(struct RecordField));
             if (cloned_field == NULL)
@@ -7730,6 +7835,8 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     /* Detect default indexed property after merging parent fields */
     detect_default_indexed_property(record_info, parent_record);
 
+    record_info->parent_fields_merged = 1;
+
     /* Class instances are accessed via pointers; parent storage need not grow.
      * Only ensure capacity for non-class (plain record) inheritance. */
     if (parent_record != NULL && !record_info->is_class)
@@ -7738,7 +7845,7 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         if (compute_class_record_size(symtab, record_info, &derived_size, line_num) == 0)
             ensure_class_storage_capacity(symtab, parent_record, derived_size, line_num);
     }
-    
+
     return 0;
 }
 
@@ -8802,8 +8909,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
                 {
-                    int merge_result = merge_parent_class_fields(symtab, record_info, 
-                                                                  tree->tree_data.type_decl_data.id, 
+                    int merge_result = merge_parent_class_fields(symtab, record_info,
+                                                                  tree->tree_data.type_decl_data.id,
                                                                   tree->line_num);
                     if (merge_result > 0)
                     {
