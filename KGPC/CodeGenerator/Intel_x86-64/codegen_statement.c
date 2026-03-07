@@ -4219,6 +4219,15 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
 
     assert(ctx != NULL);
     assert(symtab != NULL);
+
+    /* Invalidate the static link register cache at each statement boundary.
+     * The cached register may have been reused for other purposes by a
+     * previous statement's codegen (e.g., the first inner while loop in
+     * QuickSort caches r12 as the static link, but if its condition
+     * short-circuits, r12 is never loaded at runtime yet the second while
+     * loop's codegen reuses the cached register without emitting a reload). */
+    codegen_reset_static_link_cache(ctx);
+
     switch(stmt->type)
     {
         case STMT_VAR_ASSIGN:
@@ -9640,11 +9649,18 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         struct RecordField *fitems_field = NULL;
         struct RecordField *fcount_field = NULL;
 
+        int using_flist = 0;  /* Track if we're using TStringList's FList field */
         if (record_info != NULL) {
             if (resolve_record_field(symtab, record_info, "FItems", &fitems_field,
                     &fitems_offset, stmt->line_num, 1) != 0) {
-                fitems_offset = 8;
-                fitems_field = NULL;
+                /* FItems not found — try FList (used by TStringList and TStrings) */
+                if (resolve_record_field(symtab, record_info, "FList", &fitems_field,
+                        &fitems_offset, stmt->line_num, 1) != 0) {
+                    fitems_offset = 8;
+                    fitems_field = NULL;
+                } else {
+                    using_flist = 1;
+                }
             }
             if (resolve_record_field(symtab, record_info, "FCount", &fcount_field,
                     &fcount_offset, stmt->line_num, 1) != 0) {
@@ -9745,15 +9761,34 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
 
         // Calculate element offset: index * element_size
         int element_size = 0;
+        const char *item_field_name = using_flist ? "FList" : "FItems";
 
-        // Try to determine element size from FItems field
-        if (record_info != NULL) {
+        // Try to determine element size from the item array field
+        if (fitems_field != NULL) {
+            /* If the resolved field has array element type info, use it */
+            if (fitems_field->array_element_type_id != NULL && ctx->symtab != NULL) {
+                HashNode_t *tnode = NULL;
+                if (FindIdent(&tnode, ctx->symtab, fitems_field->array_element_type_id) >= 0 &&
+                    tnode != NULL && tnode->type != NULL) {
+                    element_size = (int)kgpc_type_sizeof(tnode->type);
+                }
+            }
+            if (element_size <= 0) {
+                switch (fitems_field->array_element_type) {
+                    case CHAR_TYPE: case BOOL: element_size = 1; break;
+                    case INT_TYPE: case ENUM_TYPE: element_size = 4; break;
+                    case LONGINT_TYPE: element_size = 4; break;
+                    case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
+                }
+            }
+        } else if (record_info != NULL) {
+            /* Fallback: scan fields by name */
             ListNode_t *fields = record_info->fields;
             while (fields != NULL) {
                 if (fields->type == LIST_RECORD_FIELD) {
                     struct RecordField *f = (struct RecordField *)fields->cur;
-                    if (f != NULL && f->name != NULL && strcmp(f->name, "FItems") == 0) {
-                        // Try lookup by ID first
+                    if (f != NULL && f->name != NULL &&
+                        pascal_identifier_equals(f->name, item_field_name)) {
                         if (f->array_element_type_id != NULL && ctx->symtab != NULL) {
                             HashNode_t *tnode = NULL;
                             if (FindIdent(&tnode, ctx->symtab, f->array_element_type_id) >= 0 &&
@@ -9761,12 +9796,11 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
                                 element_size = (int)kgpc_type_sizeof(tnode->type);
                             }
                         }
-                        // Fallback to primitive tag if ID lookup failed or size is 0
                         if (element_size <= 0) {
                             switch (f->array_element_type) {
                                 case CHAR_TYPE: case BOOL: element_size = 1; break;
                                 case INT_TYPE: case ENUM_TYPE: element_size = 4; break;
-                                case LONGINT_TYPE: element_size = 4; break;  // 4 bytes to match FPC
+                                case LONGINT_TYPE: element_size = 4; break;
                                 case POINTER_TYPE: case REAL_TYPE: element_size = 8; break;
                             }
                         }
@@ -9777,7 +9811,28 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             }
         }
 
-        // Fallback to loop variable size if FItems size couldn't be determined
+        /* When using FList (TStringList), try to resolve the element type from
+         * the field's type chain: PStringItemList → ^TStringItemList →
+         * array of TStringItem → sizeof(TStringItem) = 16. */
+        if (element_size <= 0 && using_flist && fitems_field != NULL &&
+            fitems_field->type_id != NULL && ctx->symtab != NULL) {
+            HashNode_t *ftype_node = NULL;
+            if (FindIdent(&ftype_node, ctx->symtab, fitems_field->type_id) >= 0 &&
+                ftype_node != NULL && ftype_node->type != NULL) {
+                KgpcType *ft = ftype_node->type;
+                /* Dereference pointer: PStringItemList → TStringItemList */
+                if (ft->kind == TYPE_KIND_POINTER && ft->info.points_to != NULL)
+                    ft = ft->info.points_to;
+                /* Array element: TStringItemList → TStringItem */
+                if (ft->kind == TYPE_KIND_ARRAY &&
+                    ft->info.array_info.element_type != NULL)
+                    element_size = (int)kgpc_type_sizeof(ft->info.array_info.element_type);
+                else if (ft->kind == TYPE_KIND_RECORD)
+                    element_size = (int)kgpc_type_sizeof(ft);
+            }
+        }
+
+        // Fallback to loop variable size if element size couldn't be determined
         if (element_size <= 0 && loop_var != NULL && loop_var->resolved_kgpc_type != NULL) {
              element_size = (int)kgpc_type_sizeof(loop_var->resolved_kgpc_type);
         }
@@ -9805,6 +9860,11 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         } else if (element_size == 4) {
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_32);
         } else if (element_size == 8) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_64);
+        } else if (using_flist && element_size > 8) {
+            /* TStringList's FList stores TStringItem records (FString + FObject).
+             * The stride is element_size (16) but we only need the first 8 bytes
+             * (the FString pointer) from each entry. */
             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s,%s), %s\n", fitems_reg->bit_64, idx_reg->bit_64, elem_reg->bit_64);
         } else {
             free_reg(get_reg_stack(), elem_reg);
@@ -9855,6 +9915,10 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         } else if (element_size == 4) {
             snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", elem_reg->bit_32, loop_var_addr_reg->bit_64);
         } else if (element_size == 8) {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", elem_reg->bit_64, loop_var_addr_reg->bit_64);
+        } else if (using_flist && element_size > 8) {
+            /* For FList with record entries (e.g., TStringItem), we loaded the
+             * first field (FString pointer, 8 bytes) — store as a pointer. */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", elem_reg->bit_64, loop_var_addr_reg->bit_64);
         }
         inst_list = add_inst(inst_list, buffer);

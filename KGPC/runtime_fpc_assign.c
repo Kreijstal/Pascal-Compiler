@@ -380,7 +380,11 @@ static void kgpc_rtlevent_wait_timeout(void *event, int timeout) {
 
 /* Critical sections backed by pthread_mutex */
 static void kgpc_critsection_init(void *cs) {
-    pthread_mutex_init((pthread_mutex_t *)cs, NULL);
+    pthread_mutexattr_t attr;
+    pthread_mutexattr_init(&attr);
+    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
+    pthread_mutex_init((pthread_mutex_t *)cs, &attr);
+    pthread_mutexattr_destroy(&attr);
 }
 static void kgpc_critsection_done(void *cs) {
     pthread_mutex_destroy((pthread_mutex_t *)cs);

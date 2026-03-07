@@ -306,6 +306,7 @@ void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_
 int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
 int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
 
+void codegen_reset_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);

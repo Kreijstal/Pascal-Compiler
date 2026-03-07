@@ -7885,12 +7885,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                      *
                      * However, for class methods, Self (first parameter) needs to be dereferenced to pass the
                      * instance pointer, even though it's technically a var parameter internally. */
-                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
-                        struct RecordType *arg_record = codegen_expr_record_type(arg_expr,
-                            ctx != NULL ? ctx->symtab : NULL);
-                        fprintf(stderr, "[CodeGen] Checking var param arg %d: expr=%p, type=%d, record_type=%p\n",
-                            arg_num, arg_expr, arg_expr ? arg_expr->type : -1, (void *)arg_record);
-                    }
 
                     struct RecordType *arg_record = codegen_expr_record_type(arg_expr,
                         ctx != NULL ? ctx->symtab : NULL);
@@ -7930,6 +7924,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         {
                             /* Non-var class parameter from local variable: dereference to get instance pointer */
                             should_dereference = 1;
+                        }
+                        else if (arg_num == 0 && is_var_param && !arg_is_var_param &&
+                                 procedure_name != NULL && ctx->symtab != NULL)
+                        {
+                            /* Self parameter for a method call from outside a class method context.
+                             * The formal Self parameter is a var param, but for a global/static
+                             * class/interface variable, codegen_address_for_expr emits leaq (address
+                             * of the variable), so we need to dereference to get the object pointer. */
+                            HashNode_t *called_func = NULL;
+                            if (FindIdent(&called_func, ctx->symtab, procedure_name) >= 0 &&
+                                called_func != NULL && called_func->owner_class != NULL)
+                            {
+                                should_dereference = 1;
+                            }
                         }
                         /* else: var parameter of class type OR argument is already a var param:
                          * codegen_address_for_expr already loaded the value, don't dereference again */

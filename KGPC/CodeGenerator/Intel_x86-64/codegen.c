@@ -1005,7 +1005,7 @@ int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangle
     return 0;
 }
 
-static void codegen_reset_static_link_cache(CodeGenContext *ctx)
+void codegen_reset_static_link_cache(CodeGenContext *ctx)
 {
     if (ctx == NULL)
         return;
