@@ -5237,20 +5237,15 @@ skip_type_receiver_rewrite:
                 /* Check if this is a virtual/abstract method call that needs VMT dispatch.
                  * Only for instance methods (not class/static methods), since class methods
                  * use a different VMT dispatch convention (single indirection). */
+                /* Use the actual call argument count (excluding Self) for VMT overload
+                 * matching instead of method_node's parameter count, because
+                 * semcheck_find_class_method may return the wrong overload. */
                 int method_param_count = -1;
-                if (method_node != NULL && method_node->type != NULL &&
-                    method_node->type->kind == TYPE_KIND_PROCEDURE)
                 {
-                    method_param_count = ListLength(method_node->type->info.proc_info.params);
-                    if (method_node->owner_class != NULL &&
-                        !from_cparser_is_method_static(method_node->owner_class,
-                            method_node->method_name != NULL ? method_node->method_name : bare_method_name))
-                    {
-                        if (method_param_count > 0)
-                            method_param_count -= 1;
-                        else
-                            method_param_count = 0;
-                    }
+                    int actual_arg_count = ListLength(args_given);
+                    if (!method_is_static && actual_arg_count > 0)
+                        actual_arg_count -= 1; /* subtract Self */
+                    method_param_count = actual_arg_count;
                 }
                 if (self_record->type_id != NULL && bare_method_name != NULL &&
                     from_cparser_is_method_virtual_with_signature(
@@ -6782,7 +6777,9 @@ proccall_parent_resolve_done:
                         {
                             if (resolved_param_count >= 0 && mi->param_count >= 0 &&
                                 resolved_param_count != mi->param_count)
+                            {
                                 continue;
+                            }
                             stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
                             stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
                             if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)

@@ -2298,8 +2298,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 /* Call through a procedural variable stored in a symbol */
                 const char *var_name = expr->expr_data.function_call_data.id;
                 
-                /* Find the variable on the stack */
-                StackNode_t *stack_node = find_label((char *)var_name);
+                /* Find the variable on the stack, checking for non-local access */
+                int proc_var_scope_depth = 0;
+                StackNode_t *stack_node = find_label_with_depth((char *)var_name, &proc_var_scope_depth);
                 if (stack_node != NULL)
                 {
                     /* Load the function pointer into a register */
@@ -2310,12 +2311,23 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         {
                             const char *label = (stack_node->static_label != NULL) ?
                                 stack_node->static_label : stack_node->label;
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n", 
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
                                 label, func_ptr_reg->bit_64);
+                        }
+                        else if (proc_var_scope_depth > 0)
+                        {
+                            /* Non-local variable: access through static link */
+                            Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, proc_var_scope_depth);
+                            if (frame_reg != NULL)
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                                    stack_node->offset, frame_reg->bit_64, func_ptr_reg->bit_64);
+                            else
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    stack_node->offset, func_ptr_reg->bit_64);
                         }
                         else
                         {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", 
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                                 stack_node->offset, func_ptr_reg->bit_64);
                         }
                         inst_list = add_inst(inst_list, buffer);
@@ -4266,33 +4278,59 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             if (relop_kind == IN)
             {
                 const char *left32 = reg_to_reg32(left, left_reg);
-                const char *right32 = reg_to_reg32(right, right_reg);
                 const char *left8 = reg32_to_reg8(left32, left_reg);
 
-                const char *bit_index = left32;
-                const char *bit_base = right32;
+                int is_char_set = (right_expr != NULL && expr_is_char_set_ctx(right_expr, ctx));
 
-                if (right != NULL && right[0] == '$')
+                if (is_char_set)
                 {
-                    /* When loading an immediate set value, make sure not to clobber the left operand.
-                     * Use %r11d if left is in %r10d, otherwise use %r10d. */
-                    const char *temp_reg = "%r10d";
-                    /* Check if left operand is in r10 (any size: r10, r10d, r10b, r10w) */
-                    if (left_reg != NULL && left_reg->reg_id == REG_R10)
-                        temp_reg = "%r11d";
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, temp_reg);
-                    inst_list = add_inst(inst_list, buffer);
-                    bit_base = temp_reg;
+                    /* Char sets are 32 bytes in memory. If the right operand is in a register,
+                     * it holds a POINTER to the set — use btl %bit, (%addr).
+                     * If the right operand is already a memory reference (stack variable),
+                     * use it directly without extra parentheses. */
+                    if (left32 != NULL && left8 != NULL)
+                    {
+                        if (right_reg != NULL)
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left32, right_reg->bit_64);
+                        else if (right != NULL)
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left32, right);
+                        else
+                            break;
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                 }
-
-                if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
+                else
                 {
-                    snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", bit_index, bit_base);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
-                    inst_list = add_inst(inst_list, buffer);
+                    const char *right32 = reg_to_reg32(right, right_reg);
+                    const char *bit_index = left32;
+                    const char *bit_base = right32;
+
+                    if (right != NULL && right[0] == '$')
+                    {
+                        /* When loading an immediate set value, make sure not to clobber the left operand.
+                         * Use %r11d if left is in %r10d, otherwise use %r10d. */
+                        const char *temp_reg = "%r10d";
+                        /* Check if left operand is in r10 (any size: r10, r10d, r10b, r10w) */
+                        if (left_reg != NULL && left_reg->reg_id == REG_R10)
+                            temp_reg = "%r11d";
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, temp_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                        bit_base = temp_reg;
+                    }
+
+                    if (left32 != NULL && left8 != NULL && bit_index != NULL && bit_base != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", bit_index, bit_base);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                 }
                 break;
             }
