@@ -231,6 +231,14 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     record->cached_size = computed_size;
     record->has_cached_size = 1;
     *size_out = computed_size;
+    if (computed_size > 1000000)
+    {
+        const char *debug_env = getenv("KGPC_DEBUG_SIZE");
+        if (debug_env != NULL)
+            fprintf(stderr, "[KGPC_SIZE] Large class/record size: %lld for type_id=%s is_class=%d parent=%s\n",
+                computed_size, record->type_id ? record->type_id : "<null>",
+                record->is_class, record->parent_class_name ? record->parent_class_name : "<none>");
+    }
     return 0;
 }
 
@@ -390,6 +398,22 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
          * intentionally carry no payload bytes. */
         *size_out = 0;
         return 0;
+    }
+
+    /* Class fields are references (pointers), not inline structs.
+     * If the field's type resolves to a class, return pointer size. */
+    if (field->type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field->type_id);
+        if (type_node != NULL)
+        {
+            struct RecordType *record = get_record_type_from_node(type_node);
+            if (record != NULL && record_type_is_class(record))
+            {
+                *size_out = POINTER_SIZE_BYTES;
+                return 0;
+            }
+        }
     }
 
     return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);

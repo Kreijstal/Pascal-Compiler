@@ -4465,10 +4465,11 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
          * here, the symbol remains an external reference that the linker
          * resolves from the runtime library (correct xmm convention). */
         if (mangled_id != NULL &&
-            (strcmp(mangled_id, "arctan2_r_r") == 0 ||
-             strcmp(mangled_id, "tan_r")        == 0 ||
-             strcmp(mangled_id, "cotan_r")      == 0 ||
-             strcmp(mangled_id, "log2_r")       == 0))
+            (strcmp(mangled_id, "arctan2_r_r")  == 0 ||
+             strcmp(mangled_id, "tan_r")         == 0 ||
+             strcmp(mangled_id, "cotan_r")       == 0 ||
+             strcmp(mangled_id, "log2_r")        == 0 ||
+             strcmp(mangled_id, "copysign_r_r")  == 0))
         {
             sub_list = sub_list->next;
             continue;

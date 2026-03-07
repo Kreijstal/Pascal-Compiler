@@ -4400,7 +4400,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         char *substituted = malloc(sub_alloc);
                         if (substituted != NULL) {
                             size_t si = 0, sj = 0;
+                            /* Track whether we have seen the instruction mnemonic on
+                             * the current line.  In AT&T syntax the FIRST identifier on
+                             * each line (after optional whitespace / label) is the
+                             * mnemonic — it must never be substituted with a Pascal
+                             * variable name, or e.g. `sub %rdi,%rcx` becomes
+                             * `__kgpc_program_var_sub_N %rdi,%rcx` when the program
+                             * happens to declare a variable named "sub". */
+                            int line_has_mnemonic = 0;
                             while (si < clen && sj < sub_alloc - 64) {
+                                /* Reset mnemonic flag on each new line. */
+                                if (cleaned[si] == '\n') {
+                                    line_has_mnemonic = 0;
+                                    substituted[sj++] = cleaned[si++];
+                                    continue;
+                                }
                                 if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
                                     (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
                                                  cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
@@ -4410,9 +4424,19 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                     while (si < clen && (isalnum((unsigned char)cleaned[si]) || cleaned[si] == '_'))
                                         si++;
                                     size_t id_len = si - id_start;
+                                    /* Skip past a ':' that makes this a label (not mnemonic). */
+                                    size_t si_after = si;
+                                    while (si_after < clen && cleaned[si_after] == ' ')
+                                        si_after++;
+                                    int is_label = (si_after < clen && cleaned[si_after] == ':');
+                                    /* If we haven't seen a mnemonic yet and this is not a
+                                     * label, it IS the mnemonic — copy verbatim, no subst. */
+                                    int is_mnemonic = (!line_has_mnemonic && !is_label);
+                                    if (!is_label)
+                                        line_has_mnemonic = 1;
                                     char id_buf[256];
                                     int did_substitute = 0;
-                                    if (id_len < sizeof(id_buf)) {
+                                    if (!is_mnemonic && id_len < sizeof(id_buf)) {
                                         memcpy(id_buf, cleaned + id_start, id_len);
                                         id_buf[id_len] = '\0';
                                         /* Try nostackframe parameter substitution first */
@@ -9275,8 +9299,32 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
         inst_list = codegen_vect_reg(inst_list, 0);
         CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
-        snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
-        inst_list = add_inst(inst_list, buffer);
+        if (stmt->stmt_data.procedure_call_data.is_virtual_call &&
+            stmt->stmt_data.procedure_call_data.vmt_index >= 0)
+        {
+            /* Virtual method call through VMT for procedure (void return type).
+             * Self is the first argument register after the optional static link slot. */
+            int vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
+            int self_arg_index = should_pass_static_link ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            if (!stmt->stmt_data.procedure_call_data.is_class_method_call)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+            }
+            int vmt_offset = vmt_index * 8;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
+            inst_list = add_inst(inst_list, buffer);
+        }
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);

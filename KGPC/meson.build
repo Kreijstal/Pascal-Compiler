@@ -99,6 +99,21 @@ runtime_sources = ['runtime.c']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
   runtime_sources += 'runtime_fpc_abstract_stubs.S'
+  runtime_sources += 'runtime_fpc_rtl_compat.S'
+  runtime_sources += 'runtime_fpc_thread_symbols.S'
+  runtime_sources += 'runtime_fpc_interlocked_aliases.c'
+  runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
+  runtime_sources += 'runtime_fpclose.c'
+  runtime_sources += 'runtime_fpclose_i.c'
+  runtime_sources += 'runtime_fpgetcwd.c'
+  runtime_sources += 'runtime_fplseek.c'
+  runtime_sources += 'runtime_fpopen.c'
+  runtime_sources += 'runtime_fpopen_i_i_i.c'
+  runtime_sources += 'runtime_fpread.c'
+  runtime_sources += 'runtime_fpwrite.c'
+  runtime_sources += 'runtime_setcodepage_i.c'
+  runtime_sources += 'runtime_setcodepage_ib.c'
+  runtime_sources += 'runtime_widechar_assign_olevariant.c'
 endif
 runtime_deps = []
 runtime_c_args = ['-O2']

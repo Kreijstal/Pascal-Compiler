@@ -2843,12 +2843,15 @@ cleanup_constructor:
 
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
-         * otherwise this breaks function result variables that share the function name. */
+         * otherwise this breaks function result variables that share the function name.
+         * Skip if gencode_leaf_var already resolved the identifier to a constant immediate
+         * (e.g. Pi from FPC internproc shadowed by a builtin real constant). */
         if (stack_node == NULL &&
             symbol_node != NULL &&
             (symbol_node->hash_type == HASHTYPE_PROCEDURE ||
              symbol_node->hash_type == HASHTYPE_FUNCTION) &&
-            symbol_node->mangled_id != NULL)
+            symbol_node->mangled_id != NULL &&
+            buf_leaf[0] != '$')
         {
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                 symbol_node->mangled_id, target_reg->bit_64);
@@ -3370,6 +3373,18 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                     node != NULL);
+
+                /* If FindIdent returned a function but there's a builtin const with the same
+                 * name (e.g. FPC declares Pi as [internproc] function but we have it as a
+                 * real constant in builtins), prefer the builtin const. */
+                if (found && node != NULL && node->hash_type == HASHTYPE_FUNCTION &&
+                    ctx != NULL && ctx->symtab != NULL && ctx->symtab->builtins != NULL)
+                {
+                    HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
+                        expr->expr_data.id);
+                    if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
+                        node = builtin_node;
+                }
 
                 if (found && node->hash_type == HASHTYPE_CONST)
                 {

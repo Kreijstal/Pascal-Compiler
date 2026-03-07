@@ -7552,7 +7552,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
 {
     if (record_info == NULL || record_info->parent_class_name == NULL)
         return 0;  /* No parent class to merge */
-    
+
+    record_info->has_cached_size = 0;
+
     /* Check for circular inheritance */
     if (check_circular_inheritance(symtab, class_name, record_info->parent_class_name, 100))
     {
@@ -7725,7 +7727,9 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
     /* Detect default indexed property after merging parent fields */
     detect_default_indexed_property(record_info, parent_record);
 
-    if (parent_record != NULL)
+    /* Class instances are accessed via pointers; parent storage need not grow.
+     * Only ensure capacity for non-class (plain record) inheritance. */
+    if (parent_record != NULL && !record_info->is_class)
     {
         long long derived_size = 0;
         if (compute_class_record_size(symtab, record_info, &derived_size, line_num) == 0)
@@ -7742,12 +7746,18 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     if (record_info == NULL || class_name == NULL)
         return 0;
     
-    /* Get methods registered for this class */
+    /* Get methods registered for this class.
+     * For nested types (e.g., TMarshaller.TDeferBase), methods may have been registered
+     * under the unqualified name before renaming. Fall back to unqualified name if needed. */
     ListNode_t *class_methods = NULL;
     int method_count = 0;
     get_class_methods(class_name, &class_methods, &method_count);
-    
-    
+    if (method_count == 0) {
+        const char *dot = strrchr(class_name, '.');
+        if (dot != NULL)
+            get_class_methods(dot + 1, &class_methods, &method_count);
+    }
+
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
@@ -7827,18 +7837,6 @@ if (record_info->parent_class_name != NULL) {
                         int skip_self = (!binding->is_static);
                         char *sig = semcheck_param_sig_from_params(
                             cand->type->info.proc_info.params, skip_self);
-                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
-                            class_name != NULL && binding->method_name != NULL &&
-                            strcasecmp(class_name, "TEncoding") == 0 &&
-                            strcasecmp(binding->method_name, "GetAnsiString") == 0)
-                        {
-                            fprintf(stderr,
-                                "[KGPC VMT] %s.%s binding sig=%s cand=%s sig=%s\n",
-                                class_name, binding->method_name,
-                                binding->param_sig,
-                                cand->mangled_id != NULL ? cand->mangled_id : "<null>",
-                                sig != NULL ? sig : "<null>");
-                        }
                         if (sig != NULL && strcmp(sig, binding->param_sig) == 0)
                         {
                             best = cand;
@@ -7871,8 +7869,18 @@ if (record_info->parent_class_name != NULL) {
                     if (match_count == 1)
                         best = last_match;
                 }
-                if (best != NULL && best->mangled_id != NULL)
-                    mangled = strdup(best->mangled_id);
+                if (best != NULL) {
+                    /* Prefer definition's mangled_id: declaration may have wrong type
+                     * resolution (e.g., PByte → _i_ before type resolution completes) */
+                    const char *chosen_id = best->mangled_id;
+                    if (best->type != NULL && best->type->info.proc_info.definition != NULL) {
+                        Tree_t *bdef = best->type->info.proc_info.definition;
+                        if (bdef->tree_data.subprogram_data.mangled_id != NULL)
+                            chosen_id = bdef->tree_data.subprogram_data.mangled_id;
+                    }
+                    if (chosen_id != NULL)
+                        mangled = strdup(chosen_id);
+                }
                 DestroyList(matches);
             }
             if (mangled == NULL && base_name != NULL)
@@ -7899,17 +7907,6 @@ if (record_info->parent_class_name != NULL) {
                         } else {
                             signature_matches = 1;
                         }
-                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
-                            class_name != NULL && binding->method_name != NULL &&
-                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
-                        {
-                            fprintf(stderr,
-                                "[KGPC VMT] override check %s.%s bind_sig=%s info_sig=%s match=%d\n",
-                                class_name, binding->method_name,
-                                binding->param_sig != NULL ? binding->param_sig : "<null>",
-                                info->param_sig != NULL ? info->param_sig : "<null>",
-                                signature_matches);
-                        }
                         if (!signature_matches) {
                             vmt_entry = vmt_entry->next;
                             continue;
@@ -7919,20 +7916,17 @@ if (record_info->parent_class_name != NULL) {
                         /* Replace with derived class's version */
                         free(info->mangled_name);
                         info->mangled_name = mangled ? strdup(mangled) : NULL;
+                        /* Clear resolved_mangled_id so the resolve phase re-resolves
+                         * for the overriding class (the cloned parent value is stale) */
+                        if (info->resolved_mangled_id != NULL) {
+                            free(info->resolved_mangled_id);
+                            info->resolved_mangled_id = NULL;
+                        }
                         info->is_override = 1;
                         if (info->param_count < 0 && binding->param_count >= 0)
                             info->param_count = binding->param_count;
                         if (info->param_sig == NULL && binding->param_sig != NULL)
                             info->param_sig = strdup(binding->param_sig);
-                        if (getenv("KGPC_DEBUG_VMT") != NULL &&
-                            class_name != NULL && binding->method_name != NULL &&
-                            strcasecmp(class_name, "TUnicodeEncoding") == 0)
-                        {
-                            fprintf(stderr,
-                                "[KGPC VMT] override set %s.%s mangled=%s\n",
-                                class_name, binding->method_name,
-                                info->mangled_name != NULL ? info->mangled_name : "<null>");
-                        }
                         break;
                     }
                     vmt_entry = vmt_entry->next;
@@ -8026,12 +8020,27 @@ if (record_info->parent_class_name != NULL) {
             continue;
         snprintf(base_name, base_len, "%s__%s", class_name, mi->name);
         ListNode_t *matches = FindAllIdents(symtab, base_name);
+
+        /* Priority 0: exact mangled_id match — only for defined (non-abstract) functions
+         * to avoid pointing VMT slots to labels that are never emitted */
+        for (ListNode_t *m = matches; m != NULL && mi->resolved_mangled_id == NULL; m = m->next) {
+            HashNode_t *cand = (HashNode_t *)m->cur;
+            if (cand == NULL || cand->mangled_id == NULL ||
+                cand->type == NULL || cand->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            if (strcmp(cand->mangled_id, mi->mangled_name) == 0 &&
+                cand->type->info.proc_info.definition != NULL)
+                mi->resolved_mangled_id = strdup(cand->mangled_id);
+        }
+
+        if (mi->resolved_mangled_id == NULL) {
         const char *unique_mangled = NULL;
         const char *def_candidate_mangled = NULL;
         const char *single_mangled = NULL;
         int unique_ok = 1;
         int match_count = 0;
         int def_match_count = 0;
+        int exact_name_match = 0; /* mi->mangled_name exactly matched a passing candidate */
         for (ListNode_t *m = matches; m != NULL; m = m->next) {
             HashNode_t *cand = (HashNode_t *)m->cur;
             if (cand == NULL || cand->type == NULL ||
@@ -8053,6 +8062,12 @@ if (record_info->parent_class_name != NULL) {
                 continue;
 
             match_count++;
+            /* Track whether Phase-1 mangled_name exactly matches this candidate.
+             * Phase 1 uses param_sig to find the correct declaration; if it found
+             * mi->mangled_name, we should trust that label for the VMT slot. */
+            if (cand->mangled_id != NULL && mi->mangled_name != NULL &&
+                strcmp(cand->mangled_id, mi->mangled_name) == 0)
+                exact_name_match = 1;
             const char *cand_mangled = cand->mangled_id;
             if (cand->type->info.proc_info.definition != NULL) {
                 Tree_t *def = cand->type->info.proc_info.definition;
@@ -8074,12 +8089,20 @@ if (record_info->parent_class_name != NULL) {
                 single_mangled = (cand->type->info.proc_info.definition != NULL)
                     ? cand_mangled : NULL;
         }
-        if (unique_ok && unique_mangled != NULL && def_match_count > 0)
+        /* If Phase 1 identified mi->mangled_name via param_sig matching, and that
+         * name exists as a candidate, and there is at least one definition for this
+         * method (possibly under a stale mangled_id from early type resolution),
+         * trust mi->mangled_name — the implementation will be emitted under that label
+         * once semcheck_subprograms processes it with fully resolved types. */
+        if (exact_name_match && def_match_count > 0 && mi->mangled_name != NULL)
+            mi->resolved_mangled_id = strdup(mi->mangled_name);
+        else if (unique_ok && unique_mangled != NULL && def_match_count > 0)
             mi->resolved_mangled_id = strdup(unique_mangled);
         else if (def_match_count == 1 && def_candidate_mangled != NULL)
             mi->resolved_mangled_id = strdup(def_candidate_mangled);
         else if (match_count == 1 && single_mangled != NULL)
             mi->resolved_mangled_id = strdup(single_mangled);
+        } /* end if (mi->resolved_mangled_id == NULL) */
         if (matches != NULL)
             DestroyList(matches);
         free(base_name);
@@ -14614,11 +14637,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id);
             FindIdent(&existing_decl, symtab, id_to_use_for_lookup);
+            if (existing_decl != NULL && subprogram->tree_data.subprogram_data.defined_in_unit)
+                existing_decl->defined_in_unit = 1;
         }
         else
         {
             func_return = 0;  /* No error since it's expected to be already declared */
-            
+
             /* If we created a new type but it was already declared (e.g. existing had no type), update it */
             if (created_new_type && existing_decl != NULL && existing_decl->type == NULL)
             {
@@ -14718,6 +14743,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                             func_type);
             semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id);
+            if (subprogram->tree_data.subprogram_data.defined_in_unit)
+            {
+                HashNode_t *new_func_decl = NULL;
+                if (FindIdent(&new_func_decl, symtab, id_to_use_for_lookup) == 0 && new_func_decl != NULL)
+                    new_func_decl->defined_in_unit = 1;
+            }
         }
         else
         {
@@ -15245,47 +15276,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
         
-        if(!return_was_assigned && !has_asm)
-        {
-#ifdef DEBUG
-            fprintf(stderr, "DEBUG: Checking return for %s. cname_override=%s cname_flag=%d return_was_assigned=%d\n",
-                subprogram->tree_data.subprogram_data.id,
-                subprogram->tree_data.subprogram_data.cname_override ? subprogram->tree_data.subprogram_data.cname_override : "<null>",
-                subprogram->tree_data.subprogram_data.cname_flag,
-                return_was_assigned);
-#endif
-
-            /* Skip check for external functions (cname_flag or cname_override) or declarations without bodies */
-            int is_external = (subprogram->tree_data.subprogram_data.cname_override != NULL) ||
-                              (subprogram->tree_data.subprogram_data.cname_flag != 0);
-            int has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
-            if (is_external || !has_body)
-            {
-                /* External function, no body expected */
-            }
-            else
-            {
-                char file_buf[512] = "";
-                if (subprogram->source_index >= 0)
-                    semcheck_file_from_source_index(subprogram->source_index, file_buf, sizeof(file_buf));
-                if (file_buf[0] == '\0')
-                    semcheck_file_from_buffer_line_number(subprogram->line_num, file_buf, sizeof(file_buf));
-                if (file_buf[0] == '\0' && subprogram->tree_data.subprogram_data.source_unit_index != 0)
-                {
-                    const char *uname = unit_registry_get(subprogram->tree_data.subprogram_data.source_unit_index);
-                    if (uname != NULL)
-                        snprintf(file_buf, sizeof(file_buf), "%s", uname);
-                }
-                /* FPC treats this as a warning, not an error - function result may be uninitialized */
-                if (file_buf[0] != '\0')
-                    fprintf(stderr, "%s(%d): warning: function %s result does not seem to be set\n",
-                        file_buf, subprogram->line_num, subprogram->tree_data.subprogram_data.id);
-                else
-                    fprintf(stderr, "line %d: warning: function %s result does not seem to be set\n",
-                        subprogram->line_num, subprogram->tree_data.subprogram_data.id);
-                g_semcheck_warning_count++;
-            }
-        }
+        /* Pascal allows functions to exit without explicitly assigning the result;
+         * the value is simply uninitialized. Do not emit a warning for this. */
     }
 
     if(optimize_flag() > 0 && return_val == 0)
@@ -15541,11 +15533,17 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs flag to the hash node */
-        if (subprogram->tree_data.subprogram_data.is_varargs) {
+        /* Propagate varargs/defined_in_unit flags to the hash node */
+        if (func_return == 0 &&
+            (subprogram->tree_data.subprogram_data.is_varargs ||
+             subprogram->tree_data.subprogram_data.defined_in_unit)) {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
-                node->is_varargs = 1;
+            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
+                if (subprogram->tree_data.subprogram_data.is_varargs)
+                    node->is_varargs = 1;
+                if (subprogram->tree_data.subprogram_data.defined_in_unit)
+                    node->defined_in_unit = 1;
+            }
         }
         /* Release creator's reference - hash table retained its own */
         destroy_kgpc_type(proc_type);
@@ -15581,11 +15579,17 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs flag to the hash node */
-        if (subprogram->tree_data.subprogram_data.is_varargs) {
+        /* Propagate varargs/defined_in_unit flags to the hash node */
+        if (func_return == 0 &&
+            (subprogram->tree_data.subprogram_data.is_varargs ||
+             subprogram->tree_data.subprogram_data.defined_in_unit)) {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL)
-                node->is_varargs = 1;
+            if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
+                if (subprogram->tree_data.subprogram_data.is_varargs)
+                    node->is_varargs = 1;
+                if (subprogram->tree_data.subprogram_data.defined_in_unit)
+                    node->defined_in_unit = 1;
+            }
         }
         /* Release creator's reference - hash table retained its own */
         destroy_kgpc_type(func_type);

@@ -177,6 +177,7 @@ struct RecordType
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
+    int parent_fields_merged; /* 1 if parent class fields have been merged into fields */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */

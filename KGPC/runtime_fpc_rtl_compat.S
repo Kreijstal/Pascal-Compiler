@@ -1,35 +1,14 @@
 .text
 
-/* FPC RTL mathu.inc provides arctan2, tan, cotan, log2 as nostackframe
- * assembler routines that expect Extended parameters passed on the stack
- * (FPC's x86-64 Extended ABI: argument at 8(%rsp)).  KGPC passes all
- * floats in xmm registers (System-V double convention), so those bodies
- * are completely incompatible.  The generated .s uses .weak for these
- * symbols, so strong definitions here override them and redirect to the
- * KGPC runtime equivalents (which use the correct xmm convention). */
-
-.globl arctan2_r_r
-arctan2_r_r:
-    jmp kgpc_arctan2
-
-.globl tan_r
-tan_r:
-    jmp kgpc_tan
-
-.globl cotan_r
-cotan_r:
-    jmp kgpc_cot
-
-/* log2_r: FPC's log2(x: float) — redirect to C library log2().
- * C's log2(double) uses the same xmm0/xmm0 calling convention. */
-.globl log2_r
-log2_r:
-    jmp log2@PLT
+/* arctan2_r_r, tan_r, cotan_r, log2_r are provided by runtime_fpc_abstract_stubs.S
+ * which is always included. Do not duplicate them here. */
 
 .globl PopCnt
 PopCnt:
     jmp popcnt_i64
 
+/* filecreate_rbs_i / filecreate_rbs_i_i: FPC FileCreate(Filename; [Rights[; Attrs]]).
+ * Both variants redirect to filecreate_rbs which is implemented in runtime.c. */
 .globl filecreate_rbs_i
 filecreate_rbs_i:
     jmp filecreate_rbs
@@ -38,15 +17,23 @@ filecreate_rbs_i:
 filecreate_rbs_i_i:
     jmp filecreate_rbs
 
+/* FindComponentClass / ReadDeltaStream: FPC TReader/TComponent class methods that
+ * are referenced but rarely executed.  Redirect to the abstract-method error
+ * handler so that programs which don't exercise these paths can still link. */
 .globl FindComponentClass
 FindComponentClass:
-    jmp treader__findcomponentclass_p_rbs_rbs_rbs
+    jmp __kgpc_abstract_method_error
 
 .globl ReadDeltaStream
 ReadDeltaStream:
-    jmp tcomponent__readdeltastream_p_u_tstream
+    jmp __kgpc_abstract_method_error
 
-
+/* Interface TYPEINFO indirection table.
+ * These globals are referenced by FPC RTL compiled code for interface IS/AS checks.
+ * The ClassName_TYPEINFO symbols are emitted by the KGPC compiler when it compiles
+ * the FPC RTL interfaces.  This object is only pulled into the link when FPC RTL
+ * compiled code references PopCnt or filecreate_rbs_i — which only happens in
+ * FPC RTL builds where all ClassName_TYPEINFO symbols are available. */
 .data
 .align 8
 .globl IInterface

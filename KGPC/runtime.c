@@ -4831,6 +4831,22 @@ int64_t popcnt_i64(uint64_t value)
     return (int64_t)__builtin_popcountll(value);
 }
 
+/* filecreate_rbs: FPC FileCreate(Filename: string): THandle
+ * Creates a new file (or truncates existing), returns file descriptor.
+ * The _i and _i_i suffixed variants (with Rights/Attributes params) redirect
+ * here via runtime_fpc_rtl_compat.S; extra parameters are ignored. */
+#include <fcntl.h>
+#include <sys/stat.h>
+int64_t filecreate_rbs(const char *filename)
+{
+#ifdef _WIN32
+    #include <io.h>
+    return (int64_t)_open(filename, _O_CREAT | _O_TRUNC | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+#else
+    return (int64_t)open(filename, O_CREAT | O_TRUNC | O_RDWR, 0666);
+#endif
+}
+
 /* Chr function - returns a character value as an integer */
 int64_t kgpc_chr(int64_t value)
 {
@@ -6329,7 +6345,11 @@ double kgpc_arctan(double value)
 
 double kgpc_arccot(double value)
 {
-    return (KGPC_PI / 2.0) - atan(value);
+    /* Match FPC's ArcCot: returns 0.5*pi for x=0, arctan(1/x) otherwise.
+     * Note: for x < 0 this gives (-pi/2, 0) not (pi/2, pi). */
+    if (value == 0.0)
+        return KGPC_PI / 2.0;
+    return atan(1.0 / value);
 }
 
 double kgpc_arctan2(double y, double x)

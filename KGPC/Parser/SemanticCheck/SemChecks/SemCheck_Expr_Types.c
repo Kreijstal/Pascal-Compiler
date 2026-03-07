@@ -1457,7 +1457,10 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.id = id_copy;
     expr->expr_data.function_call_data.mangled_id = mangled_copy;
     expr->expr_data.function_call_data.args_expr = arg_node;
-    expr->expr_data.function_call_data.resolved_func = NULL;
+    /* Set resolved_func so semcheck_funccall goes via method_call_resolved (which runs
+     * the VMT dispatch check at lines 5241-5283) rather than the funccall_cleanup
+     * fast-path (which skips VMT dispatch, causing direct calls to abstract methods). */
+    expr->expr_data.function_call_data.resolved_func = method_node;
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;

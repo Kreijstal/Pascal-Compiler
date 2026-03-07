@@ -2027,14 +2027,14 @@ int semcheck_funccall(int *type_return,
                     int args_count = ListLength(args_given);
                     int expects_self = 0;
                     ListNode_t *method_params = NULL;
-                    
+
                     /* Build the mangled method name */
                     char mangled_method_name[256];
                     if (self_record->type_id != NULL)
                     {
                         snprintf(mangled_method_name, sizeof(mangled_method_name), "%s__%s",
                             self_record->type_id, id);
-                        
+
                         /* Get ALL overloads of this method */
                         ListNode_t *all_methods = FindAllIdents(symtab, mangled_method_name);
                         if (all_methods != NULL)
@@ -6835,7 +6835,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
         expr->expr_data.function_call_data.id = id_copy;
         expr->expr_data.function_call_data.mangled_id = mangled_copy;
         expr->expr_data.function_call_data.args_expr = args_head;
-        expr->expr_data.function_call_data.resolved_func = NULL;
+        /* Set resolved_func so semcheck_funccall goes via method_call_resolved
+         * (which semchecks arguments) rather than the funccall_cleanup fast-path
+         * (which skips argument semchecking, leaving e.g. FCount as EXPR_VAR_ID). */
+        expr->expr_data.function_call_data.resolved_func = getter_node;
         expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
         semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
         expr->expr_data.function_call_data.is_call_info_valid = 1;
@@ -6928,7 +6931,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
                         expr->expr_data.function_call_data.id = id_copy;
                         expr->expr_data.function_call_data.mangled_id = mangled_copy;
                         expr->expr_data.function_call_data.args_expr = args_head;
-                        expr->expr_data.function_call_data.resolved_func = NULL;
+                        /* Set resolved_func so semcheck_funccall goes via method_call_resolved
+                         * (which semchecks arguments) rather than the funccall_cleanup fast-path
+                         * (which skips argument semchecking, leaving e.g. FCount as EXPR_VAR_ID). */
+                        expr->expr_data.function_call_data.resolved_func = getter_node;
                         expr->expr_data.function_call_data.call_hash_type = getter_node->hash_type;
                         semcheck_expr_set_call_kgpc_type(expr, getter_node->type, 0);
                         expr->expr_data.function_call_data.is_call_info_valid = 1;

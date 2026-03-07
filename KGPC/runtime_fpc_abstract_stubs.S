@@ -5,6 +5,14 @@
  * when the code path is dead (never executed at runtime). */
 .text
 
+.globl iinterfacelist__add_p_u_iunknown
+iinterfacelist__add_p_u_iunknown:
+    jmp __kgpc_abstract_method_error
+
+.globl iinterfacecomponentreference__getcomponent_p
+iinterfacecomponentreference__getcomponent_p:
+    jmp __kgpc_abstract_method_error
+
 .globl ieditlinkobserver__getisreadonly_p
 ieditlinkobserver__getisreadonly_p:
     jmp __kgpc_abstract_method_error
@@ -61,3 +69,19 @@ cotan_r:
 .globl log2_r
 log2_r:
     jmp log2@PLT
+
+/* copysign_r_r: FPC's body treats floats as 10-byte Extended (sign at offset+8)
+ * but KGPC passes System V doubles (8 bytes, xmm0/xmm1).  The FPC body
+ * corrupts the caller's saved rbp by writing to rbp+0.  Provide a correct
+ * double-based copysign using bit manipulation on GPRs. */
+.globl copysign_r_r
+copysign_r_r:
+    movq    %xmm0, %rax
+    movq    %xmm1, %rcx
+    movabsq $0x7fffffffffffffff, %rdx
+    andq    %rdx,  %rax        /* rax = |x| (sign bit cleared) */
+    notq    %rdx               /* rdx = 0x8000000000000000 */
+    andq    %rdx,  %rcx        /* rcx = sign bit of y */
+    orq     %rcx,  %rax        /* combine magnitude and sign */
+    movq    %rax,  %xmm0
+    ret

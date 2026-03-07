@@ -1534,11 +1534,30 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
+    /* First pass: search under exact class name. */
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_virtual || binding->is_override)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
+     * registered under the unqualified name before renaming. Only try if no exact match. */
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = dot + 1;
+    cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, unqualified) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
         {
             if (binding->is_virtual || binding->is_override)
@@ -1558,30 +1577,42 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
     if (param_sig == NULL && param_count < 0)
         return from_cparser_is_method_virtual(class_name, method_name);
 
+    /* Helper lambda-like: check bindings for a given class name string. */
+    #define CHECK_BINDINGS_FOR(cname) \
+        do { \
+            ListNode_t *_cur = class_method_bindings; \
+            while (_cur != NULL) { \
+                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
+                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
+                    strcasecmp(_b->class_name, (cname)) == 0 && \
+                    strcasecmp(_b->method_name, method_name) == 0) \
+                { \
+                    int _matches = 0; \
+                    if (param_sig != NULL && _b->param_sig != NULL) { \
+                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                    } else if (param_count >= 0 && _b->param_count == param_count) { \
+                        _matches = 1; \
+                    } \
+                    if (_matches) { \
+                        has_match = 1; \
+                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                    } \
+                } \
+                _cur = _cur->next; \
+            } \
+        } while (0)
+
     int has_match = 0;
     int has_virtual = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            int matches = 0;
-            if (param_sig != NULL && binding->param_sig != NULL) {
-                if (strcmp(binding->param_sig, param_sig) == 0)
-                    matches = 1;
-            } else if (param_count >= 0 && binding->param_count == param_count) {
-                matches = 1;
-            }
-            if (matches) {
-                has_match = 1;
-                if (binding->is_virtual || binding->is_override)
-                    has_virtual = 1;
-            }
-        }
-        cur = cur->next;
+    /* First pass: exact class name. */
+    CHECK_BINDINGS_FOR(class_name);
+    /* Second pass: unqualified fallback — only if nothing found under exact name. */
+    if (!has_match) {
+        const char *dot = strrchr(class_name, '.');
+        if (dot != NULL)
+            CHECK_BINDINGS_FOR(dot + 1);
     }
+    #undef CHECK_BINDINGS_FOR
     if (has_match)
         return has_virtual;
     return 0;
@@ -1778,14 +1809,14 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         *methods_out = NULL;
     if (count_out != NULL)
         *count_out = 0;
-    
+
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
-    
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
-    
+
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
@@ -1804,7 +1835,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         }
         cur = cur->next;
     }
-    
+
     *methods_out = head;
     *count_out = count;
 }
