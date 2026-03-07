@@ -98,6 +98,7 @@ gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 runtime_sources = ['runtime.c']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
+  runtime_sources += 'runtime_fpc_abstract_stubs.S'
 endif
 runtime_deps = []
 runtime_c_args = ['-O2']

@@ -2633,12 +2633,27 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
+    /* Resolve the canonical label for the parent class (handles case mismatches
+     * e.g. math.pp declares "EInvalidArgument = class(ematherror)" with lowercase,
+     * but EMathError's VMT is emitted with its declaration-case label "EMathError"). */
+    const char *parent_vmt_label = record_info->parent_class_name;
+    if (parent_vmt_label != NULL) {
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, parent_vmt_label) == 0 && parent_node != NULL) {
+            struct RecordType *parent_rec = get_record_type_from_node(parent_node);
+            if (parent_rec != NULL && parent_rec->type_id != NULL)
+                parent_vmt_label = parent_rec->type_id;
+            else if (parent_node->id != NULL)
+                parent_vmt_label = parent_node->id;
+        }
+    }
+
     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
     fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
     if (record_info->parent_class_name != NULL)
-        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", parent_vmt_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
 
@@ -2690,7 +2705,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (record_info->parent_class_name != NULL) {
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
-        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", parent_vmt_label);
     }
 
     /* Compute instance size for vInstanceSize */
