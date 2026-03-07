@@ -1904,6 +1904,47 @@ const char* kgpc_type_to_string(KgpcType *type) {
 
 // --- Helper Function Implementations ---
 
+static int kgpc_list_length(ListNode_t *list)
+{
+    int count = 0;
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
+        ++count;
+    return count;
+}
+
+static long long kgpc_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long kgpc_set_storage_size(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = kgpc_list_length(alias->inline_enum_values);
+        if (count > 0)
+            return kgpc_default_set_storage_size_for_high((long long)count - 1);
+    }
+
+    return 4;
+}
+
 long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
@@ -1922,24 +1963,17 @@ long long kgpc_type_sizeof(KgpcType *type)
             switch (type->info.primitive_type_tag)
             {
                 case INT_TYPE:
+                    return 4;
                 case BOOL:
+                    return 1;
                 case ENUM_TYPE:
+                    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+                        return type->type_alias->storage_size;
                     return 4;
                 case SET_TYPE:
                 {
-                    /* Check if this is a character set (set of char) */
                     if (type->type_alias != NULL && type->type_alias->is_set)
-                    {
-                        if (type->type_alias->set_element_type == CHAR_TYPE ||
-                            (type->type_alias->set_element_type_id != NULL &&
-                             (pascal_identifier_equals(type->type_alias->set_element_type_id, "Char") ||
-                              pascal_identifier_equals(type->type_alias->set_element_type_id, "AnsiChar"))))
-                        {
-                            /* Character sets need 256 bits = 32 bytes */
-                            return 32;
-                        }
-                    }
-                    /* Regular sets (0-31 range) use 32 bits = 4 bytes */
+                        return kgpc_set_storage_size(type->type_alias);
                     return 4;
                 }
                 case LONGINT_TYPE:

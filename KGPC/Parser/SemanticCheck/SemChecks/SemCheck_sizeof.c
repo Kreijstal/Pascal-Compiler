@@ -41,6 +41,8 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num);
 static long long align_offset(long long offset, int alignment);
 static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num);
+static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
+    const char *type_id, int *align_out, int depth, int line_num);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -77,6 +79,93 @@ static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
     return hashnode_get_type_alias(node);
 }
 
+static int fpc_size_to_alignment(long long size)
+{
+    if (size > 16)
+        return 32;
+    if (size > 8)
+        return 16;
+    if (size > 4)
+        return 8;
+    if (size > 2)
+        return 4;
+    if (size > 1)
+        return 2;
+    return 1;
+}
+
+static int list_length(ListNode_t *list)
+{
+    int count = 0;
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
+        ++count;
+    return count;
+}
+
+static long long fpc_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
+    int depth, int line_num)
+{
+    if (alias == NULL || !alias->is_set)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = list_length(alias->inline_enum_values);
+        if (count > 0)
+            return fpc_default_set_storage_size_for_high((long long)count - 1);
+    }
+
+    if (alias->set_element_type == BOOL)
+        return 4;
+
+    if (alias->set_element_type_id != NULL && symtab != NULL && depth <= SIZEOF_RECURSION_LIMIT)
+    {
+        HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab, alias->set_element_type_id);
+        if (elem_node != NULL)
+        {
+            struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+            if (elem_alias != NULL)
+            {
+                if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+                {
+                    int count = list_length(elem_alias->enum_literals);
+                    if (count > 0)
+                        return fpc_default_set_storage_size_for_high((long long)count - 1);
+                }
+                if (elem_alias->range_known)
+                    return fpc_default_set_storage_size_for_high(elem_alias->range_end);
+            }
+        }
+    }
+
+    return 4;
+}
+
+static long long fpc_enum_storage_size_from_alias(const struct TypeAlias *alias)
+{
+    if (alias != NULL && alias->storage_size > 0)
+        return alias->storage_size;
+    return 4;
+}
+
 long long sizeof_from_type_tag(int type_tag)
 {
     switch(type_tag)
@@ -102,20 +191,17 @@ long long sizeof_from_type_tag(int type_tag)
         case QWORD_TYPE:
             return 8;
         case BOOL:
-            /*
-             * Standalone booleans occupy 4 bytes to keep stack accesses aligned,
-             * but packed arrays of boolean elements are emitted as 1 byte each.
-             * Document the distinction so sizeof(boolean) users are not surprised.
-             */
-            return 4;
+            return 1;
         case POINTER_TYPE:
             return POINTER_SIZE_BYTES;
         case SET_TYPE:
+            return 4;
         case ENUM_TYPE:
             return 4;
         case FILE_TYPE:
+            return 368;
         case TEXT_TYPE:
-            return POINTER_SIZE_BYTES;
+            return 632;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
         default:
@@ -206,7 +292,7 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 0;
     }
 
-    if (record->has_cached_size)
+    if (record->has_cached_size && !record_type_is_class(record))
     {
         *size_out = record->cached_size;
         return 0;
@@ -221,9 +307,16 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
 
     long long computed_size = 0;
 
-    /* Classes have a VMT pointer at offset 0 */
-    if (record->is_class)
-        computed_size = 8; /* 64-bit pointer */
+    if (record->parent_class_name != NULL && !record->parent_fields_merged && symtab != NULL)
+    {
+        HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record->parent_class_name);
+        struct RecordType *parent_record = get_record_type_from_node(parent_node);
+        if (parent_record != NULL)
+        {
+            if (sizeof_from_record(symtab, parent_record, &computed_size, depth + 1, line_num) != 0)
+                return 1;
+        }
+    }
 
     if (sizeof_from_record_members(symtab, record->fields, &computed_size, depth + 1, line_num) != 0)
         return 1;
@@ -255,7 +348,42 @@ static long long align_offset(long long offset, int alignment)
     return offset + (alignment - remainder);
 }
 
-/* Get alignment requirement for a field type (64-bit ABI) */
+static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
+    int depth, int line_num)
+{
+    if (record == NULL)
+        return 1;
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+        return 1;
+
+    int max_alignment = 1;
+    if (record->parent_class_name != NULL && !record->parent_fields_merged && symtab != NULL)
+    {
+        HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record->parent_class_name);
+        struct RecordType *parent_record = get_record_type_from_node(parent_node);
+        if (parent_record != NULL)
+        {
+            int parent_align = get_record_alignment(symtab, parent_record, depth + 1, line_num);
+            if (parent_align > max_alignment)
+                max_alignment = parent_align;
+        }
+    }
+
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        int field_align = get_field_alignment(symtab, field, depth + 1, line_num);
+        if (field_align > max_alignment)
+            max_alignment = field_align;
+    }
+
+    return max_alignment;
+}
+
+/* Get alignment requirement for a field type using FPC-style size alignment. */
 static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int depth, int line_num)
 {
     if (field == NULL)
@@ -265,60 +393,52 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     if (depth > SIZEOF_RECURSION_LIMIT)
         return 1;
 
-    /* Dynamic arrays are descriptors (pointer + int64), aligned to 8 */
+    /* Dynamic/open arrays are references for layout purposes. */
     if (field->is_array && field->array_is_open)
         return POINTER_SIZE_BYTES;
 
-    /*
-     * Compute a natural alignment based on the underlying element size.
-     * We clamp the result to pointer size (8 on this target) but never
-     * return less than 1 so that small scalar fields (Byte/Word) can sit
-     * back-to-back without being promoted to 4-byte boundaries.
-     */
-    long long elem_size = 0;
-    int status = 0;
-
     if (field->is_array)
     {
-        /* Static arrays align to their element type, not total size */
         if (field->array_element_type == RECORD_TYPE && field->array_element_record != NULL)
-            status = sizeof_from_record(symtab, field->array_element_record, &elem_size, depth + 1, line_num);
-        else if (field->array_element_type != UNKNOWN_TYPE || field->array_element_type_id != NULL)
-            status = sizeof_from_type_ref(symtab, field->array_element_type, field->array_element_type_id,
-                &elem_size, depth + 1, line_num);
-        else
-            status = sizeof_from_type_ref(symtab, field->type, field->type_id, &elem_size, depth + 1, line_num);
-    }
-    else if (field->nested_record != NULL)
-    {
-        status = sizeof_from_record(symtab, field->nested_record, &elem_size, depth + 1, line_num);
-        if (status == 0 && elem_size == 0)
-            elem_size = 1;
-    }
-    else if (field->type == RECORD_TYPE && field->type_id == NULL)
-    {
-        /* Explicit anonymous placeholder records such as `name: record end;`
-         * are valid zero-sized fields in FPC RTL declarations. */
-        elem_size = 1;
-        status = 0;
-    }
-    else
-    {
-        status = sizeof_from_type_ref(symtab, field->type, field->type_id, &elem_size, depth + 1, line_num);
+            return get_record_alignment(symtab, field->array_element_record, depth + 1, line_num);
+
+        {
+            int align = 1;
+            int status = 0;
+            if (field->array_element_type != UNKNOWN_TYPE || field->array_element_type_id != NULL)
+            {
+                status = get_type_alignment_from_ref(symtab, field->array_element_type,
+                    field->array_element_type_id, &align, depth + 1, line_num);
+            }
+            else
+            {
+                status = get_type_alignment_from_ref(symtab, field->type, field->type_id,
+                    &align, depth + 1, line_num);
+            }
+            KGPC_SEMCHECK_HARD_ASSERT(status == 0 && align > 0,
+                "failed to resolve array field alignment for '%s'",
+                field->name != NULL ? field->name : "<unnamed>");
+            return align;
+        }
     }
 
-    KGPC_SEMCHECK_HARD_ASSERT(status == 0 && elem_size > 0,
-        "failed to resolve field alignment for '%s' (type=%d, type_id=%s, is_array=%d, nested_record=%p, array_elem_record=%p)",
-        field->name != NULL ? field->name : "<unnamed>",
-        field->type,
-        field->type_id != NULL ? field->type_id : "<null>",
-        field->is_array,
-        (void *)field->nested_record,
-        (void *)field->array_element_record);
+    if (field->nested_record != NULL)
+        return get_record_alignment(symtab, field->nested_record, depth + 1, line_num);
 
-    if (elem_size > POINTER_SIZE_BYTES)
-        return POINTER_SIZE_BYTES;
-    return (int)elem_size;
+    if (field->type == RECORD_TYPE && field->type_id == NULL)
+        return 1;
+
+    {
+        int align = 1;
+        int status = get_type_alignment_from_ref(symtab, field->type, field->type_id,
+            &align, depth + 1, line_num);
+        KGPC_SEMCHECK_HARD_ASSERT(status == 0 && align > 0,
+            "failed to resolve field alignment for '%s' (type=%d, type_id=%s)",
+            field->name != NULL ? field->name : "<unnamed>",
+            field->type,
+            field->type_id != NULL ? field->type_id : "<null>");
+        return align;
+    }
 }
 
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
@@ -356,7 +476,6 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
         if (field->array_is_open || field->array_end < field->array_start)
         {
-            /* Dynamic arrays are descriptors {void *data, int64_t length}, so 16 bytes */
             *size_out = POINTER_SIZE_BYTES * 2;
             return 0;
         }
@@ -663,9 +782,8 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
     {
         if (alias->is_open_array || alias->array_end < alias->array_start)
         {
-            semcheck_error_with_context("Error on line %d, SizeOf cannot determine size of open array type.\n",
-                line_num);
-            return 1;
+            *size_out = POINTER_SIZE_BYTES;
+            return 0;
         }
 
         long long element_size = 0;
@@ -685,6 +803,18 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
         return 0;
     }
 
+    if (alias->is_set)
+    {
+        *size_out = fpc_set_storage_size_from_alias(symtab, alias, depth + 1, line_num);
+        return 0;
+    }
+
+    if (alias->is_enum)
+    {
+        *size_out = fpc_enum_storage_size_from_alias(alias);
+        return 0;
+    }
+
     if (alias->base_type != UNKNOWN_TYPE)
     {
         return sizeof_from_type_ref(symtab, alias->base_type, NULL,
@@ -698,6 +828,91 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
     semcheck_error_with_context("Error on line %d, SizeOf encountered unresolved type alias.\n",
         line_num);
     return 1;
+}
+
+static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
+    const char *type_id, int *align_out, int depth, int line_num)
+{
+    if (align_out == NULL)
+        return 1;
+
+    if (depth > SIZEOF_RECURSION_LIMIT)
+    {
+        *align_out = 1;
+        return 0;
+    }
+
+    if (type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
+        if (type_node != NULL)
+        {
+            struct RecordType *record = get_record_type_from_node(type_node);
+            if (record != NULL)
+            {
+                if (record_type_is_class(record))
+                {
+                    *align_out = POINTER_SIZE_BYTES;
+                    return 0;
+                }
+
+                *align_out = get_record_alignment(symtab, record, depth + 1, line_num);
+                return 0;
+            }
+
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (alias != NULL)
+            {
+                if (alias->is_set)
+                {
+                    long long set_size = fpc_set_storage_size_from_alias(symtab, alias, depth + 1, line_num);
+                    int align = fpc_size_to_alignment(set_size);
+                    *align_out = (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
+                    return 0;
+                }
+
+                if (alias->is_enum)
+                {
+                    *align_out = fpc_size_to_alignment(fpc_enum_storage_size_from_alias(alias));
+                    return 0;
+                }
+
+                if (alias->storage_size > 0)
+                {
+                    *align_out = fpc_size_to_alignment(alias->storage_size);
+                    return 0;
+                }
+            }
+
+            if (type_node->type != NULL)
+            {
+                long long size = kgpc_type_sizeof(type_node->type);
+                if (size > 0)
+                {
+                    *align_out = fpc_size_to_alignment(size);
+                    if (type_node->type->kind == TYPE_KIND_POINTER)
+                        *align_out = POINTER_SIZE_BYTES;
+                    return 0;
+                }
+            }
+        }
+    }
+
+    if (type_tag != UNKNOWN_TYPE)
+    {
+        long long size = sizeof_from_type_tag(type_tag);
+        if (size > 0)
+        {
+            int align = fpc_size_to_alignment(size);
+            if (type_tag == SET_TYPE)
+                align = (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
+            *align_out = align;
+            return 0;
+        }
+    }
+
+    *align_out = POINTER_SIZE_BYTES;
+    return 0;
 }
 
 int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
@@ -823,7 +1038,15 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
     {
         long long offset = 0;
         int found = 0;
-        long long start_offset = current->is_class ? POINTER_SIZE_BYTES : 0;
+        long long start_offset = 0;
+        if (current->parent_class_name != NULL && !current->parent_fields_merged && symtab != NULL)
+        {
+            HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, current->parent_class_name);
+            struct RecordType *parent_record = get_record_type_from_node(parent_node);
+            if (parent_record != NULL &&
+                sizeof_from_record(symtab, parent_record, &start_offset, 0, line_num) != 0)
+                return 1;
+        }
         if (find_field_in_members(symtab, current->fields, field_name, out_field,
                 &offset, start_offset, 0, line_num, &found) != 0)
             return 1;
