@@ -39,7 +39,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#ifndef _WIN32
 #include <unistd.h>
+#endif
 
 /* ------------------------------------------------------------------ */
 /* Forward declarations from KGPC runtime                              */
@@ -399,11 +401,9 @@ static int64_t kgpc_get_current_thread_id(void) {
 }
 
 /* CurrentTM: FPC's TThreadManager record (35 function pointers).
- * Defined by the compiler in the generated assembly (.globl CurrentTM).
- * In non-FPC-RTL mode it won't exist, but this file is only linked
- * when it's needed — and kgpc_fpc_init_thread_manager is only called
- * when CurrentTM is present. */
-extern void *CurrentTM[35];
+ * Storage is provided by runtime_fpc_thread_symbols.S (.comm directive).
+ * In FPC RTL mode, the compiler-generated .globl overrides the .comm. */
+extern void *CurrentTM[];
 
 /* Called from kgpc_init_args to populate CurrentTM */
 void kgpc_fpc_init_thread_manager(void)

@@ -2033,6 +2033,16 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
             
+            /* Constructor chaining: when a constructor calls a sibling constructor
+             * on Self, it's a regular method call — do not allocate a new instance. */
+            if (ctor_type_receiver && first_arg != NULL && first_arg->cur != NULL)
+            {
+                struct Expression *fa = (struct Expression *)first_arg->cur;
+                if (fa != NULL && fa->type == EXPR_VAR_ID &&
+                    fa->expr_data.id != NULL &&
+                    pascal_identifier_equals(fa->expr_data.id, "Self"))
+                    ctor_type_receiver = 0;
+            }
             if (ctor_type_receiver && class_record != NULL &&
                 record_type_is_class(class_record))
             {

@@ -6103,32 +6103,6 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
-/* Provide shims for Pascal mangled runtime helpers so the runtime always
- * satisfies references emitted by generated assembly. The COFF alternatename
- * directives make these symbols resolve to our implementations when no user
- * definition is present. MSVC/LLD handle this fine; MinGW’s ld does not,
- * so we also emit strong fallback symbols (see below) to satisfy MinGW. */
-/* Default implementations that can be adopted via COFF alternatename so
- * user-emitted stubs override when present, while ELF uses weak aliases. */
-uintptr_t kgpc_default_LoadLibrary_s(const char *path)
-{
-    return kgpc_load_library(path);
-}
-
-uintptr_t kgpc_default_GetProcedureAddress_li_s(uintptr_t handle, const char *symbol)
-{
-    return kgpc_get_proc_address(handle, symbol);
-}
-
-int kgpc_default_FreeLibrary_li(uintptr_t handle)
-{
-    return kgpc_free_library(handle);
-}
-
-uintptr_t LoadLibrary_s(const char *path) { return kgpc_default_LoadLibrary_s(path); }
-uintptr_t GetProcedureAddress_li_s(uintptr_t handle, const char *symbol) { return kgpc_default_GetProcedureAddress_li_s(handle, symbol); }
-int FreeLibrary_li(uintptr_t handle) { return kgpc_default_FreeLibrary_li(handle); }
-
 int kgpc_directory_create(const char *path)
 {
     if (path == NULL)

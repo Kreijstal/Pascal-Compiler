@@ -3054,6 +3054,19 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     is_constructor = 1;
             }
 
+            /* Constructor chaining: when a constructor calls another constructor
+             * on Self (e.g., Create(name, mode, 438) inside TFileStream.Create),
+             * it's a regular method call, not a new allocation. The first arg
+             * will be Self, injected by the semantic checker. */
+            if (is_constructor && src_expr->expr_data.function_call_data.args_expr != NULL)
+            {
+                struct Expression *first_arg = (struct Expression *)
+                    src_expr->expr_data.function_call_data.args_expr->cur;
+                if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                    first_arg->expr_data.id != NULL &&
+                    pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+                    is_constructor = 0;
+            }
             /* Record static factories can also be named Create but they are not
              * class constructors and must not use constructor/sret calling paths. */
             if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE))
