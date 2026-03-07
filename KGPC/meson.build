@@ -95,12 +95,11 @@ kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
 
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
-runtime_sources = ['runtime.c']
+runtime_sources = ['runtime.c', 'runtime_fpc_thread_symbols.S']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
   runtime_sources += 'runtime_fpc_abstract_stubs.S'
   runtime_sources += 'runtime_fpc_rtl_compat.S'
-  runtime_sources += 'runtime_fpc_thread_symbols.S'
   runtime_sources += 'runtime_fpc_interlocked_aliases.c'
   runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
   runtime_sources += 'runtime_fpclose.c'

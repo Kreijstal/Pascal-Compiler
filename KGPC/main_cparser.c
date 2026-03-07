@@ -1298,11 +1298,9 @@ static void emit_link_args(void)
         used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lm");
     }
 
-    /* Runtime requires pthread on non-Windows (thread manager in runtime_fpc_assign.c) */
-    if (!target_windows_flag())
-    {
-        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
-    }
+    /* Runtime requires pthread (thread manager in runtime_fpc_assign.c).
+     * On MSYS2/Windows, winpthreads provides this. */
+    used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
 
     if (g_requires_gmp)
     {
