@@ -2357,7 +2357,7 @@ void kgpc_string_assign_take(char **target, char *value);
 /* Robust SetCodePage wrapper: accepts either a var RawByteString (by-ref)
  * or a raw string pointer (by-value) to avoid crashes when call sites
  * accidentally pass the value. */
-void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
+void kgpc_setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
 {
     if (s_arg == NULL)
         return;
@@ -2399,9 +2399,9 @@ void setcodepage_rbs_i_b(void *s_arg, int32_t codepage, int32_t convert)
 }
 
 /* 2-arg SetCodePage overload: Convert defaults to True in FPC. */
-void setcodepage_rbs_i(void *s_arg, int32_t codepage)
+void kgpc_setcodepage_rbs_i(void *s_arg, int32_t codepage)
 {
-    setcodepage_rbs_i_b(s_arg, codepage, 1);
+    kgpc_setcodepage_rbs_i_b(s_arg, codepage, 1);
 }
 
 /* FPC RTL compatibility: some bootstrap constants use WideChar literals

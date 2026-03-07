@@ -3568,38 +3568,6 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
-    /* Emit .set aliases from unmangled Pascal id to mangled label for
-       subprograms that have bodies (so inline asm cross-references like
-       `jmp FillXxxx_MoreThanTwoXmms` resolve to the mangled label).
-       Only emit the first alias for each unmangled name to avoid
-       "redefined symbol" assembler errors from overloaded functions. */
-    if (ctx->output_file != NULL) {
-        CodeGenStringSet emitted_names;
-        memset(&emitted_names, 0, sizeof(emitted_names));
-
-        ListNode_t *id_alias_scan = data->subprograms;
-        while (id_alias_scan != NULL) {
-            if (id_alias_scan->type == LIST_TREE && id_alias_scan->cur != NULL) {
-                Tree_t *sub = (Tree_t *)id_alias_scan->cur;
-                if (sub->type == TREE_SUBPROGRAM &&
-                    sub->tree_data.subprogram_data.statement_list != NULL) {
-                    const char *id = sub->tree_data.subprogram_data.id;
-                    const char *mangled = sub->tree_data.subprogram_data.mangled_id;
-                    if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
-                        codegen_set_contains(&emitted_labels, mangled)) {
-                        if (!codegen_set_contains_ci(&emitted_names, id)) {
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), id);
-                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
-                            codegen_set_insert_ci(&emitted_names, id);
-                        }
-                    }
-                }
-            }
-            id_alias_scan = id_alias_scan->next;
-        }
-        codegen_set_destroy(&emitted_names);
-    }
-
     codegen_set_destroy(&emitted_labels);
     codegen_set_destroy(&emitted_cname_aliases);
 

@@ -154,7 +154,7 @@ static void kgpc_fpc_openfunc(void *textrec)
 /* function pointers at offsets 296-320 (harmless in standard mode,    */
 /* required for FPC RTL compiled code).                                 */
 /* ------------------------------------------------------------------ */
-void assign_t_s(void *textrec, const char *path)
+void kgpc_assign_t_s(void *textrec, const char *path)
 {
     if (textrec == NULL)
         return;
@@ -182,7 +182,7 @@ void assign_t_s(void *textrec, const char *path)
 
 #define FR_NAME_FPC 52   /* AnsiChar name used by FPC RTL's do_open_u_pc_li_b */
 
-void assign_f_s(void *filerec, const char *path)
+void kgpc_assign_f_s(void *filerec, const char *path)
 {
     if (filerec == NULL)
         return;
