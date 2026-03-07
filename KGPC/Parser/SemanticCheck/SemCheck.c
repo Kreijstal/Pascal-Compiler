@@ -2357,12 +2357,15 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                     HashNode_t *existing = NULL;
                     if (FindIdent(&existing, symtab, binding->method_name) == -1)
                     {
-                        /* Push the method onto scope using its short name */
+                        /* Push the method onto scope using its short name,
+                         * with the actual fully-mangled assembly label (not
+                         * the intermediate ClassName__MethodName form). */
                         if (method_node->type != NULL)
                         {
+                            const char *real_mangled = method_node->mangled_id ? method_node->mangled_id : mangled_name;
                             kgpc_type_retain(method_node->type);
                             PushFunctionOntoScope_Typed(symtab, binding->method_name,
-                                                        mangled_name, method_node->type);
+                                                        real_mangled, method_node->type);
                             destroy_kgpc_type(method_node->type);
                         }
                     }

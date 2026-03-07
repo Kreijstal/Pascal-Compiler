@@ -4480,6 +4480,23 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                 }
                                             }
                                         }
+                                        /* Try resolving as a function/procedure name */
+                                        if (!did_substitute) {
+                                            HashNode_t *proc_node = NULL;
+                                            if (FindIdent(&proc_node, symtab, id_buf) >= 0 &&
+                                                proc_node != NULL &&
+                                                (proc_node->hash_type == HASHTYPE_FUNCTION ||
+                                                 proc_node->hash_type == HASHTYPE_PROCEDURE) &&
+                                                proc_node->mangled_id != NULL) {
+                                                const char *label = proc_node->mangled_id;
+                                                size_t llen = strlen(label);
+                                                if (sj + llen < sub_alloc - 64) {
+                                                    memcpy(substituted + sj, label, llen);
+                                                    sj += llen;
+                                                    did_substitute = 1;
+                                                }
+                                            }
+                                        }
                                     }
                                     if (!did_substitute) {
                                         memcpy(substituted + sj, cleaned + id_start, id_len);
