@@ -2494,10 +2494,13 @@ char *kgpc_alloc_empty_string(void)
 
 void kgpc_init_widestringmanager(void);
 
-void kgpc_init_args(int argc, char **argv)
+void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+
+void kgpc_init_args(int argc, char **argv, char **envp)
 {
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
+    kgpc_fpc_init_os_params(argc, argv, envp);
     kgpc_init_widestringmanager();
 }
 
