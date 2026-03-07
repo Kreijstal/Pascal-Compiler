@@ -4322,6 +4322,47 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
     return add_inst(inst_list, buffer);
 }
 
+/* Returns the distance between the total declared size of value (non-var) float
+ * parameters and KGPC's native float size (8 bytes per param).  A distance of 0
+ * means all value float params are Double/Real (8 bytes) — the KGPC-native size.
+ * Used by has_later_override to prefer Double sincos over Single or Extended. */
+static int codegen_float_native_distance(Tree_t *sub)
+{
+    int n_value = 0;
+    int total_declared = 0;
+    ListNode_t *p = sub->tree_data.subprogram_data.args_var;
+    while (p != NULL)
+    {
+        Tree_t *decl = (Tree_t *)p->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            int is_var = decl->tree_data.var_decl_data.is_var_param;
+            if (!is_var)
+            {
+                n_value++;
+                const char *tid = decl->tree_data.var_decl_data.type_id;
+                int sz = 8; /* default: double/real/float → 8 bytes (KGPC native) */
+                if (tid != NULL)
+                {
+                    if (pascal_identifier_equals(tid, "single"))
+                        sz = 4;
+                    else if (pascal_identifier_equals(tid, "extended") ||
+                             pascal_identifier_equals(tid, "extended80"))
+                        sz = 16;
+                    /* double, real, float, currency, longreal → sz stays 8 */
+                }
+                total_declared += sz;
+            }
+        }
+        p = p->next;
+    }
+    if (n_value == 0)
+        return 0; /* no value params: distance 0 (use original later-wins rule) */
+    int native = n_value * 8;
+    int dist = total_declared - native;
+    return dist < 0 ? -dist : dist;
+}
+
 /* Codegen for a list of subprograms */
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -4379,6 +4420,11 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         {
             int this_unit = sub->tree_data.subprogram_data.source_unit_index;
             int has_later_override = 0;
+            /* For float overloads (e.g. sincos Single/Double/Extended), prefer the
+             * one whose value param sizes are closest to KGPC's native 8-byte float.
+             * Only skip the current if a later same-unit same-mangled body has a
+             * distance to native that is ≤ the current one's distance. */
+            int current_dist = codegen_float_native_distance(sub);
             ListNode_t *later = sub_list->next;
             while (later != NULL)
             {
@@ -4391,8 +4437,16 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                         later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
                         strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
                     {
-                        has_later_override = 1;
-                        break;
+                        int later_dist = codegen_float_native_distance(later_sub);
+                        if (later_dist <= current_dist)
+                        {
+                            has_later_override = 1;
+                            break;
+                        }
+                        /* later_dist > current_dist: the later body is farther from
+                         * KGPC's native float size (e.g. Single at dist=4 vs Double
+                         * at dist=0).  Don't let it override the current better one;
+                         * continue scanning for a yet-better later body. */
                     }
                 }
                 later = later->next;
@@ -4402,6 +4456,22 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub_list = sub_list->next;
                 continue;
             }
+        }
+
+        /* Skip FPC RTL functions that use the Extended stack ABI (nostackframe)
+         * which is incompatible with KGPC's xmm-register calling convention.
+         * The generated .s would emit a .weak definition that wins over the
+         * strong override in runtime_fpc_rtl_compat.S.  By skipping the body
+         * here, the symbol remains an external reference that the linker
+         * resolves from the runtime library (correct xmm convention). */
+        if (mangled_id != NULL &&
+            (strcmp(mangled_id, "arctan2_r_r") == 0 ||
+             strcmp(mangled_id, "tan_r")        == 0 ||
+             strcmp(mangled_id, "cotan_r")      == 0 ||
+             strcmp(mangled_id, "log2_r")       == 0))
+        {
+            sub_list = sub_list->next;
+            continue;
         }
 
         /* Skip unused functions (dead code elimination / reachability pass). */

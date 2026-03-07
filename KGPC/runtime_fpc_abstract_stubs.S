@@ -37,3 +37,27 @@ ivclcomobject__safecallexception_p_u_tobject_p:
 .globl tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase
 tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
     jmp __kgpc_abstract_method_error
+
+/* FPC RTL mathu.inc implements arctan2, tan, cotan, log2 as nostackframe
+ * assembler routines using FPC's x86-64 Extended ABI (argument at 8(%rsp)).
+ * KGPC passes floats in xmm registers (System V double convention), so the
+ * FPC bodies are completely incompatible.  The code generator suppresses
+ * emitting those bodies so these symbols remain external references; the
+ * strong definitions here redirect to KGPC runtime functions that use the
+ * correct xmm convention. */
+.globl arctan2_r_r
+arctan2_r_r:
+    jmp kgpc_arctan2
+
+.globl tan_r
+tan_r:
+    jmp kgpc_tan
+
+.globl cotan_r
+cotan_r:
+    jmp kgpc_cot
+
+/* log2_r: redirect to C library log2() which uses xmm0/xmm0 convention. */
+.globl log2_r
+log2_r:
+    jmp log2@PLT

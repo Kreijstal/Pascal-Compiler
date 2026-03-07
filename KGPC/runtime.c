@@ -6460,9 +6460,11 @@ long long kgpc_round(double value)
 
 long long kgpc_trunc(double value)
 {
-    if (value >= 0.0)
-        return (long long)floor(value);
-    return (long long)ceil(value);
+    /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
+     * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
+     * which override C library's ceil/floor symbols when linked together,
+     * causing infinite recursion if we called ceil() or floor() here. */
+    return (long long)trunc(value);
 }
 
 /* Trunc for Currency type - Currency stores values scaled by 10000.
@@ -6502,12 +6504,16 @@ double kgpc_frac(double value)
 
 long long kgpc_ceil(double value)
 {
-    return (long long)ceil(value);
+    /* Avoid C ceil() — FPC RTL aliases it to Pascal ceil_r. Use trunc+1. */
+    long long t = (long long)trunc(value);
+    return (value > (double)t) ? t + 1 : t;
 }
 
 long long kgpc_floor(double value)
 {
-    return (long long)floor(value);
+    /* Avoid C floor() — FPC RTL aliases it to Pascal floor_r. Use trunc-1. */
+    long long t = (long long)trunc(value);
+    return (value < (double)t) ? t - 1 : t;
 }
 
 static uint32_t kgpc_rol32(uint32_t value, uint32_t shift)

@@ -4267,6 +4267,68 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             const char *src = stmt->stmt_data.asm_block_data.code;
             if (src != NULL)
             {
+                /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
+                 * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
+                 * "qword ptr" would be rejected by the assembler.  Skip the body entirely
+                 * and let the runtime library's strong symbol override the .weak stub. */
+                if (strcasestr(src, "dword ptr") != NULL ||
+                    strcasestr(src, "qword ptr") != NULL ||
+                    strcasestr(src, "byte ptr")  != NULL ||
+                    strcasestr(src, "word ptr")  != NULL)
+                {
+                    /* Special case: sincos_r_r_r — generate a fallback that calls
+                     * kgpc_sin / kgpc_cos so the function body is not empty.
+                     * The Intel-mode asm in FPC's mathu.inc computes:
+                     *   sinus   := sin(theta)
+                     *   cosinus := cos(theta)
+                     * theta may be Single (size=4) or Double (size=8); out-params are
+                     * always 8-byte Double vars (KGPC's Real type). */
+                    if (ctx->current_subprogram_mangled != NULL &&
+                        strcmp(ctx->current_subprogram_mangled, "sincos_r_r_r") == 0)
+                    {
+                        StackNode_t *theta_node   = find_label((char *)"theta");
+                        StackNode_t *sinus_node   = find_label((char *)"sinus");
+                        StackNode_t *cosinus_node = find_label((char *)"cosinus");
+                        if (theta_node != NULL && sinus_node != NULL && cosinus_node != NULL)
+                        {
+                            char buf[256];
+                            int theta_off   = theta_node->offset;
+                            int theta_size  = theta_node->size;
+                            int sinus_off   = sinus_node->offset;
+                            int cosinus_off = cosinus_node->offset;
+                            /* Load theta into xmm0 as Double */
+                            if (theta_size == 4)
+                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            else
+                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Load sinus* and cosinus* pointers */
+                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", sinus_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", cosinus_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Call kgpc_sin; write Double result to *sinus */
+                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_sin\n"));
+                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r12)\n"));
+                            /* Reload theta for kgpc_cos */
+                            if (theta_size == 4)
+                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            else
+                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
+                            inst_list = add_inst(inst_list, strdup(buf));
+                            /* Call kgpc_cos; write Double result to *cosinus */
+                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_cos\n"));
+                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
+                            break;
+                        }
+                    }
+                    fprintf(ctx->output_file,
+                        "\t# Intel-mode asm block skipped (not supported by AT&T assembler)\n");
+                    break;
+                }
+
                 static int asm_block_counter = 0;
                 int block_id = asm_block_counter++;
                 size_t len = strlen(src);
@@ -4445,7 +4507,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
                         inst_list = add_inst(inst_list, buffer);
                     }
-                    /* For real types, result is already in xmm0 */
+                    else
+                    {
+                        /* For real types, arithmetic operations leave their result in
+                         * xmm0 as a side effect, but simple variable reads put the
+                         * 64-bit bit pattern into a GPR.  Always copy GPR → xmm0 so
+                         * the caller sees the correct float return value regardless of
+                         * which expression form was used. */
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", result_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
 
                     free_reg(get_reg_stack(), result_reg);
                 }
@@ -6562,7 +6633,10 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                 sym_node != NULL && sym_node->type != NULL)
             {
                 int sym_type = codegen_tag_from_kgpc(sym_node->type);
-                if (sym_type != UNKNOWN_TYPE)
+                /* Only override the expression's own type when it is unknown.
+                 * If the semantic checker already resolved a type (e.g. Pi as REAL_TYPE
+                 * via the builtin const shadowing an FPC internproc function), trust it. */
+                if (sym_type != UNKNOWN_TYPE && expr_type == UNKNOWN_TYPE)
                     expr_type = sym_type;
                 if (expr->resolved_kgpc_type == NULL)
                     expr->resolved_kgpc_type = sym_node->type;

@@ -1,5 +1,31 @@
 .text
 
+/* FPC RTL mathu.inc provides arctan2, tan, cotan, log2 as nostackframe
+ * assembler routines that expect Extended parameters passed on the stack
+ * (FPC's x86-64 Extended ABI: argument at 8(%rsp)).  KGPC passes all
+ * floats in xmm registers (System-V double convention), so those bodies
+ * are completely incompatible.  The generated .s uses .weak for these
+ * symbols, so strong definitions here override them and redirect to the
+ * KGPC runtime equivalents (which use the correct xmm convention). */
+
+.globl arctan2_r_r
+arctan2_r_r:
+    jmp kgpc_arctan2
+
+.globl tan_r
+tan_r:
+    jmp kgpc_tan
+
+.globl cotan_r
+cotan_r:
+    jmp kgpc_cot
+
+/* log2_r: FPC's log2(x: float) — redirect to C library log2().
+ * C's log2(double) uses the same xmm0/xmm0 calling convention. */
+.globl log2_r
+log2_r:
+    jmp log2@PLT
+
 .globl PopCnt
 PopCnt:
     jmp popcnt_i64
@@ -20,31 +46,6 @@ FindComponentClass:
 ReadDeltaStream:
     jmp tcomponent__readdeltastream_p_u_tstream
 
-.globl ieditlinkobserver__getisreadonly_p
-ieditlinkobserver__getisreadonly_p:
-    jmp __kgpc_abstract_method_error
-.globl ifpobserver__fpoobservedchanged_p_u_tobject_e_p
-ifpobserver__fpoobservedchanged_p_u_tobject_e_p:
-    jmp __kgpc_abstract_method_error
-.globl iobserver__getactive_p
-iobserver__getactive_p:
-    jmp __kgpc_abstract_method_error
-.globl isequentialstream__read_p_p_li_p
-isequentialstream__read_p_p_li_p:
-    jmp __kgpc_abstract_method_error
-.globl isequentialstream__write_p_p_li_p
-isequentialstream__write_p_p_li_p:
-    jmp __kgpc_abstract_method_error
-.globl ivclcomobject__safecallexception_p_u_tobject_p
-ivclcomobject__safecallexception_p_u_tobject_p:
-    jmp __kgpc_abstract_method_error
-
-/* TMarshaller.TDeferBase.Done is virtual;abstract in old-style Pascal objects.
- * KGPC generates a direct call instead of VMT dispatch for old-style objects,
- * so we define the stub here to prevent linker errors. */
-.globl tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase
-tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
-    jmp __kgpc_abstract_method_error
 
 .data
 .align 8
