@@ -2494,7 +2494,12 @@ char *kgpc_alloc_empty_string(void)
 
 void kgpc_init_widestringmanager(void);
 
-void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+/* Weak default — overridden by runtime_fpc_assign.c on non-Windows */
+__attribute__((weak))
+void kgpc_fpc_init_os_params(int argc, char **argv, char **envp)
+{
+    (void)argc; (void)argv; (void)envp;
+}
 
 void kgpc_init_args(int argc, char **argv, char **envp)
 {
