@@ -4271,10 +4271,10 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                  * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
                  * "qword ptr" would be rejected by the assembler.  Skip the body entirely
                  * and let the runtime library's strong symbol override the .weak stub. */
-                if (strcasestr(src, "dword ptr") != NULL ||
-                    strcasestr(src, "qword ptr") != NULL ||
-                    strcasestr(src, "byte ptr")  != NULL ||
-                    strcasestr(src, "word ptr")  != NULL)
+                if (pascal_strcasestr(src, "dword ptr") != NULL ||
+                    pascal_strcasestr(src, "qword ptr") != NULL ||
+                    pascal_strcasestr(src, "byte ptr")  != NULL ||
+                    pascal_strcasestr(src, "word ptr")  != NULL)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
                      * kgpc_sin / kgpc_cos so the function body is not empty.
