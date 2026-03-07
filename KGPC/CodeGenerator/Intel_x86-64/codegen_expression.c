@@ -6297,10 +6297,12 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
      * a raw char integer.  Detect this by checking the expression node type. */
     int right_needs_char_promo = (right_expr != NULL &&
         (right_expr->type == EXPR_CHAR_CODE ||
-         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE)));
+         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
+         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)));
     int left_needs_char_promo = (left_expr != NULL &&
         (left_expr->type == EXPR_CHAR_CODE ||
-         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE)));
+         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
+         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)));
     if ((left_is_string || right_is_string) && right_needs_char_promo)
     {
         StackNode_t *lhs_spill = add_l_t("relop_str_char_lhs");

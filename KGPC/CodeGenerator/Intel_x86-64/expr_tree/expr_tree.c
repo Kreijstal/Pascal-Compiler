@@ -2680,9 +2680,13 @@ cleanup_constructor:
              * to store the procedure name, not an actual string value */
             !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
         {
-            /* Check if this is a single-char constant (Char type, not String) */
+            /* Check if this is a single-char constant (Char type, not String).
+             * However, if the expression's resolved type is STRING_TYPE (e.g. the
+             * semantic checker promoted sLineBreak from Char to String for a
+             * comparison), emit it as a string constant, not a raw integer. */
             if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
-                node->type->info.primitive_type_tag == CHAR_TYPE)
+                node->type->info.primitive_type_tag == CHAR_TYPE &&
+                expr_get_type_tag(expr) != STRING_TYPE)
             {
                 /* Char constant - load the character value directly as an immediate */
                 unsigned char ch = (unsigned char)node->const_string_value[0];
@@ -3467,9 +3471,13 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else if (node->const_string_value != NULL)
                     {
-                        /* Check if this is a single-char constant (Char type) */
+                        /* Check if this is a single-char constant (Char type).
+                         * If the expression's resolved type is STRING_TYPE, emit
+                         * as a string constant instead (e.g. sLineBreak promoted
+                         * from Char to String in a comparison context). */
                         if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE &&
-                            node->type->info.primitive_type_tag == CHAR_TYPE)
+                            node->type->info.primitive_type_tag == CHAR_TYPE &&
+                            expr_get_type_tag(expr) != STRING_TYPE)
                         {
                             unsigned char ch = (unsigned char)node->const_string_value[0];
                             snprintf(buffer, buf_len, "$%d", (int)ch);
@@ -4476,7 +4484,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                      * Convert via kgpc_char_to_string before kgpc_string_compare. */
                     if (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
-                         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
+                         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
+                         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
                         left_reg != NULL)
                     {
                         StackNode_t *rhs_save = NULL;
@@ -4490,7 +4499,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
                     if (right_expr != NULL &&
                         (right_expr->type == EXPR_CHAR_CODE ||
-                         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
+                         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
+                         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
                         right_reg != NULL)
                     {
                         StackNode_t *lhs_save = NULL;
