@@ -114,8 +114,8 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_setcodepage_i.c'
   runtime_sources += 'runtime_setcodepage_ib.c'
   runtime_sources += 'runtime_widechar_assign_olevariant.c'
-  runtime_sources += 'runtime_fpc_assign.c'
 endif
+runtime_sources += 'runtime_fpc_assign.c'
 runtime_deps = []
 runtime_c_args = ['-O2']
 
