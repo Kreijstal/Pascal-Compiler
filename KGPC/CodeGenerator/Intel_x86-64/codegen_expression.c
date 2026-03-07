@@ -4145,8 +4145,19 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         offset -= 8;
     if (offset != 0)
     {
-        char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", offset, addr_reg->bit_64);
+        char buffer[128];
+        if (offset > INT32_MAX || offset < INT32_MIN)
+        {
+            /* x86-64 addq only accepts 32-bit sign-extended immediates.
+             * For larger offsets, load into a scratch register first. */
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %%r11\n", offset);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\taddq\t%%r11, %s\n", addr_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", offset, addr_reg->bit_64);
+        }
         inst_list = add_inst(inst_list, buffer);
     }
 

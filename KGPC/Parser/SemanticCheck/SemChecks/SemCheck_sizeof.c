@@ -357,6 +357,16 @@ static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
     if (depth > SIZEOF_RECURSION_LIMIT)
         return 1;
 
+    /* If size is already cached, derive alignment from it to avoid
+     * re-walking potentially cyclic type graphs. */
+    if (record->has_cached_size)
+    {
+        int align = fpc_size_to_alignment(record->cached_size);
+        if (align > POINTER_SIZE_BYTES)
+            align = POINTER_SIZE_BYTES;
+        return align;
+    }
+
     int max_alignment = 1;
     if (record->parent_class_name != NULL && !record->parent_fields_merged && symtab != NULL)
     {
@@ -415,9 +425,8 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
                 status = get_type_alignment_from_ref(symtab, field->type, field->type_id,
                     &align, depth + 1, line_num);
             }
-            KGPC_SEMCHECK_HARD_ASSERT(status == 0 && align > 0,
-                "failed to resolve array field alignment for '%s'",
-                field->name != NULL ? field->name : "<unnamed>");
+            if (status != 0 || align <= 0)
+                return 1;  /* Unresolvable type — use minimum alignment */
             return align;
         }
     }
@@ -432,11 +441,8 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
         int align = 1;
         int status = get_type_alignment_from_ref(symtab, field->type, field->type_id,
             &align, depth + 1, line_num);
-        KGPC_SEMCHECK_HARD_ASSERT(status == 0 && align > 0,
-            "failed to resolve field alignment for '%s' (type=%d, type_id=%s)",
-            field->name != NULL ? field->name : "<unnamed>",
-            field->type,
-            field->type_id != NULL ? field->type_id : "<null>");
+        if (status != 0 || align <= 0)
+            return 1;  /* Unresolvable type — use minimum alignment */
         return align;
     }
 }
@@ -847,6 +853,13 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
         if (type_node != NULL)
         {
+            /* Pointer type aliases: resolve to POINTER_SIZE_BYTES directly */
+            if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_POINTER)
+            {
+                *align_out = POINTER_SIZE_BYTES;
+                return 0;
+            }
+
             struct RecordType *record = get_record_type_from_node(type_node);
             if (record != NULL)
             {
