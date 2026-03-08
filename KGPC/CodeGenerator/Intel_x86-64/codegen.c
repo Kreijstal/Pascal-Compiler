@@ -3685,27 +3685,39 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
         if (tree->type == TREE_VAR_DECL)
         {
             id_list = tree->tree_data.var_decl_data.ids;
-           HashNode_t *type_node = NULL;
-           if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
-               FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
-           }
+            HashNode_t *type_node = NULL;
+            if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
+                FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+            }
+            int decl_type_owned = 0;
+            KgpcType *decl_type = resolve_type_from_vardecl(tree, symtab, &decl_type_owned);
             KgpcType *cached_type = tree->tree_data.var_decl_data.cached_kgpc_type;
 
             while(id_list != NULL)
             {
+                HashNode_t decl_type_node;
                 HashNode_t cached_type_node;
                 HashNode_t *fallback_type_node = NULL;
                 HashNode_t *var_info = NULL;
+                if (decl_type != NULL)
+                {
+                    memset(&decl_type_node, 0, sizeof(decl_type_node));
+                    decl_type_node.type = decl_type;
+                    fallback_type_node = &decl_type_node;
+                }
                 if (cached_type != NULL)
                 {
                     memset(&cached_type_node, 0, sizeof(cached_type_node));
                     cached_type_node.type = cached_type;
-                    fallback_type_node = &cached_type_node;
+                    if (fallback_type_node == NULL)
+                        fallback_type_node = &cached_type_node;
                 }
                 if (symtab != NULL)
                     FindIdent(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
+                if (decl_type != NULL && kgpc_type_is_array(decl_type))
+                    effective_type_node = &decl_type_node;
                 if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
@@ -4119,6 +4131,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 }
                 id_list = id_list->next;
             };
+
+            if (decl_type_owned && decl_type != NULL)
+                destroy_kgpc_type(decl_type);
         }
         else if (tree->type == TREE_ARR_DECL)
         {

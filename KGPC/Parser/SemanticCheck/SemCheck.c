@@ -1373,6 +1373,7 @@ static int g_semcheck_error_suppress_source_index = 0;
 /* When inside a unit subprogram body, holds the unit name for error reporting
  * fallback (e.g., "<unit System>") so errors don't show the main program file. */
 static const char *g_semcheck_error_unit_context = NULL;
+static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
@@ -1394,74 +1395,232 @@ void semcheck_clear_error_context(void)
     g_semcheck_error_source_index = -1;
 }
 
+static void skip_const_expr_ws(const char **p)
+{
+    while (p != NULL && *p != NULL && (**p == ' ' || **p == '\t'))
+        (*p)++;
+}
+
+static int match_const_expr_keyword(const char **p, const char *keyword)
+{
+    size_t len = strlen(keyword);
+    if (strncasecmp(*p, keyword, len) != 0)
+        return 0;
+    char next = (*p)[len];
+    if ((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') ||
+        (next >= '0' && next <= '9') || next == '_')
+        return 0;
+    *p += len;
+    return 1;
+}
+
+static int eval_const_expr_parse_additive(SymTab_t *symtab, const char **p, long long *out_value);
+
+static int eval_const_expr_parse_primary(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (p == NULL || *p == NULL || out_value == NULL)
+        return -1;
+
+    skip_const_expr_ws(p);
+
+    if (**p == '(')
+    {
+        (*p)++;
+        if (eval_const_expr_parse_additive(symtab, p, out_value) != 0)
+            return -1;
+        skip_const_expr_ws(p);
+        if (**p != ')')
+            return -1;
+        (*p)++;
+        return 0;
+    }
+
+    if (match_const_expr_keyword(p, "sizeof"))
+    {
+        skip_const_expr_ws(p);
+        if (**p != '(')
+            return -1;
+        (*p)++;
+        skip_const_expr_ws(p);
+
+        const char *start = *p;
+        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+            (*p)++;
+        if (*p == start)
+            return -1;
+        size_t len = (size_t)(*p - start);
+        char *type_id = (char *)malloc(len + 1);
+        if (type_id == NULL)
+            return -1;
+        memcpy(type_id, start, len);
+        type_id[len] = '\0';
+
+        skip_const_expr_ws(p);
+        if (**p != ')')
+        {
+            free(type_id);
+            return -1;
+        }
+        (*p)++;
+
+        long long size_val = 0;
+        int ok = (sizeof_from_type_ref(symtab, UNKNOWN_TYPE, type_id, &size_val, 0, 0) == 0);
+        free(type_id);
+        if (!ok)
+            return -1;
+        *out_value = size_val;
+        return 0;
+    }
+
+    if ((**p >= '0' && **p <= '9') ||
+        ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9')))
+    {
+        char *endptr = NULL;
+        long long value = strtoll(*p, &endptr, 10);
+        if (endptr == *p)
+            return -1;
+        *p = endptr;
+        *out_value = value;
+        return 0;
+    }
+
+    if ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') || **p == '_')
+    {
+        const char *start = *p;
+        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+            (*p)++;
+        size_t len = (size_t)(*p - start);
+        char *id = (char *)malloc(len + 1);
+        if (id == NULL)
+            return -1;
+        memcpy(id, start, len);
+        id[len] = '\0';
+        int ok = (resolve_const_identifier(symtab, id, out_value) == 0);
+        free(id);
+        return ok ? 0 : -1;
+    }
+
+    return -1;
+}
+
+static int eval_const_expr_parse_unary(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (p == NULL || *p == NULL || out_value == NULL)
+        return -1;
+
+    skip_const_expr_ws(p);
+    if (**p == '+')
+    {
+        (*p)++;
+        return eval_const_expr_parse_unary(symtab, p, out_value);
+    }
+    if (**p == '-')
+    {
+        long long inner = 0;
+        (*p)++;
+        if (eval_const_expr_parse_unary(symtab, p, &inner) != 0)
+            return -1;
+        *out_value = -inner;
+        return 0;
+    }
+    return eval_const_expr_parse_primary(symtab, p, out_value);
+}
+
+static int eval_const_expr_parse_multiplicative(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (eval_const_expr_parse_unary(symtab, p, out_value) != 0)
+        return -1;
+
+    while (1)
+    {
+        long long rhs = 0;
+        skip_const_expr_ws(p);
+        if (**p == '*')
+        {
+            (*p)++;
+            if (eval_const_expr_parse_unary(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value *= rhs;
+            continue;
+        }
+        if (match_const_expr_keyword(p, "div"))
+        {
+            if (eval_const_expr_parse_unary(symtab, p, &rhs) != 0 || rhs == 0)
+                return -1;
+            *out_value /= rhs;
+            continue;
+        }
+        if (match_const_expr_keyword(p, "mod"))
+        {
+            if (eval_const_expr_parse_unary(symtab, p, &rhs) != 0 || rhs == 0)
+                return -1;
+            *out_value %= rhs;
+            continue;
+        }
+        if (match_const_expr_keyword(p, "shl"))
+        {
+            if (eval_const_expr_parse_unary(symtab, p, &rhs) != 0 || rhs < 0)
+                return -1;
+            *out_value <<= rhs;
+            continue;
+        }
+        if (match_const_expr_keyword(p, "shr"))
+        {
+            if (eval_const_expr_parse_unary(symtab, p, &rhs) != 0 || rhs < 0)
+                return -1;
+            *out_value >>= rhs;
+            continue;
+        }
+        break;
+    }
+
+    return 0;
+}
+
+static int eval_const_expr_parse_additive(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (eval_const_expr_parse_multiplicative(symtab, p, out_value) != 0)
+        return -1;
+
+    while (1)
+    {
+        long long rhs = 0;
+        skip_const_expr_ws(p);
+        if (**p == '+')
+        {
+            (*p)++;
+            if (eval_const_expr_parse_multiplicative(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value += rhs;
+            continue;
+        }
+        if (**p == '-')
+        {
+            (*p)++;
+            if (eval_const_expr_parse_multiplicative(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value -= rhs;
+            continue;
+        }
+        break;
+    }
+
+    return 0;
+}
+
 static int resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
 {
     if (expr == NULL || out_value == NULL)
         return -1;
 
     const char *p = expr;
-    while (*p == ' ' || *p == '\t')
-        p++;
-
-    if (strncasecmp(p, "sizeof", 6) != 0)
-        return -1;
-    p += 6;
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != '(')
-        return -1;
-    p++;
-    while (*p == ' ' || *p == '\t')
-        p++;
-
-    const char *start = p;
-    while ((*p >= 'A' && *p <= 'Z') || (*p >= 'a' && *p <= 'z') ||
-           (*p >= '0' && *p <= '9') || *p == '_' || *p == '.')
-        p++;
-    if (p == start)
-        return -1;
-    size_t len = (size_t)(p - start);
-    char *type_id = (char *)malloc(len + 1);
-    if (type_id == NULL)
-        return -1;
-    memcpy(type_id, start, len);
-    type_id[len] = '\0';
-
-    while (*p == ' ' || *p == '\t')
-        p++;
-    if (*p != ')')
-    {
-        free(type_id);
-        return -1;
-    }
-    p++;
-
-    long long size_val = 0;
-    int sizeof_ok = sizeof_from_type_ref(symtab, UNKNOWN_TYPE, type_id, &size_val, 0, 0) == 0;
-    free(type_id);
-    if (!sizeof_ok || size_val <= 0)
+    long long result = 0;
+    if (eval_const_expr_parse_additive(symtab, &p, &result) != 0)
         return -1;
 
-    while (*p == ' ' || *p == '\t')
-        p++;
-
-    long long result = size_val;
-    if (*p == '+' || *p == '-')
-    {
-        int sign = (*p == '-') ? -1 : 1;
-        p++;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        char *endptr = NULL;
-        long val = strtol(p, &endptr, 10);
-        if (endptr == p)
-            return -1;
-        result += (long long)sign * (long long)val;
-        p = endptr;
-    }
-
-    while (*p == ' ' || *p == '\t')
-        p++;
+    skip_const_expr_ws(&p);
     if (*p != '\0')
         return -1;
 

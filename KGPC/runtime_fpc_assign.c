@@ -173,6 +173,11 @@ void kgpc_assign_t_s(void *textrec, const char *path)
     memcpy(tr + FPC_CLOSEFUNC, &close_fn, sizeof(close_fn));
 }
 
+void assign_t_s(void *textrec, const char *path)
+{
+    kgpc_assign_t_s(textrec, path);
+}
+
 /* ------------------------------------------------------------------ */
 /* assign_f_s: Assign(var f: File; const s: string)                    */
 /* Single implementation for both standard and FPC RTL mode.           */
@@ -198,6 +203,11 @@ void kgpc_assign_f_s(void *filerec, const char *path)
         memcpy(fr + FR_NAME_FPC, path, len);
         fr[FR_NAME_FPC + len] = '\0';
     }
+}
+
+void assign_f_s(void *filerec, const char *path)
+{
+    kgpc_assign_f_s(filerec, path);
 }
 
 /* ------------------------------------------------------------------ */

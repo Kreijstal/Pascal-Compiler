@@ -2,6 +2,9 @@ unit Crt;
 
 interface
 
+type
+    tcrtcoord = 1..255;
+
 const
     Black = 0;
     Blue = 1;
@@ -22,14 +25,14 @@ const
 
 procedure clrscr;
 procedure clreol;
-procedure gotoxy(x, y: integer);
-procedure window(x1, y1, x2, y2: integer);
-procedure textcolor(color: integer);
-procedure textbackground(color: integer);
+procedure gotoxy(x, y: tcrtcoord);
+procedure window(x1, y1, x2, y2: byte);
+procedure textcolor(color: byte);
+procedure textbackground(color: byte);
 procedure highvideo;
 procedure lowvideo;
 procedure normvideo;
-function readkey: char;
+function readkey: ansichar;
 function screenwidth: integer;
 function screenheight: integer;
 
@@ -38,6 +41,7 @@ implementation
 function kgpc_keyboard_read_char: integer; external;
 function kgpc_crt_screen_width: integer; external;
 function kgpc_crt_screen_height: integer; external;
+function kgpc_crt_stdout_is_tty: boolean; external;
 
 const
     // FPC's Crt maps Turbo Pascal colour indices onto ANSI SGR codes but uses
@@ -59,7 +63,8 @@ begin
         x := 1;
     if y < 1 then
         y := 1;
-    write(#27, '[', y, ';', x, 'H');
+    if kgpc_crt_stdout_is_tty() then
+        write(#27, '[', y, ';', x, 'H');
 end;
 
 procedure crt_ensure_default_window;
@@ -85,12 +90,15 @@ begin
     if (crt_win_x1 = 1) and (crt_win_y1 = 1) and
         (crt_win_x2 = kgpc_crt_screen_width()) and (crt_win_y2 = kgpc_crt_screen_height()) then
     begin
-        // Match FPC's clrscr sequence when stdout is a terminal and stdin is not:
-        // [H[m[H[2J
-        write(#27, '[H');   // Cursor home
-        write(#27, '[m');   // Reset attributes
-        write(#27, '[H');   // Cursor home again
-        write(#27, '[2J');  // Clear screen
+        if kgpc_crt_stdout_is_tty() then
+        begin
+            // Match FPC's clrscr sequence when stdout is a terminal and stdin is not:
+            // [H[m[H[2J
+            write(#27, '[H');
+            write(#27, '[m');
+            write(#27, '[H');
+            write(#27, '[2J');
+        end;
     end
     else
     begin
@@ -127,7 +135,7 @@ begin
     crt_gotoxy_abs(abs_x, abs_y);
 end;
 
-procedure gotoxy(x, y: integer);
+procedure gotoxy(x, y: tcrtcoord);
 begin
     crt_ensure_default_window;
     if x < 1 then
@@ -139,7 +147,7 @@ begin
     crt_gotoxy_abs((crt_win_x1 + x - 1), (crt_win_y1 + y - 1));
 end;
 
-procedure window(x1, y1, x2, y2: integer);
+procedure window(x1, y1, x2, y2: byte);
 begin
     if x1 < 1 then
         x1 := 1;
@@ -160,13 +168,13 @@ begin
     gotoxy(1, 1);
 end;
 
-procedure textcolor(color: integer);
+procedure textcolor(color: byte);
 var
     ansi_code: integer;
 begin
-    if color < 0 then
-        color := 0;
     color := color mod 16;
+    if not kgpc_crt_stdout_is_tty() then
+        exit;
     
     if color < 8 then
         ansi_code := tp_to_ansi_fg[color]
@@ -193,13 +201,13 @@ begin
         write(#27, '[0;', ansi_code, 'm');
 end;
 
-procedure textbackground(color: integer);
+procedure textbackground(color: byte);
 var
     ansi_code: integer;
 begin
-    if color < 0 then
-        color := 0;
     color := color mod 16;
+    if not kgpc_crt_stdout_is_tty() then
+        exit;
     
     if color = 0 then
         write(#27, '[m')
@@ -212,20 +220,23 @@ end;
 
 procedure highvideo;
 begin
-    write(#27, '[1m');
+    if kgpc_crt_stdout_is_tty() then
+        write(#27, '[1m');
 end;
 
 procedure lowvideo;
 begin
-    write(#27, '[22m');
+    if kgpc_crt_stdout_is_tty() then
+        write(#27, '[22m');
 end;
 
 procedure normvideo;
 begin
-    write(#27, '[m');  // Match FPC's exact reset pattern
+    if kgpc_crt_stdout_is_tty() then
+        write(#27, '[m');
 end;
 
-function readkey: char;
+function readkey: ansichar;
 var
     v: integer;
 begin

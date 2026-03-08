@@ -169,6 +169,9 @@ FPC_RTL_FLAGS = [
     "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
     "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
     "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
+    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "unix"),
 ]
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
@@ -342,12 +345,14 @@ def run_executable_with_valgrind(executable_args, **kwargs):
             kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
-    # Prefer running with stdout/stderr attached to a pseudo-terminal so Crt / ANSI
-    # output matches behaviour under a real TTY.
+    # PTY capture is opt-in. Most tests, and validation against real FPC invoked via
+    # subprocess pipes, should observe redirected-output behaviour rather than a fake TTY.
+    # Enable KGPC_USE_PTY_CAPTURE=1 when a test genuinely needs terminal semantics.
     #
     # Important: keep stdin as a pipe when input=... is provided, so test input is
     # not echoed by terminal line discipline.
-    if HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
+    use_pty_capture = os.environ.get("KGPC_USE_PTY_CAPTURE", "").lower() in ("1", "true", "yes")
+    if use_pty_capture and HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
         text_mode = bool(kwargs.get("text"))
         timeout = kwargs.get("timeout", EXEC_TIMEOUT)
         input_data = kwargs.get("input")

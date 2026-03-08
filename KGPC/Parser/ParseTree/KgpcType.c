@@ -674,11 +674,42 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     if (owns_type != NULL)
         *owns_type = 0;
 
+    const char *decl_type_id = NULL;
+    int decl_defined_in_unit = 0;
+    if (var_decl->type == TREE_VAR_DECL)
+    {
+        decl_type_id = var_decl->tree_data.var_decl_data.type_id;
+        decl_defined_in_unit = var_decl->tree_data.var_decl_data.defined_in_unit;
+    }
+
     /* Prefer declaration-time type cache to avoid late scope shadowing
-     * changing the meaning of parameter type identifiers (e.g. TSize). */
+     * changing the meaning of parameter type identifiers (e.g. TSize).
+     * However, older cached types may have collapsed imported array aliases
+     * such as TFDSet to a scalar. Rebuild those from the symbol-table alias. */
     if (var_decl->type == TREE_VAR_DECL &&
         var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
     {
+        if (decl_type_id != NULL && symtab != NULL &&
+            !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
+        {
+            struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+                decl_type_id, decl_defined_in_unit);
+            if (type_node != NULL)
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
+                        decl_defined_in_unit);
+                    if (alias_type != NULL)
+                    {
+                        if (owns_type != NULL)
+                            *owns_type = 1;
+                        return alias_type;
+                    }
+                }
+            }
+        }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
         return var_decl->tree_data.var_decl_data.cached_kgpc_type;
     }
@@ -830,6 +861,19 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
             type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
         if (type_node != NULL && type_node->type != NULL) {
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+            if (alias != NULL && alias->is_array &&
+                !kgpc_type_is_array(type_node->type))
+            {
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
+                    var_decl->tree_data.var_decl_data.defined_in_unit);
+                if (alias_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return alias_type;
+                }
+            }
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)
                 *owns_type = 0;

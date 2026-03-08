@@ -229,6 +229,40 @@ static int is_unsigned_type_name(const char *type_name)
     return 0;
 }
 
+static int expr_integer_store_size(const struct Expression *expr)
+{
+    int type_tag = expr_get_type_tag(expr);
+    if (expr != NULL && expr->resolved_kgpc_type != NULL)
+    {
+        int kgpc_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (kgpc_size == 1 || kgpc_size == 2 || kgpc_size == 4 || kgpc_size == 8)
+            return kgpc_size;
+    }
+
+    switch (type_tag)
+    {
+        case BYTE_TYPE:
+        case CHAR_TYPE:
+            return 1;
+        case WORD_TYPE:
+            return 2;
+        case INT_TYPE:
+        case LONGINT_TYPE:
+        case LONGWORD_TYPE:
+        case BOOL:
+            return 4;
+        case INT64_TYPE:
+        case QWORD_TYPE:
+            return 8;
+        default:
+            break;
+    }
+
+    if (expr_uses_qword_kgpctype(expr))
+        return 8;
+    return 4;
+}
+
 /**
  * Check if an expression requires 64-bit (qword) storage for integers.
  * This returns true for:
@@ -1641,6 +1675,18 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             goto cleanup;
 
         *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ADDR)
+    {
+        struct Expression *inner = expr->expr_data.addr_data.expr;
+        if (inner == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Address-of expression missing operand.");
+            goto cleanup;
+        }
+
+        inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
         goto cleanup;
     }
     else if (expr->type == EXPR_TYPECAST)
@@ -6141,6 +6187,9 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     Register_t *code_addr = NULL;
     StackNode_t *code_spill = NULL;
     StackNode_t *code_result_spill = NULL;
+    StackNode_t *value_result_spill = NULL;
+    int value_type_tag = (value_expr != NULL) ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE;
+    int value_store_size = expr_integer_store_size(value_expr);
 
     int source_is_shortstring = codegen_expr_is_shortstring_array(source_expr);
     if (!source_is_shortstring && source_expr != NULL &&
@@ -6171,11 +6220,16 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     }
 
     const char *call_target = NULL;
-    switch (value_expr != NULL ? expr_get_type_tag(value_expr) : UNKNOWN_TYPE)
+    switch (value_type_tag)
     {
+        case BYTE_TYPE:
+        case WORD_TYPE:
         case INT_TYPE:
+        case LONGWORD_TYPE:
             call_target = source_is_shortstring ? "kgpc_val_integer_ss" : "kgpc_val_integer";
             break;
+        case CHAR_TYPE:
+        case BOOL:
         case LONGINT_TYPE:
         case INT64_TYPE:
             call_target = source_is_shortstring ? "kgpc_val_longint_ss" : "kgpc_val_longint";
@@ -6200,6 +6254,16 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         goto cleanup;
     }
 
+    if (is_integer_type(value_type_tag) || value_type_tag == CHAR_TYPE || value_type_tag == BOOL)
+    {
+        value_result_spill = add_l_t("val_value_result");
+        if (value_result_spill == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val target result.");
+            goto cleanup;
+        }
+    }
+
     if (code_expr != NULL)
     {
         code_spill = add_l_t("val_code_ptr");
@@ -6219,19 +6283,56 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", source_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_addr->bit_64);
+        if (value_result_spill != NULL)
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdx\n", value_result_spill->offset);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_addr->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     else
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", source_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_addr->bit_64);
+        if (value_result_spill != NULL)
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rsi\n", value_result_spill->offset);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_addr->bit_64);
         inst_list = add_inst(inst_list, buffer);
     }
     inst_list = codegen_vect_reg(inst_list, 0);
     snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
     inst_list = add_inst(inst_list, buffer);
+
+    if (value_result_spill != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", value_addr->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        switch (value_store_size)
+        {
+            case 1:
+                snprintf(buffer, sizeof(buffer), "\tmovb\t-%d(%%rbp), %%dl\n", value_result_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovb\t%dl, (%rax)\n");
+                break;
+            case 2:
+                snprintf(buffer, sizeof(buffer), "\tmovw\t-%d(%%rbp), %%dx\n", value_result_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovw\t%dx, (%rax)\n");
+                break;
+            case 8:
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", value_result_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovq\t%rdx, (%rax)\n");
+                break;
+            case 4:
+            default:
+                snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%edx\n", value_result_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = add_inst(inst_list, "\tmovl\t%edx, (%rax)\n");
+                break;
+        }
+    }
 
     if (code_expr != NULL)
     {

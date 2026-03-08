@@ -1614,6 +1614,15 @@ int kgpc_crt_screen_height(void)
 #endif
 }
 
+int kgpc_crt_stdout_is_tty(void)
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stdout)) ? 1 : 0;
+#else
+    return isatty(STDOUT_FILENO) ? 1 : 0;
+#endif
+}
+
 #ifndef _WIN32
 static int kgpc_keyboard_initialized = 0;
 static struct termios kgpc_keyboard_saved_termios;
@@ -2139,7 +2148,16 @@ void kgpc_write_newline(KGPCTextRec *file)
     if (dest == NULL)
         return;
 
-    fputc('\n', dest);
+    int fd = fileno(dest);
+    if (fd >= 0 && isatty(fd))
+    {
+        fputc('\r', dest);
+        fputc('\n', dest);
+    }
+    else
+    {
+        fputc('\n', dest);
+    }
     fflush(dest);
 }
 

@@ -3027,6 +3027,7 @@ int codegen_expr_is_addressable(const struct Expression *expr)
         case EXPR_ARRAY_ACCESS:
         case EXPR_RECORD_ACCESS:
         case EXPR_POINTER_DEREF:
+        case EXPR_ADDR:
         case EXPR_RECORD_CONSTRUCTOR:
             return 1;
         case EXPR_FUNCTION_CALL:
@@ -7479,6 +7480,17 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         formal_args = proc_type->info.proc_info.params;
         CODEGEN_DEBUG("DEBUG: Using formal_args from KgpcType: %p\n", formal_args);
     }
+    else if (procedure_name != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *proc_node = NULL;
+        if (FindIdent(&proc_node, ctx->symtab, procedure_name) == 0 &&
+            proc_node != NULL && proc_node->type != NULL &&
+            proc_node->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            formal_args = proc_node->type->info.proc_info.params;
+            CODEGEN_DEBUG("DEBUG: Using formal_args from symtab fallback: %p\n", formal_args);
+        }
+    }
     int skip_formal_for_self = 0;
     if (formal_args != NULL)
     {
@@ -7564,6 +7576,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         {
             is_external_c_function = def->tree_data.subprogram_data.cname_flag;
             is_varargs_function = def->tree_data.subprogram_data.is_varargs;
+        }
+    }
+    else if (procedure_name != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *proc_node = NULL;
+        if (FindIdent(&proc_node, ctx->symtab, procedure_name) == 0 &&
+            proc_node != NULL && proc_node->type != NULL &&
+            proc_node->type->kind == TYPE_KIND_PROCEDURE &&
+            proc_node->type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = proc_node->type->info.proc_info.definition;
+            if (def->type == TREE_SUBPROGRAM || def->type == TREE_SUBPROGRAM_PROC || def->type == TREE_SUBPROGRAM_FUNC)
+            {
+                is_external_c_function = def->tree_data.subprogram_data.cname_flag;
+                is_varargs_function = def->tree_data.subprogram_data.is_varargs;
+            }
         }
     }
 
@@ -8721,8 +8749,58 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     arginfo_assign_register(&arg_infos[arg_num], result_reg, arg_expr);
                 }
             }
+            else if (arg_expr != NULL && expr_has_type_tag(arg_expr, CHAR_TYPE))
+            {
+                int owns_formal_kgpc = 0;
+                KgpcType *formal_kgpc = NULL;
+                if (formal_arg_decl != NULL && ctx != NULL && ctx->symtab != NULL)
+                    formal_kgpc = resolve_type_from_vardecl(formal_arg_decl, ctx->symtab, &owns_formal_kgpc);
+
+                int formal_is_char_pointer =
+                    (formal_kgpc != NULL &&
+                     formal_kgpc->kind == TYPE_KIND_POINTER &&
+                     formal_kgpc->info.points_to != NULL &&
+                     formal_kgpc->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                     formal_kgpc->info.points_to->info.primitive_type_tag == CHAR_TYPE);
+
+                if (formal_is_char_pointer && codegen_expr_is_addressable(arg_expr))
+                {
+                    Register_t *addr_reg = NULL;
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+                    if (owns_formal_kgpc && formal_kgpc != NULL)
+                        destroy_kgpc_type(formal_kgpc);
+                    if (codegen_had_error(ctx) || addr_reg == NULL)
+                        return inst_list;
+
+                    StackNode_t *arg_spill = add_l_t("arg_eval");
+                    if (arg_spill != NULL && arg_infos != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            addr_reg->bit_64, arg_spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), addr_reg);
+
+                        arg_infos[arg_num].reg = NULL;
+                        arg_infos[arg_num].spill = arg_spill;
+                        arg_infos[arg_num].expr = arg_expr;
+                        arg_infos[arg_num].is_pointer_like = 1;
+                    }
+                    else if (arg_infos != NULL)
+                    {
+                        arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                        arg_infos[arg_num].is_pointer_like = 1;
+                    }
+                }
+                else
+                {
+                    if (owns_formal_kgpc && formal_kgpc != NULL)
+                        destroy_kgpc_type(formal_kgpc);
+                    goto pass_value_arg;
+                }
+            }
             else
             {
+pass_value_arg:
                 // Pass by value
                 if (expected_type == REAL_TYPE && arg_infos != NULL &&
                     arg_infos[arg_num].expected_real_size == 16)

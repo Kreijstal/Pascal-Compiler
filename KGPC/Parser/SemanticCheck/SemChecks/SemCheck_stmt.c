@@ -7306,6 +7306,44 @@ proccall_parent_resolve_done:
                         arg_kgpc_type ? kgpc_type_to_string(arg_kgpc_type) : "<null>");
                 }
                 int param_is_untyped = semcheck_var_decl_is_untyped(arg_decl);
+                if (param_is_untyped &&
+                    proc_id != NULL &&
+                    cur_arg == 1 &&
+                    (pascal_identifier_equals(proc_id, "write") ||
+                     pascal_identifier_equals(proc_id, "read") ||
+                     pascal_identifier_equals(proc_id, "fpWrite") ||
+                     pascal_identifier_equals(proc_id, "fpRead")) &&
+                    arg_expr != NULL &&
+                    arg_expr->type != EXPR_ADDR &&
+                    arg_kgpc_type != NULL &&
+                    !kgpc_type_is_pointer(arg_kgpc_type) &&
+                    (arg_expr->type == EXPR_VAR_ID ||
+                     arg_expr->type == EXPR_ARRAY_ACCESS ||
+                     arg_expr->type == EXPR_RECORD_ACCESS ||
+                     arg_expr->type == EXPR_POINTER_DEREF))
+                {
+                    struct Expression *addr_expr = mk_addressof(arg_expr->line_num, arg_expr);
+                    KgpcType *new_arg_kgpc_type = NULL;
+                    int new_arg_type_owned = 0;
+                    semcheck_expr_main(symtab, addr_expr, INT_MAX, NO_MUTATE, &new_arg_kgpc_type);
+                    if (new_arg_kgpc_type == NULL)
+                    {
+                        new_arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, addr_expr,
+                            INT_MAX, NO_MUTATE, &new_arg_type_owned);
+                    }
+                    if (new_arg_kgpc_type != NULL && kgpc_type_is_pointer(new_arg_kgpc_type))
+                    {
+                        args_given->cur = addr_expr;
+                        arg_expr = addr_expr;
+                        arg_kgpc_type = new_arg_kgpc_type;
+                        arg_type_owned = new_arg_type_owned;
+                    }
+                    else if (addr_expr != NULL)
+                    {
+                        addr_expr->expr_data.addr_data.expr = NULL;
+                        destroy_expr(addr_expr);
+                    }
+                }
 
                 /* Perform type compatibility check using KgpcType */
                 int types_match = param_is_untyped ? 1 : 0;
@@ -7324,6 +7362,53 @@ proccall_parent_resolve_done:
                 else if (!param_is_untyped)
                 {
                     types_match = are_types_compatible_for_assignment(expected_kgpc_type, arg_kgpc_type, symtab);
+                    if (!types_match && expected_kgpc_type != NULL && arg_kgpc_type != NULL &&
+                        arg_expr != NULL &&
+                        expected_kgpc_type->kind == TYPE_KIND_POINTER &&
+                        expected_kgpc_type->info.points_to != NULL &&
+                        expected_kgpc_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
+                        expected_kgpc_type->info.points_to->info.primitive_type_tag == CHAR_TYPE &&
+                        arg_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                        arg_kgpc_type->info.primitive_type_tag == CHAR_TYPE &&
+                        arg_expr->type != EXPR_ADDR &&
+                        (arg_expr->type == EXPR_VAR_ID ||
+                         arg_expr->type == EXPR_ARRAY_ACCESS ||
+                         arg_expr->type == EXPR_RECORD_ACCESS ||
+                         arg_expr->type == EXPR_POINTER_DEREF))
+                    {
+                        struct Expression *addr_expr = mk_addressof(arg_expr->line_num, arg_expr);
+                        KgpcType *new_arg_kgpc_type = NULL;
+                        int new_arg_type_owned = 0;
+
+                        semcheck_expr_main(symtab, addr_expr, INT_MAX, NO_MUTATE, &new_arg_kgpc_type);
+                        if (new_arg_kgpc_type == NULL)
+                        {
+                            new_arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, addr_expr,
+                                INT_MAX, NO_MUTATE, &new_arg_type_owned);
+                        }
+
+                        if (new_arg_kgpc_type != NULL &&
+                            are_types_compatible_for_assignment(expected_kgpc_type, new_arg_kgpc_type, symtab))
+                        {
+                            args_given->cur = addr_expr;
+                            arg_expr = addr_expr;
+                            if (arg_type_owned && arg_kgpc_type != NULL)
+                                destroy_kgpc_type(arg_kgpc_type);
+                            arg_kgpc_type = new_arg_kgpc_type;
+                            arg_type_owned = new_arg_type_owned;
+                            types_match = 1;
+                        }
+                        else
+                        {
+                            if (new_arg_type_owned && new_arg_kgpc_type != NULL)
+                                destroy_kgpc_type(new_arg_kgpc_type);
+                            if (addr_expr != NULL)
+                            {
+                                addr_expr->expr_data.addr_data.expr = NULL;
+                                destroy_expr(addr_expr);
+                            }
+                        }
+                    }
                     if (!types_match && !param_is_var_out && expected_kgpc_type != NULL &&
                         arg_kgpc_type != NULL && arg_expr != NULL)
                     {
