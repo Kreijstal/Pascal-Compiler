@@ -478,6 +478,16 @@ static int semcheck_record_assign_operator_score(SymTab_t *symtab, HashNode_t *c
         arg_rank = 4;
 
     KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
+    if (ret_type != NULL &&
+        ret_type->kind == TYPE_KIND_PRIMITIVE &&
+        ret_type->info.primitive_type_tag == VARIANT_TYPE &&
+        !(target_type->kind == TYPE_KIND_PRIMITIVE &&
+          target_type->info.primitive_type_tag == VARIANT_TYPE))
+    {
+        if (param_owned && param_type != NULL)
+            destroy_kgpc_type(param_type);
+        return 0;
+    }
     int ret_rank = (ret_type != NULL) ? kgpc_type_conversion_rank(ret_type, target_type) : -1;
     if (ret_rank < 0 && ret_type != NULL &&
         are_types_compatible_for_assignment(target_type, ret_type, symtab))
@@ -565,11 +575,6 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
     HashNode_t *best_node = NULL;
     KgpcType *best_return_type = NULL;
     int best_score = INT_MAX;
-
-    semcheck_record_assign_consider_id(symtab, ":=", target_type, source_type,
-        &best_node, &best_return_type, &best_score);
-    semcheck_record_assign_consider_id(symtab, "op_assign", target_type, source_type,
-        &best_node, &best_return_type, &best_score);
     if (target_type_id != NULL)
     {
         char target_id[256];
@@ -605,6 +610,18 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         semcheck_record_assign_consider_id(symtab, source_specific_id, target_type, source_type,
             &best_node, &best_return_type, &best_score);
     }
+
+    if (best_node != NULL)
+    {
+        if (return_type_out != NULL)
+            *return_type_out = best_return_type;
+        return best_node;
+    }
+
+    semcheck_record_assign_consider_id(symtab, ":=", target_type, source_type,
+        &best_node, &best_return_type, &best_score);
+    semcheck_record_assign_consider_id(symtab, "op_assign", target_type, source_type,
+        &best_node, &best_return_type, &best_score);
 
     ListNode_t *scope = symtab->stack_head;
     while (scope != NULL)
@@ -4162,6 +4179,18 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             semcheck_typecheck_array_literal(expr, symtab, INT_MAX,
                 elem_tag, elem_type_id, stmt->line_num);
             goto assignment_types_ok;
+        }
+
+        if (semcheck_type_is_recordish(lhs_kgpctype) &&
+            !semcheck_type_is_recordish(rhs_kgpctype))
+        {
+            if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
+                    &rhs_kgpctype, &rhs_owned))
+            {
+                expr = stmt->stmt_data.var_assign_data.expr;
+                type_second = semcheck_tag_from_kgpc(rhs_kgpctype);
+                goto assignment_types_ok;
+            }
         }
 
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
