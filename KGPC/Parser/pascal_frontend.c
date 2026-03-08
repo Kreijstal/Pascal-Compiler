@@ -601,7 +601,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 free(cache_path);
                 /* Set up preprocessed source context (needed for semcheck error reporting) */
                 set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
-                semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
+                int src_offset = semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
 
                 /* Detect objfpc mode from cached preprocessed source */
                 if (detect_objfpc_mode(cached_pp_buf, cached_pp_len))
@@ -613,6 +613,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 if (convert_to_tree)
                 {
                     file_to_parse = (char *)path;
+                    from_cparser_set_source_offset(src_offset);
                     tree = tree_from_pascal_ast(cached_ast);
                     if (tree != NULL)
                         success = true;
@@ -910,7 +911,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
     set_preprocessed_context(buffer, length, path);
-    semcheck_register_source_buffer(path, buffer, length);
+    int src_offset = semcheck_register_source_buffer(path, buffer, length);
+    from_cparser_set_source_offset(src_offset);
 
     /* Debug: dump full preprocessed buffer */
     if (getenv("KGPC_DUMP_PREPROC")) {

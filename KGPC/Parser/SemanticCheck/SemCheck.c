@@ -87,8 +87,10 @@ static struct {
     char *path;
     char *buffer;
     size_t length;
+    int global_start;  /* cumulative offset for globally-unique source_index values */
 } g_source_buffer_registry[MAX_SOURCE_BUFFERS];
 static int g_source_buffer_count = 0;
+static int g_source_buffer_next_global = 0; /* next available global offset */
 
 void semcheck_set_source_path(const char *path)
 {
@@ -122,22 +124,23 @@ void semcheck_set_source_buffer(const char *buffer, size_t length)
     g_semcheck_source_length = length;
 }
 
-void semcheck_register_source_buffer(const char *path, const char *buffer, size_t length)
+int semcheck_register_source_buffer(const char *path, const char *buffer, size_t length)
 {
     if (path == NULL || buffer == NULL || length == 0)
-        return;
+        return 0;
     if (g_source_buffer_count >= MAX_SOURCE_BUFFERS)
-        return;
-    
+        return 0;
+
     for (int i = 0; i < g_source_buffer_count; i++)
     {
         if (g_source_buffer_registry[i].path != NULL &&
             strcmp(g_source_buffer_registry[i].path, path) == 0)
         {
-            return;
+            return g_source_buffer_registry[i].global_start;
         }
     }
-    
+
+    int global_start = g_source_buffer_next_global;
     g_source_buffer_registry[g_source_buffer_count].path = strdup(path);
     g_source_buffer_registry[g_source_buffer_count].buffer = (char *)malloc(length + 1);
     if (g_source_buffer_registry[g_source_buffer_count].path &&
@@ -146,13 +149,16 @@ void semcheck_register_source_buffer(const char *path, const char *buffer, size_
         memcpy(g_source_buffer_registry[g_source_buffer_count].buffer, buffer, length);
         g_source_buffer_registry[g_source_buffer_count].buffer[length] = '\0';
         g_source_buffer_registry[g_source_buffer_count].length = length;
+        g_source_buffer_registry[g_source_buffer_count].global_start = global_start;
         g_source_buffer_count++;
+        g_source_buffer_next_global = global_start + (int)length + 1; /* +1 to avoid overlap */
     }
     else
     {
         free(g_source_buffer_registry[g_source_buffer_count].path);
         free(g_source_buffer_registry[g_source_buffer_count].buffer);
     }
+    return global_start;
 }
 
 static int semcheck_print_context_from_file(const char *file_path, int line_num, int col_num, int context_lines)
@@ -1577,14 +1583,17 @@ static int resolve_error_source_context(int source_index,
     {
         for (int i = 0; i < g_source_buffer_count; i++)
         {
-            if (source_index < (int)g_source_buffer_registry[i].length)
+            int gs = g_source_buffer_registry[i].global_start;
+            int len = (int)g_source_buffer_registry[i].length;
+            if (source_index >= gs && source_index < gs + len)
             {
+                int local_offset = source_index - gs;
                 char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
                 temp_file[0] = '\0';
                 int computed_line = semcheck_line_from_source_offset(
                     g_source_buffer_registry[i].buffer,
                     g_source_buffer_registry[i].length,
-                    source_index,
+                    local_offset,
                     temp_file, sizeof(temp_file));
                 if (computed_line > 0 && temp_file[0] != '\0')
                 {

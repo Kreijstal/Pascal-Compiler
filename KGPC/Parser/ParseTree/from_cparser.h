@@ -8,6 +8,7 @@
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast);
 void from_cparser_cleanup(void);
+void from_cparser_set_source_offset(int offset);
 
 /* Frontend error tracking */
 void from_cparser_reset_error_count(void);

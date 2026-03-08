@@ -1133,10 +1133,20 @@ void from_cparser_disable_pending_specializations(void) {
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
 
+/* Global offset added to all source_index values during conversion.
+ * Set via from_cparser_set_source_offset() before converting each unit's AST,
+ * so that source_index values are globally unique across all source buffers. */
+static int g_source_offset = 0;
+
+void from_cparser_set_source_offset(int offset)
+{
+    g_source_offset = offset;
+}
+
 /* Helper to copy source index from AST node to Expression for accurate error context */
 static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
     if (expr != NULL && node != NULL) {
-        expr->source_index = node->index;
+        expr->source_index = node->index + g_source_offset;
     }
     return expr;
 }
@@ -3367,6 +3377,7 @@ static void clone_nested_types_for_specialization(
                     Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
                     if (clone == NULL) { free(new_id); cur = cur->next; continue; }
 
+                    clone->source_index = orig->source_index;
                     clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
                     clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
 
@@ -14392,7 +14403,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
     }
     struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
     if (stmt != NULL) {
-        stmt->source_index = assign_node->index;
+        stmt->source_index = assign_node->index + g_source_offset;
     }
     return stmt;
 }
@@ -14473,7 +14484,7 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     ListNode_t *args = convert_expression_list(args_start);
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
-        call->source_index = call_node->index;
+        call->source_index = call_node->index + g_source_offset;
         /* If id starts with __, it's a method call placeholder from convert_method_call_statement.
          * Extract the bare method name and set the structured flag. */
         if (id != NULL && strncmp(id, "__", 2) == 0) {
@@ -15410,7 +15421,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL)
-                                tree->source_index = method_node->index;
+                                tree->source_index = method_node->index + g_source_offset;
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.return_type_ref =
                                     return_type_ref != NULL ? type_ref_clone(return_type_ref)
@@ -15894,7 +15905,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            nested_subs, body, 0, 0);
     }
     if (tree != NULL)
-        tree->source_index = method_node->index;
+        tree->source_index = method_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -16297,7 +16308,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
     if (tree != NULL)
-        tree->source_index = proc_node->index;
+        tree->source_index = proc_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -16610,7 +16621,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
     if (tree != NULL)
-        tree->source_index = func_node->index;
+        tree->source_index = func_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
