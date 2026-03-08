@@ -6092,6 +6092,9 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         case REAL_TYPE:
             call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
             break;
+        case EXTENDED_TYPE:
+            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
+            break;
         default:
             call_target = NULL;
             break;

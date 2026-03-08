@@ -1915,7 +1915,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
 
     int value_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
-    if (!is_integer_type(value_type) && value_type != REAL_TYPE)
+    if (!is_integer_type(value_type) && !is_real_family_type(value_type))
     {
         semcheck_error_with_context("Error on line %d, Str value must be an integer or real.\n", stmt->line_num);
         ++return_val;
@@ -2132,7 +2132,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, MUTATE);
-    if (!is_integer_type(value_type) && value_type != REAL_TYPE)
+    if (!is_integer_type(value_type) && !is_real_family_type(value_type))
     {
         fprintf(stderr,
             "Error on line %d, Val target must be an integer, longint, or real variable.\n",
@@ -5756,8 +5756,9 @@ skip_type_receiver_rewrite:
                                           (formal_type == INT_TYPE && actual_type == LONGINT_TYPE) ||
                                           (formal_type == POINTER_TYPE) || (actual_type == POINTER_TYPE) ||
                                           (is_integer_type(formal_type) && is_integer_type(actual_type)) ||
-                                          (formal_type == REAL_TYPE && is_integer_type(actual_type)) ||
-                                          (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
+                                          (is_real_family_type(formal_type) && is_integer_type(actual_type)) ||
+                                          (is_integer_type(formal_type) && is_real_family_type(actual_type)) ||
+                                          (is_real_family_type(formal_type) && is_real_family_type(actual_type)) ||
                                           (formal_type == VARIANT_TYPE) ||
                                           (actual_type == VARIANT_TYPE) ||
                                           (formal_type == BUILTIN_ANY_TYPE) ||

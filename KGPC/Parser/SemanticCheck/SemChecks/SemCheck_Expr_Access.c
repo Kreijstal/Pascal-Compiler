@@ -2607,8 +2607,9 @@ int semcheck_funccall(int *type_return,
                                       (formal_type == POINTER_TYPE) ||
                                       (actual_type == POINTER_TYPE) ||
                                       (is_integer_type(formal_type) && is_integer_type(actual_type)) ||
-                                      (formal_type == REAL_TYPE && is_integer_type(actual_type)) ||
-                                      (is_integer_type(formal_type) && actual_type == REAL_TYPE) ||
+                                      (is_real_family_type(formal_type) && is_integer_type(actual_type)) ||
+                                      (is_integer_type(formal_type) && is_real_family_type(actual_type)) ||
+                                      (is_real_family_type(formal_type) && is_real_family_type(actual_type)) ||
                                       (formal_type == VARIANT_TYPE) ||
                                       (actual_type == VARIANT_TYPE) ||
                                       (formal_type == RECORD_TYPE) ||

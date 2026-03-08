@@ -185,11 +185,7 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "FPC_HAS_RIP_RELATIVE");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_TYPE_SINGLE");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_TYPE_DOUBLE");
-    /* Do NOT define FPC_HAS_TYPE_EXTENDED — KGPC maps Extended to Double
-     * (64-bit) rather than the 80-bit x87 extended type.  Without this
-     * define the FPC RTL falls back to SSE-based (xmm0) implementations
-     * for math intrinsics instead of x87 asm that expects 80-bit values
-     * on the stack. */
+    pascal_preprocessor_define(preprocessor, "FPC_HAS_TYPE_EXTENDED");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_INDIRECT_ENTRY_INFORMATION");
     pascal_preprocessor_define(preprocessor, "FPC_STATICRIPFIXED");
     pascal_preprocessor_define(preprocessor, "FPC_VARIANTCOPY_FIXED");
