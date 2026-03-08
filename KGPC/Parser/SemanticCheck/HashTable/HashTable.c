@@ -8,6 +8,7 @@
 */
 
 #include "../../../identifier_utils.h"
+#include "../../../unit_registry.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
 
@@ -229,11 +230,12 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
     }
 
     /* Scan all matches, pick by priority:
-     * 1. Same unit as caller (exact match)
-     * 2. Program-local (source_unit_index == 0) when caller is program code
-     * 3. First match (fallback) */
+     * 4. Same unit as caller (exact match)
+     * 3. Symbol from a unit that caller directly uses (dependency)
+     * 2. Program-local (source_unit_index == 0) fallback
+     * 1. Any match (fallback) */
     HashNode_t *best = NULL;
-    int best_priority = 0; /* 0=none, 1=any, 2=program-local, 3=same-unit */
+    int best_priority = 0;
 
     cur = list;
     while (cur != NULL)
@@ -243,9 +245,12 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
         {
             int priority = 1; /* any match */
             if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
-                priority = 3; /* same unit */
+                priority = 4; /* same unit */
             else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
-                priority = 3; /* program-local for program code */
+                priority = 4; /* program-local for program code */
+            else if (caller_unit_index > 0 && hash_node->source_unit_index > 0 &&
+                     unit_registry_is_dep(caller_unit_index, hash_node->source_unit_index))
+                priority = 3; /* from a unit that caller uses */
             else if (hash_node->source_unit_index == 0)
                 priority = 2; /* program-local fallback */
 

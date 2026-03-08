@@ -1276,6 +1276,22 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
+    /* Record dependency edges: this unit depends on each unit it uses */
+    {
+        int this_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+        ListNode_t *dep;
+        for (dep = unit_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
+        {
+            if (dep->type == LIST_STRING && dep->cur != NULL)
+                unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
+        }
+        for (dep = unit_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
+        {
+            if (dep->type == LIST_STRING && dep->cur != NULL)
+                unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
+        }
+    }
+
     merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);
 }

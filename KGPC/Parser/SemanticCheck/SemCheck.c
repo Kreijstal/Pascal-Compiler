@@ -1357,6 +1357,9 @@ static int g_semcheck_error_source_index = -1;
  * context, since resolve_error_source_context cannot disambiguate which
  * buffer the offset belongs to. */
 static int g_semcheck_error_suppress_source_index = 0;
+/* When inside a unit subprogram body, holds the unit name for error reporting
+ * fallback (e.g., "<unit System>") so errors don't show the main program file. */
+static const char *g_semcheck_error_unit_context = NULL;
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
@@ -1498,6 +1501,10 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
 
 static const char *semcheck_get_error_path(void)
 {
+    /* When inside a unit subprogram body, use the unit context path
+     * so errors report the unit name instead of the main program file. */
+    if (g_semcheck_error_unit_context != NULL)
+        return g_semcheck_error_unit_context;
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
                                 ? file_to_parse
                                 : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
@@ -1616,7 +1623,11 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
-    if (effective_source_index >= 0)
+    if (g_semcheck_error_unit_context != NULL)
+    {
+        /* Inside unit body: skip line resolution, just show unit name */
+    }
+    else if (effective_source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
             effective_source_index, directive_file, sizeof(directive_file), 1);
@@ -1660,7 +1671,11 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
-    if (source_index >= 0)
+    if (g_semcheck_error_unit_context != NULL)
+    {
+        /* Inside unit body: skip line resolution, just show unit name */
+    }
+    else if (source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
             source_index, directive_file, sizeof(directive_file), 0);
@@ -1773,7 +1788,11 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
-    if (source_index >= 0)
+    if (g_semcheck_error_unit_context != NULL)
+    {
+        /* Inside unit body: skip line resolution, just show unit name */
+    }
+    else if (source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
             source_index, directive_file, sizeof(directive_file), 1);
@@ -1814,7 +1833,11 @@ void semcheck_error_with_context(const char *format, ...)
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
-    if (effective_source_index >= 0)
+    if (g_semcheck_error_unit_context != NULL)
+    {
+        /* Inside unit body: skip line resolution, just show unit name */
+    }
+    else if (effective_source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
             effective_source_index, directive_file, sizeof(directive_file), 1);
@@ -12693,11 +12716,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 resolved_type = n;
                                 break;
                             }
-                            /* Track best ancestor: highest index still <= function's unit */
+                            /* Prefer symbol from a unit that the importing unit uses */
                             if (n->source_unit_index > 0 &&
-                                n->source_unit_index <= g_semcheck_imported_decl_unit_index &&
-                                n->source_unit_index > closest_idx)
+                                unit_registry_is_dep(g_semcheck_imported_decl_unit_index,
+                                                     n->source_unit_index))
                             {
+                                closest_ancestor = n;
+                                closest_idx = n->source_unit_index;
+                                /* Don't break — exact match still wins */
+                            }
+                            else if (closest_ancestor == NULL &&
+                                     n->source_unit_index > 0 &&
+                                     n->source_unit_index <= g_semcheck_imported_decl_unit_index)
+                            {
+                                /* Fallback: highest index still <= function's unit */
                                 closest_ancestor = n;
                                 closest_idx = n->source_unit_index;
                             }
@@ -15424,6 +15456,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     int saved_unit_context = symtab->unit_context;
+    /* Set unit_context for the entire subprogram (args + locals + body)
+     * so FindIdent resolves types from this unit's dependencies correctly. */
+    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
+        subprogram->tree_data.subprogram_data.source_unit_index > 0)
+    {
+        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
+    }
 
     {
         int before_local = return_val;
@@ -15464,14 +15503,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
      * disambiguate buffers, producing misleading file:line locations. */
     int saved_suppress = g_semcheck_error_suppress_source_index;
     int saved_error_source_index = g_semcheck_error_source_index;
+    const char *saved_error_unit_context = g_semcheck_error_unit_context;
     if (subprogram->tree_data.subprogram_data.defined_in_unit)
     {
         g_semcheck_error_suppress_source_index = 1;
         g_semcheck_error_source_index = -1;
-        /* Set unit context so FindIdent resolves to this unit's symbols
-         * when variable names collide across units (e.g., Input: Text vs Input: String) */
+        /* Show unit name instead of misleading main-program file:line */
         if (subprogram->tree_data.subprogram_data.source_unit_index > 0)
+        {
+            const char *uname = unit_registry_get(subprogram->tree_data.subprogram_data.source_unit_index);
+            g_semcheck_error_unit_context = uname ? uname : "<unit>";
+            /* Set unit context so FindIdent resolves to this unit's symbols
+             * when variable names collide across units (e.g., Input: Text vs Input: String) */
             symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
+        }
     }
 
     /* Functions cannot have side effects, so need to call a special function in that case */
@@ -15578,6 +15623,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Restore error context / suppress flag after body processing. */
     g_semcheck_error_suppress_source_index = saved_suppress;
     g_semcheck_error_source_index = saved_error_source_index;
+    g_semcheck_error_unit_context = saved_error_unit_context;
     symtab->unit_context = saved_unit_context;
 
 #ifdef DEBUG
