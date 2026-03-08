@@ -5579,7 +5579,11 @@ static int codegen_return_type_id_storage_size(const char *return_type_id)
     if (pascal_identifier_equals(return_type_id, "Real") ||
         pascal_identifier_equals(return_type_id, "Double"))
         return 8;
-    if (pascal_identifier_equals(return_type_id, "Int64") ||
+    if (pascal_identifier_equals(return_type_id, "string") ||
+        pascal_identifier_equals(return_type_id, "AnsiString") ||
+        pascal_identifier_equals(return_type_id, "UnicodeString") ||
+        pascal_identifier_equals(return_type_id, "WideString") ||
+        pascal_identifier_equals(return_type_id, "Int64") ||
         pascal_identifier_equals(return_type_id, "QWord") ||
         pascal_identifier_equals(return_type_id, "UInt64") ||
         pascal_identifier_equals(return_type_id, "NativeInt") ||
@@ -5922,26 +5926,24 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
-        int uses_qword = (anon->return_type == STRING_TYPE || 
-                         anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE ||
-                         anon->return_type == INT64_TYPE);
-        if (uses_qword)
-        {
-            /* Check element_size which stores the unaligned size */
-            long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-            if (anon->return_type == EXTENDED_TYPE)
-                snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
-            else if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
-                snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            else if (anon->return_type == REAL_TYPE)
-                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            else
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
-        }
+        int return_is_real = (anon->return_type == REAL_TYPE || anon->return_type == EXTENDED_TYPE);
+        int return_size = get_return_type_size(anon->return_type);
+        int use_qword = return_size >= 8;
+        if (return_size == 0 && return_var->size >= 8)
+            use_qword = 1;
+
+        /* Check element_size for unaligned Single type (4 bytes) */
+        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+        if (return_is_real && return_var->element_size == 10)
+            snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+        else if (return_is_real && unaligned_return_size <= 4)
+            snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (return_is_real)
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (use_qword)
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
         else
-        {
             snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%eax\n", return_var->offset);
-        }
         inst_list = add_inst(inst_list, buffer);
     }
     
