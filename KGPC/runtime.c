@@ -2550,6 +2550,15 @@ char *widechar__op_assign_olevariant_wc(uint16_t value)
     return kgpc_cached_widechar_pchar(value);
 }
 
+/* FPC RTL compatibility: operator :=(widestring) olevariant stub.
+ * The system unit declares this operator but we don't support real
+ * OleVariant. Return the input pointer as-is since our "olevariant"
+ * representation is just a string pointer. */
+char *olevariant__op_assign_widestring_u(char *source)
+{
+    return source;
+}
+
 static char *kgpc_string_alloc_with_length(size_t length)
 {
     size_t total = sizeof(KgpcStringHeader) + length + 1;
