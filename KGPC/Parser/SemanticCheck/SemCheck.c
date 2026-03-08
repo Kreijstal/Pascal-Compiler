@@ -15828,15 +15828,21 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
      * Pass 2: Process bodies (which may reference procedures declared in pass 1)
      */
     
-    /* Pass 1: Pre-declare all procedures at this level */
+    /* Pass 1: Pre-declare all procedures at this level.
+     * NOTE: Do NOT skip subprograms that already have cached_predecl_node.
+     * predeclare_subprograms() is called multiple times (once globally from
+     * semcheck_program, then again per-scope from semcheck_subprograms).
+     * Between calls, type aliases like PByte get resolved from integer to
+     * pointer, changing the mangled name (e.g. _p_i_i → _p_p_i).  Skipping
+     * the second predeclare leaves the HashNode with the stale mangled name,
+     * so the VMT references an undefined symbol at link time. */
     cur = subprograms;
     while(cur != NULL)
     {
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         Tree_t *child = (Tree_t *)cur->cur;
-        if (child->tree_data.subprogram_data.cached_predecl_node == NULL)
-            return_val += predeclare_subprogram(symtab, child, max_scope_lev, parent_subprogram);
+        return_val += predeclare_subprogram(symtab, child, max_scope_lev, parent_subprogram);
         cur = cur->next;
     }
 
