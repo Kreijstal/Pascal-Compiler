@@ -3129,6 +3129,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.self_class_name = NULL;
     new_expr->expr_data.function_call_data.is_class_method_call = 0;
     new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    new_expr->expr_data.function_call_data.is_inherited_call = 0;
 
     return new_expr;
 }
