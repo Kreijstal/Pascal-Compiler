@@ -6382,6 +6382,113 @@ int kgpc_free_library(uintptr_t handle)
 #endif
 }
 
+typedef struct KgpcFpcDynLibsManager {
+    uintptr_t (*LoadLibraryU)(const char *name);
+    uintptr_t (*LoadLibraryA)(const char *name);
+    void *(*GetProcAddress)(uintptr_t lib, const char *proc_name);
+    void *(*GetProcAddressOrdinal)(uintptr_t lib, uintptr_t ordinal);
+    int (*UnloadLibrary)(uintptr_t lib);
+    char *(*GetLoadErrorStr)(void);
+} KgpcFpcDynLibsManager;
+
+typedef struct KgpcStringHeaderShim {
+    uint16_t codepage;
+    uint16_t elementsize;
+    int32_t refcount;
+    int64_t length;
+} KgpcStringHeaderShim;
+
+extern KgpcFpcDynLibsManager CurrentDLM __attribute__((weak));
+
+static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value)
+{
+    if (value == NULL)
+        return NULL;
+    return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(KgpcStringHeaderShim));
+}
+
+static char *kgpc_fpc_unicode_to_ansi_dup(const char *value)
+{
+    const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(value);
+    if (value == NULL)
+        return NULL;
+    if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
+        return strdup(value);
+
+    size_t len = (size_t)hdr->length;
+    char *ansi = (char *)malloc(len + 1);
+    if (ansi == NULL)
+        return NULL;
+    const uint16_t *src = (const uint16_t *)value;
+    for (size_t i = 0; i < len; ++i)
+        ansi[i] = (src[i] < 256u) ? (char)src[i] : '?';
+    ansi[len] = '\0';
+    return ansi;
+}
+
+static uintptr_t kgpc_fpc_dynlib_load_u(const char *name)
+{
+    char *ansi = kgpc_fpc_unicode_to_ansi_dup(name);
+    uintptr_t handle = kgpc_load_library(ansi);
+    free(ansi);
+    return handle;
+}
+
+static uintptr_t kgpc_fpc_dynlib_load_a(const char *name)
+{
+    return kgpc_load_library(name);
+}
+
+static void *kgpc_fpc_dynlib_get_proc(uintptr_t lib, const char *proc_name)
+{
+    return (void *)kgpc_get_proc_address(lib, proc_name);
+}
+
+static void *kgpc_fpc_dynlib_get_proc_ordinal(uintptr_t lib, uintptr_t ordinal)
+{
+#ifdef _WIN32
+    return (void *)GetProcAddress((HMODULE)lib, (LPCSTR)(uintptr_t)ordinal);
+#else
+    (void)lib;
+    (void)ordinal;
+    return NULL;
+#endif
+}
+
+static int kgpc_fpc_dynlib_unload(uintptr_t lib)
+{
+    return kgpc_free_library(lib);
+}
+
+static char *kgpc_fpc_dynlib_error(void)
+{
+#ifdef _WIN32
+    DWORD err = GetLastError();
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "LoadLibrary error %lu", (unsigned long)err);
+    return kgpc_string_duplicate(buffer);
+#else
+    const char *msg = dlerror();
+    if (msg == NULL)
+        msg = "";
+    return kgpc_string_duplicate(msg);
+#endif
+}
+
+__attribute__((constructor))
+static void kgpc_fpc_init_dynlibs_manager(void)
+{
+    if ((uintptr_t)&CurrentDLM == 0)
+        return;
+
+    CurrentDLM.LoadLibraryU = kgpc_fpc_dynlib_load_u;
+    CurrentDLM.LoadLibraryA = kgpc_fpc_dynlib_load_a;
+    CurrentDLM.GetProcAddress = kgpc_fpc_dynlib_get_proc;
+    CurrentDLM.GetProcAddressOrdinal = kgpc_fpc_dynlib_get_proc_ordinal;
+    CurrentDLM.UnloadLibrary = kgpc_fpc_dynlib_unload;
+    CurrentDLM.GetLoadErrorStr = kgpc_fpc_dynlib_error;
+}
+
 int kgpc_directory_create(const char *path)
 {
     if (path == NULL)
