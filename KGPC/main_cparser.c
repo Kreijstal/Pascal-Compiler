@@ -1344,6 +1344,8 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
             if (dep->type == LIST_STRING && dep->cur != NULL)
                 unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
         }
+        /* Every unit implicitly depends on System (Input, Output, etc.) */
+        unit_registry_add_dep(this_idx, unit_registry_add("System"));
     }
 
     merge_unit_into_program(program, unit_tree);
