@@ -15463,9 +15463,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *ident_nodes[32];  // more than enough for any reasonable nesting depth
     int ident_count = 0;
 
+    ast_t *method_type_param_list = NULL;  /* TYPE_PARAM_LIST after the last IDENTIFIER (method-level generic) */
+    ast_t *pending_type_param_list = NULL;
     for (ast_t *cursor = class_node; cursor != NULL; cursor = cursor->next) {
         if (cursor->typ == PASCAL_T_IDENTIFIER && ident_count < 32) {
             ident_nodes[ident_count++] = cursor;
+            pending_type_param_list = NULL;  /* TYPE_PARAM_LIST before an IDENTIFIER is class-level, reset */
+        }
+        if (cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+            pending_type_param_list = cursor;
         }
         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
@@ -15473,6 +15479,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                     (cursor->sym && cursor->sym->name) ? cursor->sym->name : "<null>");
         }
     }
+    method_type_param_list = pending_type_param_list;  /* Last TYPE_PARAM_LIST with no IDENTIFIER after it */
 
     if (ident_count < 2)
         return NULL;  // Need at least ClassName and MethodName
@@ -15643,6 +15650,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     list_builder_init(&params_builder);
     char **generic_type_params = NULL;
     int num_generic_type_params = 0;
+    /* Extract method-level generic type params found inside the qualified identifier */
+    if (method_type_param_list != NULL) {
+        num_generic_type_params = extract_generic_type_params(method_type_param_list, &generic_type_params);
+    }
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
