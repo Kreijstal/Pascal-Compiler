@@ -563,9 +563,10 @@ static int semcheck_map_builtin_type_name_local(const char *id)
         pascal_identifier_equals(id, "ValReal"))
         return REAL_TYPE;
     if (pascal_identifier_equals(id, "Single") ||
-        pascal_identifier_equals(id, "Double") ||
-        pascal_identifier_equals(id, "Extended"))
+        pascal_identifier_equals(id, "Double"))
         return REAL_TYPE;
+    if (pascal_identifier_equals(id, "Extended"))
+        return EXTENDED_TYPE;
     if (pascal_identifier_equals(id, "Byte") ||
         pascal_identifier_equals(id, "UInt8"))
         return BYTE_TYPE;
@@ -668,7 +669,7 @@ static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_i
 {
     if (base_type_id == NULL)
         return 0;
-    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    /* Real/Single/Double/Extended: helper Self is passed by value. */
     if (pascal_identifier_equals(base_type_id, "Real") ||
         pascal_identifier_equals(base_type_id, "Float") ||
         pascal_identifier_equals(base_type_id, "ValReal") ||
@@ -777,7 +778,8 @@ static enum VarType map_type_tag_to_var_type(int type_tag)
         case INT_TYPE:        return HASHVAR_INTEGER;
         case LONGINT_TYPE:    return HASHVAR_LONGINT;
         case INT64_TYPE:      return HASHVAR_INT64;
-        case REAL_TYPE:       return HASHVAR_REAL;
+        case REAL_TYPE:
+        case EXTENDED_TYPE:   return HASHVAR_REAL;
         case BOOL:            return HASHVAR_BOOLEAN;
         case CHAR_TYPE:       return HASHVAR_CHAR;
         case STRING_TYPE:     return HASHVAR_PCHAR;
@@ -3119,7 +3121,8 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
                 case WORD_TYPE: return HASHVAR_INTEGER;
                 case LONGWORD_TYPE: return HASHVAR_LONGINT;
                 case QWORD_TYPE: return HASHVAR_INT64;
-                case REAL_TYPE: return HASHVAR_REAL;
+                case REAL_TYPE:
+                case EXTENDED_TYPE: return HASHVAR_REAL;
                 case BOOL: return HASHVAR_BOOLEAN;
                 case CHAR_TYPE: return HASHVAR_CHAR;
                 case STRING_TYPE: return HASHVAR_PCHAR;
@@ -3695,7 +3698,7 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
-            node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
+            node->type != NULL && kgpc_type_is_real(node->type))
         {
             return 1;
         }
@@ -3711,7 +3714,7 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
     {
         const char *target_id = expr->expr_data.typecast_data.target_type_id;
         int target_type = expr->expr_data.typecast_data.target_type;
-        if (target_type == REAL_TYPE || is_real_type_name(symtab, target_id))
+        if (is_real_family_type(target_type) || is_real_type_name(symtab, target_id))
             return 1;
         return 0;
     }
@@ -4347,7 +4350,7 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
         {
             const char *target_id = expr->expr_data.typecast_data.target_type_id;
             int target_type = expr->expr_data.typecast_data.target_type;
-            if (target_type == REAL_TYPE || is_real_type_name(symtab, target_id))
+            if (is_real_family_type(target_type) || is_real_type_name(symtab, target_id))
             {
                 return evaluate_real_const_expr(symtab, expr->expr_data.typecast_data.expr, out_value);
             }
@@ -4367,7 +4370,7 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL &&
                 (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
             {
-                if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
+                if (node->type != NULL && kgpc_type_is_real(node->type))
                 {
                     *out_value = node->const_real_value;
                     return 0;
@@ -4677,6 +4680,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
                             case BOOL: return "Boolean";
                             case CHAR_TYPE: return "Char";
                             case REAL_TYPE: return "Real";
+                            case EXTENDED_TYPE: return "Extended";
                             case POINTER_TYPE: return "Pointer";
                             default: break;
                         }
@@ -4694,6 +4698,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
                         case BOOL: return "Boolean";
                         case CHAR_TYPE: return "Char";
                         case REAL_TYPE: return "Real";
+                        case EXTENDED_TYPE: return "Extended";
                         case POINTER_TYPE: return "Pointer";
                         default: break;
                     }
@@ -7317,6 +7322,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             if (kgpc_type != NULL)
                                 created_new_type = 1;
                         }
+                        else if (pascal_identifier_equals(target_base, "Extended"))
+                        {
+                            kgpc_type = create_primitive_type(EXTENDED_TYPE);
+                            if (kgpc_type != NULL)
+                                created_new_type = 1;
+                        }
                         else if (pascal_identifier_equals(target_base, "Boolean"))
                         {
                             kgpc_type = create_primitive_type(BOOL);
@@ -9682,7 +9693,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (alias_info->is_array)
                 {
                     int element_type = alias_info->array_element_type;
-                    if (element_type == REAL_TYPE)
+                    if (is_real_family_type(element_type))
                         var_type = HASHVAR_REAL;
                     else if (element_type == LONGINT_TYPE)
                         var_type = HASHVAR_LONGINT;
@@ -9708,7 +9719,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 else
                 {
                     int base_type = alias_info->base_type;
-                    if (base_type == REAL_TYPE)
+                    if (is_real_family_type(base_type))
                         var_type = HASHVAR_REAL;
                     else if (base_type == LONGINT_TYPE)
                         var_type = HASHVAR_LONGINT;
@@ -11043,7 +11054,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                         PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, sv);
                     }
                 }
-                else if (ref->type != NULL && kgpc_type_equals_tag(ref->type, REAL_TYPE))
+                else if (ref->type != NULL && kgpc_type_is_real(ref->type))
                     PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, ref->const_real_value);
                 else
                     PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, ref->const_int_value);
@@ -11604,7 +11615,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "ValReal", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
-    add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(REAL_TYPE, 16));
+    add_builtin_type_owned(symtab, "Extended", create_primitive_type_with_size(EXTENDED_TYPE, 10));
 
     /* Variant and OleVariant (COM interop) - treated as opaque 16-byte types.
      * VARIANT_TYPE auto-coerces to/from any value type at the semantic level. */
@@ -13866,7 +13877,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = HASHVAR_PCHAR;  /* ShortString is array of char */
                     else if(tree->tree_data.arr_decl_data.type == CHAR_TYPE)
                         var_type = HASHVAR_CHAR;
-                    else if(tree->tree_data.arr_decl_data.type == REAL_TYPE)
+                    else if(is_real_family_type(tree->tree_data.arr_decl_data.type))
                         var_type = HASHVAR_REAL;
                     else {
                         semcheck_error_with_context(
@@ -14374,8 +14385,9 @@ next_identifier:
                                 normalized_type = BOOL;
                                 break;
                             case REAL_TYPE:
+                            case EXTENDED_TYPE:
                                 inferred_var_type = HASHVAR_REAL;
-                                normalized_type = REAL_TYPE;
+                                normalized_type = expr_tag;
                                 break;
                             case CHAR_TYPE:
                                 inferred_var_type = HASHVAR_CHAR;

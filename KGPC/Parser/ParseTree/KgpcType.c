@@ -130,6 +130,16 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
 
+int kgpc_type_is_real_family_tag(int primitive_tag)
+{
+    return is_real_family_type(primitive_tag);
+}
+
+int kgpc_type_is_extended_tag(int primitive_tag)
+{
+    return (primitive_tag == EXTENDED_TYPE);
+}
+
 // --- Constructor Implementations ---
 
 KgpcType* create_primitive_type(int primitive_tag) {
@@ -637,11 +647,15 @@ static int types_numeric_compatible(int lhs, int rhs) {
         return 1;
 
     /* Real can accept any integer type */
-    if (lhs == REAL_TYPE && is_integer_type(rhs))
+    if (is_real_family_type(lhs) && is_integer_type(rhs))
         return 1;
 
     /* Integer can accept real (truncation, as in FPC Trunc semantics) */
-    if (is_integer_type(lhs) && rhs == REAL_TYPE)
+    if (is_integer_type(lhs) && is_real_family_type(rhs))
+        return 1;
+
+    /* Floating-point types interoperate with each other. */
+    if (is_real_family_type(lhs) && is_real_family_type(rhs))
         return 1;
 
     /* Integer can accept char (for compatibility) */
@@ -790,6 +804,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 builtin_tag = INT_TYPE;
             else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                 builtin_tag = REAL_TYPE;
+            else if (pascal_identifier_equals(type_id, "Extended"))
+                builtin_tag = EXTENDED_TYPE;
             else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar"))
                 builtin_tag = CHAR_TYPE;
             else if (pascal_identifier_equals(type_id, "Boolean"))
@@ -854,6 +870,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         /* Other types */
         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double")) {
             builtin_tag = REAL_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Extended")) {
+            builtin_tag = EXTENDED_TYPE;
         }
         else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar")) {
             builtin_tag = CHAR_TYPE;
@@ -1844,6 +1863,7 @@ const char* kgpc_type_to_string(KgpcType *type) {
             switch (type->info.primitive_type_tag) {
                 case INT_TYPE: return "Integer";
                 case REAL_TYPE: return "Real";
+                case EXTENDED_TYPE: return "Extended";
                 case LONGINT_TYPE: return "LongInt";
                 case STRING_TYPE: return "String";
                 case CHAR_TYPE: return "Char";
@@ -1982,6 +2002,8 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return 8;  /* 64-bit Int64 */
                 case REAL_TYPE:
                     return 8;
+                case EXTENDED_TYPE:
+                    return 10;
                 case STRING_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
@@ -2137,7 +2159,14 @@ int kgpc_type_is_real(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == REAL_TYPE);
+        is_real_family_type(type->info.primitive_type_tag));
+}
+
+int kgpc_type_is_extended(const KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == EXTENDED_TYPE);
 }
 
 int kgpc_type_is_numeric(const KgpcType *type)
@@ -2146,7 +2175,27 @@ int kgpc_type_is_numeric(const KgpcType *type)
         return 0;
     if (is_integer_type(type->info.primitive_type_tag))
         return 1;
-    return (type->info.primitive_type_tag == REAL_TYPE);
+    return is_real_family_type(type->info.primitive_type_tag);
+}
+
+long long kgpc_type_real_storage_size(const KgpcType *type)
+{
+    if (!kgpc_type_is_real(type))
+        return -1;
+
+    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+        return type->type_alias->storage_size;
+
+    return kgpc_type_sizeof((KgpcType *)type);
+}
+
+KgpcFloatAbiClass kgpc_type_float_abi_class(const KgpcType *type)
+{
+    if (!kgpc_type_is_real(type))
+        return KGPC_FLOAT_ABI_NONE;
+    if (kgpc_type_is_extended(type))
+        return KGPC_FLOAT_ABI_X87;
+    return KGPC_FLOAT_ABI_SSE;
 }
 
 int kgpc_type_is_boolean(const KgpcType *type)
@@ -2740,6 +2789,7 @@ int kgpc_type_uses_qword(KgpcType *type)
         case TYPE_KIND_PRIMITIVE:
             switch (type->info.primitive_type_tag) {
                 case REAL_TYPE:
+                case EXTENDED_TYPE:
                 case STRING_TYPE:
                 case SHORTSTRING_TYPE:
                 case FILE_TYPE:
@@ -2959,8 +3009,16 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
             }
             return 1;
         }
-        if (is_integer_type(from_tag) && to_tag == REAL_TYPE)
+        if (is_integer_type(from_tag) && is_real_family_type(to_tag))
             return 2;
+        if (is_real_family_type(from_tag) && is_real_family_type(to_tag))
+        {
+            long long from_size = kgpc_type_sizeof(from);
+            long long to_size = kgpc_type_sizeof(to);
+            if (from_size == to_size)
+                return 1;
+            return (to_size > from_size) ? 2 : 3;
+        }
         if (from_tag == CHAR_TYPE && is_string_type(to_tag))
             return 1;
         if (is_string_type(from_tag) && is_string_type(to_tag))
@@ -3103,6 +3161,7 @@ const char* type_tag_to_string(int type_tag)
         case UNKNOWN_TYPE: return "Unknown";
         case INT_TYPE: return "Integer";
         case REAL_TYPE: return "Real";
+        case EXTENDED_TYPE: return "Extended";
         case LONGINT_TYPE: return "LongInt";
         case STRING_TYPE: return "String";
         case BUILTIN_ANY_TYPE: return "Any";

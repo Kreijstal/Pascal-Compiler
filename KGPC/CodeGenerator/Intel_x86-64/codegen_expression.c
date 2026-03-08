@@ -579,6 +579,8 @@ static const char *codegen_register_name8(const Register_t *reg);
 const char *codegen_register_name16(const Register_t *reg);
 static ListNode_t *codegen_store_value_to_stack(ListNode_t *inst_list, Register_t *value_reg,
     int offset, int element_size);
+static ListNode_t *codegen_expr_maybe_convert_int_like_to_real(int target_type,
+    struct Expression *arg_expr, Register_t *top_reg, ListNode_t *inst_list);
 static ListNode_t *codegen_materialize_array_literal(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t **out_reg);
 static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
@@ -595,6 +597,7 @@ typedef struct ArgInfo
     StackNode_t *spill;
     struct Expression *expr;
     int spill_is_single;
+    int spill_is_extended;
     int expected_type;
     int expected_real_size;
     int is_pointer_like;
@@ -602,6 +605,7 @@ typedef struct ArgInfo
     int assigned_index;
     int pass_via_stack;
     int stack_slot;
+    int stack_size;
     int stack_offset;
 } ArgInfo;
 
@@ -613,6 +617,7 @@ static void arginfo_register_spill_handler(Register_t *reg, StackNode_t *spill_s
     info->reg = NULL;
     info->spill = spill_slot;
     info->spill_is_single = 0;
+    info->spill_is_extended = 0;
 }
 
 static void arginfo_assign_register(ArgInfo *info, Register_t *reg, struct Expression *expr)
@@ -835,9 +840,10 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
             const char *type_id = decl->tree_data.var_decl_data.type_id;
             if (pascal_identifier_equals(type_id, "Single"))
                 return 4;
+            if (pascal_identifier_equals(type_id, "Extended"))
+                return 16;
             if (pascal_identifier_equals(type_id, "Double") ||
-                pascal_identifier_equals(type_id, "Real") ||
-                pascal_identifier_equals(type_id, "Extended"))
+                pascal_identifier_equals(type_id, "Real"))
                 return 8;
         }
         struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
@@ -867,6 +873,93 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
     return 8;
 }
 
+static int codegen_expr_is_extended_storage_arg(const struct Expression *expr)
+{
+    KgpcType *expr_type = expr_get_kgpc_type((struct Expression *)expr);
+    return expr_type != NULL && kgpc_type_is_extended(expr_type);
+}
+
+static ListNode_t *codegen_materialize_extended_arg_spill(ArgInfo *info,
+    struct Expression *arg_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    char buffer[CODEGEN_MAX_INST_BUF];
+    StackNode_t *arg_spill = add_l_t_bytes("arg_ext_eval", 10);
+    if (info == NULL || arg_expr == NULL || arg_spill == NULL)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to allocate storage for Extended argument evaluation.");
+        return inst_list;
+    }
+
+    if (codegen_expr_is_extended_storage_arg(arg_expr) && codegen_expr_is_addressable(arg_expr))
+    {
+        Register_t *src_addr = NULL;
+        Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_addr == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate register for Extended argument destination.");
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            arg_spill->offset, dest_addr->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_addr);
+        if (codegen_had_error(ctx) || src_addr == NULL)
+        {
+            free_reg(get_reg_stack(), dest_addr);
+            if (src_addr != NULL)
+                free_reg(get_reg_stack(), src_addr);
+            return inst_list;
+        }
+
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+        free_arg_regs();
+        free_reg(get_reg_stack(), src_addr);
+        free_reg(get_reg_stack(), dest_addr);
+    }
+    else
+    {
+        Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
+        if (dest_addr == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate register for Extended argument spill.");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            arg_spill->offset, dest_addr->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_materialize_extended_expr(arg_expr, inst_list, ctx, dest_addr);
+        free_reg(get_reg_stack(), dest_addr);
+    }
+
+    info->reg = NULL;
+    info->spill = arg_spill;
+    info->expr = arg_expr;
+    info->spill_is_extended = 1;
+    info->spill_is_single = 0;
+    return inst_list;
+}
+
 static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
@@ -875,7 +968,7 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
     if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
     {
         long long field_size = codegen_record_field_effective_size((struct Expression *)expr, ctx);
-        if (field_size == 4 || field_size == 8)
+        if (field_size == 4 || field_size == 8 || field_size == 16)
             return (int)field_size;
     }
 
@@ -892,6 +985,8 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
     if (type != NULL)
     {
         long long size = kgpc_type_sizeof(type);
+        if (size == 10)
+            return 8;
         if (size > 0)
             return (int)size;
     }
@@ -901,7 +996,9 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
     if (expr_has_type_tag(expr, REAL_TYPE))
     {
         long long eff_size = expr_effective_size_bytes(expr);
-        if (eff_size == 4 || eff_size == 8)
+        if (eff_size == 10)
+            return 8;
+        if (eff_size == 4 || eff_size == 8 || eff_size == 16)
             return (int)eff_size;
     }
 
@@ -1045,6 +1142,298 @@ static StackNode_t *codegen_alloc_temp_bytes(const char *prefix, int size)
     snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp",
         codegen_expr_next_temp_suffix());
     return add_l_t_bytes(label, size);
+}
+
+int codegen_expr_involves_extended(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr_get_kgpc_type(expr) != NULL && kgpc_type_is_extended(expr_get_kgpc_type(expr)))
+        return 1;
+
+    switch (expr->type)
+    {
+        case EXPR_SIGN_TERM:
+            return codegen_expr_involves_extended(expr->expr_data.sign_term);
+        case EXPR_ADDOP:
+            return codegen_expr_involves_extended(expr->expr_data.addop_data.left_expr) ||
+                codegen_expr_involves_extended(expr->expr_data.addop_data.right_term);
+        case EXPR_MULOP:
+            return codegen_expr_involves_extended(expr->expr_data.mulop_data.left_term) ||
+                codegen_expr_involves_extended(expr->expr_data.mulop_data.right_factor);
+        case EXPR_TYPECAST:
+            return codegen_expr_involves_extended(expr->expr_data.typecast_data.expr);
+        default:
+            return 0;
+    }
+}
+
+static ListNode_t *codegen_extended_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+    const char *dest_addr, const char *src_addr)
+{
+    if (dest_addr == NULL || src_addr == NULL)
+        return inst_list;
+
+    if (codegen_target_is_windows())
+    {
+        char buffer[CODEGEN_MAX_INST_BUF];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_addr);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+    }
+    else
+    {
+        char buffer[CODEGEN_MAX_INST_BUF];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_addr);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+    }
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_extended_store_from_reg(ListNode_t *inst_list, CodeGenContext *ctx,
+    struct Expression *expr, Register_t *value_reg, const char *dest_addr)
+{
+    if (value_reg == NULL || dest_addr == NULL)
+        return inst_list;
+
+    int source_type = expr_get_type_tag(expr);
+    char buffer[CODEGEN_MAX_INST_BUF];
+    if (source_type == INT_TYPE || source_type == LONGINT_TYPE ||
+        source_type == INT64_TYPE || source_type == QWORD_TYPE)
+    {
+        const char *src_reg64 = value_reg->bit_64;
+        if (source_type == INT_TYPE)
+        {
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+        }
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_addr);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_addr);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_store_extended_from_int64");
+        free_arg_regs();
+        return inst_list;
+    }
+
+    inst_list = codegen_expr_maybe_convert_int_like_to_real(REAL_TYPE, expr, value_reg, inst_list);
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_addr);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_addr);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_store_extended_from_bits");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_materialize_extended_expr_internal(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *dest_addr_reg)
+{
+    if (expr == NULL || ctx == NULL || dest_addr_reg == NULL)
+        return inst_list;
+
+    char buffer[CODEGEN_MAX_INST_BUF];
+    StackNode_t *dest_slot = add_l_t("ext_dest_ptr");
+    if (dest_slot == NULL)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to allocate spill slot for Extended destination.");
+        return inst_list;
+    }
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+        dest_addr_reg->bit_64, dest_slot->offset);
+    inst_list = add_inst(inst_list, buffer);
+
+    switch (expr->type)
+    {
+        case EXPR_SIGN_TERM:
+        {
+            StackNode_t *src_slot = codegen_alloc_temp_bytes("ext_neg", 10);
+            StackNode_t *src_ptr_slot = add_l_t("ext_neg_ptr");
+            Register_t *src_addr = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (src_slot == NULL || src_ptr_slot == NULL || src_addr == NULL)
+                return inst_list;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                src_slot->offset, src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                src_addr->bit_64, src_ptr_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_materialize_extended_expr_internal(
+                expr->expr_data.sign_term, inst_list, ctx, src_addr);
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", src_ptr_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", src_ptr_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_extended_neg");
+            free_arg_regs();
+            free_reg(get_reg_stack(), src_addr);
+            return inst_list;
+        }
+        case EXPR_ADDOP:
+        case EXPR_MULOP:
+        {
+            int op_type = (expr->type == EXPR_ADDOP) ?
+                expr->expr_data.addop_data.addop_type :
+                expr->expr_data.mulop_data.mulop_type;
+            const char *helper = NULL;
+            switch (op_type)
+            {
+                case PLUS: helper = "kgpc_extended_add"; break;
+                case MINUS: helper = "kgpc_extended_sub"; break;
+                case STAR: helper = "kgpc_extended_mul"; break;
+                case SLASH: helper = "kgpc_extended_div"; break;
+                default: break;
+            }
+            if (helper != NULL)
+            {
+                struct Expression *left_expr = (expr->type == EXPR_ADDOP) ?
+                    expr->expr_data.addop_data.left_expr :
+                    expr->expr_data.mulop_data.left_term;
+                struct Expression *right_expr = (expr->type == EXPR_ADDOP) ?
+                    expr->expr_data.addop_data.right_term :
+                    expr->expr_data.mulop_data.right_factor;
+                StackNode_t *lhs_slot = codegen_alloc_temp_bytes("ext_lhs", 10);
+                StackNode_t *rhs_slot = codegen_alloc_temp_bytes("ext_rhs", 10);
+                StackNode_t *lhs_ptr_slot = add_l_t("ext_lhs_ptr");
+                StackNode_t *rhs_ptr_slot = add_l_t("ext_rhs_ptr");
+                Register_t *lhs_addr = get_reg_with_spill(get_reg_stack(), &inst_list);
+                Register_t *rhs_addr = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (lhs_slot == NULL || rhs_slot == NULL || lhs_ptr_slot == NULL ||
+                    rhs_ptr_slot == NULL || lhs_addr == NULL || rhs_addr == NULL)
+                    return inst_list;
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    lhs_slot->offset, lhs_addr->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    rhs_slot->offset, rhs_addr->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    lhs_addr->bit_64, lhs_ptr_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    rhs_addr->bit_64, rhs_ptr_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_materialize_extended_expr_internal(left_expr, inst_list, ctx, lhs_addr);
+                inst_list = codegen_materialize_extended_expr_internal(right_expr, inst_list, ctx, rhs_addr);
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", lhs_ptr_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r8\n", rhs_ptr_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rsi\n", lhs_ptr_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", rhs_ptr_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, helper);
+                free_arg_regs();
+                free_reg(get_reg_stack(), rhs_addr);
+                free_reg(get_reg_stack(), lhs_addr);
+                return inst_list;
+            }
+            break;
+        }
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+            {
+                struct Expression *inner = expr->expr_data.typecast_data.expr;
+                if (codegen_expr_involves_extended(inner))
+                    return codegen_materialize_extended_expr_internal(inner, inst_list, ctx, dest_addr_reg);
+            }
+            break;
+        default:
+            break;
+    }
+
+    if (codegen_expr_involves_extended(expr) && codegen_expr_is_addressable(expr))
+    {
+        Register_t *src_addr = NULL;
+        Register_t *dest_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (dest_reload == NULL)
+            return inst_list;
+        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &src_addr);
+        if (codegen_had_error(ctx) || src_addr == NULL)
+            return inst_list;
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_slot->offset, dest_reload->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_extended_copy(inst_list, ctx, dest_reload->bit_64, src_addr->bit_64);
+        free_reg(get_reg_stack(), dest_reload);
+        free_reg(get_reg_stack(), src_addr);
+        return inst_list;
+    }
+
+    Register_t *value_reg = NULL;
+    Register_t *dest_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
+    if (dest_reload == NULL)
+        return inst_list;
+    inst_list = codegen_expr_with_result(expr, inst_list, ctx, &value_reg);
+    if (codegen_had_error(ctx) || value_reg == NULL)
+        return inst_list;
+    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+        dest_slot->offset, dest_reload->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_extended_store_from_reg(inst_list, ctx, expr, value_reg,
+        dest_reload->bit_64);
+    free_reg(get_reg_stack(), dest_reload);
+    free_reg(get_reg_stack(), value_reg);
+    return inst_list;
+}
+
+ListNode_t *codegen_materialize_extended_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *dest_addr_reg)
+{
+    return codegen_materialize_extended_expr_internal(expr, inst_list, ctx, dest_addr_reg);
 }
 
 static int formal_decl_is_open_array(Tree_t *decl)
@@ -7391,6 +7780,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             arg_infos[arg_num].assigned_class = ARG_CLASS_INT;
             arg_infos[arg_num].assigned_index = -1;
             arg_infos[arg_num].spill_is_single = 0;
+            arg_infos[arg_num].spill_is_extended = 0;
+            arg_infos[arg_num].stack_size = CODEGEN_POINTER_SIZE_BYTES;
         }
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
@@ -7440,6 +7831,11 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 arg_infos[arg_num].expected_real_size =
                     codegen_expr_real_storage_size(arg_expr, ctx);
             }
+        }
+        if (arg_infos != NULL && expected_type == REAL_TYPE &&
+            arg_infos[arg_num].expected_real_size == 16)
+        {
+            arg_infos[arg_num].stack_size = 16;
         }
 
         int arg_handled = 0;
@@ -8306,6 +8702,20 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else
             {
                 // Pass by value
+                if (expected_type == REAL_TYPE && arg_infos != NULL &&
+                    arg_infos[arg_num].expected_real_size == 16)
+                {
+                    inst_list = codegen_materialize_extended_arg_spill(
+                        &arg_infos[arg_num], arg_expr, inst_list, ctx);
+                    if (codegen_had_error(ctx))
+                    {
+                        if (arg_infos != NULL)
+                            free(arg_infos);
+                        return inst_list;
+                    }
+                }
+                else
+                {
                 if (arg_expr->type == EXPR_AS || arg_expr->type == EXPR_IS ||
                     arg_expr->type == EXPR_ARRAY_LITERAL ||
                     expr_has_type_tag(arg_expr, SET_TYPE))
@@ -8423,6 +8833,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 arginfo_assign_register(&arg_infos[arg_num], top_reg, arg_expr);
             }
             }
+            }
         }
 
         args = args->next;
@@ -8461,8 +8872,10 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  (arg_infos[i].expr->type == EXPR_RNUM ||
                   (arg_infos[i].expr->type == EXPR_TYPECAST &&
                    arg_infos[i].expr->expr_data.typecast_data.target_type == REAL_TYPE)));
+            int is_extended_real = (arg_infos[i].expected_type == REAL_TYPE &&
+                arg_infos[i].expected_real_size == 16);
             int use_sse = ((arg_infos[i].expected_type == REAL_TYPE) || actual_is_real) &&
-                !arg_infos[i].is_pointer_like;
+                !arg_infos[i].is_pointer_like && !is_extended_real;
             if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_external_c_function)
             {
                 /* Windows x64 C ABI: argument slots are positional across classes.
@@ -8483,7 +8896,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_INT;
-                    if (reg_slot < max_int_regs)
+                    if (!is_extended_real && reg_slot < max_int_regs)
                         arg_infos[i].assigned_index = reg_slot;
                     else
                     {
@@ -8513,7 +8926,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     arg_infos[i].assigned_class = ARG_CLASS_INT;
-                    if (next_gpr < max_int_regs)
+                    if (!is_extended_real && next_gpr < max_int_regs)
                     {
                         arg_infos[i].assigned_index = next_gpr++;
                     }
@@ -8534,7 +8947,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
          * *every* call, even when all args fit in registers. Stack-passed args are
          * placed after that shadow space. */
         int shadow_space = codegen_target_is_windows() ? 32 : 0;
-        int stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
+        int stack_bytes = 0;
+        if (arg_infos != NULL)
+        {
+            for (int i = 0; i < arg_num; ++i)
+            {
+                if (!arg_infos[i].pass_via_stack)
+                    continue;
+                int stack_size = arg_infos[i].stack_size > 0 ?
+                    arg_infos[i].stack_size : CODEGEN_POINTER_SIZE_BYTES;
+                if (stack_size >= 16)
+                    stack_bytes = codegen_expr_align_to(stack_bytes, 16);
+                arg_infos[i].stack_offset = shadow_space + stack_bytes;
+                stack_bytes += stack_size;
+            }
+        }
+        else
+        {
+            stack_bytes = stack_slot_count * CODEGEN_POINTER_SIZE_BYTES;
+        }
         /* Alignment padding must be placed AFTER the stack arguments.
          * Stack arguments start immediately after the Windows shadow space (if any),
          * i.e. at offset 32(%rsp) for the 5th argument. */
@@ -8546,12 +8977,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             inst_list = add_inst(inst_list, buffer);
             if (ctx != NULL)
                 ctx->pending_stack_arg_bytes += total_stack_area;
-            for (int i = 0; i < arg_num; ++i)
-            {
-                if (arg_infos[i].pass_via_stack)
-                    arg_infos[i].stack_offset =
-                        shadow_space + arg_infos[i].stack_slot * CODEGEN_POINTER_SIZE_BYTES;
-            }
         }
     }
 
@@ -8713,6 +9138,54 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
             Register_t *temp_reg = NULL;
+            if (expected_type == REAL_TYPE && expected_real_size == 16)
+            {
+                if (!pass_on_stack)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Extended arguments currently require stack passing.");
+                    return inst_list;
+                }
+
+                Register_t *src_addr = get_free_reg(get_reg_stack(), &inst_list);
+                if (src_addr == NULL)
+                    return inst_list;
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    arg_infos[i].spill->offset, src_addr->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                if (codegen_target_is_windows())
+                {
+                    Register_t *dst_addr = get_free_reg(get_reg_stack(), &inst_list);
+                    if (dst_addr == NULL)
+                    {
+                        free_reg(get_reg_stack(), src_addr);
+                        return inst_list;
+                    }
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %s\n",
+                        arg_infos[i].stack_offset, dst_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+                    free_reg(get_reg_stack(), dst_addr);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rsp), %%rdi\n",
+                        arg_infos[i].stack_offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+                }
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                free_arg_regs();
+                free_reg(get_reg_stack(), src_addr);
+                continue;
+            }
             if (expected_type == REAL_TYPE && expected_real_size == 4 &&
                 arg_infos[i].assigned_class == ARG_CLASS_SSE)
             {

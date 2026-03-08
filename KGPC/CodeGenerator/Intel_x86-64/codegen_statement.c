@@ -173,6 +173,9 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
+static int codegen_expr_is_extended_storage(const struct Expression *expr);
+static ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
 /* Check if a type name represents an unsigned integer type */
 static int is_unsigned_type_name(const char *type_name)
@@ -4626,7 +4629,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
 
                         /* Check element_size for unaligned Single type (4 bytes) */
                         long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-                        if (return_is_real && unaligned_return_size <= 4)
+                        if (return_is_real && return_var->element_size == 10)
+                            snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+                        else if (return_is_real && unaligned_return_size <= 4)
                             snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
                         else if (return_is_real)
                             snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -7655,6 +7660,69 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
     return inst_list;
 }
 
+static int codegen_expr_is_extended_storage(const struct Expression *expr)
+{
+    KgpcType *type = expr_get_kgpc_type(expr);
+    return kgpc_type_is_extended(type);
+}
+
+static ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
+        return inst_list;
+
+    Register_t *dest_addr = NULL;
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_addr);
+    if (codegen_had_error(ctx) || dest_addr == NULL)
+    {
+        if (dest_addr != NULL)
+            free_reg(get_reg_stack(), dest_addr);
+        return inst_list;
+    }
+
+    char buffer[CODEGEN_MAX_INST_BUF];
+    if (codegen_expr_is_extended_storage(src_expr) && codegen_expr_is_addressable(src_expr))
+    {
+        Register_t *src_addr = NULL;
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr);
+        if (codegen_had_error(ctx) || src_addr == NULL)
+        {
+            free_reg(get_reg_stack(), dest_addr);
+            if (src_addr != NULL)
+                free_reg(get_reg_stack(), src_addr);
+            return inst_list;
+        }
+
+        if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+        free_arg_regs();
+        free_reg(get_reg_stack(), src_addr);
+        free_reg(get_reg_stack(), dest_addr);
+        return inst_list;
+    }
+
+    inst_list = codegen_materialize_extended_expr(src_expr, inst_list, ctx, dest_addr);
+    free_reg(get_reg_stack(), dest_addr);
+    return inst_list;
+}
+
 /* Code generation for a variable assignment */
 ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
@@ -7763,6 +7831,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+
+    if (codegen_expr_is_extended_storage(var_expr))
+        return codegen_assign_extended_value(var_expr, assign_expr, inst_list, ctx);
 
     /* Character sets (set of char) need special handling like records due to 32-byte size */
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))

@@ -36,7 +36,11 @@ int codegen_tag_from_kgpc(const KgpcType *type)
     if (type == NULL)
         return UNKNOWN_TYPE;
     if (type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        if (type->info.primitive_type_tag == EXTENDED_TYPE)
+            return REAL_TYPE;
         return type->info.primitive_type_tag;
+    }
     if (kgpc_type_is_array_of_const(type))
         return ARRAY_OF_CONST_TYPE;
     if (kgpc_type_is_array(type) &&
@@ -491,6 +495,9 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
                 case POINTER_TYPE:
                     elem_size = 8;
                     break;
+                case EXTENDED_TYPE:
+                    elem_size = 10;
+                    break;
                 default:
                     elem_size = DOUBLEWORD;
                     break;
@@ -514,6 +521,9 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
         case QWORD_TYPE:
             field_size = 8;
             break;
+        case EXTENDED_TYPE:
+            field_size = 10;
+            break;
         case CHAR_TYPE:
         case BOOL:
         case BYTE_TYPE:
@@ -535,6 +545,18 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
     return field_size;
 }
 
+static int codegen_record_field_alignment(const struct RecordField *field, int field_size)
+{
+    if (field != NULL)
+    {
+        if (field->type == EXTENDED_TYPE)
+            return 16;
+        if (field->type_id != NULL && pascal_identifier_equals(field->type_id, "Extended"))
+            return 16;
+    }
+    return (field_size > 8) ? 16 : ((field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1));
+}
+
 static long long codegen_class_var_storage_size(SymTab_t *symtab, const struct RecordType *record_info,
     int include_all_fields)
 {
@@ -551,7 +573,7 @@ static long long codegen_class_var_storage_size(SymTab_t *symtab, const struct R
             if (field != NULL && (include_all_fields || field->is_class_var == 1))
             {
                 int field_size = codegen_class_var_field_size(symtab, field);
-                int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+                int alignment = codegen_record_field_alignment(field, field_size);
                 current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
                 current_offset += field_size;
             }
@@ -731,7 +753,7 @@ static void codegen_add_class_vars_for_static_method(const char *owner_class,
             }
             
             /* Advance offset with alignment (using standard power-of-two alignment formula) */
-            int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+            int alignment = codegen_record_field_alignment(field, field_size);
             current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
             current_offset += field_size;
         }
@@ -782,6 +804,9 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 {
     if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
     {
+        if (arg_decl->tree_data.var_decl_data.type_id != NULL &&
+            pascal_identifier_equals(arg_decl->tree_data.var_decl_data.type_id, "Extended"))
+            return 16;
         struct TypeAlias *alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->storage_size > 0)
             return (int)alias->storage_size;
@@ -789,6 +814,8 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 
     if (resolved_type_node != NULL && resolved_type_node->type != NULL)
     {
+        if (kgpc_type_is_extended(resolved_type_node->type))
+            return 16;
         long long size = kgpc_type_sizeof(resolved_type_node->type);
         if (size > 0)
             return (int)size;
@@ -796,6 +823,8 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 
     if (cached_arg_type != NULL)
     {
+        if (kgpc_type_is_extended(cached_arg_type))
+            return 16;
         long long size = kgpc_type_sizeof(cached_arg_type);
         if (size > 0)
             return (int)size;
@@ -5149,6 +5178,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         struct TypeAlias *alias = kgpc_type_get_type_alias(func_node->type);
         if (alias != NULL && alias->storage_size > 0)
             return_size = (int)alias->storage_size;
+        else if (tag == EXTENDED_TYPE)
+            return_size = 10;
         else if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE ||
                  tag == INT64_TYPE)
             return_size = 8;
@@ -5387,7 +5418,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
             {
                 int tag = kgpc_type_get_primitive_tag(return_type);
-                if (tag == REAL_TYPE)
+                if (is_real_family_type(tag))
                     is_real_return = 1;
             }
         }
@@ -5395,14 +5426,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                  func_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
             int tag = kgpc_type_get_primitive_tag(func_node->type);
-            if (tag == REAL_TYPE)
+            if (is_real_family_type(tag))
                 is_real_return = 1;
         }
         
         /* Use movss for Single (4-byte), movsd for Double/Real (8-byte), return in xmm0.
          * Check element_size which stores the unaligned size, not size which may be padded. */
         long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-        if (is_real_return && unaligned_return_size <= 4)
+        if (is_real_return && return_var->element_size == 10)
+            snprintf(buffer, 50, "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+        else if (is_real_return && unaligned_return_size <= 4)
             snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -5474,6 +5507,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 /* Helper function to determine the size in bytes for a return type */
 static int get_return_type_size(int return_type)
 {
+    if (return_type == EXTENDED_TYPE)
+        return 10;
     if (return_type == STRING_TYPE || 
         return_type == POINTER_TYPE || return_type == REAL_TYPE ||
         return_type == INT64_TYPE)
@@ -5812,7 +5847,9 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
         {
             /* Check element_size which stores the unaligned size */
             long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-            if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
+            if (anon->return_type == EXTENDED_TYPE)
+                snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+            else if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
                 snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
             else if (anon->return_type == REAL_TYPE)
                 snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -5980,15 +6017,20 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             {
                 int scan_type = scan_decl->tree_data.var_decl_data.type;
                 int scan_is_var = scan_decl->tree_data.var_decl_data.is_var_param;
+                KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
                 ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
                 while(scan_ids != NULL)
                 {
+                    int scan_real_storage_size = 8;
+                    if (!scan_is_var && scan_type == REAL_TYPE)
+                        scan_real_storage_size = codegen_real_param_storage_size(scan_decl,
+                            NULL, scan_cached_type);
                     /* Float (REAL_TYPE) parameters that are not passed by reference
                      * use SSE/XMM registers, NOT integer registers. Skip integer
                      * register allocation for them so subsequent integer params
                      * get the correct registers. SSE regs are not clobbered by
                      * kgpc_move calls, so no presave slot is needed. */
-                    if (!scan_is_var && scan_type == REAL_TYPE)
+                    if (!scan_is_var && scan_type == REAL_TYPE && scan_real_storage_size < 16)
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
                             scan_sse_index++;
@@ -6258,6 +6300,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_array_type = 0;
                     int type_requires_qword = 0;
                     int real_storage_size = 8;
+                    int use_extended_stack_param = 0;
                     int is_shortstring_param = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
@@ -6301,6 +6344,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     if (inferred_type_tag == REAL_TYPE)
                         real_storage_size = codegen_real_param_storage_size(arg_decl,
                             resolved_type_node, cached_arg_type);
+
+                    use_extended_stack_param =
+                        (!is_var_param && !is_array_type && !is_shortstring_param &&
+                         inferred_type_tag == REAL_TYPE && real_storage_size == 16);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
@@ -6308,12 +6355,67 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                           (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
                     int use_sse_reg = 0;
                     if (!is_var_param && !is_array_type && !is_shortstring_param &&
-                        inferred_type_tag == REAL_TYPE)
+                        inferred_type_tag == REAL_TYPE && real_storage_size < 16)
                         use_sse_reg = 1;
-                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (use_extended_stack_param)
+                        arg_stack = add_l_z_bytes((char *)arg_ids->cur, 10);
+                    else
+                        arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
-                    if (use_sse_reg)
+                    if (use_extended_stack_param)
+                    {
+                        Register_t *src_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        Register_t *dst_addr_reg = NULL;
+                        if (src_addr_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for Extended parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        dst_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                        {
+                            free_reg(get_reg_stack(), src_addr_reg);
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate destination register for Extended parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rbp), %s\n",
+                            stack_arg_offset, src_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            arg_stack->offset, dst_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                        free_arg_regs();
+                        free_reg(get_reg_stack(), dst_addr_reg);
+                        free_reg(get_reg_stack(), src_addr_reg);
+                        stack_arg_offset += 16;
+                    }
+                    else if (use_sse_reg)
                     {
                         if (next_sse_index < kgpc_max_sse_arg_regs())
                         {

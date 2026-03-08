@@ -1048,6 +1048,94 @@ static inline int64_t kgpc_double_to_bits(double value)
     return bits;
 }
 
+void kgpc_store_extended_from_bits(void *dest, int64_t bits)
+{
+    if (dest == NULL)
+        return;
+
+    double value = kgpc_bits_to_double(bits);
+    long double ext = (long double)value;
+    memcpy(dest, &ext, 10);
+}
+
+int64_t kgpc_load_extended_to_bits(const void *src)
+{
+    if (src == NULL)
+        return kgpc_double_to_bits(0.0);
+
+    long double ext = 0.0L;
+    memcpy(&ext, src, 10);
+    return kgpc_double_to_bits((double)ext);
+}
+
+void kgpc_store_extended_from_int64(void *dest, int64_t value)
+{
+    if (dest == NULL)
+        return;
+
+    long double ext = (long double)value;
+    memcpy(dest, &ext, 10);
+}
+
+void kgpc_extended_neg(void *dest, const void *src)
+{
+    if (dest == NULL || src == NULL)
+        return;
+
+    long double value = 0.0L;
+    memcpy(&value, src, 10);
+    value = -value;
+    memcpy(dest, &value, 10);
+}
+
+void kgpc_extended_add(void *dest, const void *lhs, const void *rhs)
+{
+    if (dest == NULL || lhs == NULL || rhs == NULL)
+        return;
+
+    long double left = 0.0L, right = 0.0L;
+    memcpy(&left, lhs, 10);
+    memcpy(&right, rhs, 10);
+    left += right;
+    memcpy(dest, &left, 10);
+}
+
+void kgpc_extended_sub(void *dest, const void *lhs, const void *rhs)
+{
+    if (dest == NULL || lhs == NULL || rhs == NULL)
+        return;
+
+    long double left = 0.0L, right = 0.0L;
+    memcpy(&left, lhs, 10);
+    memcpy(&right, rhs, 10);
+    left -= right;
+    memcpy(dest, &left, 10);
+}
+
+void kgpc_extended_mul(void *dest, const void *lhs, const void *rhs)
+{
+    if (dest == NULL || lhs == NULL || rhs == NULL)
+        return;
+
+    long double left = 0.0L, right = 0.0L;
+    memcpy(&left, lhs, 10);
+    memcpy(&right, rhs, 10);
+    left *= right;
+    memcpy(dest, &left, 10);
+}
+
+void kgpc_extended_div(void *dest, const void *lhs, const void *rhs)
+{
+    if (dest == NULL || lhs == NULL || rhs == NULL)
+        return;
+
+    long double left = 0.0L, right = 0.0L;
+    memcpy(&left, lhs, 10);
+    memcpy(&right, rhs, 10);
+    left /= right;
+    memcpy(dest, &left, 10);
+}
+
 /* Cache extended-precision parses so default Write can preserve StrToFloat precision.
  * This mirrors FPC's behavior where StrToFloat returns Extended on x86_64. */
 #define KGPC_REAL_CACHE_SIZE 64

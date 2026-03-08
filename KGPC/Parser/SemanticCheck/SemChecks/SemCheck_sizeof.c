@@ -94,6 +94,13 @@ static int fpc_size_to_alignment(long long size)
     return 1;
 }
 
+static int fpc_type_alignment_from_size(long long size, int type_tag)
+{
+    if (type_tag == EXTENDED_TYPE)
+        return 16;
+    return fpc_size_to_alignment(size);
+}
+
 static int list_length(ListNode_t *list)
 {
     int count = 0;
@@ -176,6 +183,8 @@ long long sizeof_from_type_tag(int type_tag)
             return 4;
         case REAL_TYPE:
             return 8;
+        case EXTENDED_TYPE:
+            return 10;
         case STRING_TYPE:
             return POINTER_SIZE_BYTES;
         case INT64_TYPE:
@@ -919,7 +928,8 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
 
                 if (alias->storage_size > 0)
                 {
-                    *align_out = fpc_size_to_alignment(alias->storage_size);
+                    *align_out = fpc_type_alignment_from_size(alias->storage_size,
+                        alias->base_type);
                     return 0;
                 }
             }
@@ -929,7 +939,8 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
                 long long size = kgpc_type_sizeof(type_node->type);
                 if (size > 0)
                 {
-                    *align_out = fpc_size_to_alignment(size);
+                    *align_out = fpc_type_alignment_from_size(size,
+                        kgpc_type_get_primitive_tag(type_node->type));
                     if (type_node->type->kind == TYPE_KIND_POINTER)
                         *align_out = POINTER_SIZE_BYTES;
                     return 0;
@@ -943,7 +954,7 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
         long long size = sizeof_from_type_tag(type_tag);
         if (size > 0)
         {
-            int align = fpc_size_to_alignment(size);
+            int align = fpc_type_alignment_from_size(size, type_tag);
             if (type_tag == SET_TYPE)
                 align = (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
             *align_out = align;

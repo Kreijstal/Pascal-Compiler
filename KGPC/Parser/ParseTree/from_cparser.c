@@ -3871,7 +3871,7 @@ static int map_type_name(const char *name, char **type_id_out) {
     if (strcasecmp(name, "extended") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("Extended");
-        return REAL_TYPE;
+        return EXTENDED_TYPE;
     }
     if (strcasecmp(name, "valreal") == 0) {
         if (type_id_out != NULL)
@@ -3961,9 +3961,9 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
 {
     if (base_type_id == NULL)
         return 0;
-    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    /* Real/Single/Double/Extended: helper Self is passed by value. */
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag == REAL_TYPE)
+    if (is_real_family_type(type_tag))
         return 0;
     /* String types are heap-allocated pointers — by value is correct. */
     if (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE ||
@@ -3996,16 +3996,18 @@ static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
         return NULL;
 
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag != REAL_TYPE)
+    if (!is_real_family_type(type_tag))
         return NULL;
 
     struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
     if (alias == NULL)
         return NULL;
 
-    alias->base_type = REAL_TYPE;
+    alias->base_type = type_tag;
     if (pascal_identifier_equals(base_type_id, "Single"))
         alias->storage_size = 4;
+    else if (pascal_identifier_equals(base_type_id, "Extended"))
+        alias->storage_size = 10;
     else
         alias->storage_size = 8;
 

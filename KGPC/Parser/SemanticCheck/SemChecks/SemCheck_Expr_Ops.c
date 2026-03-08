@@ -1287,7 +1287,9 @@ int semcheck_addop(int *type_return,
         ++return_val;
     }
 
-    if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+    if (type_first == EXTENDED_TYPE || type_second == EXTENDED_TYPE)
+        *type_return = EXTENDED_TYPE;
+    else if (type_first == REAL_TYPE || type_second == REAL_TYPE)
         *type_return = REAL_TYPE;
     else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
         *type_return = LONGINT_TYPE;
@@ -1509,7 +1511,8 @@ int semcheck_mulop(int *type_return,
     /* Handle DIV and MOD operators - integer division only */
     if (op_type == DIV || op_type == MOD)
     {
-        if (type_first == REAL_TYPE || type_second == REAL_TYPE)
+        if (type_first == REAL_TYPE || type_second == REAL_TYPE ||
+            type_first == EXTENDED_TYPE || type_second == EXTENDED_TYPE)
         {
             semcheck_error_with_context("Error on line %d, DIV and MOD operators require integer operands!\n\n",
                 expr->line_num);
@@ -1529,7 +1532,9 @@ int semcheck_mulop(int *type_return,
     }
 
     /* SLASH (/) always produces REAL_TYPE in Pascal, regardless of operand types */
-    if (type_first == REAL_TYPE || type_second == REAL_TYPE || op_type == SLASH)
+    if (type_first == EXTENDED_TYPE || type_second == EXTENDED_TYPE)
+        *type_return = EXTENDED_TYPE;
+    else if (type_first == REAL_TYPE || type_second == REAL_TYPE || op_type == SLASH)
         *type_return = REAL_TYPE;
     else if (type_first == INT64_TYPE || type_second == INT64_TYPE)
         *type_return = INT64_TYPE;

@@ -385,6 +385,12 @@ static const char *reg64_to_reg32(const char *reg_name, const Register_t *reg);
 static int expr_is_single_real_local(const struct Expression *expr);
 static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab_t *symtab);
 
+static int expr_has_extended_storage(const struct Expression *expr)
+{
+    KgpcType *type = expr_get_kgpc_type(expr);
+    return kgpc_type_is_extended(type);
+}
+
 static int expr_is_single_real_local(const struct Expression *expr)
 {
     if (expr == NULL || !expr_has_type_tag(expr, REAL_TYPE))
@@ -635,6 +641,44 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
 {
     if (ctx == NULL || operand == NULL || xmm_reg == NULL)
         return inst_list;
+
+    if (operand_expr != NULL && codegen_expr_involves_extended(operand_expr) &&
+        operand[0] != '$')
+    {
+        char buffer[192];
+        if (!codegen_expr_is_addressable(operand_expr) || operand[0] == '%')
+        {
+            StackNode_t *ext_slot = add_l_t_bytes("__ext_operand", 10);
+            Register_t *dest_addr = get_free_reg(get_reg_stack(), &inst_list);
+            if (ext_slot == NULL || dest_addr == NULL)
+                return inst_list;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                ext_slot->offset, dest_addr->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_materialize_extended_expr(operand_expr, inst_list, ctx, dest_addr);
+            free_reg(get_reg_stack(), dest_addr);
+            if (codegen_target_is_windows())
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", ext_slot->offset);
+            else
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", ext_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (codegen_target_is_windows())
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %%rcx\n", operand);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %%rdi\n", operand);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+        free_arg_regs();
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", xmm_reg);
+        return add_inst(inst_list, buffer);
+    }
 
     int operand_is_real = operand_expr != NULL &&
         expr_has_type_tag(operand_expr, REAL_TYPE);
@@ -2569,6 +2613,24 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             if (has_record_return && !is_constructor && sret_slot != NULL)
                 snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
                     sret_slot->offset, target_reg->bit_64);
+            else if (expr_has_extended_storage(expr))
+            {
+                StackNode_t *ext_slot = add_l_t_bytes("__ext_ret", 10);
+                if (ext_slot == NULL)
+                    return inst_list;
+
+                snprintf(buffer, sizeof(buffer), "\tfstpt\t-%d(%%rbp)\n", ext_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                if (codegen_target_is_windows())
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", ext_slot->offset);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", ext_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                free_arg_regs();
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+            }
             else if (expr_has_type_tag(expr, REAL_TYPE))
             {
                 long long real_size = expr_effective_size_bytes(expr);
@@ -3041,6 +3103,22 @@ cleanup_constructor:
                 return add_inst(inst_list, buffer);
             }
         }
+    }
+
+    if (expr_has_extended_storage(expr) && buf_leaf[0] != '$')
+    {
+        if (codegen_target_is_windows())
+            snprintf(buffer, sizeof(buffer), "%s\t%s, %%rcx\n",
+                (buf_leaf[0] == '%') ? "\tmovq" : "\tleaq", buf_leaf);
+        else
+            snprintf(buffer, sizeof(buffer), "%s\t%s, %%rdi\n",
+                (buf_leaf[0] == '%') ? "\tmovq" : "\tleaq", buf_leaf);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+        free_arg_regs();
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+        return add_inst(inst_list, buffer);
     }
 
     if (expr_has_type_tag(expr, REAL_TYPE) &&

@@ -161,7 +161,7 @@ char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *fi
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (is_integer_type(*type) || *type == REAL_TYPE);
+    return (is_integer_type(*type) || *type == REAL_TYPE || *type == EXTENDED_TYPE);
 }
 
 int types_numeric_compatible(int lhs, int rhs)
@@ -172,8 +172,11 @@ int types_numeric_compatible(int lhs, int rhs)
     if (is_integer_type(lhs) && is_integer_type(rhs))
         return 1;
     /* Real is compatible with any integer type */
-    if ((lhs == REAL_TYPE && is_integer_type(rhs)) ||
-        (rhs == REAL_TYPE && is_integer_type(lhs)))
+    if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && is_integer_type(rhs)) ||
+        ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && is_integer_type(lhs)))
+        return 1;
+    if ((lhs == REAL_TYPE && rhs == EXTENDED_TYPE) ||
+        (lhs == EXTENDED_TYPE && rhs == REAL_TYPE))
         return 1;
     return 0;
 }
