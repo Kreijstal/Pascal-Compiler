@@ -237,6 +237,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->return_type_ast = NULL;
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast(method->method_impl_ast) : NULL;
+    clone->source_offset = method->source_offset;
 
     return clone;
 }

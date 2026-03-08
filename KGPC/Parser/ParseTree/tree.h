@@ -120,6 +120,7 @@ typedef struct Tree
             char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
             int num_generic_type_params;  /* Number of generic type parameters */
             struct ast_t *generic_template_ast; /* AST template for generic subprogram cloning */
+            int generic_template_source_offset; /* source buffer offset active when template was saved */
             char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */
             char *method_name;            /* Bare method name (NULL for non-methods) */
             char *owner_class;            /* Innermost owning class name (NULL for non-methods) */

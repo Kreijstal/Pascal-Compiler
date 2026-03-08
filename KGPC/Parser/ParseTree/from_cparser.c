@@ -2522,7 +2522,14 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
         return NULL;
 
     rewrite_method_impl_ast(method_copy, record);
+
+    /* Restore the source offset from when the template was parsed,
+     * so source_index values map to the correct source buffer. */
+    int saved_offset = g_source_offset;
+    g_source_offset = method_template->source_offset;
     Tree_t *method_tree = convert_method_impl(method_copy);
+    g_source_offset = saved_offset;
+
     free_ast(method_copy);
     return method_tree;
 }
@@ -2689,6 +2696,12 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     rewrite_generic_subprogram_ast(ast_copy, specialized_name,
         template->tree_data.subprogram_data.generic_type_params, arg_types, arg_count);
 
+    /* Restore the source offset from the unit that defined the template,
+     * so that source_index values in the specialized code map to the
+     * correct source buffer (e.g., fgl.pp, not the main program). */
+    int saved_offset = g_source_offset;
+    g_source_offset = template->tree_data.subprogram_data.generic_template_source_offset;
+
     Tree_t *result = NULL;
     if (template->type == TREE_SUBPROGRAM &&
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC)
@@ -2697,6 +2710,7 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC)
         result = convert_function(ast_copy);
 
+    g_source_offset = saved_offset;
     free_ast(ast_copy);
 
     if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
@@ -7261,6 +7275,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
+    template->source_offset = g_source_offset;
     return template;
 }
 
@@ -15963,6 +15978,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
             tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
             num_generic_type_params = 0;
         }
@@ -16323,6 +16339,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -16641,6 +16658,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);

@@ -162,6 +162,7 @@ struct MethodTemplate
     struct ast_t *return_type_ast;  /* Pointer inside method_ast for return type */
     struct ast_t *directives_ast;   /* Pointer inside method_ast for directives */
     struct ast_t *method_impl_ast;  /* Cloned AST for the implementation */
+    int source_offset;              /* g_source_offset when template was created */
 };
 
 struct RecordType

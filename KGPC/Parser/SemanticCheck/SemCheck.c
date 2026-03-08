@@ -1185,7 +1185,6 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
     if (buffer == NULL || length == 0 || source_offset < 0 || (size_t)source_offset >= length)
         return -1;
 
-    int current_line_at_offset = 1;
     int scan_pos = source_offset;
     while (scan_pos > 0)
     {
@@ -1217,8 +1216,7 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
                     ++lines_after_directive;
                 ++pos;
             }
-            current_line_at_offset = directive_line + lines_after_directive;
-            break;
+            return directive_line + lines_after_directive;
         }
 
         if (line_start > 0)
@@ -1227,7 +1225,14 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
             break;
     }
 
-    return current_line_at_offset;
+    /* No #line directive found — count newlines from buffer start */
+    int line = 1;
+    for (int i = 0; i < source_offset; i++)
+    {
+        if (buffer[i] == '\n')
+            ++line;
+    }
+    return line;
 }
 
 /* Find the file from a source byte offset by scanning backwards for line directives */
@@ -1595,10 +1600,21 @@ static int resolve_error_source_context(int source_index,
                     g_source_buffer_registry[i].length,
                     local_offset,
                     temp_file, sizeof(temp_file));
-                if (computed_line > 0 && temp_file[0] != '\0')
+                if (computed_line > 0)
                 {
-                    strncpy(directive_file_out, temp_file, dir_size - 1);
-                    directive_file_out[dir_size - 1] = '\0';
+                    if (temp_file[0] != '\0')
+                    {
+                        strncpy(directive_file_out, temp_file, dir_size - 1);
+                        directive_file_out[dir_size - 1] = '\0';
+                    }
+                    else
+                    {
+                        /* No #line directive in this buffer — use the
+                         * registered path as the file name. */
+                        strncpy(directive_file_out,
+                            g_source_buffer_registry[i].path, dir_size - 1);
+                        directive_file_out[dir_size - 1] = '\0';
+                    }
                     return computed_line;
                 }
             }
