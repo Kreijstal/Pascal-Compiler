@@ -2515,7 +2515,7 @@ SKIP_SELF_FIELD_REWRITE:
         if (helper_record == NULL)
             helper_record = semcheck_lookup_type_helper(symtab, record_type,
                 alias_type_name != NULL ? alias_type_name : expr_type_name);
-        if (helper_record == NULL && record_type == REAL_TYPE)
+        if (helper_record == NULL && is_real_family_type(record_type))
         {
             const char *helper_base = alias_type_name != NULL ? alias_type_name : expr_type_name;
             if (helper_base != NULL)
@@ -2530,7 +2530,7 @@ SKIP_SELF_FIELD_REWRITE:
             record_type = RECORD_TYPE;
             record_info = helper_record;
         }
-        else if (record_type == REAL_TYPE && field_id != NULL &&
+        else if (is_real_family_type(record_type) && field_id != NULL &&
                  pascal_identifier_equals(field_id, "IsNan"))
         {
             /* FPC allows Float.IsNan via type helpers. If helpers weren't registered,
