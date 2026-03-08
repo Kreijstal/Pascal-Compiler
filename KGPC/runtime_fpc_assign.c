@@ -6,7 +6,7 @@
  *
  * TextRec layout (as KGPC allocates: 632 bytes, AnsiChar name):
  *   0:  Handle (int32)
- *   4:  Mode   (int32)   — fmClosed=55216, fmInput=55217, fmOutput=55218, fmInOut=55219
+ *   4:  Mode   (int32)   — fmClosed=55216, fmInput=55217, fmOutput=55218, fmInOut=55219, fmAppend=55220
  *   8:  BufSize (int64)
  *  16:  _private / KGPC private_data (int64, stores FILE* pointer)
  *  24:  BufPos  (int64)
@@ -74,6 +74,7 @@ extern void kgpc_tfile_assign(void *file, const char *path);
 #define KGPC_FM_INPUT   0xD7B1   /* 55217 */
 #define KGPC_FM_OUTPUT  0xD7B2   /* 55218 */
 #define KGPC_FM_INOUT   0xD7B3   /* 55219 */
+#define KGPC_FM_APPEND  0xD7B4   /* 55220 */
 
 /* ------------------------------------------------------------------ */
 /* Internal helpers for the TextRec I/O function table                 */
@@ -125,6 +126,8 @@ static void kgpc_fpc_openfunc(void *textrec)
             fmode = "w";
         else if (mode == (int32_t)KGPC_FM_INOUT)
             fmode = "r+";
+        else if (mode == (int32_t)KGPC_FM_APPEND)
+            fmode = "a";
         else
             fmode = "w";
         stream = fopen(name, fmode);
@@ -135,6 +138,10 @@ static void kgpc_fpc_openfunc(void *textrec)
         memcpy(tr + TR_PRIV, &priv, sizeof(priv));
         int32_t fd = fileno(stream);
         memcpy(tr + TR_HANDLE, &fd, sizeof(fd));
+        if (mode == (int32_t)KGPC_FM_APPEND) {
+            int32_t output_mode = KGPC_FM_OUTPUT;
+            memcpy(tr + TR_MODE, &output_mode, sizeof(output_mode));
+        }
         kgpc_ioresult_set(0);
     } else {
         kgpc_ioresult_set(errno);
