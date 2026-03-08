@@ -6472,7 +6472,6 @@ skip_type_receiver_rewrite:
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
     HashNode_t *resolved_proc = NULL;
     int match_count = 0;
-
     if (overload_candidates != NULL)
     {
         ListNode_t *cur = overload_candidates;
@@ -6609,9 +6608,9 @@ proccall_parent_resolve_done:
             cur = cur->next;
         }
         if (same_mangled) {
-            match_count = 0;
-            resolved_proc = NULL;
-            force_best_match = 1;
+            match_count = 1;
+            /* resolved_proc already set to first match — keep it,
+             * duplicates from different scopes are functionally equivalent */
         }
     }
 
@@ -6685,11 +6684,26 @@ proccall_parent_resolve_done:
         if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1 &&
             best_candidate != resolved_proc)
         {
-            resolved_proc = best_candidate;
-            if (best_candidate->mangled_id != NULL)
+            /* Only override the exact mangled match if the secondary resolution
+             * has the same formal param count.  The exact mangled match already
+             * verified the arg count via name mangling; allowing a candidate with
+             * different arity to replace it causes false "not enough arguments" errors
+             * when allow_implicit_leading_self adjusts arity in the resolver. */
+            int best_total = 0;
+            if (best_candidate->type != NULL && best_candidate->type->kind == TYPE_KIND_PROCEDURE)
+                best_total = ListLength(kgpc_type_get_procedure_params(best_candidate->type));
+            int resolved_total = 0;
+            if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+                resolved_total = ListLength(kgpc_type_get_procedure_params(resolved_proc->type));
+            int given_count = ListLength(args_given);
+            if (best_total == given_count || best_total == resolved_total)
             {
-                free(mangled_name);
-                mangled_name = strdup(best_candidate->mangled_id);
+                resolved_proc = best_candidate;
+                if (best_candidate->mangled_id != NULL)
+                {
+                    free(mangled_name);
+                    mangled_name = strdup(best_candidate->mangled_id);
+                }
             }
         }
     }
