@@ -182,7 +182,9 @@ void kgpc_assign_t_s(void *textrec, const char *path)
     memcpy(tr + FPC_CLOSEFUNC, &close_fn, sizeof(close_fn));
 }
 
-/* assign_t_s removed — compiler generates it from system.p */
+/* Wrapper for FPC RTL path — FPC system.pp mangles Assign(text,string) as assign_t_s.
+ * KGPC's system.p uses external name 'kgpc_assign_t_s' so doesn't conflict. */
+void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
 
 /* ------------------------------------------------------------------ */
 /* assign_f_s: Assign(var f: File; const s: string)                    */
@@ -211,7 +213,7 @@ void kgpc_assign_f_s(void *filerec, const char *path)
     }
 }
 
-/* assign_f_s removed — compiler generates it from system.p */
+void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
 /* ------------------------------------------------------------------ */
 /* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
