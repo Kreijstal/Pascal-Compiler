@@ -51,6 +51,7 @@
 
 /* Sets Pascal IOResult variable */
 extern void kgpc_ioresult_set(int32_t value);
+extern uint16_t InOutRes;
 
 /* Initializes a TextRec to KGPC defaults (zeros + name copy) */
 extern void kgpc_text_assign(void *file, const char *path);
@@ -80,6 +81,12 @@ extern void kgpc_tfile_assign(void *file, const char *path);
 /* ------------------------------------------------------------------ */
 /* Internal helpers for the TextRec I/O function table                 */
 /* ------------------------------------------------------------------ */
+
+static void kgpc_fpc_set_ioresult(int32_t value)
+{
+    kgpc_ioresult_set(value);
+    InOutRes = (uint16_t)value;
+}
 
 /* No-op I/O stub used for InOutFunc and FlushFunc slots */
 static void kgpc_fpc_noop_t(void *textrec)
@@ -143,9 +150,9 @@ static void kgpc_fpc_openfunc(void *textrec)
             int32_t output_mode = KGPC_FM_OUTPUT;
             memcpy(tr + TR_MODE, &output_mode, sizeof(output_mode));
         }
-        kgpc_ioresult_set(0);
+        kgpc_fpc_set_ioresult(0);
     } else {
-        kgpc_ioresult_set(errno);
+        kgpc_fpc_set_ioresult(errno);
     }
 
     /* Set FPC I/O function table slots */
