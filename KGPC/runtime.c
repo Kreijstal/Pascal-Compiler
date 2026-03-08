@@ -7154,13 +7154,28 @@ long atomicincrement_i_i(long *target, long value)
     return __sync_add_and_fetch(target, value);
 }
 
+uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
 /* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1 */
 long atomicincrement_i(long *target)
 {
     return __sync_add_and_fetch(target, 1);
 }
 
+uint32_t atomicincrement_u32(uint32_t *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
 long atomicdecrement_i(long *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+uint32_t atomicdecrement_u32(uint32_t *target)
 {
     return __sync_sub_and_fetch(target, 1);
 }
@@ -7181,8 +7196,18 @@ long atomicexchange_i_i(long *target, long new_val)
     return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
 }
 
+uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
 /* Int64 overloads of atomic intrinsics */
 long long atomicincrement_i64(long long *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+uint64_t atomicincrement_u64(uint64_t *target)
 {
     return __sync_add_and_fetch(target, 1);
 }
@@ -7192,7 +7217,17 @@ long long atomicincrement_i64_i64(long long *target, long long value)
     return __sync_add_and_fetch(target, value);
 }
 
+uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
 long long atomicdecrement_i64(long long *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+uint64_t atomicdecrement_u64(uint64_t *target)
 {
     return __sync_sub_and_fetch(target, 1);
 }
@@ -7202,7 +7237,22 @@ long long atomicexchange_i64_i64(long long *target, long long new_val)
     return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
 }
 
+uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
 long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
+uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand)
 {
     return __sync_val_compare_and_swap(target, comparand, new_val);
 }

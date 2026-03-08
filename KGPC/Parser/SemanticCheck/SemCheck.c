@@ -12389,7 +12389,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     {
         /* AtomicCmpExchange(var Target: T; NewValue: T; Comparand: T): T */
         {
-            static const int cmpxchg_types[] = {INT_TYPE, INT64_TYPE, POINTER_TYPE};
+            static const int cmpxchg_types[] = {INT_TYPE, LONGWORD_TYPE, INT64_TYPE, QWORD_TYPE, POINTER_TYPE};
             for (size_t i = 0; i < sizeof(cmpxchg_types) / sizeof(cmpxchg_types[0]); ++i)
             {
                 int t = cmpxchg_types[i];
@@ -12417,7 +12417,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         /* AtomicExchange(var Target: T; Value: T): T
          * Target is a var parameter — must be passed by reference. */
         {
-            static const int xchg_types[] = {INT_TYPE, INT64_TYPE, POINTER_TYPE};
+            static const int xchg_types[] = {INT_TYPE, LONGWORD_TYPE, INT64_TYPE, QWORD_TYPE, POINTER_TYPE};
             for (size_t i = 0; i < sizeof(xchg_types) / sizeof(xchg_types[0]); ++i)
             {
                 int t = xchg_types[i];
@@ -12442,14 +12442,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
         /* AtomicIncrement/AtomicDecrement(var Target: T[; Value: T]): T
          * Target is a var parameter — must be passed by reference.
-         * In FPC these are compiler intrinsics that work on any ordinal type.
-         * Register overloads for Integer and Int64 to cover common usage. */
+         * In FPC these are compiler intrinsics that work on ordinal types.
+         * Register the signed and unsigned 32/64-bit overloads used by the RTL. */
         {
             const char *names[] = {
                 "AtomicIncrement", "AtomicDecrement",
                 "InterlockedIncrement", "InterlockedDecrement",
             };
-            static const int atomic_types[] = {INT_TYPE, INT64_TYPE};
+            static const int atomic_types[] = {INT_TYPE, LONGWORD_TYPE, INT64_TYPE, QWORD_TYPE};
             for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
             {
                 for (size_t ti = 0; ti < sizeof(atomic_types) / sizeof(atomic_types[0]); ti++)
