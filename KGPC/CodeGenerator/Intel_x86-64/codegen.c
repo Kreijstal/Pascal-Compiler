@@ -5129,7 +5129,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         if (return_type_id_size > 0)
             return_size = return_type_id_size;
     }
-    else if (func_node != NULL && func_node->type != NULL &&
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
         /* Get return type from KgpcType */
@@ -5148,7 +5148,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             }
         }
     }
-    else if (func_node != NULL && func_node->type != NULL &&
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = kgpc_type_get_primitive_tag(func_node->type);
@@ -5165,7 +5165,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
     }
-    else if (func_node != NULL && func_node->type != NULL &&
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_POINTER)
     {
         return_size = 8;
@@ -5532,6 +5532,9 @@ static int codegen_return_type_id_storage_size(const char *return_type_id)
         return 4;
     if (pascal_identifier_equals(return_type_id, "Extended"))
         return 10;
+    if (pascal_identifier_equals(return_type_id, "Real") ||
+        pascal_identifier_equals(return_type_id, "Double"))
+        return 8;
     if (pascal_identifier_equals(return_type_id, "Int64") ||
         pascal_identifier_equals(return_type_id, "QWord") ||
         pascal_identifier_equals(return_type_id, "UInt64") ||

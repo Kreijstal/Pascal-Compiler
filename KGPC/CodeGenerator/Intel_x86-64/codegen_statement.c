@@ -36,7 +36,7 @@ static int codegen_statement_return_storage_size(KgpcType *return_type)
         int tag = kgpc_type_get_primitive_tag(return_type);
         if (tag == EXTENDED_TYPE)
             return 10;
-        if (tag == STRING_TYPE || tag == POINTER_TYPE || tag == INT64_TYPE || tag == QWORD_TYPE)
+        if (tag == STRING_TYPE || tag == POINTER_TYPE || tag == INT64_TYPE || tag == QWORD_TYPE || tag == REAL_TYPE)
             return 8;
         return 4;
     }
