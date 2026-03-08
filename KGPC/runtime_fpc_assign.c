@@ -230,6 +230,44 @@ void assign_f_s(void *filerec, const char *path)
 /* ------------------------------------------------------------------ */
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct KgpcStringHeaderShim {
+    uint16_t codepage;
+    uint16_t elementsize;
+    int32_t refcount;
+    int64_t length;
+} KgpcStringHeaderShim;
+
+static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value)
+{
+    if (value == NULL)
+        return NULL;
+    return (const KgpcStringHeaderShim *)(value - (ptrdiff_t)sizeof(KgpcStringHeaderShim));
+}
+
+static char *kgpc_fpc_filename_to_ansi_dup(const char *filename)
+{
+    if (filename == NULL)
+        return NULL;
+
+    const KgpcStringHeaderShim *hdr = kgpc_string_header_shim(filename);
+    if (hdr == NULL || hdr->elementsize != 2 || hdr->length <= 0)
+        return strdup(filename);
+
+    const uint16_t *src = (const uint16_t *)filename;
+    size_t len = (size_t)hdr->length;
+    char *ansi = (char *)malloc(len + 1);
+    if (ansi == NULL)
+        return NULL;
+
+    for (size_t i = 0; i < len; ++i)
+        ansi[i] = (src[i] < 256) ? (char)src[i] : '?';
+    ansi[len] = '\0';
+    return ansi;
+}
 
 /* FPC file mode constants (lower 2 bits) */
 #define FPC_FM_OPENREAD      0
@@ -246,40 +284,17 @@ static int fpc_mode_to_posix_flags(int32_t mode)
     }
 }
 
-/* Helper: if the string has elementsize==2 (real UTF-16 UnicodeString),
- * convert it to a temporary char* by truncating each uint16_t to a byte.
- * Returns a malloc'd buffer that the caller must free, or NULL if no
- * conversion was needed (in which case use the original pointer). */
-static char *unicode_filename_to_ansi(const char *filename)
-{
-    if (filename == NULL)
-        return NULL;
-    /* KgpcStringHeader is at offset -24 from the data pointer.
-     * elementsize is at offset 10 within the header (offset -14 from data). */
-    uint16_t elementsize = *(const uint16_t *)((const char *)filename - 14);
-    if (elementsize != 2)
-        return NULL;  /* already AnsiString, no conversion needed */
-    /* It's UTF-16 data — get length from header (int64 at offset -8 from data) */
-    int64_t len = *(const int64_t *)((const char *)filename - 8);
-    if (len <= 0)
-        return NULL;
-    char *buf = (char *)malloc(len + 1);
-    const uint16_t *src = (const uint16_t *)filename;
-    for (int64_t i = 0; i < len; i++)
-        buf[i] = (src[i] < 256) ? (char)src[i] : '?';
-    buf[len] = '\0';
-    return buf;
-}
-
 /* fileopen_us_i: FileOpen(const FileName: UnicodeString; Mode: Integer): THandle */
 int32_t fileopen_us_i(const char *filename, int32_t mode)
 {
     if (filename == NULL)
         return -1;
-    char *ansi = unicode_filename_to_ansi(filename);
-    int32_t result = open(ansi ? ansi : filename, fpc_mode_to_posix_flags(mode));
+    char *ansi = kgpc_fpc_filename_to_ansi_dup(filename);
+    if (ansi == NULL)
+        return -1;
+    int fd = open(ansi, fpc_mode_to_posix_flags(mode));
     free(ansi);
-    return result;
+    return fd;
 }
 
 /* fileopen_rbs_i: FileOpen(const FileName: RawByteString; Mode: Integer): THandle */
