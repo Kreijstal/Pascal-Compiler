@@ -9166,7 +9166,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
     while(cur != NULL)
     {
         int loop_start_errors = return_val;
-        
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
@@ -9212,12 +9211,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         struct RecordType *record_info = NULL;
         struct TypeAlias *alias_info = NULL;
         
+
         switch (tree->tree_data.type_decl_data.kind)
         {
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
                 record_info = semcheck_record_from_type_decl(tree);
-                
+
                 /* Set the type_id on the RecordType so operator overloading can find it */
                 if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
                 {
@@ -9228,10 +9228,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
                 if (record_info != NULL && record_info->is_type_helper)
                     semcheck_register_type_helper(record_info, symtab);
-                
+
                 /* In objfpc mode, classes without explicit parent inherit from TObject,
                  * unless this IS TObject itself (to avoid circular inheritance). */
-                if (record_info != NULL && record_info->is_class && 
+                if (record_info != NULL && record_info->is_class &&
                     record_info->parent_class_name == NULL &&
                     pascal_frontend_is_objfpc_mode())
                 {
@@ -9241,7 +9241,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         record_info->parent_class_name = strdup("TObject");
                     }
                 }
-                
+
                 /* Handle class inheritance - merge parent fields */
                 if (record_info != NULL && record_info->parent_class_name != NULL)
                 {

@@ -314,6 +314,16 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 1;
     }
 
+    /* Set sentinel to break self-referencing cycles (e.g., record with class var
+     * fields of its own type).  If we re-enter for the same record, the cached
+     * size (0) will be returned, preventing infinite recursion. */
+    int was_cached = record->has_cached_size;
+    if (!was_cached && !record_type_is_class(record))
+    {
+        record->has_cached_size = 1;
+        record->cached_size = 0;
+    }
+
     long long computed_size = 0;
 
     if (record->parent_class_name != NULL && !record->parent_fields_merged && symtab != NULL)
@@ -323,12 +333,18 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         if (parent_record != NULL)
         {
             if (sizeof_from_record(symtab, parent_record, &computed_size, depth + 1, line_num) != 0)
+            {
+                if (!was_cached) record->has_cached_size = 0;
                 return 1;
+            }
         }
     }
 
     if (sizeof_from_record_members(symtab, record->fields, &computed_size, depth + 1, line_num) != 0)
+    {
+        if (!was_cached) record->has_cached_size = 0;
         return 1;
+    }
 
     record->cached_size = computed_size;
     record->has_cached_size = 1;
@@ -394,6 +410,9 @@ static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
         if (cur->type != LIST_RECORD_FIELD)
             continue;
         struct RecordField *field = (struct RecordField *)cur->cur;
+        /* Class variables are stored as globals, not in the instance layout */
+        if (field != NULL && field->is_class_var)
+            continue;
         int field_align = get_field_alignment(symtab, field, depth + 1, line_num);
         if (field_align > max_alignment)
             max_alignment = field_align;
