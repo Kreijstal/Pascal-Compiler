@@ -2678,9 +2678,15 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         HashNode_t *parent_node = NULL;
         if (FindIdent(&parent_node, symtab, parent_vmt_label) == 0 && parent_node != NULL) {
             struct RecordType *parent_rec = get_record_type_from_node(parent_node);
-            if (parent_rec != NULL && parent_rec->type_id != NULL)
+            /* Only use the resolved type_id if it's actually a class. If FindIdent
+             * resolved to a plain record (e.g. TTimeZone = timezone record alias
+             * instead of TTimeZone = class abstract), keep the original name which
+             * matches the class VMT label. */
+            if (parent_rec != NULL && parent_rec->is_class && parent_rec->type_id != NULL)
                 parent_vmt_label = parent_rec->type_id;
-            else if (parent_node->id != NULL)
+            else if (parent_rec != NULL && !parent_rec->is_class) {
+                /* Resolved to a non-class record; keep original parent_class_name */
+            } else if (parent_node->id != NULL)
                 parent_vmt_label = parent_node->id;
         }
     }
