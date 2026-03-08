@@ -2114,9 +2114,36 @@ static ListNode_t *codegen_materialize_array_of_const(struct Expression *expr,
         inst_list = add_inst(inst_list, buffer);
 
         int data_offset = element_offset - 8;
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-            value_reg->bit_64, data_offset);
-        inst_list = add_inst(inst_list, buffer);
+        if (kind == KGPC_TVAR_KIND_REAL)
+        {
+            /* FPC's vtExtended expects a pointer to the Extended/Double value,
+             * not the raw value.  Allocate a temp slot, store the double there,
+             * and put the address in the TVarRec data field. */
+            StackNode_t *real_slot = codegen_alloc_temp_bytes("varrec_real", 8);
+            if (real_slot != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    value_reg->bit_64, real_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        real_slot->offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        addr_reg->bit_64, data_offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    free_reg(get_reg_stack(), addr_reg);
+                }
+            }
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                value_reg->bit_64, data_offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
         free_reg(get_reg_stack(), value_reg);
         cur = cur->next;

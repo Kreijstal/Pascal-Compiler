@@ -5896,7 +5896,7 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
             {
                 double real_value = 0.0;
                 if (arg->kind == KGPC_TVAR_KIND_REAL)
-                    real_value = arg->data.v_real;
+                    real_value = *(double *)arg->data.v_ptr;
                 else if (arg->kind == KGPC_TVAR_KIND_INT || arg->kind == KGPC_TVAR_KIND_BOOL ||
                          arg->kind == KGPC_TVAR_KIND_CHAR)
                     real_value = (double)arg->data.v_int;
