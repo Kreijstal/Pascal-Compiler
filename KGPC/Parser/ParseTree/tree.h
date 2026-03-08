@@ -17,6 +17,7 @@ struct KgpcType;
 
 /* Types */
 typedef struct Tree Tree_t;
+struct HashNode;
 
 /* Enum for readability */
 enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
@@ -127,6 +128,7 @@ typedef struct Tree
             int is_static_method;         /* 1 if method is static (no implicit Self) */
             int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
             int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
+            struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
         } subprogram_data;
 
         /* A variable declaration */

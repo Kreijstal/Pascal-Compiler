@@ -4081,6 +4081,93 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
     return 1;
 }
 
+typedef struct SubprogramPredeclLookup
+{
+    HashNode_t *exact_match;
+    HashNode_t *first_mangled_match;
+    HashNode_t *tree_match;
+    HashNode_t *body_pair_match;
+} SubprogramPredeclLookup;
+
+static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
+    SymTab_t *symtab,
+    Tree_t *subprogram,
+    const char *lookup_id,
+    const char *mangled_id)
+{
+    SubprogramPredeclLookup result;
+    memset(&result, 0, sizeof(result));
+
+    if (symtab == NULL || subprogram == NULL || lookup_id == NULL)
+        return result;
+
+    ListNode_t *all_matches = FindAllIdents(symtab, lookup_id);
+    ListNode_t *cur = all_matches;
+    int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+
+    while (cur != NULL)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        Tree_t *def = NULL;
+        int existing_has_body = 0;
+        int mangled_match = 0;
+        int signature_match = 0;
+
+        if (candidate == NULL)
+        {
+            cur = cur->next;
+            continue;
+        }
+
+        if (candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+        {
+            cur = cur->next;
+            continue;
+        }
+
+        if (candidate->mangled_id != NULL &&
+            mangled_id != NULL &&
+            strcmp(candidate->mangled_id, mangled_id) == 0)
+        {
+            mangled_match = 1;
+            if (result.first_mangled_match == NULL)
+                result.first_mangled_match = candidate;
+        }
+
+        if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            def = candidate->type->info.proc_info.definition;
+            existing_has_body = (def != NULL &&
+                def->tree_data.subprogram_data.statement_list != NULL);
+
+            if (def == subprogram)
+                result.tree_match = candidate;
+
+            if (def != NULL &&
+                semcheck_subprogram_signatures_equivalent(subprogram, def))
+            {
+                signature_match = 1;
+                if (mangled_match && result.exact_match == NULL)
+                    result.exact_match = candidate;
+            }
+
+            if (result.body_pair_match == NULL &&
+                existing_has_body != current_has_body &&
+                (signature_match || mangled_match))
+            {
+                result.body_pair_match = candidate;
+            }
+        }
+
+        cur = cur->next;
+    }
+
+    if (all_matches != NULL)
+        DestroyList(all_matches);
+
+    return result;
+}
+
 static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
 {
     ListNode_t *lcur = lhs;
@@ -12028,7 +12115,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
 
-    /* Predeclare subprograms so they can be referenced in const initializers */
+    /* Predeclare subprograms so they can be referenced in const initializers. */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     semcheck_timing_step("predeclare subprograms", &t0);
     if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
@@ -14615,67 +14702,49 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     HashNode_t *existing_decl = NULL;
     int already_declared = 0;
     
-    /* For overloaded functions, find the correct overload by matching mangled name */
-    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    if (subprogram->tree_data.subprogram_data.cached_predecl_node != NULL)
     {
-        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
-        ListNode_t *cur = all_matches;
-        
-        if (getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
-        {
-            fprintf(stderr, "[KGPC] Matching impl %s mangled=%s\n",
-                id_to_use_for_lookup ? id_to_use_for_lookup : "<null>",
-                subprogram->tree_data.subprogram_data.mangled_id);
-            ListNode_t *debug_cur = all_matches;
-            while (debug_cur != NULL)
-            {
-                HashNode_t *debug_cand = (HashNode_t *)debug_cur->cur;
-                fprintf(stderr, "  candidate: id=%s mangled=%s\n",
-                    debug_cand && debug_cand->id ? debug_cand->id : "<null>",
-                    debug_cand && debug_cand->mangled_id ? debug_cand->mangled_id : "<null>");
-                debug_cur = debug_cur->next;
-            }
-        }
-        
-        HashNode_t *first_mangled_match = NULL;
-        while (cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate != NULL && candidate->mangled_id != NULL &&
-                strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
-            {
-                if (first_mangled_match == NULL)
-                    first_mangled_match = candidate;
-                /* When multiple candidates share the same mangled name (e.g.,
-                 * FpFStat and FPFStat both mangle to fpfstat_li), prefer the
-                 * one with an equivalent signature. */
-                if (candidate->type != NULL &&
-                    candidate->type->kind == TYPE_KIND_PROCEDURE &&
-                    candidate->type->info.proc_info.definition != NULL &&
-                    semcheck_subprogram_signatures_equivalent(
-                        subprogram, candidate->type->info.proc_info.definition))
-                {
-                    existing_decl = candidate;
-                    already_declared = 1;
-                    break;
-                }
-            }
-            cur = cur->next;
-        }
-        /* If no signature-exact match found, fall back to the first mangled match */
-        if (existing_decl == NULL && first_mangled_match != NULL)
-        {
-            existing_decl = first_mangled_match;
-            already_declared = 1;
-        }
-
-        if (all_matches != NULL)
-            DestroyList(all_matches);
+        existing_decl = (HashNode_t *)subprogram->tree_data.subprogram_data.cached_predecl_node;
+        already_declared = 1;
     }
     
-    /* Fallback to simple lookup if no mangled name or no match found */
     if (!already_declared)
-        already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
+    {
+        /* For overloaded functions, find the correct overload by matching mangled name */
+        if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+        {
+            SubprogramPredeclLookup lookup = semcheck_lookup_subprogram_predecl(
+                symtab,
+                subprogram,
+                id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
+
+            if (getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
+            {
+                ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
+                fprintf(stderr, "[KGPC] Matching impl %s mangled=%s\n",
+                    id_to_use_for_lookup ? id_to_use_for_lookup : "<null>",
+                    subprogram->tree_data.subprogram_data.mangled_id);
+                for (ListNode_t *debug_cur = all_matches; debug_cur != NULL; debug_cur = debug_cur->next)
+                {
+                    HashNode_t *debug_cand = (HashNode_t *)debug_cur->cur;
+                    fprintf(stderr, "  candidate: id=%s mangled=%s\n",
+                        debug_cand && debug_cand->id ? debug_cand->id : "<null>",
+                        debug_cand && debug_cand->mangled_id ? debug_cand->mangled_id : "<null>");
+                }
+                if (all_matches != NULL)
+                    DestroyList(all_matches);
+            }
+
+            existing_decl = lookup.exact_match != NULL ?
+                lookup.exact_match : lookup.first_mangled_match;
+            already_declared = (existing_decl != NULL);
+        }
+        
+        /* Fallback to simple lookup if no mangled name or no match found */
+        if (!already_declared)
+            already_declared = (FindIdent(&existing_decl, symtab, id_to_use_for_lookup) == 0);
+    }
 
     if (already_declared && existing_decl != NULL &&
         subprogram->tree_data.subprogram_data.mangled_id != NULL)
@@ -15466,6 +15535,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     int return_val = 0;
     int func_return;
     enum TreeType sub_type;
+    SubprogramPredeclLookup lookup;
 
     assert(symtab != NULL);
     assert(subprogram != NULL);
@@ -15534,101 +15604,32 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
 
     id_to_use_for_lookup = subprogram->tree_data.subprogram_data.id;
-    
-    /* Check if this specific overload is already declared (by matching mangled name) */
-    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    subprogram->tree_data.subprogram_data.cached_predecl_node = NULL;
+    lookup = semcheck_lookup_subprogram_predecl(
+        symtab,
+        subprogram,
+        id_to_use_for_lookup,
+        subprogram->tree_data.subprogram_data.mangled_id);
+
+    if (lookup.tree_match != NULL)
     {
-        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
-        ListNode_t *cur = all_matches;
-        int already_exists = 0;
-        while (cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate != NULL && candidate->mangled_id != NULL &&
-                strcmp(candidate->mangled_id, subprogram->tree_data.subprogram_data.mangled_id) == 0)
-            {
-                int same_signature = 1;
-                if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
-                {
-                    Tree_t *candidate_def = candidate->type->info.proc_info.definition;
-                    if (candidate_def != NULL &&
-                        !semcheck_subprogram_signatures_equivalent(subprogram, candidate_def))
-                    {
-                        same_signature = 0;
-                    }
-                }
-                if (same_signature)
-                {
-                    already_exists = 1;
-                    break;
-                }
-            }
-            /* If this exact subprogram was already registered (even with a different
-             * mangled name), reuse that declaration instead of creating a duplicate. */
-            if (candidate != NULL && candidate->type != NULL &&
-                candidate->type->kind == TYPE_KIND_PROCEDURE &&
-                candidate->type->info.proc_info.definition == subprogram)
-            {
-                if (candidate->mangled_id != NULL)
-                    free(candidate->mangled_id);
-                candidate->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
-                already_exists = 1;
-                break;
-            }
-            cur = cur->next;
-        }
-        if (all_matches != NULL)
-            DestroyList(all_matches);
-        
-        if (already_exists)
-            return 0;  /* Already declared - skip to avoid duplicates */
+        if (lookup.tree_match->mangled_id != NULL)
+            free(lookup.tree_match->mangled_id);
+        lookup.tree_match->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+        subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
+        return 0;  /* Already declared - skip to avoid duplicates */
     }
 
-    /* If a declaration already exists for this name/signature, skip predeclaring
-     * the matching implementation body. */
+    if (lookup.exact_match != NULL)
     {
-        int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
-        ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
-        ListNode_t *cur = all_matches;
-        while (cur != NULL)
-        {
-            HashNode_t *candidate = (HashNode_t *)cur->cur;
-            if (candidate == NULL || candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
-            {
-                cur = cur->next;
-                continue;
-            }
-            if (candidate->type != NULL && candidate->type->kind == TYPE_KIND_PROCEDURE)
-            {
-                Tree_t *def = candidate->type->info.proc_info.definition;
-                int existing_has_body = (def != NULL &&
-                    def->tree_data.subprogram_data.statement_list != NULL);
-                int same_signature = 0;
+        subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
+        return 0;  /* Already declared - skip to avoid duplicates */
+    }
 
-                if (def != NULL &&
-                    semcheck_subprogram_signatures_equivalent(subprogram, def))
-                {
-                    same_signature = 1;
-                }
-                else if (candidate->mangled_id != NULL &&
-                         subprogram->tree_data.subprogram_data.mangled_id != NULL &&
-                         strcmp(candidate->mangled_id,
-                                subprogram->tree_data.subprogram_data.mangled_id) == 0)
-                {
-                    same_signature = 1;
-                }
-
-                if (same_signature && existing_has_body != current_has_body)
-                {
-                    if (all_matches != NULL)
-                        DestroyList(all_matches);
-                    return 0;
-                }
-            }
-            cur = cur->next;
-        }
-        if (all_matches != NULL)
-            DestroyList(all_matches);
+    if (lookup.body_pair_match != NULL)
+    {
+        subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
+        return 0;  /* Declaration/body pair already tracked */
     }
     
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
@@ -15669,6 +15670,15 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
             }
+        }
+        if (func_return == 0)
+        {
+            SubprogramPredeclLookup pushed_lookup = semcheck_lookup_subprogram_predecl(
+                symtab, subprogram, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
+            HashNode_t *cached = pushed_lookup.exact_match != NULL ?
+                pushed_lookup.exact_match : pushed_lookup.first_mangled_match;
+            subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)cached;
         }
         /* Release creator's reference - hash table retained its own */
         destroy_kgpc_type(proc_type);
@@ -15715,6 +15725,15 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
             }
+        }
+        if (func_return == 0)
+        {
+            SubprogramPredeclLookup pushed_lookup = semcheck_lookup_subprogram_predecl(
+                symtab, subprogram, id_to_use_for_lookup,
+                subprogram->tree_data.subprogram_data.mangled_id);
+            HashNode_t *cached = pushed_lookup.exact_match != NULL ?
+                pushed_lookup.exact_match : pushed_lookup.first_mangled_match;
+            subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)cached;
         }
         /* Release creator's reference - hash table retained its own */
         destroy_kgpc_type(func_type);
@@ -15785,7 +15804,9 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     {
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
-        return_val += predeclare_subprogram(symtab, (Tree_t *)cur->cur, max_scope_lev, parent_subprogram);
+        Tree_t *child = (Tree_t *)cur->cur;
+        if (child->tree_data.subprogram_data.cached_predecl_node == NULL)
+            return_val += predeclare_subprogram(symtab, child, max_scope_lev, parent_subprogram);
         cur = cur->next;
     }
 
