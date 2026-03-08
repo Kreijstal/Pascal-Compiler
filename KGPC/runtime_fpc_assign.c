@@ -453,3 +453,94 @@ void kgpc_fpc_init_thread_manager(void)
     CurrentTM[33] = (void *)kgpc_rtlevent_wait;
     CurrentTM[34] = (void *)kgpc_rtlevent_wait_timeout;
 }
+
+/* ------------------------------------------------------------------ */
+/* FPC-mangled untyped file operations: Rewrite, Reset, Close          */
+/* These map FPC system unit declarations to KGPC runtime functions.   */
+/* ------------------------------------------------------------------ */
+extern void kgpc_tfile_rewrite(void *file);
+extern void kgpc_tfile_reset(void *file);
+extern void kgpc_tfile_close(void *file);
+extern int  kgpc_tfile_blockread(void *file, void *buffer, size_t count, long long *actual);
+extern int  kgpc_tfile_blockwrite(void *file, const void *buffer, size_t count, long long *actual);
+
+/* FileRec field offsets */
+#define FR_RECSIZE  8    /* int64 recsize at offset 8 */
+
+void rewrite_f_li(void *filerec, int32_t recsize)
+{
+    if (filerec != NULL) {
+        int64_t rs = recsize;
+        memcpy((char *)filerec + FR_RECSIZE, &rs, sizeof(rs));
+    }
+    kgpc_tfile_rewrite(filerec);
+}
+
+void rewrite_f(void *filerec)
+{
+    kgpc_tfile_rewrite(filerec);
+}
+
+void reset_f_li(void *filerec, int32_t recsize)
+{
+    if (filerec != NULL) {
+        int64_t rs = recsize;
+        memcpy((char *)filerec + FR_RECSIZE, &rs, sizeof(rs));
+    }
+    kgpc_tfile_reset(filerec);
+}
+
+void reset_f(void *filerec)
+{
+    kgpc_tfile_reset(filerec);
+}
+
+void close_f(void *filerec)
+{
+    kgpc_tfile_close(filerec);
+}
+
+/* ------------------------------------------------------------------ */
+/* FPC-mangled BlockRead/BlockWrite overloads                          */
+/* ------------------------------------------------------------------ */
+void blockread_f_u_i64_i64(void *file, void *buffer, int64_t count, int64_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockread(file, buffer, (size_t)count, &actual);
+    if (result != NULL)
+        *result = actual;
+}
+
+void blockread_f_u_li_li(void *file, void *buffer, int32_t count, int32_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockread(file, buffer, (size_t)count, &actual);
+    if (result != NULL)
+        *result = (int32_t)actual;
+}
+
+void blockread_f_u_li(void *file, void *buffer, int32_t count)
+{
+    kgpc_tfile_blockread(file, buffer, (size_t)count, NULL);
+}
+
+void blockwrite_f_u_i64_i64(void *file, const void *buffer, int64_t count, int64_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockwrite(file, buffer, (size_t)count, &actual);
+    if (result != NULL)
+        *result = actual;
+}
+
+void blockwrite_f_u_li_li(void *file, const void *buffer, int32_t count, int32_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockwrite(file, buffer, (size_t)count, &actual);
+    if (result != NULL)
+        *result = (int32_t)actual;
+}
+
+void blockwrite_f_u_li(void *file, const void *buffer, int32_t count)
+{
+    kgpc_tfile_blockwrite(file, buffer, (size_t)count, NULL);
+}
