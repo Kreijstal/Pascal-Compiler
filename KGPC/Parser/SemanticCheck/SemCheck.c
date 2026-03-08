@@ -4168,6 +4168,36 @@ static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
     return result;
 }
 
+static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
+{
+    if (node == NULL || subprogram == NULL)
+        return;
+
+    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    {
+        if (node->mangled_id != NULL)
+            free(node->mangled_id);
+        node->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+    }
+
+    if (subprogram->tree_data.subprogram_data.is_varargs)
+        node->is_varargs = 1;
+    if (subprogram->tree_data.subprogram_data.defined_in_unit)
+        node->defined_in_unit = 1;
+
+    if (node->type != NULL &&
+        node->type->kind == TYPE_KIND_PROCEDURE &&
+        subprogram->tree_data.subprogram_data.statement_list != NULL)
+    {
+        Tree_t *prev_def = node->type->info.proc_info.definition;
+        if (prev_def == NULL ||
+            prev_def->tree_data.subprogram_data.statement_list == NULL)
+        {
+            node->type->info.proc_info.definition = subprogram;
+        }
+    }
+}
+
 static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
 {
     ListNode_t *lcur = lhs;
@@ -15613,21 +15643,21 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 
     if (lookup.tree_match != NULL)
     {
-        if (lookup.tree_match->mangled_id != NULL)
-            free(lookup.tree_match->mangled_id);
-        lookup.tree_match->mangled_id = strdup(subprogram->tree_data.subprogram_data.mangled_id);
+        semcheck_refresh_predecl_match(lookup.tree_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
     if (lookup.exact_match != NULL)
     {
+        semcheck_refresh_predecl_match(lookup.exact_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
     if (lookup.body_pair_match != NULL)
     {
+        semcheck_refresh_predecl_match(lookup.body_pair_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
         return 0;  /* Declaration/body pair already tracked */
     }
