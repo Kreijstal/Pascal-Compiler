@@ -4982,6 +4982,18 @@ long long kgpc_val_real(const char *text, double *out_value)
     return code;
 }
 
+long long kgpc_val_extended(const char *text, void *out_value)
+{
+    double parsed = 0.0;
+    long long code = kgpc_val_parse_real(text, &parsed);
+    if (out_value != NULL)
+    {
+        long double ext = (long double)parsed;
+        memcpy(out_value, &ext, 10);
+    }
+    return code;
+}
+
 /* ShortString versions of Val: take a ShortString pointer (length byte + chars) */
 static const char *kgpc_shortstr_to_cstr(const unsigned char *ss, char *buf, int bufsize)
 {
@@ -5017,6 +5029,12 @@ long long kgpc_val_real_ss(const unsigned char *ss, double *out_value)
 {
     char buf[256];
     return kgpc_val_real(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
+}
+
+long long kgpc_val_extended_ss(const unsigned char *ss, void *out_value)
+{
+    char buf[256];
+    return kgpc_val_extended(kgpc_shortstr_to_cstr(ss, buf, sizeof(buf)), out_value);
 }
 
 int64_t bsrqword_i64(uint64_t value)
@@ -5983,7 +6001,18 @@ char *kgpc_format(const char *fmt, const kgpc_tvarrec *args, size_t arg_count)
 char *kgpc_float_to_string(double value, int precision)
 {
     if (precision < 0)
-        precision = 6;
+    {
+        if (isnan(value))
+            return kgpc_string_duplicate("-nan(ind)");
+        if (isinf(value))
+            return kgpc_string_duplicate(value > 0 ? "inf" : "-inf");
+
+        char buffer[64];
+        int len = snprintf(buffer, sizeof(buffer), "%.15g", value);
+        if (len < 0)
+            return kgpc_alloc_empty_string();
+        return kgpc_string_duplicate(buffer);
+    }
     if (precision > 18)
         precision = 18;
 
@@ -6009,6 +6038,33 @@ char *kgpc_float_to_string(double value, int precision)
     if (len < 0)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(buffer);
+}
+
+uint16_t *extractfilepath_us(const uint16_t *filename)
+{
+    int64_t len = kgpc_unicode_known_length(filename);
+    if (filename == NULL || len <= 0)
+        return kgpc_alloc_empty_unicodestring();
+
+    int64_t end = 0;
+    for (int64_t i = len; i > 0; --i)
+    {
+        uint16_t ch = filename[i - 1];
+        if (ch == (uint16_t)'/' || ch == (uint16_t)'\\')
+        {
+            end = i;
+            break;
+        }
+    }
+
+    if (end <= 0)
+        return kgpc_alloc_empty_unicodestring();
+
+    uint16_t *result = NULL;
+    kgpc_setstring_unicode(&result, filename, end);
+    if (result == NULL)
+        return kgpc_alloc_empty_unicodestring();
+    return result;
 }
 
 int kgpc_string_to_int(const char *text, int *out_value)

@@ -5486,6 +5486,40 @@ ListNode_t *codegen_expr(struct Expression *expr, ListNode_t *inst_list, CodeGen
     }
 }
 
+static int codegen_expr_is_byref_var_id(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *symbol = NULL;
+    if (FindIdent(&symbol, ctx->symtab, expr->expr_data.id) < 0 || symbol == NULL)
+        return 0;
+
+    return symbol->is_var_parameter;
+}
+
+static const struct Expression *codegen_unwrap_typecast_chain(
+    const struct Expression *expr, int *saw_extended_cast)
+{
+    const struct Expression *cur = expr;
+    if (saw_extended_cast != NULL)
+        *saw_extended_cast = 0;
+
+    while (cur != NULL && cur->type == EXPR_TYPECAST &&
+           cur->expr_data.typecast_data.expr != NULL)
+    {
+        if (saw_extended_cast != NULL &&
+            cur->expr_data.typecast_data.target_type == EXTENDED_TYPE)
+        {
+            *saw_extended_cast = 1;
+        }
+        cur = cur->expr_data.typecast_data.expr;
+    }
+
+    return cur;
+}
+
 ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -5503,6 +5537,79 @@ ListNode_t *codegen_expr_with_result(struct Expression *expr, ListNode_t *inst_l
         #endif
         return inst_list;
     }
+
+    if (expr != NULL && expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.expr != NULL)
+    {
+        int target_tag = expr->expr_data.typecast_data.target_type;
+        int saw_extended_cast = 0;
+        const struct Expression *source_expr =
+            codegen_unwrap_typecast_chain(expr->expr_data.typecast_data.expr,
+                                          &saw_extended_cast);
+
+        if (!codegen_expr_is_byref_var_id(source_expr, ctx))
+            goto skip_byref_typecast_fastpath;
+
+        if (target_tag == REAL_TYPE || target_tag == EXTENDED_TYPE)
+        {
+            Register_t *addr_reg = NULL;
+            Register_t *result_reg = NULL;
+            char buffer[128];
+
+            inst_list = codegen_address_for_expr(
+                (struct Expression *)source_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+                return inst_list;
+
+            result_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (result_reg == NULL)
+                result_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (result_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            if (target_tag == EXTENDED_TYPE || saw_extended_cast)
+            {
+                if (codegen_target_is_windows())
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                free_arg_regs();
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", result_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                long long real_size = expr_effective_size_bytes(
+                    (struct Expression *)source_expr);
+                if (real_size <= 0)
+                    real_size = expr_effective_size_bytes(expr);
+                if (real_size <= 4)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovss\t(%s), %%xmm0\n", addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovsd\t(%s), %%xmm0\n", addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%xmm0, %s\n", result_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            free_reg(get_reg_stack(), addr_reg);
+            *out_reg = result_reg;
+            return inst_list;
+        }
+    }
+skip_byref_typecast_fastpath:
 
     inst_list = codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
 
@@ -7936,6 +8043,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         if (arg_infos != NULL && expected_type == REAL_TYPE)
             arg_infos[arg_num].expected_real_size =
                 codegen_param_real_storage_size(formal_arg_decl, ctx->symtab);
+        if (!is_var_param && formal_arg_decl != NULL &&
+            formal_arg_decl->type == TREE_VAR_DECL &&
+            expected_type == REAL_TYPE &&
+            formal_arg_decl->tree_data.var_decl_data.type != POINTER_TYPE &&
+            formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type != NULL &&
+            kgpc_type_is_pointer(formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type))
+        {
+            /* Some out/var real formals retain their scalar source tag while
+             * semantic analysis stores the ABI-level byref shape in cached_kgpc_type. */
+            is_var_param = 1;
+        }
+        is_pointer_like = (is_var_param || is_array_param || is_array_arg || formal_is_dynarray);
+        if (is_self_param && expected_type == REAL_TYPE)
+            is_pointer_like = 0;
+        if (arg_infos != NULL)
+            arg_infos[arg_num].is_pointer_like = is_pointer_like;
         int force_runtime_real_qword = 0;
         if (expected_type == REAL_TYPE)
         {
@@ -8974,6 +9097,20 @@ pass_value_arg:
                     inst_list = add_inst(inst_list, buffer);
                 }
 
+                if ((formal_decl_expects_string(formal_arg_decl) ||
+                     builtin_arg_expects_string(procedure_name, arg_num)) &&
+                    arg_expr != NULL &&
+                    arg_expr->type == EXPR_STRING &&
+                    expr_get_type_tag(arg_expr) != CHAR_TYPE)
+                {
+                    const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_duplicate");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
                 if (formal_decl_expects_wide_string(formal_arg_decl, ctx->symtab) &&
                     !codegen_expr_is_wide_string_value(arg_expr) &&
                     (expr_has_type_tag(arg_expr, STRING_TYPE) ||
@@ -9087,7 +9224,8 @@ pass_value_arg:
                   (arg_infos[i].expr->type == EXPR_TYPECAST &&
                    arg_infos[i].expr->expr_data.typecast_data.target_type == REAL_TYPE)));
             int is_extended_real = (arg_infos[i].expected_type == REAL_TYPE &&
-                arg_infos[i].expected_real_size == 16);
+                arg_infos[i].expected_real_size == 16 &&
+                !arg_infos[i].is_pointer_like);
             int use_sse = ((arg_infos[i].expected_type == REAL_TYPE) || actual_is_real) &&
                 !arg_infos[i].is_pointer_like && !is_extended_real;
             if (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS && is_external_c_function)
@@ -9352,7 +9490,8 @@ pass_value_arg:
         else if (arg_infos != NULL && arg_infos[i].spill != NULL)
         {
             Register_t *temp_reg = NULL;
-            if (expected_type == REAL_TYPE && expected_real_size == 16)
+            if (expected_type == REAL_TYPE && expected_real_size == 16 &&
+                !(arg_infos != NULL && arg_infos[i].is_pointer_like))
             {
                 if (!pass_on_stack)
                 {

@@ -5696,8 +5696,49 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
     
     if (value_is_real)
     {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+        int value_is_unknown_byref = 0;
+        if (value_expr != NULL && value_expr->type == EXPR_VAR_ID &&
+            value_expr->expr_data.id != NULL && expr_get_type_tag(value_expr) == UNKNOWN_TYPE &&
+            ctx->symtab != NULL)
+        {
+            HashNode_t *value_sym = NULL;
+            if (FindIdent(&value_sym, ctx->symtab, value_expr->expr_data.id) >= 0 &&
+                value_sym != NULL && value_sym->is_var_parameter)
+            {
+                value_is_unknown_byref = 1;
+            }
+        }
+
+        if (value_is_unknown_byref)
+        {
+            Register_t *value_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(value_expr, inst_list, ctx, &value_addr_reg);
+            if (codegen_had_error(ctx) || value_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reg);
+                free_reg(get_reg_stack(), value_reg);
+                if (width_reg != NULL)
+                    free_reg(get_reg_stack(), width_reg);
+                if (precision_reg != NULL)
+                    free_reg(get_reg_stack(), precision_reg);
+                return inst_list;
+            }
+            if (codegen_target_is_windows())
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", value_addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+            free_arg_regs();
+            free_reg(get_reg_stack(), value_addr_reg);
+            inst_list = add_inst(inst_list, "\tmovq\t%rax, %xmm0\n");
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
         if (has_width || has_precision)
         {
             if (width_reg == NULL)
@@ -6297,6 +6338,14 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     }
 
     const char *call_target = NULL;
+    int target_is_extended = 0;
+    if (value_expr != NULL)
+    {
+        KgpcType *value_kgpc = expr_get_kgpc_type(value_expr);
+        target_is_extended = (value_type_tag == EXTENDED_TYPE) ||
+            (value_kgpc != NULL && kgpc_type_is_extended(value_kgpc)) ||
+            codegen_expr_involves_extended(value_expr);
+    }
     switch (value_type_tag)
     {
         case BYTE_TYPE:
@@ -6315,10 +6364,12 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
             call_target = source_is_shortstring ? "kgpc_val_qword_ss" : "kgpc_val_qword";
             break;
         case REAL_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
+            call_target = source_is_shortstring
+                ? (target_is_extended ? "kgpc_val_extended_ss" : "kgpc_val_real_ss")
+                : (target_is_extended ? "kgpc_val_extended" : "kgpc_val_real");
             break;
         case EXTENDED_TYPE:
-            call_target = source_is_shortstring ? "kgpc_val_real_ss" : "kgpc_val_real";
+            call_target = source_is_shortstring ? "kgpc_val_extended_ss" : "kgpc_val_extended";
             break;
         default:
             call_target = NULL;

@@ -3094,6 +3094,23 @@ cleanup_constructor:
                 return inst_list;
             }
 
+            if (expr_type == EXTENDED_TYPE ||
+                (expr->resolved_kgpc_type != NULL &&
+                 kgpc_type_is_extended(expr->resolved_kgpc_type)))
+            {
+                if (codegen_target_is_windows())
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", target_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                free_arg_regs();
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+
             char load_value[80];
             int use_qword = expr_requires_qword(expr) ||
                 codegen_type_uses_qword(expr_type) ||

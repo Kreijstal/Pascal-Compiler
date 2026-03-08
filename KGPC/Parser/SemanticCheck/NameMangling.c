@@ -73,6 +73,20 @@ static const char *type_ref_base_name_or_id(const TypeRef *ref, const char *fall
     return base != NULL ? base : fallback;
 }
 
+static int mangle_type_id_is_extended(const char *type_id)
+{
+    return (type_id != NULL && strcasecmp(type_id, "Extended") == 0);
+}
+
+static int mangle_kgpc_type_is_extended_real(const KgpcType *type)
+{
+    if (type == NULL || !kgpc_type_is_real(type))
+        return 0;
+    if (kgpc_type_is_extended(type))
+        return 1;
+    return kgpc_type_real_storage_size(type) > 8;
+}
+
 static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
 {
     if (ref == NULL)
@@ -428,6 +442,9 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
                     type_ref_base_name_or_id(type_ref, type_id));
+                if (resolved_type == HASHVAR_REAL &&
+                    mangle_type_id_is_extended(type_ref_base_name_or_id(type_ref, type_id)))
+                    record_type_id = "Extended";
                 
                 // If not a built-in type, look it up in the symbol table
                 if (resolved_type == HASHVAR_UNTYPED) {
@@ -463,6 +480,9 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                                 record_type_id = type_node->type->info.points_to->info.record_info->type_id;
                             }
                         }
+                        if (resolved_type == HASHVAR_REAL &&
+                            mangle_kgpc_type_is_extended_real(type_node->type))
+                            record_type_id = "Extended";
                     }
                 }
             } else {
@@ -470,6 +490,9 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 {
                     // It's a built-in type, convert from parser token to semantic type
                     resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
+                    if (resolved_type == HASHVAR_REAL &&
+                        decl_tree->tree_data.var_decl_data.type == EXTENDED_TYPE)
+                        record_type_id = "Extended";
                 }
             }
 
@@ -478,6 +501,17 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 decl_tree->tree_data.var_decl_data.inline_record_type->type_id != NULL)
             {
                 record_type_id = decl_tree->tree_data.var_decl_data.inline_record_type->type_id;
+            }
+            if (resolved_type == HASHVAR_REAL &&
+                mangle_kgpc_type_is_extended_real(
+                    decl_tree->tree_data.var_decl_data.cached_kgpc_type))
+            {
+                record_type_id = "Extended";
+            }
+            if (resolved_type == HASHVAR_REAL && record_type_id == NULL &&
+                inline_alias != NULL && inline_alias->storage_size > 8)
+            {
+                record_type_id = "Extended";
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
@@ -605,7 +639,12 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
                 case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
                 case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
-                case HASHVAR_REAL:    type_suffix = "_ar"; break;   /* array of Real */
+                case HASHVAR_REAL:
+                    if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
+                        type_suffix = "_ax";
+                    else
+                        type_suffix = "_ar";
+                    break;
                 case HASHVAR_PCHAR:   type_suffix = "_as"; break;   /* array of String */
                 case HASHVAR_SHORTSTRING: type_suffix = "_ass"; break; /* array of ShortString */
                 case HASHVAR_BOOLEAN: type_suffix = "_ab"; break;   /* array of Boolean */
@@ -632,7 +671,12 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
                 case HASHVAR_LONGINT: type_suffix = "_li"; break;
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
-                case HASHVAR_REAL:    type_suffix = "_r"; break;
+                case HASHVAR_REAL:
+                    if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
+                        type_suffix = "_x";
+                    else
+                        type_suffix = "_r";
+                    break;
                 case HASHVAR_PCHAR:   type_suffix = "_s"; break; // For String (keep backwards compat)
                 case HASHVAR_SHORTSTRING: type_suffix = "_ss"; break; // ShortString
                 case HASHVAR_PANSICHAR: type_suffix = "_pc"; break; // For PAnsiChar/PChar
@@ -762,6 +806,9 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 }
                 else if (kgpc_type->kind == TYPE_KIND_PROCEDURE)
                     resolved_type = HASHVAR_PROCEDURE;
+                if (resolved_type == HASHVAR_REAL &&
+                    mangle_kgpc_type_is_extended_real(kgpc_type))
+                    record_type_id = "Extended";
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */

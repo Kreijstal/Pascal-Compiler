@@ -807,6 +807,8 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 {
     if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
     {
+        if (arg_decl->tree_data.var_decl_data.type == EXTENDED_TYPE)
+            return 16;
         if (arg_decl->tree_data.var_decl_data.type_id != NULL &&
             pascal_identifier_equals(arg_decl->tree_data.var_decl_data.type_id, "Extended"))
             return 16;
@@ -819,6 +821,14 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
     {
         if (kgpc_type_is_extended(resolved_type_node->type))
             return 16;
+        if (kgpc_type_is_real(resolved_type_node->type))
+        {
+            long long real_size = kgpc_type_real_storage_size(resolved_type_node->type);
+            if (real_size > 8)
+                return 16;
+            if (real_size > 0)
+                return (int)real_size;
+        }
         long long size = kgpc_type_sizeof(resolved_type_node->type);
         if (size > 0)
             return (int)size;
@@ -828,6 +838,14 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
     {
         if (kgpc_type_is_extended(cached_arg_type))
             return 16;
+        if (kgpc_type_is_real(cached_arg_type))
+        {
+            long long real_size = kgpc_type_real_storage_size(cached_arg_type);
+            if (real_size > 8)
+                return 16;
+            if (real_size > 0)
+                return (int)real_size;
+        }
         long long size = kgpc_type_sizeof(cached_arg_type);
         if (size > 0)
             return (int)size;
@@ -6086,7 +6104,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 while(scan_ids != NULL)
                 {
                     int scan_real_storage_size = 8;
-                    if (!scan_is_var && scan_type == REAL_TYPE)
+                    if (!scan_is_var && (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE))
                         scan_real_storage_size = codegen_real_param_storage_size(scan_decl,
                             NULL, scan_cached_type);
                     /* Float (REAL_TYPE) parameters that are not passed by reference
@@ -6094,7 +6112,9 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                      * register allocation for them so subsequent integer params
                      * get the correct registers. SSE regs are not clobbered by
                      * kgpc_move calls, so no presave slot is needed. */
-                    if (!scan_is_var && scan_type == REAL_TYPE && scan_real_storage_size < 16)
+                    if (!scan_is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
+                        scan_real_storage_size < 16)
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
                             scan_sse_index++;
@@ -6405,21 +6425,24 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             is_shortstring_param = 1;
                     }
 
-                    if (inferred_type_tag == REAL_TYPE)
+                    if (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE)
                         real_storage_size = codegen_real_param_storage_size(arg_decl,
                             resolved_type_node, cached_arg_type);
 
                     use_extended_stack_param =
                         (!is_var_param && !is_array_type && !is_shortstring_param &&
-                         inferred_type_tag == REAL_TYPE && real_storage_size == 16);
+                         (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                         real_storage_size == 16);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
                           type == PROCEDURE ||
-                          (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
+                          ((inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                           real_storage_size > 4));
                     int use_sse_reg = 0;
                     if (!is_var_param && !is_array_type && !is_shortstring_param &&
-                        inferred_type_tag == REAL_TYPE && real_storage_size < 16)
+                        (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                        real_storage_size < 16)
                         use_sse_reg = 1;
                     if (use_extended_stack_param)
                         arg_stack = add_l_z_bytes((char *)arg_ids->cur, 10);

@@ -69,6 +69,7 @@ static int semcheck_expr_best_context(const struct Expression *expr,
     int *out_line, int *out_col, int *out_source_index);
 static int semcheck_expr_list_best_context(ListNode_t *list,
     int *out_line, int *out_col, int *out_source_index);
+static int semcheck_expr_is_real_family(const struct Expression *expr);
 static int semcheck_expr_list_best_line(ListNode_t *list)
 {
     while (list != NULL)
@@ -2376,8 +2377,10 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             continue;
         }
 
+        int expr_is_real = (expr_type == REAL_TYPE) || semcheck_expr_is_real_family(expr);
+
         if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE &&
-            expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE &&
+            expr_type != BOOL && expr_type != POINTER_TYPE && !expr_is_real &&
             expr_type != CHAR_TYPE && expr_type != ENUM_TYPE && !expr_is_char_array)
         {
             semcheck_error_with_context("Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
@@ -2452,8 +2455,10 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
         int expr_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, INT_MAX, NO_MUTATE);
 
+        int expr_is_real = (expr_type == REAL_TYPE) || semcheck_expr_is_real_family(expr);
+
         if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE && 
-            expr_type != BOOL && expr_type != POINTER_TYPE && expr_type != REAL_TYPE && 
+            expr_type != BOOL && expr_type != POINTER_TYPE && !expr_is_real && 
             expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
         {
             semcheck_error_with_context("Error on line %d, WriteStr argument %d must be integer, real, boolean, string, pointer, or enum.\n",
@@ -2466,6 +2471,13 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
     }
 
     return return_val;
+}
+
+static int semcheck_expr_is_real_family(const struct Expression *expr)
+{
+    return (expr != NULL &&
+        expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_real(expr->resolved_kgpc_type));
 }
 
 static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -2499,7 +2511,8 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         expr_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, MUTATE);
         
-        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE && expr_type != REAL_TYPE)
+        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE &&
+            expr_type != REAL_TYPE && !semcheck_expr_is_real_family(expr))
         {
             semcheck_error_with_context("Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
                     stmt->line_num, arg_index);
