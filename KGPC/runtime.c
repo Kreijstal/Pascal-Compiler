@@ -4235,6 +4235,34 @@ void kgpc_string_assign_from_shortstring(char **target, const char *ss)
     *target = copy;
 }
 
+void kgpc_string_assign_from_char_array(char **target, const char *value, size_t max_len)
+{
+    if (target == NULL)
+        return;
+
+    char *existing = *target;
+    if (existing != NULL)
+        kgpc_string_release(existing);
+
+    if (value == NULL || max_len == 0)
+    {
+        *target = kgpc_alloc_empty_string();
+        return;
+    }
+
+    size_t len = kgpc_char_array_bounded_length(value, max_len);
+    char *copy = kgpc_string_alloc_with_length(len);
+    if (copy == NULL)
+    {
+        *target = kgpc_alloc_empty_string();
+        return;
+    }
+
+    if (len > 0)
+        memcpy(copy, value, len);
+    *target = copy;
+}
+
 void kgpc_string_assign_from_unicodestring(char **target, const uint16_t *value)
 {
     if (target == NULL)
