@@ -747,6 +747,33 @@ static int formal_decl_expects_string(Tree_t *decl)
     return 0;
 }
 
+static int formal_decl_expects_wide_string(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL || decl->type != TREE_VAR_DECL)
+        return 0;
+
+    if (decl->tree_data.var_decl_data.type_id != NULL)
+    {
+        const char *type_id = decl->tree_data.var_decl_data.type_id;
+        if (pascal_identifier_equals(type_id, "UnicodeString") ||
+            pascal_identifier_equals(type_id, "WideString"))
+            return 1;
+
+        if (symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, type_id) >= 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_wide_string(type_node->type))
+            {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static int builtin_arg_expects_string(const char *procedure_name, int arg_index)
 {
     (void)procedure_name;
@@ -790,6 +817,59 @@ static int mangled_call_expects_char(const struct Expression *call_expr, int arg
     /* suffix[0] = substr type, suffix[1] = value type */
     char type_char = (arg_index == 0) ? suffix[0] : suffix[1];
     return type_char == 'c';
+}
+
+static int codegen_expr_is_wide_string_value(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_wide_string(expr->resolved_kgpc_type))
+            return 1;
+
+        if (expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                return 1;
+            }
+        }
+    }
+
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+        if (ret_type != NULL && kgpc_type_is_wide_string(ret_type))
+            return 1;
+        if (call_type->info.proc_info.return_type_id != NULL &&
+            (pascal_identifier_equals(call_type->info.proc_info.return_type_id, "UnicodeString") ||
+             pascal_identifier_equals(call_type->info.proc_info.return_type_id, "WideString")))
+        {
+            return 1;
+        }
+    }
+
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.target_type_id != NULL &&
+        (pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "UnicodeString") ||
+         pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "WideString")))
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
@@ -4292,6 +4372,26 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
 
     inst_list = gencode_expr_tree(pointer_tree, inst_list, ctx, addr_reg);
     free_expr_tree(pointer_tree);
+
+    KgpcType *deref_type = expr_get_kgpc_type(expr);
+    if (deref_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(deref_type);
+        if (kgpc_type_is_record(deref_type) ||
+            kgpc_type_is_array(deref_type) ||
+            (deref_type->kind == TYPE_KIND_PRIMITIVE &&
+             deref_type->info.primitive_type_tag == SET_TYPE) ||
+            kgpc_type_is_shortstring(deref_type) ||
+            (alias != NULL && (alias->is_shortstring || alias->is_set)))
+        {
+            char addr_buf[64];
+            snprintf(addr_buf, sizeof(addr_buf), "\tmovq\t%s, %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+            inst_list = add_inst(inst_list, addr_buf);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
 
     long long load_size = expr_effective_size_bytes(expr);
     char buffer[64];
@@ -8870,6 +8970,20 @@ pass_value_arg:
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                if (formal_decl_expects_wide_string(formal_arg_decl, ctx->symtab) &&
+                    !codegen_expr_is_wide_string_value(arg_expr) &&
+                    (expr_has_type_tag(arg_expr, STRING_TYPE) ||
+                     expr_has_type_tag(arg_expr, SHORTSTRING_TYPE) ||
+                     arg_expr->type == EXPR_STRING))
+                {
+                    const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_from_string");
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }

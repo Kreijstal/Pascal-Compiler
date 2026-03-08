@@ -2036,6 +2036,7 @@ static KgpcStringHeader *kgpc_string_header(const char *value);
 static void kgpc_string_set_insert(const void *value);
 static void kgpc_string_release(char *value);
 static void kgpc_default_unicode2ansi_move(const uint16_t *source, char **dest, int32_t cp, int64_t len);
+static void kgpc_default_ansi2unicode_move(const char *source, int32_t cp, uint16_t **dest, int64_t len);
 extern void *widestringmanager[25];
 extern int32_t DefaultSystemCodePage;
 int64_t kgpc_widechar_length(const uint16_t *value);
@@ -4232,6 +4233,64 @@ void kgpc_string_assign_from_shortstring(char **target, const char *ss)
     if (len > 0)
         memcpy(copy, ss + 1, len);
     *target = copy;
+}
+
+void kgpc_string_assign_from_unicodestring(char **target, const uint16_t *value)
+{
+    if (target == NULL)
+        return;
+
+    if (value == NULL)
+    {
+        kgpc_string_assign(target, "");
+        return;
+    }
+
+    KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+    if (hdr != NULL && hdr->elementsize == 1)
+    {
+        kgpc_string_assign(target, (const char *)value);
+        return;
+    }
+
+    int64_t len = kgpc_unicode_known_length(value);
+    char *ansi = NULL;
+    typedef void (*Unicode2AnsiProc)(const uint16_t *, char **, int32_t, int64_t);
+    Unicode2AnsiProc conv = (Unicode2AnsiProc)widestringmanager[19];
+    int32_t cp = DefaultSystemCodePage;
+    if (conv != NULL)
+        conv(value, &ansi, cp, len);
+    else
+        kgpc_default_unicode2ansi_move(value, &ansi, cp, len);
+
+    kgpc_string_assign_take(target, ansi);
+}
+
+uint16_t *kgpc_unicodestring_from_string(const char *value)
+{
+    if (value == NULL)
+        return kgpc_alloc_empty_unicodestring();
+
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr != NULL && hdr->elementsize == 2)
+    {
+        kgpc_string_retain(value);
+        return (uint16_t *)value;
+    }
+
+    uint16_t *result = NULL;
+    int64_t len = kgpc_string_length(value);
+    typedef void (*Ansi2UnicodeProc)(const char *, int32_t, uint16_t **, int64_t);
+    Ansi2UnicodeProc conv = (Ansi2UnicodeProc)widestringmanager[20];
+    int32_t cp = DefaultSystemCodePage;
+    if (conv != NULL)
+        conv(value, cp, &result, len);
+    else
+        kgpc_default_ansi2unicode_move(value, cp, &result, len);
+
+    if (result == NULL)
+        return kgpc_alloc_empty_unicodestring();
+    return result;
 }
 
 char *kgpc_strpas(const char *p)

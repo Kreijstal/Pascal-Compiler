@@ -1356,6 +1356,29 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
         if (lower == 0 && upper == 255)
             return 1;
     }
+    if (expr->type == EXPR_POINTER_DEREF)
+    {
+        const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+        {
+            KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+            if (points_to != NULL)
+            {
+                struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
+                if (kgpc_type_is_shortstring(points_to) ||
+                    (alias != NULL && alias->is_shortstring))
+                    return 1;
+                if (points_to->kind == TYPE_KIND_ARRAY &&
+                    points_to->info.array_info.element_type != NULL &&
+                    points_to->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                    points_to->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
+                    points_to->info.array_info.start_index == 0 &&
+                    points_to->info.array_info.end_index == 255)
+                    return 1;
+            }
+        }
+    }
     return 0;
 }
 
@@ -1372,6 +1395,21 @@ static int expr_is_char_array_expr(const struct Expression *expr)
         expr->resolved_kgpc_type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
     {
         return 1;
+    }
+    if (expr->type == EXPR_POINTER_DEREF)
+    {
+        const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL && pointer_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+        {
+            KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+            if (points_to != NULL &&
+                points_to->kind == TYPE_KIND_ARRAY &&
+                points_to->info.array_info.element_type != NULL &&
+                points_to->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                points_to->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                return 1;
+        }
     }
     return 0;
 }

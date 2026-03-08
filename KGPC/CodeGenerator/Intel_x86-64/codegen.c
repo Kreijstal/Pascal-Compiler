@@ -1711,42 +1711,47 @@ static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s\n", typeinfo_label);
     fprintf(ctx->output_file, "%s:\n", typeinfo_label);
-    fprintf(ctx->output_file, "\t.long\t%d\n", count);
-    fprintf(ctx->output_file, "\t.long\t0\n");
 
-    int index = 0;
-    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    /* Emit enum TypeInfo/TTypeData in the layout KGPC's current FPC RTL
+     * TypInfo build expects:
+     *   Kind: Byte = tkEnumeration (3)
+     *   Name: ShortString
+     *   AttributeTable: Pointer = nil
+     *   OrdType: Byte = otULong (5) for default zero-based enums
+     *   MinValue, MaxValue: LongInt
+     *   BaseType: PPTypeInfo (nil)
+     *   NameList: packed shortstrings for each literal, followed by unit/type owner
+     * This keeps KGPC-emitted enum RTTI aligned with the TypInfo offsets
+     * produced by KGPC's own FPC RTL build. */
     {
-        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
-        if (name_len > 0)
-        {
-            char *name_label = (char *)malloc((size_t)name_len + 1);
-            if (name_label != NULL)
-            {
-                snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
-                fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
-                free(name_label);
-            }
-        }
+        char escaped_type_name[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_type_name, type_name, sizeof(escaped_type_name));
+        fprintf(ctx->output_file, "\t.byte\t3,%zu\n", strlen(type_name));
+        if (type_name[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_type_name);
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+        fprintf(ctx->output_file, "\t.byte\t5\n");
+        fprintf(ctx->output_file, "\t.long\t0,%d\n", count - 1);
+        fprintf(ctx->output_file, "\t.quad\t0\n");
     }
 
-    index = 0;
-    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next)
     {
         const char *literal = (lit->cur != NULL) ? (const char *)lit->cur : "";
-        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
-        char *name_label = NULL;
-        if (name_len > 0)
-            name_label = (char *)malloc((size_t)name_len + 1);
         char escaped_literal[CODEGEN_MAX_INST_BUF];
         escape_string(escaped_literal, literal, sizeof(escaped_literal));
-        if (name_label != NULL)
-        {
-            snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
-            fprintf(ctx->output_file, "%s:\n", name_label);
-            fprintf(ctx->output_file, "\t.string \"%s\"\n", escaped_literal);
-            free(name_label);
-        }
+        fprintf(ctx->output_file, "\t.byte\t%zu\n", strlen(literal));
+        if (literal[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_literal);
+    }
+
+    {
+        char escaped_owner_name[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_owner_name, type_name, sizeof(escaped_owner_name));
+        fprintf(ctx->output_file, "\t.byte\t%zu\n", strlen(type_name));
+        if (type_name[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_owner_name);
+        fprintf(ctx->output_file, "\t.byte\t0\n");
     }
     free(typeinfo_label);
 }

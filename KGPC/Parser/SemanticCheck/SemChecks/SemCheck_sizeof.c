@@ -28,15 +28,15 @@
 
 /* Forward declarations for internal functions */
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
-    long long *size_out, int depth, int line_num);
+    long long *size_out, int is_packed, int depth, int line_num);
 static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *variant,
-    long long *size_out, int depth, int line_num);
+    long long *size_out, int is_packed, int depth, int line_num);
 static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    long long start_offset, int depth, int line_num, int *found);
+    long long start_offset, int is_packed, int depth, int line_num, int *found);
 static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int depth, int line_num, int *found);
+    int is_packed, int depth, int line_num, int *found);
 static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num);
 static long long align_offset(long long offset, int alignment);
@@ -170,6 +170,16 @@ static long long fpc_enum_storage_size_from_alias(const struct TypeAlias *alias)
 {
     if (alias != NULL && alias->storage_size > 0)
         return alias->storage_size;
+    if (alias != NULL && alias->enum_literals != NULL)
+    {
+        int count = list_length(alias->enum_literals);
+        if (count <= 0)
+            return 4;
+        if (count <= 0x100)
+            return 1;
+        if (count <= 0x10000)
+            return 2;
+    }
     return 4;
 }
 
@@ -340,7 +350,8 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         }
     }
 
-    if (sizeof_from_record_members(symtab, record->fields, &computed_size, depth + 1, line_num) != 0)
+    if (sizeof_from_record_members(symtab, record->fields, &computed_size,
+            record->is_packed, depth + 1, line_num) != 0)
     {
         if (!was_cached) record->has_cached_size = 0;
         return 1;
@@ -377,6 +388,9 @@ static int get_record_alignment(SymTab_t *symtab, struct RecordType *record,
     int depth, int line_num)
 {
     if (record == NULL)
+        return 1;
+
+    if (record->is_packed)
         return 1;
 
     if (depth > SIZEOF_RECURSION_LIMIT)
@@ -573,7 +587,7 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 }
 
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
-    long long *size_out, int depth, int line_num)
+    long long *size_out, int is_packed, int depth, int line_num)
 {
     if (size_out == NULL)
         return 1;
@@ -600,7 +614,8 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
             if (field_alignment > max_alignment)
                 max_alignment = field_alignment;
 
-            total = align_offset(total, field_alignment);
+            if (!is_packed)
+                total = align_offset(total, field_alignment);
 
             /* Add field size */
             long long field_size = 0;
@@ -619,7 +634,8 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         {
             struct VariantPart *variant = (struct VariantPart *)cur->cur;
             long long variant_size = 0;
-            if (sizeof_from_variant_part(symtab, variant, &variant_size, depth + 1, line_num) != 0)
+            if (sizeof_from_variant_part(symtab, variant, &variant_size,
+                    is_packed, depth + 1, line_num) != 0)
                 return 1;
             total += variant_size;
         }
@@ -627,14 +643,15 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
     }
 
     /* Align total size to the maximum alignment (struct padding at end) */
-    total = align_offset(total, max_alignment);
+    if (!is_packed)
+        total = align_offset(total, max_alignment);
 
     *size_out = total;
     return 0;
 }
 
 static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *variant,
-    long long *size_out, int depth, int line_num)
+    long long *size_out, int is_packed, int depth, int line_num)
 {
     if (size_out == NULL)
         return 1;
@@ -667,7 +684,7 @@ static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *varian
             struct VariantBranch *branch = (struct VariantBranch *)cur->cur;
             long long branch_size = 0;
             if (sizeof_from_record_members(symtab, branch->members, &branch_size,
-                    depth + 1, line_num) != 0)
+                    is_packed, depth + 1, line_num) != 0)
                 return 1;
             if (branch_size > max_size)
                 max_size = branch_size;
@@ -683,7 +700,7 @@ static int sizeof_from_variant_part(SymTab_t *symtab, struct VariantPart *varian
 
 static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    int depth, int line_num, int *found)
+    int is_packed, int depth, int line_num, int *found)
 {
     if (found != NULL)
         *found = 0;
@@ -700,7 +717,7 @@ static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
             long long branch_offset = 0;
             int branch_found = 0;
             if (find_field_in_members(symtab, branch->members, field_name, out_field,
-                    &branch_offset, 0, depth + 1, line_num, &branch_found) != 0)
+                    &branch_offset, 0, is_packed, depth + 1, line_num, &branch_found) != 0)
                 return 1;
             if (branch_found)
             {
@@ -719,7 +736,7 @@ static int find_field_in_variant(SymTab_t *symtab, struct VariantPart *variant,
 
 static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
     const char *field_name, struct RecordField **out_field, long long *offset_out,
-    long long start_offset, int depth, int line_num, int *found)
+    long long start_offset, int is_packed, int depth, int line_num, int *found)
 {
     if (found != NULL)
         *found = 0;
@@ -755,7 +772,8 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
 
                 /* Align offset to field's alignment requirement */
                 int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
-                offset = align_offset(offset, field_alignment);
+                if (!is_packed)
+                    offset = align_offset(offset, field_alignment);
 
                 /* Check if this is the target field */
                 if (field->name != NULL &&
@@ -782,7 +800,7 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
             long long variant_field_offset = 0;
             int variant_found = 0;
             if (find_field_in_variant(symtab, variant, field_name, out_field,
-                    &variant_field_offset, depth + 1, line_num, &variant_found) != 0)
+                    &variant_field_offset, is_packed, depth + 1, line_num, &variant_found) != 0)
                 return 1;
             if (variant_found)
             {
@@ -794,7 +812,8 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
             }
 
             long long variant_size = 0;
-            if (sizeof_from_variant_part(symtab, variant, &variant_size, depth + 1, line_num) != 0)
+            if (sizeof_from_variant_part(symtab, variant, &variant_size,
+                    is_packed, depth + 1, line_num) != 0)
                 return 1;
             offset += variant_size;
         }
@@ -1118,7 +1137,7 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
                 return 1;
         }
         if (find_field_in_members(symtab, current->fields, field_name, out_field,
-                &offset, start_offset, 0, line_num, &found) != 0)
+                &offset, start_offset, current->is_packed, 0, line_num, &found) != 0)
             return 1;
 
         if (found)

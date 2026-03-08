@@ -1979,6 +1979,59 @@ static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenCont
     return inst_list;
 }
 
+static int codegen_expr_is_wide_string_value(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_wide_string(expr->resolved_kgpc_type))
+            return 1;
+
+        if (expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                return 1;
+            }
+        }
+    }
+
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+        if (ret_type != NULL && kgpc_type_is_wide_string(ret_type))
+            return 1;
+        if (call_type->info.proc_info.return_type_id != NULL &&
+            (pascal_identifier_equals(call_type->info.proc_info.return_type_id, "UnicodeString") ||
+             pascal_identifier_equals(call_type->info.proc_info.return_type_id, "WideString")))
+        {
+            return 1;
+        }
+    }
+
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.target_type_id != NULL &&
+        (pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "UnicodeString") ||
+         pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "WideString")))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
 /* Call kgpc_string_to_char_array(dest, src, size) to copy string to char array */
 static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, int array_size)
@@ -8134,6 +8187,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
              * Also check for typecasts from char to string (e.g. AnsiString(char_value))
              * where expr_get_type_tag returns STRING_TYPE but the actual value is a char. */
             int assign_type = expr_get_type_tag(assign_expr);
+            int target_is_wide_string = codegen_expr_is_wide_string_value(var_expr);
+            int source_is_wide_string = codegen_expr_is_wide_string_value(assign_expr);
             if (assign_type == CHAR_TYPE)
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
@@ -8160,6 +8215,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (assign_type == SHORTSTRING_TYPE)
                 inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
                     "kgpc_string_assign_from_shortstring");
+            else if (!target_is_wide_string && source_is_wide_string)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
+                    "kgpc_string_assign_from_unicodestring");
             else
                 inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
             free_reg(get_reg_stack(), value_reg);
