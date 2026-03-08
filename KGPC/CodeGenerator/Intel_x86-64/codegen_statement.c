@@ -18,6 +18,31 @@
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../identifier_utils.h"
+
+static int codegen_statement_return_storage_size(KgpcType *return_type)
+{
+    if (return_type == NULL)
+        return 0;
+
+    long long type_size = kgpc_type_sizeof(return_type);
+    if (type_size > 0 && type_size <= INT_MAX)
+        return (int)type_size;
+
+    if (return_type->kind == TYPE_KIND_POINTER)
+        return 8;
+
+    if (return_type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int tag = kgpc_type_get_primitive_tag(return_type);
+        if (tag == EXTENDED_TYPE)
+            return 10;
+        if (tag == STRING_TYPE || tag == POINTER_TYPE || tag == INT64_TYPE || tag == QWORD_TYPE)
+            return 8;
+        return 4;
+    }
+
+    return 0;
+}
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
@@ -41,6 +66,8 @@ static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_exp
     struct RecordType *record_type);
 static void codegen_with_pop(CodeGenContext *ctx);
 static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
+    int *out_is_real, int *out_size);
+static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
     int *out_is_real, int *out_size);
 static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -3951,14 +3978,33 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
     if (ctx == NULL || symtab == NULL)
         return;
 
-    const char *lookup_id = ctx->current_subprogram_mangled;
-    if (lookup_id == NULL)
-        lookup_id = ctx->current_subprogram_id;
-    if (lookup_id == NULL)
+    const char *lookup_id = ctx->current_subprogram_id;
+    const char *lookup_mangled = ctx->current_subprogram_mangled;
+    if (lookup_id == NULL && lookup_mangled == NULL)
         return;
 
     HashNode_t *func_node = NULL;
-    if (FindIdent(&func_node, symtab, lookup_id) >= 0 && func_node != NULL &&
+    if (lookup_id != NULL)
+        FindIdent(&func_node, symtab, lookup_id);
+
+    if (func_node == NULL && lookup_id != NULL && lookup_mangled != NULL)
+    {
+        ListNode_t *matches = FindAllIdents(symtab, lookup_id);
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, lookup_mangled) == 0)
+            {
+                func_node = candidate;
+                break;
+            }
+        }
+        if (matches != NULL)
+            DestroyList(matches);
+    }
+
+    if (func_node != NULL &&
         func_node->type != NULL)
     {
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
@@ -3968,15 +4014,10 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
         if (return_type->kind == TYPE_KIND_PRIMITIVE)
         {
             int tag = kgpc_type_get_primitive_tag(return_type);
-            if (out_is_real != NULL && tag == REAL_TYPE)
+            if (out_is_real != NULL && (tag == REAL_TYPE || tag == EXTENDED_TYPE))
                 *out_is_real = 1;
             if (out_size != NULL)
-            {
-                if (tag == STRING_TYPE || tag == POINTER_TYPE || tag == INT64_TYPE)
-                    *out_size = 8;
-                else
-                    *out_size = 4;
-            }
+                *out_size = codegen_statement_return_storage_size(return_type);
         }
         else if (return_type->kind == TYPE_KIND_POINTER)
         {
@@ -3988,12 +4029,36 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
             /* Use actual record size for movl vs movq decision */
             if (out_size != NULL)
             {
-                long long type_size = kgpc_type_sizeof(return_type);
-                if (type_size > 0)
-                    *out_size = (int)type_size;
+                *out_size = codegen_statement_return_storage_size(return_type);
             }
         }
     }
+}
+
+static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
+    int *out_is_real, int *out_size)
+{
+    if (out_is_real != NULL)
+        *out_is_real = 0;
+    if (out_size != NULL)
+        *out_size = 0;
+    if (ctx == NULL)
+        return;
+
+    StackNode_t *return_var = find_label("Result");
+    if (return_var == NULL && ctx->current_subprogram_id != NULL)
+        return_var = find_label((char *)ctx->current_subprogram_id);
+    if (return_var == NULL && ctx->current_subprogram_mangled != NULL)
+        return_var = find_label((char *)ctx->current_subprogram_mangled);
+    if (return_var == NULL)
+        return;
+
+    long long size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+    if (out_size != NULL && size > 0 && size <= INT_MAX)
+        *out_size = (int)size;
+
+    if (out_is_real != NULL && return_var->element_size == 10)
+        *out_is_real = 1;
 }
 
 static int codegen_current_loop_finally_depth(const CodeGenContext *ctx)
@@ -4541,6 +4606,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             int return_is_real = 0;
             int return_size = 0;
             codegen_get_current_return_info(ctx, symtab, &return_is_real, &return_size);
+            if (return_size == 0 || (return_is_real == 0 && return_size == 10))
+            {
+                int slot_is_real = 0;
+                int slot_size = 0;
+                codegen_get_current_return_slot_info(ctx, &slot_is_real, &slot_size);
+                if (return_size == 0)
+                    return_size = slot_size;
+                if (return_is_real == 0)
+                    return_is_real = slot_is_real;
+            }
 
             /* Handle Exit(value) - evaluate value and return it */
             struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
@@ -4553,20 +4628,39 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 if (result_reg != NULL && codegen_had_error(ctx) == 0)
                 {
                     char buffer[128];
-                    int expr_is_real = expr_has_type_tag(return_expr, REAL_TYPE);
+                    int expr_is_real = expr_has_type_tag(return_expr, REAL_TYPE) ||
+                        expr_has_type_tag(return_expr, EXTENDED_TYPE);
                     int is_real = return_is_real || expr_is_real;
 
                     int use_qword = return_size >= 8;
                     if (return_size == 0)
                     {
+                        KgpcType *expr_type = expr_get_kgpc_type(return_expr);
+                        long long expr_size = 0;
+                        if (expr_type != NULL)
+                            expr_size = kgpc_type_sizeof(expr_type);
+
                         if (expr_has_type_tag(return_expr, STRING_TYPE) ||
                             expr_has_type_tag(return_expr, POINTER_TYPE) ||
-                            expr_has_type_tag(return_expr, INT64_TYPE))
+                            expr_has_type_tag(return_expr, INT64_TYPE) ||
+                            expr_uses_qword_kgpctype(return_expr) ||
+                            expr_size >= 8)
                             use_qword = 1;
                     }
 
                     if (!is_real)
                     {
+                        int value_is_qword = expr_uses_qword_kgpctype(return_expr);
+                        if (!value_is_qword && return_expr != NULL)
+                        {
+                            int return_tag = expr_get_type_tag(return_expr);
+                            if (codegen_type_uses_qword(return_tag))
+                                value_is_qword = 1;
+                        }
+                        if (use_qword && !value_is_qword)
+                            inst_list = codegen_sign_extend32_to64(inst_list,
+                                result_reg->bit_32, result_reg->bit_64);
+
                         if (use_qword)
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", result_reg->bit_64);
                         else
@@ -6208,7 +6302,10 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         if (increment_reg == NULL)
             return inst_list;
         char buffer[64];
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", increment_reg->bit_32);
+        if (target_expr != NULL && expr_uses_qword_kgpctype(target_expr))
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", increment_reg->bit_64);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", increment_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
     }
 
@@ -6216,8 +6313,11 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     int target_is_long = (target_type_tag == LONGINT_TYPE);
     int target_is_pointer = (target_type_tag == POINTER_TYPE);
     int target_uses_qword = target_is_long || target_is_pointer;
+    if (!target_uses_qword && target_expr != NULL)
+        target_uses_qword = expr_uses_qword_kgpctype(target_expr);
 
-    if (target_uses_qword)
+    if (target_uses_qword &&
+        (value_expr == NULL || !expr_uses_qword_kgpctype(value_expr)))
         inst_list = codegen_sign_extend32_to64(inst_list, increment_reg->bit_32, increment_reg->bit_64);
 
     long long pointer_step = 1;

@@ -167,6 +167,8 @@ FPC_RTL_FLAGS = [
     "-Fu" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "x86_64"),
     "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
+    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
 ]
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)

@@ -31,6 +31,9 @@
 
 #include "../../identifier_utils.h"
 
+static int codegen_return_storage_size(KgpcType *return_type);
+static int codegen_return_type_id_storage_size(const char *return_type_id);
+
 int codegen_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
@@ -5116,59 +5119,33 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     int return_size = DOUBLEWORD;
-    /* Check for Single type (4 bytes) return by checking return_type_id */
-    int is_single_return = (func->return_type_id != NULL && 
-                           pascal_identifier_equals(func->return_type_id, "Single"));
     if (returns_dynamic_array)
         return_size = dynamic_array_descriptor_size;
     else if (has_record_return)
         return_size = (int)record_return_size;
-    else if (is_single_return)
-        return_size = 4;  /* Single is 4 bytes */
+    else if (func->return_type_id != NULL)
+    {
+        int return_type_id_size = codegen_return_type_id_storage_size(func->return_type_id);
+        if (return_type_id_size > 0)
+            return_size = return_type_id_size;
+    }
     else if (func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
         /* Get return type from KgpcType */
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
-        if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
+        if (return_type != NULL)
         {
-            int tag = kgpc_type_get_primitive_tag(return_type);
             struct TypeAlias *alias = kgpc_type_get_type_alias(return_type);
-            if (alias != NULL && alias->storage_size > 0)
-            {
-                return_size = (int)alias->storage_size;
-            }
-            /* Check for Single type (4 bytes) by type_id */
-            else if (alias != NULL && alias->target_type_id != NULL &&
+            if (alias != NULL && alias->target_type_id != NULL &&
                      pascal_identifier_equals(alias->target_type_id, "Single"))
             {
                 return_size = 4;  /* Single is 4 bytes */
             }
-            else switch (tag)
+            else
             {
-                case LONGINT_TYPE:
-                    return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
-                    break;
-                case INT64_TYPE:
-                    return_size = 8;  /* 64-bit Int64 */
-                    break;
-                case REAL_TYPE:
-                case STRING_TYPE:  /* PCHAR */
-                case POINTER_TYPE:
-                    return_size = 8;
-                    break;
-                case BOOL:
-                    return_size = DOUBLEWORD;
-                    break;
-                default:
-                    return_size = DOUBLEWORD;
-                    break;
+                return_size = codegen_return_storage_size(return_type);
             }
-        }
-        else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
-        {
-            /* Pointer return (e.g., PChar) */
-            return_size = 8;
         }
     }
     else if (func_node != NULL && func_node->type != NULL &&
@@ -5444,15 +5421,20 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             /* Use actual return type size (not stack slot size which may be
              * padded) to choose movl vs movq.  A 4-byte record allocated in
              * an 8-byte slot would otherwise read 4 bytes of garbage. */
-            long long actual_return_size = return_var->size;
+            long long actual_return_size =
+                return_var->element_size > 0 ? return_var->element_size : return_var->size;
+            if (func->return_type_id != NULL)
+            {
+                int return_type_id_size = codegen_return_type_id_storage_size(func->return_type_id);
+                if (return_type_id_size > 0)
+                    actual_return_size = return_type_id_size;
+            }
             if (func_node != NULL && func_node->type != NULL)
             {
                 KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
                 if (ret_type != NULL)
                 {
-                    long long type_size = kgpc_type_sizeof(ret_type);
-                    if (type_size > 0)
-                        actual_return_size = type_size;
+                    actual_return_size = codegen_return_storage_size(ret_type);
                 }
             }
             if (actual_return_size >= 8)
@@ -5514,6 +5496,59 @@ static int get_return_type_size(int return_type)
         return_type == INT64_TYPE)
         return 8;
     return 4; /* Default for INT_TYPE, LONGINT_TYPE, BOOL, CHAR_TYPE, etc. */
+}
+
+static int codegen_return_storage_size(KgpcType *return_type)
+{
+    if (return_type == NULL)
+        return DOUBLEWORD;
+
+    long long type_size = kgpc_type_sizeof(return_type);
+    if (type_size > 0 && type_size <= INT_MAX)
+        return (int)type_size;
+
+    if (return_type->kind == TYPE_KIND_POINTER)
+        return 8;
+
+    if (return_type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int tag = kgpc_type_get_primitive_tag(return_type);
+        if (tag == EXTENDED_TYPE)
+            return 10;
+        if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE ||
+            tag == INT64_TYPE || tag == QWORD_TYPE)
+            return 8;
+    }
+
+    return DOUBLEWORD;
+}
+
+static int codegen_return_type_id_storage_size(const char *return_type_id)
+{
+    if (return_type_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(return_type_id, "Single"))
+        return 4;
+    if (pascal_identifier_equals(return_type_id, "Extended"))
+        return 10;
+    if (pascal_identifier_equals(return_type_id, "Int64") ||
+        pascal_identifier_equals(return_type_id, "QWord") ||
+        pascal_identifier_equals(return_type_id, "UInt64") ||
+        pascal_identifier_equals(return_type_id, "NativeInt") ||
+        pascal_identifier_equals(return_type_id, "NativeUInt") ||
+        pascal_identifier_equals(return_type_id, "SizeInt") ||
+        pascal_identifier_equals(return_type_id, "SizeUInt") ||
+        pascal_identifier_equals(return_type_id, "PtrInt") ||
+        pascal_identifier_equals(return_type_id, "PtrUInt") ||
+        pascal_identifier_equals(return_type_id, "IntPtr") ||
+        pascal_identifier_equals(return_type_id, "UIntPtr") ||
+        pascal_identifier_equals(return_type_id, "Pointer") ||
+        pascal_identifier_equals(return_type_id, "PChar") ||
+        pascal_identifier_equals(return_type_id, "PAnsiChar"))
+        return 8;
+
+    return 0;
 }
 
 /* Helper to add an alias label for a return variable so multiple identifiers share storage. */

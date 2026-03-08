@@ -103,6 +103,7 @@ function AnsiUpperCase(const S: AnsiString): AnsiString;
 function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
+procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
@@ -689,6 +690,11 @@ end;
 function SameText(const S1, S2: AnsiString): Boolean;
 begin
     SameText := CompareText(S1, S2) = 0;
+end;
+
+procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
+begin
+    Dest := Dest + S;
 end;
 
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;

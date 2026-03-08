@@ -6233,18 +6233,28 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         inst_list = add_inst(inst_list, buffer);
     }
 
-    if (first_lower_bound > 0)
     {
-        snprintf(buffer, sizeof(buffer), "\tsubl\t$%lld, %s\n", first_lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else if (first_lower_bound < 0)
-    {
-        snprintf(buffer, sizeof(buffer), "\taddl\t$%lld, %s\n", -first_lower_bound, index_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
-    }
+        int index_uses_qword = expression_uses_qword(index_expr);
+        if (first_lower_bound > 0)
+        {
+            if (index_uses_qword)
+                snprintf(buffer, sizeof(buffer), "\tsubq\t$%lld, %s\n", first_lower_bound, index_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tsubl\t$%lld, %s\n", first_lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (first_lower_bound < 0)
+        {
+            if (index_uses_qword)
+                snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", -first_lower_bound, index_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t$%lld, %s\n", -first_lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
 
-    inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+        if (!index_uses_qword)
+            inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+    }
 
     static const int scaled_sizes[] = {1, 2, 4, 8};
     int can_scale = 0;
@@ -6330,21 +6340,33 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     extra_lower_bound = 1; /* Default to 1-based */
                 }
 
-                if (extra_lower_bound > 0)
                 {
-                    snprintf(buffer, sizeof(buffer), "\tsubl\t$%lld, %s\n",
-                        extra_lower_bound, extra_idx_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-                else if (extra_lower_bound < 0)
-                {
-                    snprintf(buffer, sizeof(buffer), "\taddl\t$%lld, %s\n",
-                        -extra_lower_bound, extra_idx_reg->bit_32);
-                    inst_list = add_inst(inst_list, buffer);
-                }
+                    int extra_uses_qword = expression_uses_qword(extra_idx_expr);
+                    if (extra_lower_bound > 0)
+                    {
+                        if (extra_uses_qword)
+                            snprintf(buffer, sizeof(buffer), "\tsubq\t$%lld, %s\n",
+                                extra_lower_bound, extra_idx_reg->bit_64);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\tsubl\t$%lld, %s\n",
+                                extra_lower_bound, extra_idx_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    else if (extra_lower_bound < 0)
+                    {
+                        if (extra_uses_qword)
+                            snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n",
+                                -extra_lower_bound, extra_idx_reg->bit_64);
+                        else
+                            snprintf(buffer, sizeof(buffer), "\taddl\t$%lld, %s\n",
+                                -extra_lower_bound, extra_idx_reg->bit_32);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
 
-                inst_list = codegen_sign_extend32_to64(inst_list,
-                    extra_idx_reg->bit_32, extra_idx_reg->bit_64);
+                    if (!extra_uses_qword)
+                        inst_list = codegen_sign_extend32_to64(inst_list,
+                            extra_idx_reg->bit_32, extra_idx_reg->bit_64);
+                }
 
                 if (stride != 1)
                 {
