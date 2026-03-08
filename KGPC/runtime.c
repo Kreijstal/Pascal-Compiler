@@ -7067,6 +7067,32 @@ long atomicexchange_i_i(long *target, long new_val)
     return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
 }
 
+/* Int64 overloads of atomic intrinsics */
+long long atomicincrement_i64(long long *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+long long atomicincrement_i64_i64(long long *target, long long value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
+long long atomicdecrement_i64(long long *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+long long atomicexchange_i64_i64(long long *target, long long new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
+}
+
 long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
 {
     return __sync_fetch_and_add(target, value);
