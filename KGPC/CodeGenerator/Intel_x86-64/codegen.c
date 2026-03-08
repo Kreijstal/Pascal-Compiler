@@ -5254,8 +5254,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    
-    if (returns_dynamic_array)
+
+    /* For nostackframe+assembler functions, the asm block handles the return
+     * value entirely.  Skip the compiler-generated return-value epilogue,
+     * which would read from an invalid %rbp offset. */
+    if (func->nostackframe)
+    {
+        /* Skip return value loading — asm is responsible */
+    }
+    else if (returns_dynamic_array)
     {
 #if KGPC_ENABLE_REG_DEBUG
         const char *prev_reg_ctx = g_reg_debug_context;

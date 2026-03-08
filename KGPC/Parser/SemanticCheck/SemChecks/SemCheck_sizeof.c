@@ -560,6 +560,13 @@ static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,
         {
             struct RecordField *field = (struct RecordField *)cur->cur;
 
+            /* Class variables are stored as globals, not in the instance layout */
+            if (field != NULL && field->is_class_var)
+            {
+                cur = cur->next;
+                continue;
+            }
+
             /* Get field alignment and align current offset */
             int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
             if (field_alignment > max_alignment)
@@ -698,6 +705,26 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
             struct RecordField *field = (struct RecordField *)cur->cur;
             if (field != NULL && !record_field_is_hidden(field))
             {
+                /* Class variables are stored as globals, not in the instance
+                 * layout.  They can still be looked up by name (for access
+                 * resolution) but must not contribute to the running offset. */
+                if (field->is_class_var)
+                {
+                    if (field->name != NULL &&
+                        pascal_identifier_equals(field->name, field_name))
+                    {
+                        if (out_field != NULL)
+                            *out_field = field;
+                        if (offset_out != NULL)
+                            *offset_out = -1; /* sentinel: not an instance offset */
+                        if (found != NULL)
+                            *found = 1;
+                        return 0;
+                    }
+                    cur = cur->next;
+                    continue;
+                }
+
                 /* Align offset to field's alignment requirement */
                 int field_alignment = get_field_alignment(symtab, field, depth + 1, line_num);
                 offset = align_offset(offset, field_alignment);
