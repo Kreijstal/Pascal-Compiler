@@ -833,6 +833,30 @@ static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
                 if (unit_index > 0 && sub->tree_data.subprogram_data.source_unit_index == 0)
                     sub->tree_data.subprogram_data.source_unit_index = unit_index;
+                /* Also mark formal parameters so type resolution (e.g. TSize)
+                 * picks the correct unit-specific type during overload matching,
+                 * even before semcheck_subprogram processes this function. */
+                ListNode_t *arg = sub->tree_data.subprogram_data.args_var;
+                while (arg != NULL)
+                {
+                    if (arg->type == LIST_TREE && arg->cur != NULL)
+                    {
+                        Tree_t *arg_tree = (Tree_t *)arg->cur;
+                        if (arg_tree->type == TREE_VAR_DECL)
+                        {
+                            arg_tree->tree_data.var_decl_data.defined_in_unit = 1;
+                            if (unit_index > 0 && arg_tree->tree_data.var_decl_data.source_unit_index == 0)
+                                arg_tree->tree_data.var_decl_data.source_unit_index = unit_index;
+                        }
+                        else if (arg_tree->type == TREE_ARR_DECL)
+                        {
+                            arg_tree->tree_data.arr_decl_data.defined_in_unit = 1;
+                            if (unit_index > 0 && arg_tree->tree_data.arr_decl_data.source_unit_index == 0)
+                                arg_tree->tree_data.arr_decl_data.source_unit_index = unit_index;
+                        }
+                    }
+                    arg = arg->next;
+                }
             }
         }
         node = node->next;

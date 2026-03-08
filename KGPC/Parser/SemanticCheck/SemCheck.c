@@ -3120,29 +3120,36 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                     continue;
                 }
             }
-            int unit_rank = 0;
-            if (prefer_unit_defined)
-                unit_rank = node->defined_in_unit ? 0 : 1;
-            else
-                unit_rank = node->defined_in_unit ? 1 : 0;
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
             int same_unit = 0;
             int effective_unit_index = (override_unit_index != 0)
                 ? override_unit_index : g_semcheck_current_unit_index;
+            /* Also consider symtab->unit_context — set when processing unit
+             * subprogram bodies during program-level semcheck */
+            if (effective_unit_index == 0 && symtab->unit_context > 0)
+                effective_unit_index = symtab->unit_context;
+            int unit_rank = 0;
+            if (prefer_unit_defined || effective_unit_index > 0)
+                /* In unit context, prefer unit-defined types over local program types */
+                unit_rank = node->defined_in_unit ? 0 : 1;
+            else
+                unit_rank = node->defined_in_unit ? 1 : 0;
             if (!prefer_unit_defined && effective_unit_index != 0 &&
                 node->source_unit_index != 0 &&
                 node->source_unit_index == effective_unit_index)
                 same_unit = 1;
 
-            if (debug_tsize)
+            if (debug_tsize || (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                lookup_id != NULL && pascal_identifier_equals(lookup_id, "TSize")))
             {
                 const char *uname = unit_registry_get(node->source_unit_index);
                 fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
-                    "unit_rank=%d scope_level=%d same_unit=%d type=%p kind=%d\n",
+                    "unit_rank=%d scope_level=%d same_unit=%d effective_unit=%d unit_context=%d type=%p kind=%d\n",
                     node->id ? node->id : "<null>", node->defined_in_unit,
                     node->source_unit_index, uname ? uname : "?",
-                    unit_rank, scope_level, same_unit,
+                    unit_rank, scope_level, same_unit, effective_unit_index,
+                    symtab->unit_context,
                     (void *)node->type, node->type ? node->type->kind : -1);
             }
 
@@ -6564,6 +6571,20 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         scope_level, (void *)existing,
                         tree->tree_data.type_decl_data.kind);
                 }
+                if (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                    pascal_identifier_equals(type_id, "TSize"))
+                {
+                    fprintf(stderr, "[TSIZE-FLOW] tree: defined_in_unit=%d src_unit=%d kind=%d | existing=%p scope=%d",
+                        tree->tree_data.type_decl_data.defined_in_unit,
+                        tree->tree_data.type_decl_data.source_unit_index,
+                        tree->tree_data.type_decl_data.kind,
+                        (void *)existing, scope_level);
+                    if (existing != NULL)
+                        fprintf(stderr, " ex_defined_in_unit=%d ex_src_unit=%d ex_has_record=%d",
+                            existing->defined_in_unit, existing->source_unit_index,
+                            get_record_type_from_node(existing) != NULL);
+                    fprintf(stderr, "\n");
+                }
                 if (scope_level == 0 && existing != NULL)
                 {
                     /* If the existing symbol is a non-record alias and we are now defining
@@ -6576,6 +6597,12 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (tree->tree_data.type_decl_data.source_unit_index != 0 &&
                         existing->source_unit_index != 0 &&
                         tree->tree_data.type_decl_data.source_unit_index != existing->source_unit_index)
+                        cross_unit_replace = 1;
+                    /* A local type (source_unit_index=0) shadowing a unit type
+                     * must also be pushed as a separate entry, not replaced
+                     * in-place, so unit functions still see their original type. */
+                    if (tree->tree_data.type_decl_data.source_unit_index == 0 &&
+                        existing->source_unit_index != 0)
                         cross_unit_replace = 1;
                     if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
                         existing->hash_type == HASHTYPE_TYPE &&
@@ -6957,6 +6984,13 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         }
 
                         int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
+                        if (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                            pascal_identifier_equals(type_id, "TSize"))
+                        {
+                            fprintf(stderr, "[TSIZE-PUSH] push result=%d tree_defined_in_unit=%d tree_src_unit=%d\n",
+                                result, tree->tree_data.type_decl_data.defined_in_unit,
+                                tree->tree_data.type_decl_data.source_unit_index);
+                        }
                         if (getenv("KGPC_DEBUG_FORWARD_CLASS") && record_info != NULL && record_info->is_class)
                         {
                             fprintf(stderr, "[FWD-PRE] type='%s' push_result=%d fields=%p\n",
@@ -15483,6 +15517,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
     }
+    /* Set unit_context early — before args processing — so type resolution
+     * for parameter types (e.g. TSize) picks the correct unit-specific type
+     * rather than a shadowing local program type. */
+    int saved_unit_context = symtab->unit_context;
+    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
+        subprogram->tree_data.subprogram_data.source_unit_index > 0)
+    {
+        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
+    }
+
     {
         int before_args = return_val;
         int saved_imported_unit = g_semcheck_imported_decl_unit_index;
@@ -15678,15 +15722,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
     }
 
-    int saved_unit_context = symtab->unit_context;
-    /* Set unit_context for the entire subprogram (args + locals + body)
-     * so FindIdent resolves types from this unit's dependencies correctly. */
-    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
-        subprogram->tree_data.subprogram_data.source_unit_index > 0)
-    {
-        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
-    }
-
     {
         int before_local = return_val;
         return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
@@ -15877,6 +15912,16 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
+    /* Set unit_context during predeclaration so type resolution (e.g. for
+     * parameter types like TSize) picks the correct unit-specific type
+     * instead of a local program type that happens to shadow it. */
+    int saved_unit_context = symtab->unit_context;
+    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
+        subprogram->tree_data.subprogram_data.source_unit_index > 0)
+    {
+        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
+    }
+
     char *id_to_use_for_lookup;
 
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
@@ -15951,6 +15996,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.tree_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
+        symtab->unit_context = saved_unit_context;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -15958,6 +16004,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.exact_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
+        symtab->unit_context = saved_unit_context;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -15965,6 +16012,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.body_pair_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
+        symtab->unit_context = saved_unit_context;
         return 0;  /* Declaration/body pair already tracked */
     }
     
@@ -16079,6 +16127,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s returning error: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
 
+    symtab->unit_context = saved_unit_context;
     return return_val;
 }
 
