@@ -1999,8 +1999,8 @@ int semcheck_funccall(int *type_return,
                     {
                         self_type_name = self_node->type->type_alias->target_type_id;
                     }
-                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                        self_type_tag, self_type_name);
+                    struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                        self_type_tag, self_type_name, id);
                     if (helper_record != NULL)
                     {
                         self_record = helper_record;
@@ -4725,7 +4725,8 @@ int semcheck_funccall(int *type_return,
                 }
             }
 
-            helper_record = semcheck_lookup_type_helper(symtab, helper_tag, helper_name);
+            helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                helper_tag, helper_name, id);
             if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
                 first_arg->expr_data.id != NULL)
             {
@@ -4743,8 +4744,8 @@ int semcheck_funccall(int *type_return,
                             var_helper_name = var_alias->alias_name;
                     }
                     if (var_helper_name != NULL)
-                        helper_record = semcheck_lookup_type_helper(symtab,
-                            UNKNOWN_TYPE, var_helper_name);
+                        helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                            UNKNOWN_TYPE, var_helper_name, id);
                 }
             }
         }

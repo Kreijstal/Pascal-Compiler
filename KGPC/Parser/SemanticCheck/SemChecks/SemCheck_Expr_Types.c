@@ -2494,15 +2494,8 @@ SKIP_SELF_FIELD_REWRITE:
             /* Check for type helpers on Pointer type before giving up.
              * Type helpers can be defined for Pointer, PChar, etc. */
             const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-            const char *alias_type_name = NULL;
-            if (record_expr->resolved_kgpc_type != NULL &&
-                record_expr->resolved_kgpc_type->type_alias != NULL &&
-                record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
-            {
-                alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
-            }
-            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
-                alias_type_name != NULL ? alias_type_name : expr_type_name);
+            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                record_type, expr_type_name, field_id);
             if (helper_record != NULL)
             {
                 record_type = RECORD_TYPE;
@@ -2520,13 +2513,6 @@ SKIP_SELF_FIELD_REWRITE:
     else
     {
         const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-        const char *alias_type_name = NULL;
-        if (record_expr->resolved_kgpc_type != NULL &&
-            record_expr->resolved_kgpc_type->type_alias != NULL &&
-            record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
-        {
-            alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
-        }
         /* When the record_expr is literally "Self" inside a type helper
          * method body, use the current method's owning helper type rather
          * than the most-recently-registered helper for this base type.
@@ -2549,11 +2535,11 @@ SKIP_SELF_FIELD_REWRITE:
             }
         }
         if (helper_record == NULL)
-            helper_record = semcheck_lookup_type_helper(symtab, record_type,
-                alias_type_name != NULL ? alias_type_name : expr_type_name);
+            helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                record_type, expr_type_name, field_id);
         if (helper_record == NULL && is_real_family_type(record_type))
         {
-            const char *helper_base = alias_type_name != NULL ? alias_type_name : expr_type_name;
+            const char *helper_base = expr_type_name;
             if (helper_base != NULL)
             {
                 char helper_name[256];
@@ -3421,8 +3407,8 @@ SKIP_SELF_FIELD_REWRITE:
         if (record_info != NULL && !record_type_is_class(record_info) &&
             record_info->type_id != NULL && !record_info->is_type_helper)
         {
-            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                UNKNOWN_TYPE, record_info->type_id);
+            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                UNKNOWN_TYPE, record_info->type_id, field_id);
             if (helper_record != NULL)
             {
                 HashNode_t *method_node = semcheck_find_class_method(symtab,
@@ -3507,7 +3493,8 @@ SKIP_SELF_FIELD_REWRITE:
             (pascal_identifier_equals(record_info->helper_base_type_id, "AnsiString") ||
              pascal_identifier_equals(record_info->helper_base_type_id, "String") ||
              pascal_identifier_equals(record_info->helper_base_type_id, "ShortString") ||
-             pascal_identifier_equals(record_info->helper_base_type_id, "UnicodeString")))
+             pascal_identifier_equals(record_info->helper_base_type_id, "UnicodeString") ||
+             pascal_identifier_equals(record_info->helper_base_type_id, "WideString")))
         {
             if (pascal_identifier_equals(field_id, "Length"))
             {

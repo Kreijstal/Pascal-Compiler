@@ -91,5 +91,7 @@ const char *semcheck_get_current_method_owner(void);
 void semcheck_register_type_helper(struct RecordType *record_info, SymTab_t *symtab);
 struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
     int base_type_tag, const char *type_name);
+struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
+    int base_type_tag, const char *type_name, const char *member_name);
 
 #endif

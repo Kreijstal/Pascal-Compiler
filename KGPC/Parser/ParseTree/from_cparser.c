@@ -4054,11 +4054,19 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("shortstring");
         return SHORTSTRING_TYPE;
     }
-    if (strcasecmp(name, "string") == 0 ||
-        strcasecmp(name, "ansistring") == 0 ||
-        strcasecmp(name, "widestring") == 0) {
+    if (strcasecmp(name, "string") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "ansistring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("AnsiString");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "widestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("WideString");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "shortstring") == 0) {
@@ -6331,10 +6339,12 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         
         if (type_tag != UNKNOWN_TYPE) {
             KgpcType *type = create_primitive_type(type_tag);
-            /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
+            /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
             if (type != NULL && preserved_type_id != NULL &&
-                (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
-                 strcasecmp(preserved_type_id, "UnicodeString") == 0)) {
+                (strcasecmp(preserved_type_id, "AnsiString") == 0 ||
+                 strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0 ||
+                 strcasecmp(preserved_type_id, "WideString") == 0)) {
                 /* Create a TypeAlias to preserve the original type name */
                 struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
                 if (alias != NULL) {

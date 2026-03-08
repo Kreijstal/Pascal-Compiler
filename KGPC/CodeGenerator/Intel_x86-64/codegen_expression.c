@@ -6302,10 +6302,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         {
             if (ptr_expr->pointer_subtype == SHORTSTRING_TYPE ||
                 (ptr_expr->pointer_subtype_id != NULL &&
-                 (pascal_identifier_equals(ptr_expr->pointer_subtype_id, "ShortString") ||
-                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "AnsiString") ||
-                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "UnicodeString") ||
-                  pascal_identifier_equals(ptr_expr->pointer_subtype_id, "WideString"))))
+                 pascal_identifier_equals(ptr_expr->pointer_subtype_id, "ShortString")))
             {
                 shortstring_index = 1;
             }
