@@ -802,7 +802,8 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                         struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                         const char *lookup_id = NULL;
                         if (method != NULL)
-                            lookup_id = method->mangled_name != NULL ? method->mangled_name : method->name;
+                            lookup_id = method->resolved_mangled_id != NULL ? method->resolved_mangled_id :
+                                (method->mangled_name != NULL ? method->mangled_name : method->name);
                         if (lookup_id != NULL)
                         {
                             Tree_t *sub = map_find(map, lookup_id);

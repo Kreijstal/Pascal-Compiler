@@ -8634,6 +8634,140 @@ if (record_info->parent_class_name != NULL) {
     return 0;
 }
 
+static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
+    ListNode_t *type_decls)
+{
+    if (symtab == NULL || type_decls == NULL)
+        return;
+
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_TYPE_DECL)
+            continue;
+
+        struct RecordType *record_info = NULL;
+        const char *class_name = tree->tree_data.type_decl_data.id;
+
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+            struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+            if (alias->inline_record_type != NULL)
+                record_info = alias->inline_record_type;
+            else if (tree->tree_data.type_decl_data.kgpc_type != NULL) {
+                KgpcType *alias_type = tree->tree_data.type_decl_data.kgpc_type;
+                if (kgpc_type_is_record(alias_type))
+                    record_info = kgpc_type_get_record(alias_type);
+                else if (kgpc_type_is_pointer(alias_type) &&
+                         alias_type->info.points_to != NULL &&
+                         kgpc_type_is_record(alias_type->info.points_to))
+                    record_info = kgpc_type_get_record(alias_type->info.points_to);
+            }
+        }
+
+        if (record_info == NULL || !record_info->is_class ||
+            record_info->method_templates == NULL || class_name == NULL)
+            continue;
+
+        for (ListNode_t *tmpl_cur = record_info->method_templates;
+             tmpl_cur != NULL; tmpl_cur = tmpl_cur->next) {
+            if (tmpl_cur->type != LIST_METHOD_TEMPLATE || tmpl_cur->cur == NULL)
+                continue;
+
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
+            if (tmpl->name == NULL)
+                continue;
+
+            ListNode_t *bindings = NULL;
+            int method_count = 0;
+            int already_registered = 0;
+            get_class_methods(class_name, &bindings, &method_count);
+            for (ListNode_t *bcur = bindings; bcur != NULL; bcur = bcur->next) {
+                ClassMethodBinding *binding = (ClassMethodBinding *)bcur->cur;
+                if (binding != NULL && binding->method_name != NULL &&
+                    strcasecmp(binding->method_name, tmpl->name) == 0) {
+                    already_registered = 1;
+                    break;
+                }
+            }
+            if (bindings != NULL)
+                DestroyList(bindings);
+
+            if (!already_registered) {
+                from_cparser_register_method_template(
+                    class_name,
+                    tmpl->name,
+                    tmpl->is_virtual,
+                    tmpl->is_override,
+                    tmpl->is_static,
+                    from_cparser_count_params_ast(tmpl->params_ast));
+            }
+        }
+
+        build_class_vmt(symtab, record_info, class_name, tree->line_num);
+
+        for (ListNode_t *tmpl_cur = record_info->method_templates;
+             tmpl_cur != NULL; tmpl_cur = tmpl_cur->next) {
+            if (tmpl_cur->type != LIST_METHOD_TEMPLATE || tmpl_cur->cur == NULL)
+                continue;
+
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
+            if (tmpl->name == NULL || (!tmpl->is_virtual && !tmpl->is_override))
+                continue;
+
+            size_t base_len = strlen(class_name) + 2 + strlen(tmpl->name) + 1;
+            char *base_name = (char *)malloc(base_len);
+            if (base_name == NULL)
+                continue;
+            snprintf(base_name, base_len, "%s__%s", class_name, tmpl->name);
+
+            const char *resolved_id = NULL;
+            int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            for (ListNode_t *m = matches; m != NULL; m = m->next) {
+                HashNode_t *cand = (HashNode_t *)m->cur;
+                if (cand == NULL || cand->type == NULL ||
+                    cand->type->kind != TYPE_KIND_PROCEDURE)
+                    continue;
+                if (cand->type->info.proc_info.definition == NULL)
+                    continue;
+                int count = ListLength(cand->type->info.proc_info.params);
+                if (!tmpl->is_static && count > 0)
+                    count -= 1;
+                if (count != wanted_params)
+                    continue;
+                resolved_id = cand->mangled_id;
+                if (cand->type->info.proc_info.definition != NULL &&
+                    cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
+                    resolved_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
+                break;
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            free(base_name);
+
+            if (resolved_id == NULL)
+                continue;
+
+            for (ListNode_t *vmt_node = record_info->methods; vmt_node != NULL; vmt_node = vmt_node->next) {
+                struct MethodInfo *mi = (struct MethodInfo *)vmt_node->cur;
+                if (mi == NULL || mi->name == NULL)
+                    continue;
+                if (strcasecmp(mi->name, tmpl->name) != 0)
+                    continue;
+                free(mi->mangled_name);
+                mi->mangled_name = strdup(resolved_id);
+                if (mi->resolved_mangled_id != NULL)
+                    free(mi->resolved_mangled_id);
+                mi->resolved_mangled_id = strdup(resolved_id);
+                mi->is_override = 1;
+                break;
+            }
+        }
+    }
+}
+
 /* Helper function to resolve constant identifier to integer value
  * Returns 0 on success, 1 on failure */
 static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
@@ -10118,6 +10252,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         else if (alias_record->is_class)
                         {
                             detect_default_indexed_property(alias_record, NULL);
+                        }
+
+                        if (alias_record->is_class)
+                        {
+                            int vmt_result = build_class_vmt(symtab, alias_record,
+                                tree->tree_data.type_decl_data.id, tree->line_num);
+                            if (vmt_result > 0)
+                                return_val += vmt_result;
                         }
                         
                         /* Skip size computation for generic templates (not yet specialized)
@@ -12525,6 +12667,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after subprograms: %d\n", return_val);
 #endif
+
+    semcheck_refresh_generic_specialization_vmts(
+        symtab, tree->tree_data.program_data.type_declaration);
+    semcheck_timing_step("refresh generic vmts", &t0);
 
     return_val += semcheck_stmt(symtab, tree->tree_data.program_data.body_statement, INT_MAX);
     semcheck_timing_step("body", &t0);

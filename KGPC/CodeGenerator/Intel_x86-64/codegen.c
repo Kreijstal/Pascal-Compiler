@@ -33,6 +33,8 @@
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
+static int codegen_float_native_distance(Tree_t *sub);
+static ListNode_t *g_codegen_available_subprograms = NULL;
 
 int codegen_tag_from_kgpc(const KgpcType *type)
 {
@@ -137,6 +139,88 @@ static void codegen_set_destroy(CodeGenStringSet *set)
     }
 }
 /* ---- End string hash set ---- */
+
+static int codegen_list_contains_string(ListNode_t *list, const char *value)
+{
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next) {
+        if (cur->type == LIST_STRING && cur->cur != NULL &&
+            strcmp((const char *)cur->cur, value) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (sub == NULL || sub->type != TREE_SUBPROGRAM) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        if (sub->tree_data.subprogram_data.statement_list == NULL) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (mangled_id != NULL) {
+            int this_unit = sub->tree_data.subprogram_data.source_unit_index;
+            int has_later_override = 0;
+            int current_dist = codegen_float_native_distance(sub);
+            ListNode_t *later = sub_list->next;
+            while (later != NULL) {
+                if (later->type == LIST_TREE && later->cur != NULL) {
+                    Tree_t *later_sub = (Tree_t *)later->cur;
+                    if (later_sub->type == TREE_SUBPROGRAM &&
+                        later_sub->tree_data.subprogram_data.statement_list != NULL &&
+                        later_sub->tree_data.subprogram_data.mangled_id != NULL &&
+                        later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
+                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0) {
+                        int later_dist = codegen_float_native_distance(later_sub);
+                        if (later_dist <= current_dist) {
+                            has_later_override = 1;
+                            break;
+                        }
+                    }
+                }
+                later = later->next;
+            }
+            if (has_later_override) {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
+        if (mangled_id != NULL &&
+            (strcmp(mangled_id, "arctan2_r_r") == 0 ||
+             strcmp(mangled_id, "tan_r") == 0 ||
+             strcmp(mangled_id, "cotan_r") == 0 ||
+             strcmp(mangled_id, "copysign_r_r") == 0)) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (mangled_id != NULL && !codegen_list_contains_string(g_codegen_available_subprograms, mangled_id)) {
+            ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
+            if (g_codegen_available_subprograms == NULL)
+                g_codegen_available_subprograms = node;
+            else
+                g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+        }
+
+        if (sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_collect_available_subprogram_labels(sub->tree_data.subprogram_data.subprograms);
+
+        sub_list = sub_list->next;
+    }
+}
 
 static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
 {
@@ -2146,6 +2230,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    g_codegen_available_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -2159,6 +2244,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
+    codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
     codegen_vmt(ctx, symtab, tree);
 
     prgm_name = codegen_program(tree, ctx, symtab);
@@ -2170,6 +2256,11 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     {
         DestroyList(ctx->emitted_subprograms);
         ctx->emitted_subprograms = NULL;
+    }
+    if (g_codegen_available_subprograms != NULL)
+    {
+        DestroyList(g_codegen_available_subprograms);
+        g_codegen_available_subprograms = NULL;
     }
 
     free_stackmng();
@@ -2199,6 +2290,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    g_codegen_available_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -2211,6 +2303,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
+    codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
 
     /* Generate code for unit subprograms */
     codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);
@@ -2333,6 +2426,11 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     {
         DestroyList(ctx->emitted_subprograms);
         ctx->emitted_subprograms = NULL;
+    }
+    if (g_codegen_available_subprograms != NULL)
+    {
+        DestroyList(g_codegen_available_subprograms);
+        g_codegen_available_subprograms = NULL;
     }
 
     free_stackmng();
@@ -2824,6 +2922,76 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Slot 11: vMsgStrPtr */
     fprintf(ctx->output_file, "\t.quad\t0\n");
 
+    /* Generic specializations can carry a cloned VMT from semcheck while the
+     * actual specialized methods are only visible here by their emitted
+     * symbols. Refresh matching virtual slots by method name before emitting
+     * the final table so inherited slots point at the specialized overrides. */
+    if (record_info->method_templates != NULL && record_info->methods != NULL &&
+        class_label != NULL) {
+        for (ListNode_t *tmpl_node = record_info->method_templates;
+             tmpl_node != NULL; tmpl_node = tmpl_node->next) {
+            if (tmpl_node->type != LIST_METHOD_TEMPLATE || tmpl_node->cur == NULL)
+                continue;
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_node->cur;
+            if (tmpl->name == NULL || (!tmpl->is_virtual && !tmpl->is_override))
+                continue;
+
+            size_t base_len = strlen(class_label) + 2 + strlen(tmpl->name) + 1;
+            char *base_name = (char *)malloc(base_len);
+            if (base_name == NULL)
+                continue;
+            snprintf(base_name, base_len, "%s__%s", class_label, tmpl->name);
+
+            const char *resolved_id = NULL;
+            int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            const char *fallback_id = NULL;
+            for (ListNode_t *m = matches; m != NULL; m = m->next) {
+                HashNode_t *cand = (HashNode_t *)m->cur;
+                if (cand == NULL || cand->type == NULL ||
+                    cand->type->kind != TYPE_KIND_PROCEDURE ||
+                    cand->type->info.proc_info.definition == NULL)
+                    continue;
+                if (fallback_id == NULL) {
+                    fallback_id = cand->mangled_id;
+                    if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
+                        fallback_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
+                }
+                int count = ListLength(cand->type->info.proc_info.params);
+                if (!tmpl->is_static && count > 0)
+                    count -= 1;
+                if (count != wanted_params)
+                    continue;
+                resolved_id = cand->mangled_id;
+                if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
+                    resolved_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
+                break;
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            free(base_name);
+
+            if (resolved_id == NULL)
+                resolved_id = fallback_id;
+            if (resolved_id == NULL)
+                continue;
+
+            for (ListNode_t *method_node = record_info->methods;
+                 method_node != NULL; method_node = method_node->next) {
+                struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                if (method == NULL || method->name == NULL)
+                    continue;
+                if (strcasecmp(method->name, tmpl->name) != 0)
+                    continue;
+                if (method->resolved_mangled_id != NULL &&
+                    method->resolved_mangled_id != method->mangled_name)
+                    free(method->resolved_mangled_id);
+                method->resolved_mangled_id = strdup(resolved_id);
+                break;
+            }
+        }
+    }
+
     /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
     if (record_info->methods != NULL) {
         ListNode_t *method_node = record_info->methods;
@@ -2831,8 +2999,17 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
             if (method != NULL && method->mangled_name != NULL) {
                 const char *full_mangled = method->resolved_mangled_id;
-                if (full_mangled != NULL) {
-                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                const char *fallback_mangled = method->mangled_name;
+                const char *slot_label = NULL;
+                if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
+                    codegen_list_contains_string(g_codegen_available_subprograms, full_mangled))
+                    slot_label = full_mangled;
+                if (slot_label == NULL && fallback_mangled != NULL &&
+                    g_codegen_available_subprograms != NULL &&
+                    codegen_list_contains_string(g_codegen_available_subprograms, fallback_mangled))
+                    slot_label = fallback_mangled;
+                if (slot_label != NULL) {
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
                 } else {
                     /* Abstract method or no definition - emit reference to runtime error handler */
                     fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");

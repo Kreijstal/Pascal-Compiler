@@ -3547,7 +3547,6 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             /* Use original arguments for non-inherited calls */
                             temp_args = call_expr->expr_data.function_call_data.args_expr;
                         }
-
                         struct Statement temp_call;
                         int temp_call_id_owned = 0;
                         memset(&temp_call, 0, sizeof(temp_call));
@@ -3622,8 +3621,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         /* Clean up temporary argument node if we created one */
                         if (temp_self_arg != NULL)
                         {
-                            temp_self_arg->next = NULL;  /* Detach to avoid double-free */
-                            /* Note: self_expr will be cleaned up with the statement tree */
+                            /* temp_self_arg now belongs to call_expr/temp_args for codegen. */
                         }
 
                         if (temp_call.stmt_data.procedure_call_data.mangled_id != NULL)
