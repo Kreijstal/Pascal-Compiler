@@ -1061,8 +1061,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             {
                 return semcheck_make_quality(MATCH_EXACT);
             }
-            /* Allow String <-> ShortString for var params (openstring compatibility) */
-            if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+            /* Allow String <-> ShortString for var params (openstring compatibility).
+             * Only permit this fallback for string/class/interface types —
+             * primitive integer types (e.g. Int64 vs Longint) must NOT match
+             * via assignment compatibility for var/out params. */
+            if (!(actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                  formal_kgpc->kind == TYPE_KIND_PRIMITIVE) &&
+                are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
                 return semcheck_make_quality(MATCH_PROMOTION);
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
