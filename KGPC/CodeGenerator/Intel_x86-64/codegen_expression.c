@@ -7847,7 +7847,19 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             else if (is_var_param || is_array_param || is_array_arg)
             {
                 Register_t *addr_reg = NULL;
-                if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+                if (arg_expr != NULL && arg_expr->type == EXPR_NIL)
+                {
+                    /* Passing nil to a var parameter: pass null pointer (0) */
+                    addr_reg = codegen_try_get_reg(&inst_list, ctx, "nil_var_param");
+                    if (addr_reg != NULL)
+                    {
+                        char buf[64];
+                        snprintf(buf, sizeof(buf), "\txorq\t%s, %s\n",
+                                 addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buf);
+                    }
+                }
+                else if (arg_expr != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
                 {
                     inst_list = codegen_materialize_array_literal(arg_expr, inst_list, ctx, &addr_reg);
                 }
