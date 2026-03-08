@@ -4,11 +4,11 @@ program OsRuntimeFeatures;
   {$define KGPC_COMPILER}
 {$endif}
 
-{$if defined(FPC) and not defined(KGPC)}
+{$if defined(FPC)}
 {$mode objfpc}{$H+}
 {$endif}
 
-{$if defined(FPC) and not defined(KGPC)}
+{$if defined(FPC)}
   {$ifdef MSWINDOWS}
   uses SysUtils, DynLibs, Windows;
   {$else}
@@ -32,7 +32,7 @@ begin
         BoolStr := 'FALSE';
 end;
 
-{$if defined(FPC) and not defined(KGPC)}
+{$if defined(FPC)}
 {$ifdef MSWINDOWS}
 function SetEnvironmentVariable(const Name, Value: string): Boolean;
 begin
@@ -72,7 +72,7 @@ end;
 
 function LoadUnixLibrary: NativeUInt;
 begin
-{$if defined(FPC) and not defined(KGPC)}
+{$if defined(FPC)}
     Result := NativeUInt(LoadLibrary('libc.so.6'));
     if Result = 0 then
         Result := NativeUInt(LoadLibrary('libc.so'));

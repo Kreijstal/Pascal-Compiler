@@ -1506,6 +1506,27 @@ int kgpc_is_debugger_present(void) {
 #endif
 }
 
+uint32_t kgpc_getpid(void) {
+#ifdef _WIN32
+    return (uint32_t)GetCurrentProcessId();
+#else
+    return (uint32_t)getpid();
+#endif
+}
+
+int32_t kgpc_setenv(const char *name, const char *value) {
+    if (name == NULL) return -1;
+#ifdef _WIN32
+    if (value == NULL)
+        return _putenv_s(name, "") == 0 ? 0 : -1;
+    return _putenv_s(name, value) == 0 ? 0 : -1;
+#else
+    if (value == NULL)
+        return unsetenv(name);
+    return setenv(name, value, 1);
+#endif
+}
+
 static int kgpc_normalize_crt_color(int color)
 {
     int normalized = color % 16;
