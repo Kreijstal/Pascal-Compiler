@@ -2833,28 +2833,16 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
     }
 
-    /* Emit class name as a ShortString (length byte + characters) for vClassName.
-     * The compiled FPC ClassName body does PVmt(Self)^.vClassName^ which generates
-     * two dereferences: one to load the PShortString from the VMT field, and one
-     * to dereference the PShortString. Our codegen treats the second ^ as a pointer
-     * load, so vClassName must be a PPShortString (pointer to PShortString). We emit:
-     *   __kgpc_vmt_classname_ptr_X: .quad __kgpc_vmt_classname_X  (PPShortString)
-     *   __kgpc_vmt_classname_X:     .byte len, .ascii "X"         (ShortString data)
-     * The VMT's vClassName slot points to the _ptr_ label. */
+    /* Emit class name as ShortString data for vClassName.
+     * The generated TObject.ClassName body loads the slot once and then treats
+     * the resulting address as a PShortString, so the VMT must point directly to
+     * the ShortString payload rather than an intermediate pointer cell. */
     {
         char classname_ss_label[256];
-        char classname_ptr_label[256];
         char escaped_classname[256];
         snprintf(classname_ss_label, sizeof(classname_ss_label),
             "__kgpc_vmt_classname_%s", class_label);
-        snprintf(classname_ptr_label, sizeof(classname_ptr_label),
-            "__kgpc_vmt_classname_ptr_%s", class_label);
         escape_string(escaped_classname, class_label, sizeof(escaped_classname));
-        /* Emit PShortString pointer (the PPShortString level) */
-        fprintf(ctx->output_file, "\t.align 8\n");
-        fprintf(ctx->output_file, "%s:\n", classname_ptr_label);
-        fprintf(ctx->output_file, "\t.quad\t%s\n", classname_ss_label);
-        /* Emit ShortString data */
         fprintf(ctx->output_file, "%s:\n", classname_ss_label);
         fprintf(ctx->output_file, "\t.byte\t%d\n", (int)strlen(class_label));
         fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_classname);
@@ -2900,8 +2888,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_parentref_%s\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
-    /* Slot 3: vClassName (PShortString — actually PPShortString for our codegen) */
-    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_ptr_%s\n", class_label);
+    /* Slot 3: vClassName (PShortString) */
+    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_%s\n", class_label);
     /* Slot 4: vDynamicTable */
     fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 5: vMethodTable */
