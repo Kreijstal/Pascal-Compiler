@@ -1692,19 +1692,11 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
     else if (expr->type == EXPR_TYPECAST)
     {
         struct Expression *inner = expr->expr_data.typecast_data.expr;
-        int target_type = expr->expr_data.typecast_data.target_type;
-        if (target_type == UNKNOWN_TYPE)
-            target_type = expr_get_type_tag(expr);
-        if (inner != NULL &&
-            expr->resolved_kgpc_type != NULL &&
-            kgpc_type_is_array(expr->resolved_kgpc_type))
-        {
-            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
-            goto cleanup;
-        }
-        if (inner != NULL &&
-            (target_type == RECORD_TYPE || target_type == FILE_TYPE || target_type == TEXT_TYPE || target_type == SHORTSTRING_TYPE ||
-             target_type == POINTER_TYPE || target_type == STRING_TYPE))
+        /* Typecast on an addressable expression: pass the address of the inner
+         * expression. This handles reinterpret casts for var parameters, e.g.
+         * InterLockedExchange(longint(TLSInitialized), ...) where the first
+         * param is 'var Target: longint' and TLSInitialized is longbool. */
+        if (inner != NULL && codegen_expr_is_addressable(inner))
         {
             inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
             goto cleanup;
