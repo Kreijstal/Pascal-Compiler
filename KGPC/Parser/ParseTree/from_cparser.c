@@ -40,7 +40,6 @@ static char* strndup(const char* s, size_t n)
 #include "../../identifier_utils.h"
 #include "../pascal_frontend.h"
 #include "../ErrVars.h"
-
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
  * ============================================================================
@@ -2466,6 +2465,7 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
     {
         if (cursor->sym != NULL && cursor->sym->name != NULL)
         {
+            /* Substitute generic type parameters (e.g. T -> TMyRecord) */
             for (int i = 0; i < record->generic_decl->num_type_params && i < record->num_generic_args; ++i)
             {
                 const char *param_name = record->generic_decl->type_parameters[i];
@@ -2477,6 +2477,14 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
                     cursor->sym->name = strdup(arg_name);
                     break;
                 }
+            }
+            /* Substitute the generic class name itself with the specialized name
+             * (e.g. TFPGList -> TFPGList$TMyRecord in method parameter types) */
+            if (record->generic_decl->name != NULL && record->type_id != NULL &&
+                strcasecmp(cursor->sym->name, record->generic_decl->name) == 0)
+            {
+                free(cursor->sym->name);
+                cursor->sym->name = strdup(record->type_id);
             }
         }
         if (cursor->child != NULL)
@@ -12778,10 +12786,26 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 destroy_expr(callee);
             return mk_functioncall(expr_node->line, NULL, args);
         }
+        int saw_inherited = 0;
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0) {
+                    saw_inherited = 1;
+                    child = child->next;
+                    /* Now child points to the method name; extract it */
+                    if (child != NULL && child->typ == PASCAL_T_IDENTIFIER) {
+                        id = dup_symbol(child);
+                        child = child->next;
+                    } else if (child != NULL) {
+                        ast_t *unwrapped = unwrap_pascal_node(child);
+                        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_IDENTIFIER) {
+                            id = dup_symbol(unwrapped);
+                            child = child->next;
+                        }
+                    }
+                }
+                else if (name != NULL)
                     id = dup_symbol(child);
             } else if (child->typ == PASCAL_T_TYPECAST &&
                        child->child != NULL &&
@@ -12803,12 +12827,15 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child->child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0)
+                    saw_inherited = 1;
+                else if (name != NULL)
                     id = dup_symbol(child->child);
             }
-            child = child->next;
+            if (!saw_inherited)
+                child = child->next;
         }
-        if (id == NULL) {
+        if (id == NULL && !saw_inherited) {
             for (ast_t *scan = expr_node->child; scan != NULL; scan = scan->next) {
                 ast_t *node = unwrap_pascal_node(scan);
                 if (node == NULL)
@@ -12821,20 +12848,21 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                     const char *name = ast_symbol_name(node);
                     if (name == NULL)
                         continue;
-                    if (strcasecmp(name, "inherited") == 0)
-                        continue;
                     id = strdup(name);
                     break;
                 }
             }
         }
-        if (id == NULL && g_current_method_name != NULL) {
+        if (id == NULL && saw_inherited && g_current_method_name != NULL) {
             /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
         }
         ListNode_t *args = convert_expression_list(child);
-        return mk_functioncall(expr_node->line, id, args);
+        struct Expression *result = mk_functioncall(expr_node->line, id, args);
+        if (saw_inherited && result != NULL)
+            result->expr_data.function_call_data.is_inherited_call = 1;
+        return result;
     }
     case PASCAL_T_ARRAY_ACCESS: {
         ast_t *array_node = expr_node->child;

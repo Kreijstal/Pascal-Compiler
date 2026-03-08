@@ -1005,6 +1005,66 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    /* Handle inherited calls in expression context: resolve to parent class method.
+     * E.g., T(inherited Get(Index)^) should call TFPSList.Get, not TFPGList.Get. */
+    if (expr->expr_data.function_call_data.is_inherited_call && id != NULL)
+    {
+        HashNode_t *self_node = NULL;
+        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+        {
+            struct RecordType *current_class = NULL;
+            if (self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
+                self_node->type->info.record_info != NULL)
+                current_class = self_node->type->info.record_info;
+            else if (self_node->type != NULL && self_node->type->kind == TYPE_KIND_POINTER &&
+                     self_node->type->info.points_to != NULL &&
+                     self_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                     self_node->type->info.points_to->info.record_info != NULL)
+                current_class = self_node->type->info.points_to->info.record_info;
+
+            if (current_class != NULL && current_class->parent_class_name != NULL)
+            {
+                /* Look up method in parent class; walk up ancestors if needed */
+                const char *search_parent = current_class->parent_class_name;
+                while (search_parent != NULL)
+                {
+                    char parent_mangled[512];
+                    snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
+                        search_parent, id);
+                    HashNode_t *parent_method = NULL;
+                    if (FindIdent(&parent_method, symtab, parent_mangled) != -1 &&
+                        parent_method != NULL)
+                    {
+                        /* Prepend Self as the first argument (method receiver) */
+                        struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
+                        ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
+                        self_arg->next = args_given;
+                        expr->expr_data.function_call_data.args_expr = self_arg;
+                        args_given = self_arg;
+
+                        /* Rewrite the call id to the parent's mangled name */
+                        free(expr->expr_data.function_call_data.id);
+                        expr->expr_data.function_call_data.id = strdup(parent_mangled);
+                        id = expr->expr_data.function_call_data.id;
+                        expr->expr_data.function_call_data.is_inherited_call = 0;
+                        break;
+                    }
+                    /* Walk up to grandparent */
+                    HashNode_t *parent_node = NULL;
+                    if (FindIdent(&parent_node, symtab, (char *)search_parent) != -1 &&
+                        parent_node != NULL)
+                    {
+                        struct RecordType *parent_record =
+                            get_record_type_from_node(parent_node);
+                        search_parent = parent_record ? parent_record->parent_class_name : NULL;
+                    }
+                    else
+                        search_parent = NULL;
+                }
+            }
+        }
+    }
+
     /* Parse recovery: Supports(intf, IInterfaceType, ref) can be parsed as
      * Supports(intf, IInterfaceType(ref)) due no-parens call rules.
      * Rewrite the second argument back into a type identifier and restore the

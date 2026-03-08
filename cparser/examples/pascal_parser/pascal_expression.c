@@ -1366,7 +1366,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         optional(sep_by(lazy(p), token(match(","))))
     );
     combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        token(keyword_ci("inherited")),
+        token(create_keyword_parser("inherited", PASCAL_T_IDENTIFIER)),
         optional(token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER))),
         optional(inherited_arg_list),
         NULL

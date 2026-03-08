@@ -527,6 +527,7 @@ struct Expression
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
+            int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
         } function_call_data;
 
         /* Integer number */
