@@ -2195,7 +2195,6 @@ class TestCompiler(unittest.TestCase):
         )
 
         expected_prompt = (
-            "\033[H\033[m\033[H\033[2J"
             "Enter name 1 out of 3\n"
             "Enter that person's email.\n"
             "Enter name 2 out of 3\n"
@@ -2276,7 +2275,7 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
             check=True,
         )
-        expected_output = "\x1b[H\x1b[m\x1b[H\x1b[2J0\n72\n10\n3\n"
+        expected_output = "0\n72\n10\n3\n"
         self.assertEqual(kgpc_run.stdout, expected_output)
 
     def test_run_executable_with_valgrind_pty_crlf_and_echo(self):
@@ -2284,6 +2283,17 @@ class TestCompiler(unittest.TestCase):
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_crlf_and_echo_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_crlf_and_echo_impl(self):
         helper_body = r"""
 sys.stdout.write("line1\n")
 sys.stdout.write("line2\r\n")
@@ -2321,6 +2331,17 @@ sys.stdout.flush()
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_timeout_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_timeout_impl(self):
         helper_body = r"""
 time.sleep(10.0)
 sys.stdout.write("should-not-see-this\n")
@@ -2344,6 +2365,17 @@ sys.stdout.flush()
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_vs_non_pty_equivalence_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_vs_non_pty_equivalence_impl(self):
         helper_body = r"""
 sys.stdout.write("hello\n")
 sys.stderr.write("world\n")

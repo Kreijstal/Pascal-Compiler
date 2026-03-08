@@ -6303,6 +6303,20 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
     snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
     inst_list = add_inst(inst_list, buffer);
 
+    /* Save the return value (code) before the value copy block clobbers %rax */
+    if (code_expr != NULL)
+    {
+        code_result_spill = add_l_t("val_code_result");
+        if (code_result_spill == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val result.");
+            goto cleanup;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", code_result_spill->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     if (value_result_spill != NULL)
     {
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", value_addr->bit_64);
@@ -6334,19 +6348,8 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
         }
     }
 
-    if (code_expr != NULL)
+    if (code_expr != NULL && code_result_spill != NULL)
     {
-    if (code_expr != NULL)
-    {
-        code_result_spill = add_l_t("val_code_result");
-        if (code_result_spill == NULL)
-        {
-            codegen_report_error(ctx, "ERROR: Unable to allocate temporary for Val result.");
-            goto cleanup;
-        }
-
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", code_result_spill->offset);
-        inst_list = add_inst(inst_list, buffer);
         if (expr_uses_qword_kgpctype(code_expr))
         {
             snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdx\n", code_result_spill->offset);
@@ -6363,7 +6366,6 @@ static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_
             inst_list = add_inst(inst_list, buffer);
             inst_list = add_inst(inst_list, "\tmovl\t%edx, (%rax)\n");
         }
-    }
     }
 
 cleanup:

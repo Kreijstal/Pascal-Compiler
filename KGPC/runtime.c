@@ -4854,7 +4854,7 @@ long long kgpc_val_integer(const char *text, int32_t *out_value)
 {
     long long parsed = 0;
     long long code = kgpc_val_parse_integer(text, INT32_MIN, INT32_MAX, &parsed);
-    if (code == 0 && out_value != NULL)
+    if (out_value != NULL)
         *out_value = (int32_t)parsed;
     return code;
 }
@@ -4863,7 +4863,7 @@ long long kgpc_val_longint(const char *text, int64_t *out_value)
 {
     long long parsed = 0;
     long long code = kgpc_val_parse_integer(text, INT64_MIN, INT64_MAX, &parsed);
-    if (code == 0 && out_value != NULL)
+    if (out_value != NULL)
         *out_value = parsed;
     return code;
 }
@@ -4872,7 +4872,7 @@ long long kgpc_val_qword(const char *text, uint64_t *out_value)
 {
     unsigned long long parsed = 0;
     long long code = kgpc_val_parse_unsigned(text, ULLONG_MAX, &parsed);
-    if (code == 0 && out_value != NULL)
+    if (out_value != NULL)
         *out_value = (uint64_t)parsed;
     return code;
 }
@@ -4881,7 +4881,7 @@ long long kgpc_val_real(const char *text, double *out_value)
 {
     double parsed = 0.0;
     long long code = kgpc_val_parse_real(text, &parsed);
-    if (code == 0 && out_value != NULL)
+    if (out_value != NULL)
         *out_value = parsed;
     return code;
 }
