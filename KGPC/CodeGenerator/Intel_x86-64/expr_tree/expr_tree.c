@@ -951,6 +951,11 @@ static int operand_is_32bit_register(const char *operand, const Register_t *reg)
     return operand_is_reg32(operand, reg);
 }
 
+static int type_tag_is_signed_32bit_int(int type_tag)
+{
+    return (type_tag == INT_TYPE || type_tag == LONGINT_TYPE);
+}
+
 /* Helper functions */
 ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg);
@@ -4012,6 +4017,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 break;
             }
             {
+                struct Expression *left_expr = expr->expr_data.addop_data.left_expr;
+                struct Expression *right_expr = expr->expr_data.addop_data.right_term;
                 const int use_qword_op = codegen_type_uses_qword(expr_get_type_tag(expr));
                 const char arith_suffix = use_qword_op ? 'q' : 'l';
                 const char *left_op = left;
@@ -4031,6 +4038,27 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         right_op = right;
                     else
                         right_op = reg_to_reg64(right, right_reg);
+
+                    /* qword arithmetic over signed 32-bit operands must sign-extend
+                     * those inputs before using their 64-bit register names. Without
+                     * this, values like -2 loaded with movl become 0x00000000fffffffe
+                     * and break Int64 accumulation paths such as Math.SumInt/Mean. */
+                    if (left_expr != NULL &&
+                        type_tag_is_signed_32bit_int(expr_get_type_tag(left_expr)) &&
+                        operand_is_32bit_register(left, left_reg) &&
+                        left_op != NULL && strcmp(left_op, left) != 0)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", left, left_op);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+                    if (right_expr != NULL &&
+                        type_tag_is_signed_32bit_int(expr_get_type_tag(right_expr)) &&
+                        operand_is_32bit_register(right, right_reg) &&
+                        right_op != NULL && strcmp(right_op, right) != 0)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", right, right_op);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                 }
                 if (type == OR)
                 {

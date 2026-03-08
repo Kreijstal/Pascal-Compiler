@@ -1712,20 +1712,29 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                     return 1;
                 return 0;
             }
-            
-            /* Check element type compatibility */
-            int elem_compatible = are_types_compatible_for_assignment(
-                lhs_type->info.array_info.element_type,
-                rhs_type->info.array_info.element_type,
-                symtab);
-            if (elem_compatible)
+
+            /* Pascal array assignment/call compatibility is stricter than scalar
+             * assignment compatibility: array element types must match structurally
+             * rather than relying on scalar widening (for example, array of LongInt
+             * must not match array of Real). */
+            if (kgpc_type_equals(lhs_type->info.array_info.element_type,
+                                 rhs_type->info.array_info.element_type))
                 return 1;
-            
-            /* Fallback: If element types have same string representation, treat as compatible */
-            /* This handles cases where types are structurally identical but represented differently */
+
+            if (lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int lhs_elem_tag = lhs_type->info.array_info.element_type->info.primitive_type_tag;
+                int rhs_elem_tag = rhs_type->info.array_info.element_type->info.primitive_type_tag;
+                if (is_integer_type(lhs_elem_tag) && is_integer_type(rhs_elem_tag))
+                    return 1;
+            }
+
+            /* Fallback for structurally equal types represented through different
+             * alias objects but with the same resolved spelling. */
             const char *lhs_elem_str = kgpc_type_to_string(lhs_type->info.array_info.element_type);
             const char *rhs_elem_str = kgpc_type_to_string(rhs_type->info.array_info.element_type);
-            if (lhs_elem_str != NULL && rhs_elem_str != NULL && 
+            if (lhs_elem_str != NULL && rhs_elem_str != NULL &&
                 strcasecmp(lhs_elem_str, rhs_elem_str) == 0)
                 return 1;
             

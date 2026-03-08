@@ -6378,6 +6378,27 @@ skip_overload_resolution:
             {
                 int param_is_untyped = semcheck_decl_is_untyped_param(arg_decl);
                 int expected_type = resolve_param_type(arg_decl, symtab);
+                int formal_is_array_decl = 0;
+                if (arg_decl->type == TREE_ARR_DECL)
+                {
+                    formal_is_array_decl = 1;
+                }
+                else if (arg_decl->type == TREE_VAR_DECL)
+                {
+                    struct TypeAlias *inline_alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
+                    if (inline_alias != NULL && inline_alias->is_array)
+                        formal_is_array_decl = 1;
+                }
+                if (!formal_is_array_decl)
+                {
+                    int owns_formal_probe = 0;
+                    KgpcType *formal_probe = resolve_type_from_vardecl(arg_decl, symtab, &owns_formal_probe);
+                    if (formal_probe != NULL &&
+                        (kgpc_type_is_array(formal_probe) || kgpc_type_is_array_of_const(formal_probe)))
+                        formal_is_array_decl = 1;
+                    if (owns_formal_probe && formal_probe != NULL)
+                        destroy_kgpc_type(formal_probe);
+                }
                 if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
                     id != NULL && pascal_identifier_equals(id, "Format"))
                 {
@@ -6389,7 +6410,7 @@ skip_overload_resolution:
                         current_arg_expr != NULL ? current_arg_expr->type : -1);
                 }
 
-                if (arg_decl->type == TREE_ARR_DECL && current_arg_expr != NULL &&
+                if (formal_is_array_decl && current_arg_expr != NULL &&
                     current_arg_expr->type == EXPR_ARRAY_LITERAL)
                 {
                     arg_type = expected_type;
@@ -6398,6 +6419,50 @@ skip_overload_resolution:
                 {
                     /* Untyped parameters accept any argument type. */
                     /* No validation needed. */
+                }
+                else if (formal_is_array_decl &&
+                    current_arg_expr != NULL &&
+                    current_arg_expr->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_array(current_arg_expr->resolved_kgpc_type))
+                {
+                    int owns_expected_kgpc = 0;
+                    KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected_kgpc);
+                    KgpcType *arg_array = current_arg_expr->resolved_kgpc_type;
+                    int array_compatible = 0;
+
+                    if (expected_kgpc != NULL && kgpc_type_is_array(expected_kgpc))
+                    {
+                        if (are_types_compatible_for_assignment(expected_kgpc, arg_array, symtab))
+                        {
+                            array_compatible = 1;
+                        }
+                        else
+                        {
+                            KgpcType *expected_elem = kgpc_type_get_array_element_type_resolved(expected_kgpc, symtab);
+                            KgpcType *arg_elem = kgpc_type_get_array_element_type_resolved(arg_array, symtab);
+                            if (expected_elem != NULL && arg_elem != NULL)
+                            {
+                                if (kgpc_type_equals(expected_elem, arg_elem))
+                                    array_compatible = 1;
+                                else if (expected_elem->kind == TYPE_KIND_PRIMITIVE &&
+                                         arg_elem->kind == TYPE_KIND_PRIMITIVE &&
+                                         expected_elem->info.primitive_type_tag == arg_elem->info.primitive_type_tag)
+                                    array_compatible = 1;
+                            }
+                        }
+                    }
+
+                    if (owns_expected_kgpc && expected_kgpc != NULL)
+                        destroy_kgpc_type(expected_kgpc);
+
+                    if (!array_compatible)
+                    {
+                        const char *expected_str = type_tag_to_string(expected_type);
+                        const char *given_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
+                        semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
+                            expr->line_num, id, cur_arg, expected_str, given_str);
+                        ++return_val;
+                    }
                 }
                 else if(arg_type != expected_type)
                 {
