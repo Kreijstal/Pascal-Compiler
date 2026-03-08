@@ -5065,11 +5065,25 @@ int64_t bsrqword_i64(uint64_t value)
     return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
 }
 
+int64_t bsrdword_li(uint32_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)(31u - (uint32_t)__builtin_clz(value));
+}
+
 int64_t bsfqword_i64(uint64_t value)
 {
     if (value == 0)
         return -1;
     return (int64_t)__builtin_ctzll(value);
+}
+
+int64_t bsfdword_li(uint32_t value)
+{
+    if (value == 0)
+        return -1;
+    return (int64_t)__builtin_ctz(value);
 }
 
 int64_t popcnt_i64(uint64_t value)
