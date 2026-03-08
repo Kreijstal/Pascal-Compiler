@@ -213,15 +213,34 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
         if (current->type_id != NULL)
         {
             char mangled_name[256];
-            snprintf(mangled_name, sizeof(mangled_name), "%s__%s", current->type_id, method_name);
-            
+            /* Use the type_id as-is first. If that fails and the type has a
+             * different canonical name in the hash table (e.g. record has
+             * "timezone" but the registered class is "TTimeZone"), retry
+             * with the hash table node's id. */
+            const char *class_id = current->type_id;
+            snprintf(mangled_name, sizeof(mangled_name), "%s__%s", class_id, method_name);
+
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                fprintf(stderr, "[SemCheck] semcheck_find_class_method: Searching for '%s' (mangled: '%s') in class '%s'\n", 
-                    method_name, mangled_name, current->type_id);
+                fprintf(stderr, "[SemCheck] semcheck_find_class_method: Searching for '%s' (mangled: '%s') in class '%s'\n",
+                    method_name, mangled_name, class_id);
             }
 
             HashNode_t *method_node = NULL;
             int find_result = FindIdent(&method_node, symtab, mangled_name);
+
+            /* If not found, try looking up the class type to get its registered name */
+            if (find_result == -1 || method_node == NULL)
+            {
+                HashNode_t *class_type_node = NULL;
+                if (FindIdent(&class_type_node, symtab, class_id) != -1 &&
+                    class_type_node != NULL && class_type_node->id != NULL &&
+                    !pascal_identifier_equals(class_type_node->id, class_id))
+                {
+                    snprintf(mangled_name, sizeof(mangled_name), "%s__%s",
+                        class_type_node->id, method_name);
+                    find_result = FindIdent(&method_node, symtab, mangled_name);
+                }
+            }
 
             if (find_result != -1 && method_node != NULL)
             {

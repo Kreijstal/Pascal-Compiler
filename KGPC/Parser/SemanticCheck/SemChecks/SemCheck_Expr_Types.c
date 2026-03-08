@@ -1750,6 +1750,42 @@ int semcheck_recordaccess(int *type_return,
             }
         }
 
+    /* Extended NOT restructuring: for chained member access like `not x.a.b`,
+     * the parser produces `((NOT x).a).b`. The single-level NOT fix below only
+     * handles the immediate case. Walk the nested RECORD_ACCESS chain to find
+     * NOT buried deeper and pull it to the top level. */
+    {
+        struct Expression *walk = record_expr;
+        while (walk != NULL && walk->type == EXPR_RECORD_ACCESS)
+        {
+            struct Expression *inner = walk->expr_data.record_access_data.record_expr;
+            if (inner != NULL && inner->type == EXPR_RELOP &&
+                inner->expr_data.relop_data.type == NOT &&
+                inner->expr_data.relop_data.left != NULL &&
+                inner->expr_data.relop_data.right == NULL)
+            {
+                /* Found NOT buried inside the chain. Remove it from the chain
+                 * and wrap the entire current expression in NOT. */
+                struct Expression *not_node = inner;
+                struct Expression *not_operand = not_node->expr_data.relop_data.left;
+                walk->expr_data.record_access_data.record_expr = not_operand;
+
+                /* Reuse the orphaned NOT node to hold the current expr's data */
+                *not_node = *expr;
+
+                /* Make current expr a NOT wrapping the chain */
+                expr->type = EXPR_RELOP;
+                memset(&expr->expr_data, 0, sizeof(expr->expr_data));
+                expr->expr_data.relop_data.type = NOT;
+                expr->expr_data.relop_data.left = not_node;
+                expr->expr_data.relop_data.right = NULL;
+
+                return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            walk = inner;
+        }
+    }
+
     /* Similar AST transformation for NOT operator: parser produces (NOT record).field
      * instead of NOT (record.field). Detect EXPR_RELOP with NOT and restructure so the
      * NOT wraps the record access rather than the record expression itself. */

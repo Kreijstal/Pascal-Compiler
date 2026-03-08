@@ -5223,6 +5223,23 @@ skip_type_receiver_rewrite:
         if (self_record != NULL)
         {
             HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
+            /* If not found and self_record->type_id differs from the current
+             * method owner (e.g. record has "timezone" but owner is "TTimeZone"),
+             * retry with the owner's record. */
+            if (method_node == NULL && self_record->type_id != NULL)
+            {
+                const char *cur_owner = semcheck_get_current_method_owner();
+                if (cur_owner != NULL && !pascal_identifier_equals(cur_owner, self_record->type_id))
+                {
+                    struct RecordType *owner_record = semcheck_lookup_record_type(symtab, cur_owner);
+                    if (owner_record != NULL)
+                    {
+                        method_node = semcheck_find_class_method(symtab, owner_record, proc_id, NULL);
+                        if (method_node != NULL)
+                            self_record = owner_record;
+                    }
+                }
+            }
             if (method_node != NULL &&
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
                  method_node->hash_type == HASHTYPE_FUNCTION))
@@ -7436,6 +7453,28 @@ proccall_parent_resolve_done:
                                 addr_expr->expr_data.addr_data.expr = NULL;
                                 destroy_expr(addr_expr);
                             }
+                        }
+                    }
+                    /* Class method Self compatibility: if expected is record and given
+                     * is ^record (or vice versa), and this is argument 1 (Self) of a
+                     * class method, accept the match. Classes are reference types so
+                     * Self is always a pointer, but the formal parameter may have been
+                     * registered with the plain record type due to type alias collisions. */
+                    if (!types_match && cur_arg == 1 &&
+                        expected_kgpc_type != NULL && arg_kgpc_type != NULL)
+                    {
+                        int expected_is_record = (expected_kgpc_type->kind == TYPE_KIND_RECORD);
+                        int given_is_ptr_record = (arg_kgpc_type->kind == TYPE_KIND_POINTER &&
+                            arg_kgpc_type->info.points_to != NULL &&
+                            arg_kgpc_type->info.points_to->kind == TYPE_KIND_RECORD);
+                        int expected_is_ptr_record = (expected_kgpc_type->kind == TYPE_KIND_POINTER &&
+                            expected_kgpc_type->info.points_to != NULL &&
+                            expected_kgpc_type->info.points_to->kind == TYPE_KIND_RECORD);
+                        int given_is_record = (arg_kgpc_type->kind == TYPE_KIND_RECORD);
+                        if ((expected_is_record && given_is_ptr_record) ||
+                            (expected_is_ptr_record && given_is_record))
+                        {
+                            types_match = 1;
                         }
                     }
                     if (!types_match && !param_is_var_out && expected_kgpc_type != NULL &&

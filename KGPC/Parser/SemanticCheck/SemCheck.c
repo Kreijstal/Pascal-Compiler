@@ -915,14 +915,31 @@ static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const 
                 {
                     best_record = record_node;
                 }
-                else if (prefer_unit_defined)
+                else
                 {
-                    if (!best_record->defined_in_unit && record_node->defined_in_unit)
+                    /* Prefer class types over plain records for method owner resolution:
+                     * e.g. TTimeZone = class abstract (dateutil.inc) over
+                     * TTimeZone = timezone (ostypes.inc plain record alias). */
+                    struct RecordType *best_rec = get_record_type_from_node(best_record);
+                    struct RecordType *cand_rec = get_record_type_from_node(record_node);
+                    int best_is_class = (best_rec != NULL && record_type_is_class(best_rec));
+                    int cand_is_class = (cand_rec != NULL && record_type_is_class(cand_rec));
+                    if (!best_is_class && cand_is_class)
+                    {
                         best_record = record_node;
-                }
-                else if (best_record->defined_in_unit && !record_node->defined_in_unit)
-                {
-                    best_record = record_node;
+                    }
+                    else if (best_is_class == cand_is_class)
+                    {
+                        if (prefer_unit_defined)
+                        {
+                            if (!best_record->defined_in_unit && record_node->defined_in_unit)
+                                best_record = record_node;
+                        }
+                        else if (best_record->defined_in_unit && !record_node->defined_in_unit)
+                        {
+                            best_record = record_node;
+                        }
+                    }
                 }
             }
         }
@@ -3921,6 +3938,9 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
     
     if (expr->type == EXPR_MULOP)
     {
+        /* Pascal '/' (SLASH) always produces a real result, even with integer operands */
+        if (expr->expr_data.mulop_data.mulop_type == SLASH)
+            return 1;
         return expression_contains_real_literal_impl(symtab, expr->expr_data.mulop_data.left_term) ||
                expression_contains_real_literal_impl(symtab, expr->expr_data.mulop_data.right_factor);
     }

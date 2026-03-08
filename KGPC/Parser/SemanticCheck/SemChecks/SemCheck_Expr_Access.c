@@ -2097,6 +2097,19 @@ int semcheck_funccall(int *type_return,
 
                         /* Get ALL overloads of this method */
                         ListNode_t *all_methods = FindAllIdents(symtab, mangled_method_name);
+                        /* If not found and self_record->type_id differs from the current
+                         * method owner (e.g. record has "timezone" but owner is "TTimeZone"),
+                         * retry with the owner name. */
+                        if (all_methods == NULL)
+                        {
+                            const char *cur_owner = semcheck_get_current_method_owner();
+                            if (cur_owner != NULL && !pascal_identifier_equals(cur_owner, self_record->type_id))
+                            {
+                                snprintf(mangled_method_name, sizeof(mangled_method_name), "%s__%s",
+                                    cur_owner, id);
+                                all_methods = FindAllIdents(symtab, mangled_method_name);
+                            }
+                        }
                         if (all_methods != NULL)
                         {
                             /* Find the overload that matches our argument count */
