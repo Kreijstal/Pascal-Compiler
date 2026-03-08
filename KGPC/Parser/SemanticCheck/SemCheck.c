@@ -3119,6 +3119,11 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
     }
 }
 
+static inline void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
+    if (node == NULL || unit_index <= 0 || node->source_unit_index != 0) return;
+    node->source_unit_index = unit_index;
+}
+
 static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     int defined_in_unit, int is_public)
 {
@@ -3126,6 +3131,7 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
         return;
     node->defined_in_unit = 1;
     node->unit_is_public = is_public ? 1 : 0;
+    mark_hashnode_source_unit(node, g_semcheck_current_unit_index);
     if (symtab != NULL)
         SymTab_MoveHashNodeToBack(symtab, node);
 
@@ -3161,11 +3167,6 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     }
 
     free(qualified_id);
-}
-
-static inline void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
-    if (node == NULL || unit_index <= 0 || node->source_unit_index != 0) return;
-    node->source_unit_index = unit_index;
 }
 
 static inline void mark_latest_type_node_unit_info(SymTab_t *symtab, const char *type_id,
@@ -11732,12 +11733,19 @@ void semcheck_add_builtins(SymTab_t *symtab)
             destroy_kgpc_type(stderr_type);
         }
         /* Input and Output - standard Pascal file variables */
+        int sys_unit_idx = unit_registry_add("System");
         char *input_name = strdup("Input");
         if (input_name != NULL) {
             KgpcType *input_type = kgpc_type_from_var_type(HASHVAR_TEXT);
             assert(input_type != NULL && "Failed to create Input type");
             PushVarOntoScope_Typed(symtab, input_name, input_type);
             destroy_kgpc_type(input_type);
+            HashNode_t *input_node = NULL;
+            if (FindIdent(&input_node, symtab, "Input") != -1 && input_node != NULL) {
+                input_node->defined_in_unit = 1;
+                input_node->unit_is_public = 1;
+                mark_hashnode_source_unit(input_node, sys_unit_idx);
+            }
         }
         char *output_name = strdup("Output");
         if (output_name != NULL) {
@@ -11745,6 +11753,12 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(output_type != NULL && "Failed to create Output type");
             PushVarOntoScope_Typed(symtab, output_name, output_type);
             destroy_kgpc_type(output_type);
+            HashNode_t *output_node = NULL;
+            if (FindIdent(&output_node, symtab, "Output") != -1 && output_node != NULL) {
+                output_node->defined_in_unit = 1;
+                output_node->unit_is_public = 1;
+                mark_hashnode_source_unit(output_node, sys_unit_idx);
+            }
         }
     }
 
@@ -14029,6 +14043,21 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             }
 
 next_identifier:
+            /* Propagate source_unit_index from AST to HashNode for unit-aware resolution */
+            if (func_return == 0 && ids->cur != NULL)
+            {
+                int ast_source_unit = 0;
+                if (tree->type == TREE_VAR_DECL)
+                    ast_source_unit = tree->tree_data.var_decl_data.source_unit_index;
+                else if (tree->type == TREE_ARR_DECL)
+                    ast_source_unit = tree->tree_data.arr_decl_data.source_unit_index;
+                if (ast_source_unit > 0)
+                {
+                    HashNode_t *pushed_node = NULL;
+                    if (FindIdent(&pushed_node, symtab, ids->cur) != -1 && pushed_node != NULL)
+                        mark_hashnode_source_unit(pushed_node, ast_source_unit);
+                }
+            }
             ids = ids->next;
         }
 
@@ -15394,6 +15423,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
     }
 
+    int saved_unit_context = symtab->unit_context;
+
     {
         int before_local = return_val;
         return_val += predeclare_enum_literals(symtab, subprogram->tree_data.subprogram_data.type_declarations);
@@ -15419,6 +15450,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (body == NULL)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
+        symtab->unit_context = saved_unit_context;
         PopScope(symtab);
 #ifdef DEBUG
         fprintf(stderr, "DEBUG: semcheck_subprogram %s returning (no body): %d\n", subprogram->tree_data.subprogram_data.id, return_val);
@@ -15436,6 +15468,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         g_semcheck_error_suppress_source_index = 1;
         g_semcheck_error_source_index = -1;
+        /* Set unit context so FindIdent resolves to this unit's symbols
+         * when variable names collide across units (e.g., Input: Text vs Input: String) */
+        if (subprogram->tree_data.subprogram_data.source_unit_index > 0)
+            symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
     }
 
     /* Functions cannot have side effects, so need to call a special function in that case */
@@ -15542,6 +15578,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Restore error context / suppress flag after body processing. */
     g_semcheck_error_suppress_source_index = saved_suppress;
     g_semcheck_error_source_index = saved_error_source_index;
+    symtab->unit_context = saved_unit_context;
 
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);

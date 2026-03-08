@@ -207,6 +207,61 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     return NULL;
 }
 
+HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index)
+{
+    ListNode_t *cur;
+    HashNode_t *hash_node;
+    int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
+    ListNode_t *list = table->table[hash];
+    if (list == NULL)
+    {
+        free(canonical_id);
+        return NULL;
+    }
+
+    /* Scan all matches, pick by priority:
+     * 1. Same unit as caller (exact match)
+     * 2. Program-local (source_unit_index == 0) when caller is program code
+     * 3. First match (fallback) */
+    HashNode_t *best = NULL;
+    int best_priority = 0; /* 0=none, 1=any, 2=program-local, 3=same-unit */
+
+    cur = list;
+    while (cur != NULL)
+    {
+        hash_node = (HashNode_t *)cur->cur;
+        if (strcmp(hash_node->canonical_id, canonical_id) == 0)
+        {
+            int priority = 1; /* any match */
+            if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
+                priority = 3; /* same unit */
+            else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
+                priority = 3; /* program-local for program code */
+            else if (hash_node->source_unit_index == 0)
+                priority = 2; /* program-local fallback */
+
+            if (priority > best_priority)
+            {
+                best = hash_node;
+                best_priority = priority;
+            }
+        }
+        cur = cur->next;
+    }
+
+    free(canonical_id);
+    return best;
+}
+
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
 {
     assert(table != NULL);
@@ -599,6 +654,15 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
     
+    /* Allow variables/arrays to coexist when at least one is from a unit.
+     * Unit-aware FindIdentInUnit resolves which one is visible.
+     * Two program-local vars with the same name would still be caught by
+     * semcheck's duplicate-declaration check before reaching here. */
+    if ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+
     /* No other collisions allowed */
     return 0;
 }

@@ -844,7 +844,7 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_
     }
 }
 
-static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
+static void mark_unit_const_decls(ListNode_t *const_list, int is_public, int unit_index)
 {
     ListNode_t *node = const_list;
     while (node != NULL)
@@ -856,13 +856,15 @@ static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
             {
                 decl->tree_data.const_decl_data.defined_in_unit = 1;
                 decl->tree_data.const_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.const_decl_data.source_unit_index == 0)
+                    decl->tree_data.const_decl_data.source_unit_index = unit_index;
             }
         }
         node = node->next;
     }
 }
 
-static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
+static void mark_unit_var_decls(ListNode_t *var_list, int is_public, int unit_index)
 {
     ListNode_t *node = var_list;
     while (node != NULL)
@@ -874,11 +876,15 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
             {
                 decl->tree_data.var_decl_data.defined_in_unit = 1;
                 decl->tree_data.var_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.var_decl_data.source_unit_index == 0)
+                    decl->tree_data.var_decl_data.source_unit_index = unit_index;
             }
             else if (decl->type == TREE_ARR_DECL)
             {
                 decl->tree_data.arr_decl_data.defined_in_unit = 1;
                 decl->tree_data.arr_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.arr_decl_data.source_unit_index == 0)
+                    decl->tree_data.arr_decl_data.source_unit_index = unit_index;
             }
         }
         node = node->next;
@@ -1100,7 +1106,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
         unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
     if (getenv("KGPC_DEBUG_CONST") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
         while (dbg != NULL) {
@@ -1123,7 +1129,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1, unit_idx);
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
@@ -1152,12 +1158,12 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
             unit_tree->tree_data.unit_data.implementation_type_decls);
         unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
 
-        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
         /* Append implementation constants to keep dependencies ahead of targets. */
         *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
         unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
 
-        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
         *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
         unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
 
@@ -1547,7 +1553,7 @@ int main(int argc, char **argv)
             ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
             if (prelude_consts != NULL && !is_system_unit)
             {
-                mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
+                mark_unit_const_decls(prelude_consts, 1, unit_registry_add("System"));  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_const_decls =
                     ConcatList(prelude_consts, user_tree->tree_data.unit_data.interface_const_decls);
                 clear_prelude_const_decls(prelude_tree);
@@ -1557,7 +1563,7 @@ int main(int argc, char **argv)
             ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
             if (prelude_vars != NULL && !is_system_unit)
             {
-                mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
+                mark_unit_var_decls(prelude_vars, 1, unit_registry_add("System"));  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_var_decls =
                     ConcatList(prelude_vars, user_tree->tree_data.unit_data.interface_var_decls);
                 clear_prelude_var_decls(prelude_tree);
@@ -1766,6 +1772,7 @@ int main(int argc, char **argv)
         ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
         if (prelude_consts != NULL)
         {
+            mark_unit_const_decls(prelude_consts, 1, unit_registry_add("System"));
             user_tree->tree_data.program_data.const_declaration =
                 ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
             clear_prelude_const_decls(prelude_tree);
@@ -1777,7 +1784,7 @@ int main(int argc, char **argv)
         {
             /* Mark prelude vars as coming from a unit, so they're recognized
              * as available for const expressions like Ord(DirectorySeparator) */
-            mark_unit_var_decls(prelude_vars, 1);
+            mark_unit_var_decls(prelude_vars, 1, unit_registry_add("System"));
             user_tree->tree_data.program_data.var_declaration =
                 ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
             clear_prelude_var_decls(prelude_tree);

@@ -150,6 +150,7 @@ typedef struct Tree
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
             char *cname_override;    /* External/public name alias (FPC bootstrap) */
             int is_external;         /* True if declared with 'external name' */
             char *absolute_target;   /* Absolute alias target name, if any */
@@ -180,6 +181,7 @@ typedef struct Tree
             char *init_guard_label;
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
         } arr_decl_data;
 
         /* A constant declaration */
@@ -191,6 +193,7 @@ typedef struct Tree
             struct Expression *value;
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
         } const_decl_data;
 
         /* A single statement (Can be made up of multiple statements) */
