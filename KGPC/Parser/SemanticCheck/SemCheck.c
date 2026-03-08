@@ -2750,7 +2750,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
                             if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                                 fprintf(stderr, "[copy_method_decl_defaults] default_expr=%p\n",
                                     (void*)default_expr);
-                            
+
                             if (default_expr != NULL)
                             {
                                 impl_decl->tree_data.var_decl_data.initializer =
@@ -2774,7 +2774,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     
     free(class_name);
 }
-
+                            
 /* Copy method identity fields from a subprogram tree node into a hash node,
  * if the hash node doesn't already have them.  We strdup so the hash node
  * owns the memory and DestroyHashTable can free it uniformly. */
@@ -7327,7 +7327,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
                                 kgpc_type_retain(kgpc_type);
                             }
-
+                            
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
                                 errors += result;
@@ -7541,7 +7541,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 if (target_ref->name != NULL && target_ref->name->count > 1)
                                     has_qualification = 1;
                             }
-                            
+
                             /* Handle qualified type names like "UnixType.culong" */
                             int found = FindIdent(&target_node, symtab, lookup_name);
                             if (found < 0 || target_node == NULL)

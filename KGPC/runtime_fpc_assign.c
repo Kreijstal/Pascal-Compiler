@@ -16,11 +16,12 @@
  *  80:  UserData[32]
  * 112:  name[256] (AnsiChar)  — KGPC's name field
  *
- * FPC RTL compiled code accesses these offsets (empirically confirmed):
- * 296:  OpenFunc  (codepointer) — called by opentext_t_li_li
- * 304:  InOutFunc (codepointer) — called by close_t for output flush
- * 312:  FlushFunc (codepointer)
- * 320:  CloseFunc (codepointer) — called by close_t
+ * FPC RTL compiled code accesses these offsets (empirically confirmed for the
+ * current x86_64 Linux RTL build):
+ * 320:  OpenFunc   (codepointer) — called by opentext_t_li_li
+ * 328:  InOutFunc  (codepointer) — called by close_t for output flush
+ * 336:  FlushFunc  (codepointer)
+ * 344:  CloseFunc  (codepointer) — called by close_t
  *
  * FileRec layout (as KGPC allocates: 368 bytes):
  *   0:  Handle (int32)
@@ -64,10 +65,10 @@ extern void kgpc_tfile_assign(void *file, const char *path);
 #define TR_PRIV        16   /* KGPC private_data = FILE* */
 #define TR_BUFPOS      24
 #define TR_NAME       112   /* KGPC's AnsiChar name[] */
-#define FPC_OPENFUNC  296
-#define FPC_INOUTFUNC 304
-#define FPC_FLUSHFUNC 312
-#define FPC_CLOSEFUNC 320
+#define FPC_OPENFUNC  320
+#define FPC_INOUTFUNC 328
+#define FPC_FLUSHFUNC 336
+#define FPC_CLOSEFUNC 344
 
 #define KGPC_FM_CLOSED  0xD7B0   /* 55216 */
 #define KGPC_FM_INPUT   0xD7B1   /* 55217 */
