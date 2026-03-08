@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <errno.h>
+#include <stdlib.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -245,13 +246,40 @@ static int fpc_mode_to_posix_flags(int32_t mode)
     }
 }
 
-/* fileopen_us_i: FileOpen(const FileName: UnicodeString; Mode: Integer): THandle
- * In KGPC, UnicodeString IS AnsiString, so FileName is a char pointer. */
+/* Helper: if the string has elementsize==2 (real UTF-16 UnicodeString),
+ * convert it to a temporary char* by truncating each uint16_t to a byte.
+ * Returns a malloc'd buffer that the caller must free, or NULL if no
+ * conversion was needed (in which case use the original pointer). */
+static char *unicode_filename_to_ansi(const char *filename)
+{
+    if (filename == NULL)
+        return NULL;
+    /* KgpcStringHeader is at offset -24 from the data pointer.
+     * elementsize is at offset 10 within the header (offset -14 from data). */
+    uint16_t elementsize = *(const uint16_t *)((const char *)filename - 14);
+    if (elementsize != 2)
+        return NULL;  /* already AnsiString, no conversion needed */
+    /* It's UTF-16 data — get length from header (int64 at offset -8 from data) */
+    int64_t len = *(const int64_t *)((const char *)filename - 8);
+    if (len <= 0)
+        return NULL;
+    char *buf = (char *)malloc(len + 1);
+    const uint16_t *src = (const uint16_t *)filename;
+    for (int64_t i = 0; i < len; i++)
+        buf[i] = (src[i] < 256) ? (char)src[i] : '?';
+    buf[len] = '\0';
+    return buf;
+}
+
+/* fileopen_us_i: FileOpen(const FileName: UnicodeString; Mode: Integer): THandle */
 int32_t fileopen_us_i(const char *filename, int32_t mode)
 {
     if (filename == NULL)
         return -1;
-    return open(filename, fpc_mode_to_posix_flags(mode));
+    char *ansi = unicode_filename_to_ansi(filename);
+    int32_t result = open(ansi ? ansi : filename, fpc_mode_to_posix_flags(mode));
+    free(ansi);
+    return result;
 }
 
 /* fileopen_rbs_i: FileOpen(const FileName: RawByteString; Mode: Integer): THandle */
