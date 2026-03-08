@@ -140,7 +140,8 @@ if FPC_RTL_MODE:
     _cache_sentinel = os.path.join(_FPC_RTL_AST_CACHE_DIR, ".compiler_mtime")
     _compiler_mtime = ""
     if os.path.exists(KGPC_PATH):
-        _compiler_mtime = str(os.path.getmtime(KGPC_PATH))
+        st = os.stat(KGPC_PATH)
+        _compiler_mtime = f"{st.st_mtime_ns}:{st.st_size}"
     _old_mtime = ""
     if os.path.exists(_cache_sentinel):
         with open(_cache_sentinel) as f:
