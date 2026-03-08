@@ -2460,6 +2460,9 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
         record->generic_args == NULL || record->num_generic_args <= 0)
         return;
 
+    const char *generic_name = record->generic_decl->name;
+    size_t gen_prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
     ast_t *cursor = node;
     while (cursor != NULL)
     {
@@ -2480,11 +2483,50 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
             }
             /* Substitute the generic class name itself with the specialized name
              * (e.g. TFPGList -> TFPGList$TMyRecord in method parameter types) */
-            if (record->generic_decl->name != NULL && record->type_id != NULL &&
-                strcasecmp(cursor->sym->name, record->generic_decl->name) == 0)
+            if (generic_name != NULL && record->type_id != NULL &&
+                strcasecmp(cursor->sym->name, generic_name) == 0)
             {
                 free(cursor->sym->name);
                 cursor->sym->name = strdup(record->type_id);
+            }
+            /* Substitute nested type short names with their specialized full names.
+             * E.g. TFPGListEnumeratorSpec -> TFPGList$TMyRecord.TFPGListEnumeratorSpec
+             * inside method bodies of the specialized class. */
+            if (record->generic_decl->nested_type_decls != NULL && record->type_id != NULL)
+            {
+                ListNode_t *nt = record->generic_decl->nested_type_decls;
+                while (nt != NULL)
+                {
+                    if (nt->type == LIST_TREE && nt->cur != NULL)
+                    {
+                        Tree_t *nt_tree = (Tree_t *)nt->cur;
+                        if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL)
+                        {
+                            const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                            /* nested type id is like "TFPGList.TFPGListEnumeratorSpec" */
+                            if (gen_prefix_len > 0 &&
+                                strncmp(nt_id, generic_name, gen_prefix_len) == 0 &&
+                                nt_id[gen_prefix_len] == '.')
+                            {
+                                const char *short_name = nt_id + gen_prefix_len + 1;
+                                if (strcasecmp(cursor->sym->name, short_name) == 0)
+                                {
+                                    /* Rewrite to "TFPGList$TMyRecord.TFPGListEnumeratorSpec" */
+                                    size_t new_len = strlen(record->type_id) + 1 + strlen(short_name) + 1;
+                                    char *new_name = (char *)malloc(new_len);
+                                    if (new_name != NULL)
+                                    {
+                                        snprintf(new_name, new_len, "%s.%s", record->type_id, short_name);
+                                        free(cursor->sym->name);
+                                        cursor->sym->name = new_name;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    nt = nt->next;
+                }
             }
         }
         if (cursor->child != NULL)
@@ -3361,7 +3403,8 @@ static void clone_nested_types_for_specialization(
     GenericTypeDecl *generic_decl,
     const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
     ListNode_t *type_args,        /* concrete type arguments */
-    ListNode_t **type_list_out)   /* where to append new type decls */
+    ListNode_t **type_list_out,   /* where to append new type decls */
+    ListNode_t **subprograms_out) /* where to append method clones (may be NULL) */
 {
     if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
         specialized_name == NULL || type_list_out == NULL)
@@ -3449,6 +3492,44 @@ static void clone_nested_types_for_specialization(
                             }
                         }
 
+                        /* Substitute type parameters in mangled names like
+                         * "TFPGListEnumerator$T" -> "TFPGListEnumerator$TMyRecord" */
+                        if (dst_alias->target_type_id != NULL) {
+                            for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                                const char *param = generic_decl->type_parameters[pi];
+                                ListNode_t *a = type_args;
+                                for (int ai = 0; ai < pi && a != NULL; ai++)
+                                    a = a->next;
+                                if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                    continue;
+                                const char *concrete = (const char *)a->cur;
+                                if (param == NULL || concrete == NULL) continue;
+                                size_t param_len = strlen(param);
+                                /* Look for "$T" pattern at the end or "$T$" in the middle */
+                                char *pos = dst_alias->target_type_id;
+                                while ((pos = strchr(pos, '$')) != NULL) {
+                                    pos++; /* skip '$' */
+                                    if (strncasecmp(pos, param, param_len) == 0 &&
+                                        (pos[param_len] == '\0' || pos[param_len] == '$')) {
+                                        /* Found "$T" — rebuild the string with "$TMyRecord" */
+                                        size_t prefix_len2 = (pos - dst_alias->target_type_id);
+                                        size_t suffix_len = strlen(pos + param_len);
+                                        size_t concrete_len = strlen(concrete);
+                                        char *new_target = malloc(prefix_len2 + concrete_len + suffix_len + 1);
+                                        if (new_target != NULL) {
+                                            memcpy(new_target, dst_alias->target_type_id, prefix_len2);
+                                            memcpy(new_target + prefix_len2, concrete, concrete_len);
+                                            memcpy(new_target + prefix_len2 + concrete_len,
+                                                   pos + param_len, suffix_len + 1);
+                                            free(dst_alias->target_type_id);
+                                            dst_alias->target_type_id = new_target;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
                         /* Also substitute qualified names: if target_type_id refers
                          * to another nested type of the same generic (e.g., "TFPGList.PT"),
                          * rewrite to "TFPGList$TMyRecord.PT" */
@@ -3466,8 +3547,60 @@ static void clone_nested_types_for_specialization(
                         }
                     }
 
+                    /* If the target_type_id is a mangled generic name like
+                     * "TFPGListEnumerator$TMyRecord", ensure that specialization
+                     * actually exists by triggering instantiation. */
+                    int alias_type_set = 0;
+                    if (clone->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        if (debug_env != NULL && dst_alias->target_type_id != NULL)
+                            fprintf(stderr, "[KGPC] clone alias %s target_type_id=%s\n",
+                                clone->tree_data.type_decl_data.id, dst_alias->target_type_id);
+                        if (dst_alias->target_type_id != NULL) {
+                            char *dollar = strchr(dst_alias->target_type_id, '$');
+                            if (dollar != NULL) {
+                                /* Extract base name and type args from mangled name */
+                                size_t base_len = dollar - dst_alias->target_type_id;
+                                char *inner_base = strndup(dst_alias->target_type_id, base_len);
+                                GenericTypeDecl *inner_generic = generic_registry_find_decl(inner_base);
+                                if (inner_generic != NULL) {
+                                    /* Build type args from the suffix */
+                                    const char *arg_str = dollar + 1;
+                                    ListNode_t *inner_args = CreateListNode(strdup(arg_str), LIST_STRING);
+                                    char *inner_spec_name = NULL;
+                                    struct RecordType *inner_record =
+                                        instantiate_generic_record(inner_base, inner_args, &inner_spec_name);
+                                    if (inner_record != NULL) {
+                                        /* Set the alias clone's inline_record_type to the
+                                         * specialized record.  The semantic checker will
+                                         * register both the mangled name (inner_record->type_id)
+                                         * and the alias name in the symbol table (see line 7012+
+                                         * in SemCheck.c).  This also enables constructor
+                                         * resolution via record_info. */
+                                        dst_alias->inline_record_type = inner_record;
+                                        dst_alias->base_type = RECORD_TYPE;
+                                        KgpcType *alias_type = create_record_type(inner_record);
+                                        if (inner_record->is_class) {
+                                            KgpcType *ptr = create_pointer_type(alias_type);
+                                            kgpc_type_release(alias_type);
+                                            alias_type = ptr;
+                                        }
+                                        clone->tree_data.type_decl_data.kgpc_type = alias_type;
+                                        alias_type_set = 1;
+                                        if (debug_env != NULL)
+                                            fprintf(stderr, "[KGPC] triggered nested specialization %s\n",
+                                                inner_spec_name);
+                                    }
+                                    if (inner_spec_name != NULL) free(inner_spec_name);
+                                    destroy_list(inner_args);
+                                }
+                                free(inner_base);
+                            }
+                        }
+                    }
+
                     /* Also handle procedure/function type declarations */
-                    if (orig->tree_data.type_decl_data.kgpc_type != NULL) {
+                    if (!alias_type_set && orig->tree_data.type_decl_data.kgpc_type != NULL) {
                         clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
                         kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
                     }
@@ -3479,6 +3612,11 @@ static void clone_nested_types_for_specialization(
                     } else {
                         destroy_tree(clone);
                     }
+
+                    /* If we triggered a nested specialization via inline_record_type,
+                     * also emit method clones for the inner specialization. */
+                    if (alias_type_set && subprograms_out != NULL)
+                        append_specialized_method_clones(clone, subprograms_out);
 
                     if (debug_env != NULL)
                         fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
@@ -3531,7 +3669,7 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
                 GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
                 if (generic != NULL && generic->nested_type_decls != NULL) {
                     clone_nested_types_for_specialization(generic, specialized_name,
-                        cur->type_args, type_list);
+                        cur->type_args, type_list, clone_dest);
                 }
             }
 
