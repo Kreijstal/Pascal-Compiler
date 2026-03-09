@@ -6218,7 +6218,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         if (type_info != NULL) {
             type_info->is_file = 1;
             ast_t *elem = spec_node->child;
-            while (elem != NULL && elem->typ == PASCAL_T_NONE)
+            while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
                 elem = elem->child;
             if (elem != NULL && elem->typ == PASCAL_T_IDENTIFIER) {
                 char *dup = dup_symbol(elem);
@@ -6528,7 +6528,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
     /* Handle file types */
     if (spec_node->typ == PASCAL_T_FILE_TYPE) {
         ast_t *elem = spec_node->child;
-        while (elem != NULL && elem->typ == PASCAL_T_NONE)
+        while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
             elem = elem->child;
 
         if (elem == NULL) {
@@ -16364,6 +16364,8 @@ static char *map_internproc_to_runtime(const char *fpc_name)
         {"fpc_in_hi_qword",    "hi_qw"},
         /* Integer Abs */
         {"fpc_in_abs_long",    "kgpc_abs_int"},
+        /* Chr intrinsic */
+        {"fpc_in_chr_byte",    "kgpc_chr"},
         {NULL, NULL}
     };
     for (int i = 0; table[i].fpc != NULL; i++) {
@@ -16448,6 +16450,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -16534,6 +16537,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
                         char *mapped = map_internproc_to_runtime(val->sym->name);
                         if (mapped != NULL) {
                             if (external_alias != NULL)
@@ -16552,6 +16559,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
                     }
                 }
                 free(self_sym);
@@ -16607,6 +16617,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
@@ -16765,6 +16779,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -16848,6 +16863,10 @@ static Tree_t *convert_function(ast_t *func_node) {
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
                         char *mapped = map_internproc_to_runtime(val->sym->name);
                         if (mapped != NULL) {
                             if (external_alias != NULL)
@@ -16866,6 +16885,9 @@ static Tree_t *convert_function(ast_t *func_node) {
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
                     }
                 }
                 free(self_sym);
@@ -16926,6 +16948,10 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;

@@ -1254,6 +1254,8 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.mangled_id);
           if (tree->tree_data.subprogram_data.cname_override != NULL)
             free(tree->tree_data.subprogram_data.cname_override);
+          if (tree->tree_data.subprogram_data.internproc_id != NULL)
+            free(tree->tree_data.subprogram_data.internproc_id);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
           if (tree->tree_data.subprogram_data.return_type_ref != NULL)

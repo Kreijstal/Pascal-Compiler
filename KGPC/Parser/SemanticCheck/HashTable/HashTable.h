@@ -98,6 +98,8 @@ typedef struct HashNode
     char *owner_class_full;  /* Full dotted class path for nested classes (NULL if not nested) */
     char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
+    char *internproc_id;     /* FPC [INTERNPROC: name] identifier (NULL if not an internproc) */
+
 } HashNode_t;
 
 /* Our actual hash table */

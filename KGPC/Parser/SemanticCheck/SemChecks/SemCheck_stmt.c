@@ -28,6 +28,7 @@
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
+#include "SemCheck_sizeof.h"
 
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
 struct RecordType *get_record_type_from_node(HashNode_t *node);
@@ -4949,6 +4950,117 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     return semcheck_proccall(symtab, stmt, max_scope_lev);
 }
 
+/* ------------------------------------------------------------------ */
+/* INTERNPROC handler: fpc_in_Rewrite_TypedFile / fpc_in_Reset_TypedFile
+ *
+ * When FPC's RTL declares  Procedure Rewrite(var f : TypedFile);
+ * [INTERNPROC: fpc_in_Rewrite_TypedFile];  the compiler is expected to
+ * determine the element size from the actual file type and transform
+ * the 1-arg call into the 2-arg variant: Rewrite(f, SizeOf(ElementType)).
+ *
+ * Returns 1 if transformation was applied, 0 otherwise.              */
+/* ------------------------------------------------------------------ */
+static int semcheck_internproc_typedfile_rewrite_reset(
+    SymTab_t *symtab, struct Statement *stmt)
+{
+    if (symtab == NULL || stmt == NULL)
+        return 0;
+
+    const char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    if (proc_id == NULL)
+        return 0;
+
+    /* Only applies to Rewrite / Reset */
+    if (!pascal_identifier_equals(proc_id, "Rewrite") &&
+        !pascal_identifier_equals(proc_id, "Reset"))
+        return 0;
+
+    /* Must have exactly 1 argument */
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL)
+        return 0;
+
+    /* Check whether any overload has the relevant INTERNPROC tag.
+     * This ensures we only transform when using the FPC RTL. */
+    const char *expected_tag = pascal_identifier_equals(proc_id, "Rewrite")
+        ? "fpc_in_Rewrite_TypedFile"
+        : "fpc_in_Reset_TypedFile";
+    ListNode_t *candidates = FindAllIdents(symtab, proc_id);
+    int found_internproc = 0;
+    if (candidates != NULL)
+    {
+        for (ListNode_t *c = candidates; c != NULL; c = c->next)
+        {
+            HashNode_t *cand = (HashNode_t *)c->cur;
+            if (cand != NULL && cand->internproc_id != NULL &&
+                strcasecmp(cand->internproc_id, expected_tag) == 0)
+            {
+                found_internproc = 1;
+                break;
+            }
+        }
+        DestroyList(candidates);
+    }
+    if (!found_internproc)
+    {
+        return 0;
+    }
+    /* Get the first argument — should be a variable of type file-of-X */
+    struct Expression *file_expr = (struct Expression *)args->cur;
+    if (file_expr == NULL || file_expr->type != EXPR_VAR_ID ||
+        file_expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *var_node = NULL;
+    if (FindIdent(&var_node, symtab, file_expr->expr_data.id) < 0 ||
+        var_node == NULL || var_node->type == NULL)
+        return 0;
+
+    /* Look for file element type in the TypeAlias */
+    struct TypeAlias *alias = kgpc_type_get_type_alias(var_node->type);
+    if (alias == NULL || !alias->is_file)
+    {
+        /* If no TypeAlias from KgpcType, try looking up the variable's type declaration.
+         * The type may be stored on a named type alias in the symbol table. */
+        return 0;
+    }
+
+    /* Determine element size */
+    long long elem_size = 0;
+    if (alias->file_type != UNKNOWN_TYPE && alias->file_type != 0)
+    {
+        elem_size = sizeof_from_type_tag(alias->file_type);
+    }
+    else if (alias->file_type_id != NULL)
+    {
+        HashNode_t *elem_type_node = NULL;
+        if (FindIdent(&elem_type_node, symtab, alias->file_type_id) >= 0 &&
+            elem_type_node != NULL && elem_type_node->type != NULL)
+        {
+            elem_size = kgpc_type_sizeof(elem_type_node->type);
+        }
+    }
+
+    if (elem_size <= 0)
+        return 0;  /* Can't determine size, let normal resolution handle it */
+
+    /* Inject the element size as a second argument: Rewrite(f, elemSize) */
+    struct Expression *size_expr = mk_inum(stmt->line_num, (int)elem_size);
+    if (size_expr == NULL)
+        return 0;
+
+    ListNode_t *size_arg = CreateListNode(size_expr, LIST_EXPR);
+    if (size_arg == NULL)
+    {
+        destroy_expr(size_expr);
+        return 0;
+    }
+
+    /* Append size argument after the file argument */
+    args->next = size_arg;
+    return 1;
+}
+
 /** PROCEDURE_CALL **/
 int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -5194,6 +5306,11 @@ skip_type_receiver_rewrite:
 
         return return_val;
     }
+
+    /* INTERNPROC: Transform TypedFile Rewrite/Reset calls by injecting element size.
+     * Must happen before overload resolution so the 2-arg variant is selected. */
+    if (semcheck_internproc_typedfile_rewrite_reset(symtab, stmt))
+        args_given = stmt->stmt_data.procedure_call_data.expr_args;
 
     /* If no explicit receiver was provided, but Self is in scope and defines this method,
      * prepend Self so unqualified method calls resolve correctly. */

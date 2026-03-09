@@ -428,6 +428,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->owner_class_full);
             if (hash_node->owner_class_outer != NULL)
                 free(hash_node->owner_class_outer);
+            if (hash_node->internproc_id != NULL)
+                free(hash_node->internproc_id);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -555,7 +557,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->owner_class = NULL;
     hash_node->owner_class_full = NULL;
     hash_node->owner_class_outer = NULL;
-    
+    hash_node->internproc_id = NULL;
+
     /* Set identifier */
     hash_node->id = strdup(id);
     if (hash_node->id == NULL)

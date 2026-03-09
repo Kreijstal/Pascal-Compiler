@@ -15397,6 +15397,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (existing_decl != NULL && subprogram->tree_data.subprogram_data.is_varargs)
             existing_decl->is_varargs = 1;
 
+        /* Propagate INTERNPROC identifier from tree to hash node */
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internproc_id != NULL)
+        {
+            if (existing_decl->internproc_id != NULL)
+                free(existing_decl->internproc_id);
+            existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+        }
+
         PushScope(symtab);
 
         /* For method implementations, add class vars to scope */
@@ -15517,6 +15525,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         /* Propagate varargs flag from tree to hash node */
         if (existing_decl != NULL && subprogram->tree_data.subprogram_data.is_varargs)
             existing_decl->is_varargs = 1;
+
+        /* Propagate INTERNPROC identifier from tree to hash node */
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internproc_id != NULL)
+        {
+            if (existing_decl->internproc_id != NULL)
+                free(existing_decl->internproc_id);
+            existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+        }
 
         PushScope(symtab);
         if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
@@ -16235,16 +16251,21 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs/defined_in_unit flags to the hash node */
+        /* Propagate varargs/defined_in_unit/internproc_id flags to the hash node */
         if (func_return == 0 &&
             (subprogram->tree_data.subprogram_data.is_varargs ||
-             subprogram->tree_data.subprogram_data.defined_in_unit)) {
+             subprogram->tree_data.subprogram_data.defined_in_unit ||
+             subprogram->tree_data.subprogram_data.internproc_id != NULL)) {
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
+                if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
+                    if (node->internproc_id != NULL) free(node->internproc_id);
+                    node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+                }
             }
         }
         if (func_return == 0)
@@ -16290,16 +16311,21 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs/defined_in_unit flags to the hash node */
+        /* Propagate varargs/defined_in_unit/internproc_id flags to the hash node */
         if (func_return == 0 &&
             (subprogram->tree_data.subprogram_data.is_varargs ||
-             subprogram->tree_data.subprogram_data.defined_in_unit)) {
+             subprogram->tree_data.subprogram_data.defined_in_unit ||
+             subprogram->tree_data.subprogram_data.internproc_id != NULL)) {
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
+                if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
+                    if (node->internproc_id != NULL) free(node->internproc_id);
+                    node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+                }
             }
         }
         if (func_return == 0)
@@ -16314,7 +16340,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         /* Release creator's reference - hash table retained its own */
         destroy_kgpc_type(func_type);
     }
-    
+
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s returning error: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
