@@ -1653,6 +1653,23 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
         return UNKNOWN_TYPE;
+    /* Check type_alias overrides before primitive tag — a PByte (^Byte) alias
+     * may have kind=TYPE_KIND_PRIMITIVE with tag=BYTE_TYPE in unit contexts,
+     * but the type_alias correctly records is_pointer=1. */
+    if (type->type_alias != NULL)
+    {
+        int base = type->type_alias->base_type;
+        if (base == STRING_TYPE || base == SHORTSTRING_TYPE)
+            return base;
+        if (type->type_alias->is_pointer)
+            return POINTER_TYPE;
+        if (type->type_alias->is_set)
+            return SET_TYPE;
+        if (type->type_alias->is_enum)
+            return ENUM_TYPE;
+        if (type->type_alias->is_file)
+            return FILE_TYPE;
+    }
     if (type->kind == TYPE_KIND_PRIMITIVE)
         return type->info.primitive_type_tag;
     if (kgpc_type_is_array_of_const((KgpcType *)type))

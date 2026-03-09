@@ -1287,7 +1287,7 @@ static ParseResult reject_shift_ops_fn(input_t* in, void* args, char* parser_nam
     return make_failure_v2(in, parser_name, strdup("No shift token here."), NULL);
 }
 
-void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
+static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** stmt_parser, int skip_relational) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
     // Function name: use a simple identifier and let member access handle dotted calls
@@ -1476,10 +1476,15 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         pnot(match(">")),
         NULL
     );
-    expr_insert(*p, 0, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
+    // In type-expression mode, exclude '=' to avoid consuming const declaration '='
+    if (!skip_relational)
+        expr_insert(*p, 0, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
+    else
+        expr_insert(*p, 0, PASCAL_T_LT, EXPR_INFIX, ASSOC_LEFT, token(single_lt));
     // Try rejecting '<<'/'>>' before any relational operator gets a chance
     expr_altern(*p, 0, PASCAL_T_NONE, token(reject_shift_ops));
-    expr_altern(*p, 0, PASCAL_T_LT, token(single_lt));
+    if (!skip_relational)
+        expr_altern(*p, 0, PASCAL_T_LT, token(single_lt));
     expr_altern(*p, 0, PASCAL_T_GT, token(single_gt));
     expr_altern(*p, 0, PASCAL_T_IN, token(keyword_ci("in")));
     expr_altern(*p, 0, PASCAL_T_IS, token(keyword_ci("is")));
@@ -1525,7 +1530,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Field width operator for formatted output: expression:width
     // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
     // rather than `(x:Width) - 2`. Multiple colons like `x:10:2` work via left-assoc.
-    expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
+    if (!skip_relational)
+        expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
 
     // Precedence 5: Member access (highest precedence for infix)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
@@ -1557,6 +1563,14 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         combinator_t* postfix_array = map(postfix_index, wrap_array_suffix);
         expr_insert(*p, 7, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, postfix_array);
     }
+}
+
+void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
+    init_pascal_expression_parser_ex(p, stmt_parser, 0);
+}
+
+void init_pascal_type_expression_parser(combinator_t** p) {
+    init_pascal_expression_parser_ex(p, NULL, 1);
 }
 
 // --- Utility Functions ---
