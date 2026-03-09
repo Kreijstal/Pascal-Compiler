@@ -8316,8 +8316,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
 
             /* When the RHS is a ShortString (e.g. from strpas/StrPas), use a dedicated
-             * conversion function that strips the length byte and builds a proper AnsiString. */
-            if (assign_type == SHORTSTRING_TYPE)
+             * conversion function that strips the length byte and builds a proper AnsiString.
+             * Also handle typecasts like TFormatString(HexStr(...)) where the outer type
+             * is AnsiString but the inner expression returns ShortString. */
+            int inner_is_shortstring = (assign_type == SHORTSTRING_TYPE);
+            if (!inner_is_shortstring && assign_expr != NULL &&
+                assign_expr->type == EXPR_TYPECAST &&
+                assign_expr->expr_data.typecast_data.expr != NULL &&
+                expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) == SHORTSTRING_TYPE)
+            {
+                inner_is_shortstring = 1;
+            }
+            if (inner_is_shortstring)
                 inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
                     "kgpc_string_assign_from_shortstring");
             else if (!target_is_wide_string && source_is_wide_string)
