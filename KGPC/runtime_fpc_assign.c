@@ -190,14 +190,14 @@ void kgpc_assign_t_s(void *textrec, const char *path)
 }
 
 /* FPC RTL path — FPC system.pp mangles Assign(text,string) as assign_t_s. */
-void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
+static void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
 
 /* ------------------------------------------------------------------ */
 /* assign_t_c: Assign(var t: Text; c: AnsiChar)                        */
 /* FPC mangles this as assign_t_c.  The char value arrives in %rsi as  */
 /* an integer; we convert it to a 1-char string and delegate.          */
 /* ------------------------------------------------------------------ */
-void assign_t_c(void *textrec, char c)
+static void assign_t_c(void *textrec, char c)
 {
     char buf[2];
     buf[0] = c;
@@ -232,7 +232,7 @@ void kgpc_assign_f_s(void *filerec, const char *path)
     }
 }
 
-void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
+static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
 /* ------------------------------------------------------------------ */
 /* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
