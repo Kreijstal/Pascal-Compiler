@@ -527,6 +527,25 @@ function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
 
 function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
 
+{ FPC intrinsic bit manipulation functions }
+function SarInt64(value: Int64; shift: LongInt): Int64; cdecl; external name 'kgpc_sar_int64';
+function SarLongint(value: LongInt; shift: LongInt): LongInt; cdecl; external name 'kgpc_sar_longint';
+function SarSmallint(value: SmallInt; shift: LongInt): SmallInt; cdecl; external name 'kgpc_sar_smallint';
+function SarShortint(value: ShortInt; shift: LongInt): ShortInt; cdecl; external name 'kgpc_sar_shortint';
+
+function RolDWord(value: LongWord; shift: LongInt): LongWord; cdecl; external name 'kgpc_rol_dword';
+function RorDWord(value: LongWord; shift: LongInt): LongWord; cdecl; external name 'kgpc_ror_dword';
+function RolQWord(value: QWord; shift: LongInt): QWord; cdecl; external name 'kgpc_rol_qword';
+function RorQWord(value: QWord; shift: LongInt): QWord; cdecl; external name 'kgpc_ror_qword';
+function RolWord(value: Word; shift: LongInt): Word; cdecl; external name 'kgpc_rol_word';
+function RorWord(value: Word; shift: LongInt): Word; cdecl; external name 'kgpc_ror_word';
+function RolByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_rol_byte';
+function RorByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_ror_byte';
+
+function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
+procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
+procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+
 function Random: Real; cdecl; external name 'kgpc_random_real';
 function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
 function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';

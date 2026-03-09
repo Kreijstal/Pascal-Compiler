@@ -7777,3 +7777,78 @@ void kgpc_init_widestringmanager(void)
     widestringmanager[23] = (void *)kgpc_stub_compare_wide;         /* CompareUnicode */
     widestringmanager[24] = (void *)kgpc_default_get_standard_codepage;
 }
+
+/* =========================================================================
+   FPC intrinsic bit manipulation functions
+   ========================================================================= */
+
+int64_t kgpc_sar_int64(int64_t value, int32_t shift) {
+    return value >> (shift & 63);
+}
+
+int32_t kgpc_sar_longint(int32_t value, int32_t shift) {
+    return value >> (shift & 31);
+}
+
+int16_t kgpc_sar_smallint(int16_t value, int32_t shift) {
+    return (int16_t)(((int32_t)value) >> (shift & 15));
+}
+
+int8_t kgpc_sar_shortint(int8_t value, int32_t shift) {
+    return (int8_t)(((int32_t)value) >> (shift & 7));
+}
+
+uint32_t kgpc_rol_dword(uint32_t value, int32_t shift) {
+    shift &= 31;
+    return (value << shift) | (value >> (32 - shift));
+}
+
+uint32_t kgpc_ror_dword(uint32_t value, int32_t shift) {
+    shift &= 31;
+    return (value >> shift) | (value << (32 - shift));
+}
+
+uint64_t kgpc_rol_qword(uint64_t value, int32_t shift) {
+    shift &= 63;
+    return (value << shift) | (value >> (64 - shift));
+}
+
+uint64_t kgpc_ror_qword(uint64_t value, int32_t shift) {
+    shift &= 63;
+    return (value >> shift) | (value << (64 - shift));
+}
+
+uint16_t kgpc_rol_word(uint16_t value, int32_t shift) {
+    shift &= 15;
+    return (uint16_t)((value << shift) | (value >> (16 - shift)));
+}
+
+uint16_t kgpc_ror_word(uint16_t value, int32_t shift) {
+    shift &= 15;
+    return (uint16_t)((value >> shift) | (value << (16 - shift)));
+}
+
+uint8_t kgpc_rol_byte(uint8_t value, int32_t shift) {
+    shift &= 7;
+    return (uint8_t)((value << shift) | (value >> (8 - shift)));
+}
+
+uint8_t kgpc_ror_byte(uint8_t value, int32_t shift) {
+    shift &= 7;
+    return (uint8_t)((value >> shift) | (value << (8 - shift)));
+}
+
+int32_t kgpc_compare_mem(const void *p1, const void *p2, int64_t count) {
+    if (count <= 0) return 1; /* true */
+    return memcmp(p1, p2, (size_t)count) == 0 ? 1 : 0;
+}
+
+void kgpc_prefetch(const void *p) {
+    (void)p;
+    /* No-op; just a hint */
+}
+
+void kgpc_runerror(int32_t code) {
+    fprintf(stderr, "Runtime error %d\n", code);
+    exit(code);
+}
