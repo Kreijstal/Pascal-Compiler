@@ -274,7 +274,8 @@ typedef struct KGPCFileRec
     int64_t recsize;
     unsigned char private_data[64];
     unsigned char userdata[32];
-    char name[256];
+    char name[512];
+    void *fullname;          /* FPC_HAS_FEATURE_UNICODESTRINGS pointer */
 } KGPCFileRec;
 
 typedef struct KGPCFilePrivate
