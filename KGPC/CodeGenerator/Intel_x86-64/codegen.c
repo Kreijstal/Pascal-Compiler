@@ -36,6 +36,20 @@ static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
+static int codegen_template_matches_methodinfo(const struct MethodTemplate *tmpl,
+    const struct MethodInfo *method)
+{
+    if (tmpl == NULL || method == NULL || tmpl->name == NULL || method->name == NULL)
+        return 0;
+    if (strcasecmp(method->name, tmpl->name) != 0)
+        return 0;
+
+    int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+    if (wanted_params >= 0 && method->param_count >= 0)
+        return wanted_params == method->param_count;
+    return 1;
+}
+
 int codegen_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
@@ -2967,9 +2981,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             for (ListNode_t *method_node = record_info->methods;
                  method_node != NULL; method_node = method_node->next) {
                 struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-                if (method == NULL || method->name == NULL)
-                    continue;
-                if (strcasecmp(method->name, tmpl->name) != 0)
+                if (!codegen_template_matches_methodinfo(tmpl, method))
                     continue;
                 if (method->resolved_mangled_id != NULL &&
                     method->resolved_mangled_id != method->mangled_name)
@@ -4580,7 +4592,6 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
 
-
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
         {
@@ -5807,6 +5818,7 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     alias->element_size = target->element_size;
     alias->is_alias = 1;
     alias->is_static = target->is_static;
+    alias->is_reference = target->is_reference;
     if (target->static_label != NULL)
         alias->static_label = strdup(target->static_label);
 
@@ -5854,6 +5866,7 @@ static int add_absolute_var_alias_with_offset(const char *alias_label, const cha
     alias->element_size = alias_size;
     alias->is_alias = 1;
     alias->is_static = target->is_static;
+    alias->is_reference = target->is_reference;
     if (target->static_label != NULL)
     {
         /* For static variables, create a new label with offset suffix.

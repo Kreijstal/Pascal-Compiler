@@ -8634,6 +8634,34 @@ if (record_info->parent_class_name != NULL) {
     return 0;
 }
 
+static int semcheck_template_matches_binding(const struct MethodTemplate *tmpl,
+    const ClassMethodBinding *binding)
+{
+    if (tmpl == NULL || binding == NULL || tmpl->name == NULL || binding->method_name == NULL)
+        return 0;
+    if (strcasecmp(binding->method_name, tmpl->name) != 0)
+        return 0;
+
+    int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+    if (wanted_params >= 0 && binding->param_count >= 0)
+        return wanted_params == binding->param_count;
+    return 1;
+}
+
+static int semcheck_template_matches_vmt_method(const struct MethodTemplate *tmpl,
+    const struct MethodInfo *mi)
+{
+    if (tmpl == NULL || mi == NULL || tmpl->name == NULL || mi->name == NULL)
+        return 0;
+    if (strcasecmp(mi->name, tmpl->name) != 0)
+        return 0;
+
+    int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+    if (wanted_params >= 0 && mi->param_count >= 0)
+        return wanted_params == mi->param_count;
+    return 1;
+}
+
 static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
     ListNode_t *type_decls)
 {
@@ -8685,8 +8713,7 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
             get_class_methods(class_name, &bindings, &method_count);
             for (ListNode_t *bcur = bindings; bcur != NULL; bcur = bcur->next) {
                 ClassMethodBinding *binding = (ClassMethodBinding *)bcur->cur;
-                if (binding != NULL && binding->method_name != NULL &&
-                    strcasecmp(binding->method_name, tmpl->name) == 0) {
+                if (semcheck_template_matches_binding(tmpl, binding)) {
                     already_registered = 1;
                     break;
                 }
@@ -8752,9 +8779,7 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
 
             for (ListNode_t *vmt_node = record_info->methods; vmt_node != NULL; vmt_node = vmt_node->next) {
                 struct MethodInfo *mi = (struct MethodInfo *)vmt_node->cur;
-                if (mi == NULL || mi->name == NULL)
-                    continue;
-                if (strcasecmp(mi->name, tmpl->name) != 0)
+                if (!semcheck_template_matches_vmt_method(tmpl, mi))
                     continue;
                 free(mi->mangled_name);
                 mi->mangled_name = strdup(resolved_id);
