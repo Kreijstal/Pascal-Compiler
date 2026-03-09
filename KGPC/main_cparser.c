@@ -932,6 +932,10 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public, int unit_in
                 if (unit_index > 0 && decl->tree_data.arr_decl_data.source_unit_index == 0)
                     decl->tree_data.arr_decl_data.source_unit_index = unit_index;
             }
+            else
+            {
+                /* Other declaration types don't need marking */
+            }
         }
         node = node->next;
     }

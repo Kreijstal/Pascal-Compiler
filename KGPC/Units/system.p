@@ -446,6 +446,16 @@ const
   RTL_SIGLAST = RTL_SIGQUIT;
   RTL_SIGDEFAULT = -1;
 
+type
+  { TThreadManager: record of 35 function pointers matching FPC RTL thread.inc }
+  TThreadManager = array[0..34] of Pointer;
+
+  { TDynLibsManager: record of 6 function pointers matching FPC RTL dynlib.inc }
+  TDynLibsManager = array[0..5] of Pointer;
+
+  { PLazyInitThreadingProcInfo placeholder }
+  PLazyInitThreadingProcInfo = Pointer;
+
 var
   IsMultiThread: Boolean = False;
   IsLibrary: Boolean = False;
@@ -462,6 +472,13 @@ var
   StdInputHandle: THandle;
   StdOutputHandle: THandle;
   StdErrorHandle: THandle;
+
+  { Thread manager globals — defined here so both KGPC stdlib and FPC RTL
+    provide them from Pascal; the C runtime references them as extern. }
+  CurrentTM: TThreadManager; public name 'CurrentTM';
+  NoThreadManager: TThreadManager; public name 'NoThreadManager';
+  LazyInitThreadingProcList: PLazyInitThreadingProcInfo; public name 'LazyInitThreadingProcList';
+  CurrentDLM: TDynLibsManager; public name 'CurrentDLM';
 
 { ============================================================================
   Compiler Intrinsic Functions
