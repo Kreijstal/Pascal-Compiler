@@ -440,6 +440,7 @@ static combinator_t* create_type_ref_parser(void) {
     cached_type_ref = multi(new_combinator(), PASCAL_T_NONE,
         constructed_type,
         array_type(PASCAL_T_ARRAY_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
         set_type(PASCAL_T_SET),
         pointer_type(PASCAL_T_POINTER_TYPE),
         file_type(PASCAL_T_FILE_TYPE),
@@ -983,8 +984,16 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* nested_class_body = many(nested_class_member);
 
+    // Optional parent class for nested classes: class(TParent)
+    combinator_t* nested_parent_class = optional(between(
+        token(match("(")),
+        token(match(")")),
+        sep_by(create_type_ref_parser(), token(match(",")))
+    ));
+
     combinator_t* nested_class_type = seq(new_combinator(), PASCAL_T_CLASS_TYPE,
         token(keyword_ci("class")),
+        nested_parent_class,
         nested_class_body,
         token(keyword_ci("end")),
         NULL
@@ -1456,6 +1465,7 @@ static combinator_t* create_class_method_directives(void) {
         token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("dynamic", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("message", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("final", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* class_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,

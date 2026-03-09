@@ -171,7 +171,7 @@ static bool peek_assignment_operator(input_t* in) {
                 kw_end++;
             }
             size_t kw_len = (size_t)(kw_end - kw_start);
-            if (kw_len >= 2 && kw_len <= 7) {
+            if (kw_len >= 2 && kw_len <= 9) {
                 /* Check for statement-terminating keywords (case-insensitive) */
                 if ((kw_len == 4 && strncasecmp(buffer + kw_start, "else", 4) == 0) ||
                     (kw_len == 4 && strncasecmp(buffer + kw_start, "then", 4) == 0) ||
@@ -179,7 +179,8 @@ static bool peek_assignment_operator(input_t* in) {
                     (kw_len == 3 && strncasecmp(buffer + kw_start, "end", 3) == 0) ||
                     (kw_len == 5 && strncasecmp(buffer + kw_start, "until", 5) == 0) ||
                     (kw_len == 6 && strncasecmp(buffer + kw_start, "except", 6) == 0) ||
-                    (kw_len == 7 && strncasecmp(buffer + kw_start, "finally", 7) == 0)) {
+                    (kw_len == 7 && strncasecmp(buffer + kw_start, "finally", 7) == 0) ||
+                    (kw_len == 9 && strncasecmp(buffer + kw_start, "otherwise", 9) == 0)) {
                     return false;
                 }
             }
@@ -642,7 +643,8 @@ static bool is_statement_boundary_token(input_t* in) {
            (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
            (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
            (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
-           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0) ||
+           (word_len == 9 && strncasecmp(buffer + pos, "otherwise", 9) == 0);
 }
 
 static bool is_statement_list_boundary_token(input_t* in) {
@@ -679,7 +681,8 @@ static bool is_statement_list_boundary_token(input_t* in) {
            (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
            (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
            (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
-           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0) ||
+           (word_len == 9 && strncasecmp(buffer + pos, "otherwise", 9) == 0);
 }
 
 static ast_t* make_empty_statement_node(input_t* in) {
@@ -1863,8 +1866,12 @@ void init_pascal_statement_parser(combinator_t** p) {
             lazy(expr_parser),                     // case expression
             token(keyword_ci("of")),               // of keyword
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
-            optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
-                token(keyword_ci("else")),         // else keyword
+            optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else/otherwise clause
+                multi(new_combinator(), PASCAL_T_NONE,
+                    token(keyword_ci("else")),
+                    token(keyword_ci("otherwise")),
+                    NULL
+                ),
                 case_branch_body,                  // else statement or list
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL
