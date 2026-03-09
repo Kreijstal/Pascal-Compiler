@@ -274,8 +274,8 @@ typedef struct KGPCFileRec
     int64_t recsize;
     unsigned char private_data[64];
     unsigned char userdata[32];
-    char name[512];
-    void *fullname;          /* FPC_HAS_FEATURE_UNICODESTRINGS pointer */
+    char name[256];
+    void *fullname;          /* USE_FILEREC_FULLNAME pointer */
 } KGPCFileRec;
 
 typedef struct KGPCFilePrivate
@@ -510,6 +510,7 @@ void kgpc_tfile_assign(KGPCFileRec *file, const char *path)
 
     file->handle = -1;
     file->mode = KGPC_FM_CLOSED;
+    file->fullname = NULL;
     kgpc_copy_name(file->name, sizeof(file->name), path);
 }
 

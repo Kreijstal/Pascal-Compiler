@@ -2386,7 +2386,7 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case FILE_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
-                    return 632;  /* FPC x86_64: Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(512)+FullName(8) */
+                    return 376;  /* FPC x86_64: Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8) */
                 case TEXT_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
