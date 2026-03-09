@@ -7542,16 +7542,40 @@ extern void *widestringmanager[25];
 static void kgpc_default_unicode2ansi_move(const uint16_t *source,
     char **dest, int32_t cp, int64_t len)
 {
+    if (len <= 0 || source == NULL)
+    {
+        kgpc_string_setlength(dest, 0);
+        return;
+    }
+    /* Check if source is actually an AnsiString (elementsize==1).
+       KGPC aliases UnicodeString=AnsiString, so callers may pass
+       1-byte char data through PUnicodeChar parameters. */
+    int src_is_ansi = 0;
+    if (kgpc_string_is_managed((const char *)source))
+    {
+        KgpcStringHeader *shdr = (KgpcStringHeader *)((const char *)source - (int64_t)sizeof(KgpcStringHeader));
+        if (shdr->elementsize == 1)
+            src_is_ansi = 1;
+    }
     kgpc_string_setlength(dest, len);
-    if (*dest == NULL || len <= 0)
+    if (*dest == NULL)
         return;
     /* Set codepage in the header */
     KgpcStringHeader *hdr = kgpc_string_header(*dest);
     if (hdr != NULL)
         hdr->codepage = (uint16_t)cp;
     char *p = *dest;
-    for (int64_t i = 0; i < len; i++)
-        p[i] = (source[i] < 256) ? (char)source[i] : '?';
+    if (src_is_ansi)
+    {
+        const char *asrc = (const char *)source;
+        for (int64_t i = 0; i < len; i++)
+            p[i] = asrc[i];
+    }
+    else
+    {
+        for (int64_t i = 0; i < len; i++)
+            p[i] = (source[i] < 256) ? (char)source[i] : '?';
+    }
 }
 
 /* Default: convert ansi chars to unicode by zero-extending.
