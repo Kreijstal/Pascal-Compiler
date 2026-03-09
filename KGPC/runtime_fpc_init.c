@@ -155,10 +155,11 @@ static int64_t kgpc_get_current_thread_id(void) {
 }
 
 /* CurrentTM: FPC's TThreadManager record (35 function pointers).
- * Keep these as normal C globals so all targets use the same linkage model. */
-void *CurrentTM[34 + 1] = {0};
-void *NoThreadManager[34 + 1] = {0};
-void *LazyInitThreadingProcList = NULL;
+ * Defined in Pascal (system.p / system.pp) — the C runtime references them
+ * as extern so the Pascal-generated symbols are the canonical definitions. */
+extern void *CurrentTM[34 + 1];
+extern void *NoThreadManager[34 + 1];
+extern void *LazyInitThreadingProcList;
 
 /* Called from kgpc_init_args to populate CurrentTM */
 void kgpc_fpc_init_thread_manager(void)

@@ -4030,8 +4030,31 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && static_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, (int)total_size, alignment);
+                                int need_bare_alias = (id_list->cur != NULL &&
+                                                       tree->tree_data.var_decl_data.defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, static_label) != 0);
+                                if (need_bare_alias) {
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
+                                    fprintf(ctx->output_file, "%s:\n", static_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", (int)total_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, static_label);
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
+                                    }
+                                } else {
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, (int)total_size, alignment);
+                                }
                             }
                             add_static_array((char *)id_list->cur, (int)total_size, element_size,
                                 array_start, static_label);
@@ -4103,8 +4126,31 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && static_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, (int)total_size, alignment);
+                                int need_bare_alias = (id_list->cur != NULL &&
+                                                       tree->tree_data.var_decl_data.defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, static_label) != 0);
+                                if (need_bare_alias) {
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
+                                    fprintf(ctx->output_file, "%s:\n", static_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", (int)total_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, static_label);
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
+                                    }
+                                } else {
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, (int)total_size, alignment);
+                                }
                             }
                             add_static_array((char *)id_list->cur, (int)total_size,
                                 (int)element_size_ll, start, static_label);
@@ -4513,8 +4559,32 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && generated_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    generated_label, total_size, alignment);
+                                /* Check whether we need a bare-name alias (same logic as TREE_VAR_DECL) */
+                                int need_bare_alias = (id_list->cur != NULL &&
+                                                       arr->defined_in_unit &&
+                                                       strcmp((const char *)id_list->cur, generated_label) != 0);
+                                if (need_bare_alias) {
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .bss\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
+                                    }
+                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", generated_label);
+                                    fprintf(ctx->output_file, "%s:\n", generated_label);
+                                    fprintf(ctx->output_file, "\t.zero\t%d\n", total_size);
+                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
+                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
+                                        (const char *)id_list->cur, generated_label);
+                                    if (codegen_target_is_windows()) {
+                                        fprintf(ctx->output_file, "\t.section .text\n");
+                                    } else {
+                                        fprintf(ctx->output_file, "\t.popsection\n");
+                                    }
+                                } else {
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        generated_label, total_size, alignment);
+                                }
                             }
                             label_to_use = generated_label;
                         }

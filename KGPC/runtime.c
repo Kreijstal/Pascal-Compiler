@@ -6421,7 +6421,8 @@ typedef struct KgpcStringHeaderShim {
     int64_t length;
 } KgpcStringHeaderShim;
 
-KgpcFpcDynLibsManager CurrentDLM = {0};
+/* Defined in Pascal (system.p / system.pp) — referenced as extern here. */
+extern KgpcFpcDynLibsManager CurrentDLM;
 
 static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value)
 {
