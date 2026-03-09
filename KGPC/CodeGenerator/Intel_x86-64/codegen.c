@@ -2185,9 +2185,7 @@ void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int 
     codegen_function_header_ex_alias_vis(func_name, ctx, nostackframe, cname_override, 0);
 }
 
-/* Emit the function header. When emit_weak is non-zero, emit .weak instead of
- * .globl so that the runtime library can provide strong overrides (e.g. for
- * FPC RTL heap functions that require uninitialised HeapInc). */
+/* Emit the function header.  Always uses .globl for symbol visibility. */
 void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak)
 {
     #ifdef DEBUG_CODEGEN
@@ -2196,7 +2194,10 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
-    const char *vis = emit_weak ? codegen_weak_or_globl() : ".globl";
+    /* All functions use .globl — the compiler produces a single .s file but
+     * the runtime library (.a) needs to call many unit-defined functions. */
+    const char *vis = ".globl";
+    (void)emit_weak;
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
         fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);

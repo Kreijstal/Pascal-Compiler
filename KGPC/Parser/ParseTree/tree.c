@@ -1330,6 +1330,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.arr_decl_data.static_label);
           if (tree->tree_data.arr_decl_data.init_guard_label != NULL)
               free(tree->tree_data.arr_decl_data.init_guard_label);
+          if (tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
+              free(tree->tree_data.arr_decl_data.unresolved_index_type);
           break;
 
         case TREE_CONST_DECL:
@@ -2489,6 +2491,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.init_guard_label = NULL;
     new_tree->tree_data.arr_decl_data.defined_in_unit = 0;
     new_tree->tree_data.arr_decl_data.unit_is_public = 0;
+    new_tree->tree_data.arr_decl_data.unresolved_index_type = NULL;
 
     return new_tree;
 }

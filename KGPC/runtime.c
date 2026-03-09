@@ -2573,14 +2573,8 @@ char *widechar__op_assign_olevariant_wc(uint16_t value)
     return kgpc_cached_widechar_pchar(value);
 }
 
-/* FPC RTL compatibility: operator :=(widestring) olevariant stub.
- * The system unit declares this operator but we don't support real
- * OleVariant. Return the input pointer as-is since our "olevariant"
- * representation is just a string pointer. */
-char *olevariant__op_assign_widestring_u(char *source)
-{
-    return source;
-}
+/* olevariant__op_assign_widestring_u is in runtime_olevariant_assign.c
+ * (separate .o so linker only pulls it when not defined by compiler code) */
 
 static char *kgpc_string_alloc_with_length(size_t length)
 {
@@ -3330,25 +3324,10 @@ char *kgpc_shortstring_to_string(const char *value)
     return kgpc_string_duplicate_length(value + 1, len);
 }
 
-/* FPC_PCHAR_TO_SHORTSTR: Convert a null-terminated C string (PAnsiChar)
- * to a ShortString (length-prefixed, max 255 chars).
- * Used by FPC's system unit for pchar-to-shortstring conversions. */
-void FPC_PCHAR_TO_SHORTSTR(char *res, const char *p)
-{
-    if (res == NULL)
-        return;
-    if (p == NULL)
-    {
-        res[0] = 0;
-        return;
-    }
-    size_t len = strlen(p);
-    if (len > 255)
-        len = 255;
-    res[0] = (char)len;
-    if (len > 0)
-        memcpy(res + 1, p, len);
-}
+/* FPC_PCHAR_TO_SHORTSTR: Moved to runtime_fpc_pchar_to_shortstr.c
+ * so it lives in its own .o file.  In FPC mode, the compiler provides its own
+ * version and this .o is not pulled from the archive.  In non-FPC mode, this
+ * .o is pulled to resolve the undefined reference. */
 
 int64_t kgpc_shortstring_length(const char *value)
 {
@@ -3903,64 +3882,67 @@ void *SysTryResizeMem(void *p, intptr_t size)
     return realloc(p, (size_t)size);
 }
 
-/* Top-level FPC heap entry points (mangled names as emitted by KGPC).
- * The FPC RTL's versions call through MemoryManager function pointers,
- * which are all NULL (BSS) because KGPC doesn't emit typed const
- * initializers yet.  Providing strong definitions here bypasses the
- * MemoryManager indirection entirely. */
+/* ------------------------------------------------------------------ */
+/* MemoryManager initialization                                        */
+/*                                                                     */
+/* FPC's heap functions (GetMem, FreeMem, etc.) call through function  */
+/* pointers in the MemoryManager typed constant.  KGPC doesn't yet     */
+/* support typed const initialization with @function values, so        */
+/* MemoryManager is emitted as all-zeros (BSS).  We initialize it at   */
+/* program startup with simple malloc/free wrappers.                   */
+/*                                                                     */
+/* TMemoryManager layout (x86-64):                                     */
+/*   offset  0: NeedLock (boolean, padded to 8 bytes)                  */
+/*   offset  8: GetMem   (function pointer)                            */
+/*   offset 16: FreeMem  (function pointer)                            */
+/*   offset 24: FreeMemSize (function pointer)                         */
+/*   offset 32: AllocMem (function pointer)                            */
+/*   offset 40: ReAllocMem (function pointer)                          */
+/*   offset 48: MemSize  (function pointer)                            */
+/*   offset 56: InitThread (procedure pointer)                         */
+/*   offset 64: DoneThread (procedure pointer)                         */
+/*   offset 72: RelocateHeap (procedure pointer)                       */
+/*   offset 80: GetHeapStatus (function pointer)                       */
+/*   offset 88: GetFPCHeapStatus (function pointer)                    */
+/* ------------------------------------------------------------------ */
 
-/* function GetMem(size: PtrInt): Pointer */
-void *getmem_i64(intptr_t size)
+/* MemoryManager symbol — defined in the compiler's output as BSS */
+extern char MemoryManager[] __attribute__((weak));
+
+/* Simple heap wrappers matching FPC's TMemoryManager function signatures */
+static void *kgpc_mm_getmem(uintptr_t size)
 {
-    if (size <= 0)
+    if (size == 0)
         return NULL;
     return malloc((size_t)size);
 }
 
-/* function GetMem(out p: Pointer; size: PtrInt): Pointer */
-void *getmem_p_i64(void **p, intptr_t size)
-{
-    void *result = NULL;
-    if (size > 0)
-        result = malloc((size_t)size);
-    if (p != NULL)
-        *p = result;
-    return result;
-}
-
-/* procedure FreeMem(p: Pointer) */
-void freemem_p(void *p)
+static uintptr_t kgpc_mm_freemem(void *p)
 {
     free(p);
+    return 0;
 }
 
-/* function FreeMem(p: Pointer; size: PtrInt): PtrInt */
-intptr_t freemem_p_i64(void *p, intptr_t size)
+static uintptr_t kgpc_mm_freememsize(void *p, uintptr_t size)
 {
     (void)size;
     free(p);
     return 0;
 }
 
-/* function AllocMem(size: PtrInt): Pointer */
-void *sysallocmem_i64(intptr_t size)
+static void *kgpc_mm_allocmem(uintptr_t size)
 {
-    if (size <= 0)
+    if (size == 0)
         return NULL;
     return calloc(1, (size_t)size);
 }
 
-/* function ReallocMem(var p: Pointer; size: PtrInt): Pointer
- * The 'var' parameter means the caller passes a pointer-to-pointer
- * (the address of the pointer variable).  We must dereference to get
- * the actual heap pointer, realloc it, and store the result back. */
-void *sysreallocmem_p_i64(void **pp, intptr_t size)
+static void *kgpc_mm_reallocmem(void **pp, uintptr_t size)
 {
     if (pp == NULL)
         return NULL;
     void *original = *pp;
-    if (size <= 0)
-    {
+    if (size == 0) {
         free(original);
         *pp = NULL;
         return NULL;
@@ -3971,15 +3953,37 @@ void *sysreallocmem_p_i64(void **pp, intptr_t size)
     return result;
 }
 
-/* function SysMemSize(p: Pointer): PtrInt
- * Returns the usable size of the allocated block.  We cannot determine
- * this portably from libc, so return -1 (unknown).  FPC code that
- * relies on MemSize should not be affected since KGPC bypasses the
- * MemoryManager indirection. */
-intptr_t sysmemsize_p(void *p)
+static uintptr_t kgpc_mm_memsize(void *p)
 {
     (void)p;
-    return -1;
+    return (uintptr_t)-1; /* unknown */
+}
+
+static void kgpc_mm_noop(void) {}
+
+__attribute__((constructor))
+static void kgpc_init_memory_manager(void)
+{
+    if (MemoryManager == NULL)
+        return; /* MemoryManager not defined (non-FPC mode) */
+
+    char *mm = (char *)MemoryManager;
+    /* Skip NeedLock at offset 0 (leave as false/0) */
+    void *ptrs[] = {
+        kgpc_mm_getmem,       /*  8: GetMem */
+        kgpc_mm_freemem,      /* 16: FreeMem */
+        kgpc_mm_freememsize,   /* 24: FreeMemSize */
+        kgpc_mm_allocmem,     /* 32: AllocMem */
+        kgpc_mm_reallocmem,   /* 40: ReAllocMem */
+        kgpc_mm_memsize,      /* 48: MemSize */
+        kgpc_mm_noop,         /* 56: InitThread */
+        kgpc_mm_noop,         /* 64: DoneThread */
+        kgpc_mm_noop,         /* 72: RelocateHeap */
+        NULL,                 /* 80: GetHeapStatus (unused) */
+        NULL,                 /* 88: GetFPCHeapStatus (unused) */
+    };
+    for (int i = 0; i < 11; i++)
+        memcpy(mm + 8 + i * 8, &ptrs[i], sizeof(void *));
 }
 
 char *kgpc_string_concat(const char *lhs, const char *rhs)
@@ -5074,7 +5078,10 @@ int64_t bsrqword_i64(uint64_t value)
     return (int64_t)(63u - (uint64_t)__builtin_clzll(value));
 }
 
-int64_t bsrdword_li(uint32_t value)
+/* bsrdword_li and bsfdword_li: FPC's system.pp provides Pascal
+ * implementations compiled by KGPC.  These C versions are kept as
+ * fallbacks with kgpc_ prefix to avoid duplicate symbol conflicts. */
+int64_t kgpc_bsrdword_li(uint32_t value)
 {
     if (value == 0)
         return -1;
@@ -5088,7 +5095,7 @@ int64_t bsfqword_i64(uint64_t value)
     return (int64_t)__builtin_ctzll(value);
 }
 
-int64_t bsfdword_li(uint32_t value)
+int64_t kgpc_bsfdword_li(uint32_t value)
 {
     if (value == 0)
         return -1;
@@ -5106,7 +5113,7 @@ int64_t popcnt_i64(uint64_t value)
  * here via runtime_fpc_rtl_compat.S; extra parameters are ignored. */
 #include <fcntl.h>
 #include <sys/stat.h>
-int64_t filecreate_rbs(const char *filename)
+int64_t kgpc_filecreate_rbs(const char *filename)
 {
 #ifdef _WIN32
     #include <io.h>
@@ -7385,18 +7392,9 @@ uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint6
     return __sync_val_compare_and_swap(target, comparand, new_val);
 }
 
-long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
-{
-    return __sync_fetch_and_add(target, value);
-}
-
-long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val, long long comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
-
-/* interlockedexchangeadd_li_li and interlockedcompareexchange64_i64_i64_i64
-   are now emitted from Pascal source.  Only the FPC_* aliases above are needed. */
+/* FPC_INTERLOCKEDEXCHANGEADD / FPC_INTERLOCKEDCOMPAREEXCHANGE64:
+ * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
+ * system.pp).  Removed from runtime to avoid duplicate symbol conflicts. */
 
 /* Lo/Hi for Word/Integer — [internproc] fpc_in_lo_Word / fpc_in_hi_Word */
 uint8_t lo_w(uint16_t value)

@@ -2644,7 +2644,21 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
                 if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
                     current_score += 0;
                 else if (formal_type == actual_type)
-                    current_score += 0;
+                {
+                    /* When both are STRING_TYPE, prefer RawByteString over
+                     * UnicodeString.  RawByteString is FPC's catch-all byte
+                     * string type that any AnsiString converts to without
+                     * codepage conversion; UnicodeString requires conversion. */
+                    if (formal_type == STRING_TYPE && actual_type == STRING_TYPE)
+                    {
+                        const char *formal_type_id = NULL;
+                        if (formal_decl->type == TREE_VAR_DECL)
+                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        if (formal_type_id != NULL &&
+                            strcasecmp(formal_type_id, "UnicodeString") == 0)
+                            current_score += 2;  /* penalize UnicodeString */
+                    }
+                }
                 else if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
                          (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
                     current_score += 1;
@@ -2665,6 +2679,60 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
             {
                 num_best++;
             }
+        }
+
+        /* When multiple candidates tie, check if they all share the same
+         * mangled_id (e.g. File and TypedFile overloads both mangling as
+         * assign_f_rbs).  If so, they're effectively the same overload. */
+        if (num_best > 1 && best_match != NULL && best_match->mangled_id != NULL)
+        {
+            int all_same = 1;
+            for (ListNode_t *cur2 = candidates; cur2 != NULL && all_same; cur2 = cur2->next)
+            {
+                HashNode_t *c2 = (HashNode_t *)cur2->cur;
+                if (c2 == NULL || c2->type == NULL || c2->type->kind != TYPE_KIND_PROCEDURE)
+                    continue;
+                if (ListLength(c2->type->info.proc_info.params) != call_arg_count)
+                    continue;
+                /* Recompute this candidate's score to check if it ties */
+                ListNode_t *f2 = c2->type->info.proc_info.params;
+                ListNode_t *a2 = stmt->stmt_data.procedure_call_data.expr_args;
+                int s2 = 0;
+                while (f2 != NULL && a2 != NULL)
+                {
+                    Tree_t *fd = (Tree_t *)f2->cur;
+                    struct Expression *ae = (struct Expression *)a2->cur;
+                    int ft = resolve_param_type(fd, symtab);
+                    int at = UNKNOWN_TYPE;
+                    semcheck_stmt_expr_tag(&at, symtab, ae, max_scope_lev, NO_MUTATE);
+                    if (ft == UNKNOWN_TYPE || at == UNKNOWN_TYPE)
+                        s2 += 0;
+                    else if (ft == at)
+                    {
+                        if (ft == STRING_TYPE)
+                        {
+                            const char *fti = (fd->type == TREE_VAR_DECL) ?
+                                fd->tree_data.var_decl_data.type_id : NULL;
+                            if (fti != NULL && strcasecmp(fti, "UnicodeString") == 0)
+                                s2 += 2;
+                        }
+                    }
+                    else if ((ft == LONGINT_TYPE && at == INT_TYPE) ||
+                             (ft == INT_TYPE && at == LONGINT_TYPE))
+                        s2 += 1;
+                    else
+                        s2 += 1000;
+                    f2 = f2->next;
+                    a2 = a2->next;
+                }
+                if (s2 == best_score && c2->mangled_id != NULL &&
+                    strcmp(c2->mangled_id, best_match->mangled_id) != 0)
+                {
+                    all_same = 0;
+                }
+            }
+            if (all_same)
+                num_best = 1;
         }
 
         if (num_best == 1 && best_match != NULL && best_match->mangled_id != NULL)

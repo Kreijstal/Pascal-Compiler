@@ -234,6 +234,12 @@ void kgpc_assign_f_s(void *filerec, const char *path)
 
 static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
+/* RawByteString variants — kept as static stubs in case they're needed
+ * internally.  The compiler now emits .globl (not .weak) for all unit
+ * functions, so the compiler's own versions are used directly. */
+static void assign_t_rbs(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
+static void assign_f_rbs(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
+
 /* ------------------------------------------------------------------ */
 /* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
 /*                                                                     */
@@ -312,8 +318,9 @@ int32_t fileopen_us_i(const char *filename, int32_t mode)
     return fd;
 }
 
-/* fileopen_rbs_i: FileOpen(const FileName: RawByteString; Mode: Integer): THandle */
-int32_t fileopen_rbs_i(const char *filename, int32_t mode)
+/* fileopen_rbs_i: Now provided by compiler-emitted FPC Pascal code.
+ * Renamed to kgpc_ prefix to avoid duplicate symbol conflict. */
+static int32_t kgpc_fileopen_rbs_i(const char *filename, int32_t mode)
 {
     if (filename == NULL)
         return -1;

@@ -1,10 +1,3 @@
-/* FPC alias wrappers for interlocked operations. */
-long FPC_INTERLOCKEDEXCHANGEADD(long *target, long value)
-{
-    return __sync_fetch_and_add(target, value);
-}
-
-long long FPC_INTERLOCKEDCOMPAREEXCHANGE64(long long *target, long long new_val, long long comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
+/* FPC_INTERLOCKEDEXCHANGEADD / FPC_INTERLOCKEDCOMPAREEXCHANGE64:
+ * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
+ * system.pp).  This file is kept empty to avoid build system issues. */

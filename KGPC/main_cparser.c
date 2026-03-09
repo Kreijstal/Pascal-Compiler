@@ -1950,6 +1950,7 @@ int main(int argc, char **argv)
     double generic_alias_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     resolve_pending_generic_aliases(user_tree);
     emit_profile_stage("program: resolve generic aliases", current_time_seconds() - generic_alias_start);
+    from_cparser_resolve_deferred_arrays(user_tree);
     double generic_method_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     append_generic_method_clones(user_tree);
     emit_profile_stage("program: append generic method clones", current_time_seconds() - generic_method_start);

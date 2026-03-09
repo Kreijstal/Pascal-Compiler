@@ -184,6 +184,7 @@ typedef struct Tree
             int defined_in_unit;
             int unit_is_public;
             int source_unit_index;   /* Unit registry index (0 = local/program) */
+            char *unresolved_index_type;  /* Deferred enum index type name, resolved after all units load */
         } arr_decl_data;
 
         /* A constant declaration */

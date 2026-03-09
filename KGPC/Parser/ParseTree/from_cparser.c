@@ -412,6 +412,7 @@ typedef struct {
     long long range_start;
     long long range_end;
     int is_class_reference;  /* For "class of T" types */
+    char *unresolved_index_type;  /* Deferred enum index type name */
 } TypeInfo;
 
 /* Frontend error counter for errors during AST to tree conversion */
@@ -1057,6 +1058,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->element_kgpc_type != NULL) {
         destroy_kgpc_type(info->element_kgpc_type);
         info->element_kgpc_type = NULL;
+    }
+    if (info->unresolved_index_type != NULL) {
+        free(info->unresolved_index_type);
+        info->unresolved_index_type = NULL;
     }
 }
 
@@ -4948,9 +4953,9 @@ static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *con
         if (resolve_enum_type_range_with_fallback(range_str, type_section, &enum_start, &enum_end) == 0) {
             info->start = enum_start;
             info->end = enum_end;
-        } else if (id_for_error != NULL) {
-            fprintf(stderr, "ERROR: Could not resolve array index type '%s' for %s.\n",
-                    range_str, id_for_error);
+        } else {
+            /* Defer resolution — store the type name for a post-load fixup pass */
+            info->unresolved_index_type = strdup(range_str);
         }
     }
 
@@ -9422,6 +9427,10 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         if (decl != NULL)
             decl->tree_data.arr_decl_data.type_ref =
                 type_ref_from_element_info(&type_info, element_type_id);
+        if (decl != NULL && type_info.unresolved_index_type != NULL) {
+            decl->tree_data.arr_decl_data.unresolved_index_type = type_info.unresolved_index_type;
+            type_info.unresolved_index_type = NULL;  /* ownership transferred */
+        }
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         if (type_id != NULL)
@@ -10213,6 +10222,10 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         type_info->array_dimensions = NULL;
     }
 
+    if (type_info->unresolved_index_type != NULL) {
+        array_decl->tree_data.arr_decl_data.unresolved_index_type = type_info->unresolved_index_type;
+        type_info->unresolved_index_type = NULL;
+    }
     array_decl->tree_data.arr_decl_data.is_typed_const = 1;
     array_decl->tree_data.arr_decl_data.has_static_storage = 1;
 
@@ -14089,11 +14102,8 @@ tuple_cleanup:
     }
     default: {
         const char *name = tag_name(expr_node->typ);
-        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
+        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.\n",
                 expr_node->typ, name, expr_node->line);
-        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
-            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
-        fprintf(stderr, "\n");
         break;
     }
     }
@@ -15107,6 +15117,14 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             label = dup_symbol(label_node);
         return mk_goto(stmt_node->line, label);
     }
+    case PASCAL_T_STATEMENT_LIST: {
+        /* A STATEMENT_LIST appearing as a statement — flatten as compound statement */
+        ast_t *inner = stmt_node->child;
+        if (inner == NULL)
+            return NULL;
+        ListNode_t *stmts = convert_statement_list(inner);
+        return mk_compoundstatement(stmt_node->line, stmts);
+    }
     case PASCAL_T_STATEMENT: {
         ast_t *inner = unwrap_pascal_node(stmt_node->child);
         if (inner == NULL)
@@ -15515,6 +15533,8 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                 stmt_node->typ, name, stmt_node->line);
         if (stmt_node->sym != NULL && stmt_node->sym->name != NULL)
             fprintf(stderr, " (symbol: %s)", stmt_node->sym->name);
+        if (stmt_node->child != NULL)
+            fprintf(stderr, " (child: %s/%d)", tag_name(stmt_node->child->typ), stmt_node->child->line);
         fprintf(stderr, "\n");
         break;
     }
@@ -17207,6 +17227,41 @@ static ast_t *find_last_node_by_type(ast_t *node, int target_type) {
         node = node->next;
     }
     return last;
+}
+
+static void resolve_deferred_arrays_in_list(ListNode_t *decl_list)
+{
+    for (ListNode_t *cur = decl_list; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_TREE) continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_ARR_DECL) continue;
+        if (decl->tree_data.arr_decl_data.unresolved_index_type == NULL) continue;
+
+        const char *type_name = decl->tree_data.arr_decl_data.unresolved_index_type;
+        int start, end;
+        if (enum_registry_lookup(type_name, &start, &end) == 0) {
+            decl->tree_data.arr_decl_data.s_range = start;
+            decl->tree_data.arr_decl_data.e_range = end;
+            free(decl->tree_data.arr_decl_data.unresolved_index_type);
+            decl->tree_data.arr_decl_data.unresolved_index_type = NULL;
+        } else {
+            const char *id = "(unknown)";
+            if (decl->tree_data.arr_decl_data.ids != NULL &&
+                decl->tree_data.arr_decl_data.ids->cur != NULL)
+                id = (const char *)decl->tree_data.arr_decl_data.ids->cur;
+            fprintf(stderr, "ERROR: Could not resolve deferred array index type '%s' for %s.\n",
+                    type_name, id);
+        }
+    }
+}
+
+void from_cparser_resolve_deferred_arrays(Tree_t *program)
+{
+    if (program == NULL) return;
+
+    if (program->type == TREE_PROGRAM_TYPE) {
+        resolve_deferred_arrays_in_list(program->tree_data.program_data.var_declaration);
+    }
 }
 
 void from_cparser_cleanup(void)
