@@ -542,6 +542,15 @@ function RorWord(value: Word; shift: LongInt): Word; cdecl; external name 'kgpc_
 function RolByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_rol_byte';
 function RorByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_ror_byte';
 
+function Hi(value: QWord): LongWord; cdecl; external name 'kgpc_hi_qword';
+function Hi(value: Int64): LongWord; cdecl; external name 'kgpc_hi_qword';
+function Hi(value: LongWord): Word; cdecl; external name 'kgpc_hi_dword';
+function Hi(value: Word): Byte; cdecl; external name 'kgpc_hi_word';
+function Lo(value: QWord): LongWord; cdecl; external name 'kgpc_lo_qword';
+function Lo(value: Int64): LongWord; cdecl; external name 'kgpc_lo_qword';
+function Lo(value: LongWord): Word; cdecl; external name 'kgpc_lo_dword';
+function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
+
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
@@ -1130,6 +1139,11 @@ begin
 end;
 
 procedure FillChar(var dest; count: longint; value: integer); overload;
+begin
+    fillchar_impl(dest, count, value);
+end;
+
+procedure FillByte(var dest; count: longint; value: integer);
 begin
     fillchar_impl(dest, count, value);
 end;

@@ -7848,6 +7848,13 @@ void kgpc_prefetch(const void *p) {
     /* No-op; just a hint */
 }
 
+uint32_t kgpc_hi_qword(uint64_t value) { return (uint32_t)(value >> 32); }
+uint16_t kgpc_hi_dword(uint32_t value) { return (uint16_t)(value >> 16); }
+uint8_t  kgpc_hi_word(uint16_t value)  { return (uint8_t)(value >> 8); }
+uint32_t kgpc_lo_qword(uint64_t value) { return (uint32_t)(value & 0xFFFFFFFFu); }
+uint16_t kgpc_lo_dword(uint32_t value) { return (uint16_t)(value & 0xFFFF); }
+uint8_t  kgpc_lo_word(uint16_t value)  { return (uint8_t)(value & 0xFF); }
+
 void kgpc_runerror(int32_t code) {
     fprintf(stderr, "Runtime error %d\n", code);
     exit(code);
