@@ -2753,10 +2753,18 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
             break;
         }
 
-        // Check for optional := expression (explicit ordinal value)
+        // Check for optional := or = expression (explicit ordinal value)
+        // FPC uses := but also accepts = for enum values
         combinator_t* assign_op = token(match(":="));
         ParseResult assign_res = parse(in, assign_op);
         free_combinator(assign_op);
+        if (!assign_res.is_success) {
+            discard_failure(assign_res);
+            // Try plain = as well
+            combinator_t* eq_op = token(match("="));
+            assign_res = parse(in, eq_op);
+            free_combinator(eq_op);
+        }
         if (assign_res.is_success) {
             free_ast(assign_res.value.ast);
             // Parse the value expression and discard it
@@ -2770,7 +2778,7 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
                 discard_failure(val_res);
                 free_ast(ident_res.value.ast);
                 free_ast(values_ast);
-                return fail_with_message("Expected expression after ':=' in enum value", in, &state, parser_name);
+                return fail_with_message("Expected expression after '=' in enum value", in, &state, parser_name);
             }
         } else {
             discard_failure(assign_res);
@@ -3046,11 +3054,19 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         set_ast_position(return_ast, in);
     }
 
-    // 3.5 Optional "of object" for method pointer types (procedure of object)
+    // 3.5 Optional "of object" or "is nested" for method pointer / nested types
     {
-        combinator_t* of_object = optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("of")),
-            token(keyword_ci("object")),
+        combinator_t* of_object = optional(multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("of")),
+                token(keyword_ci("object")),
+                NULL
+            ),
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("is")),
+                token(create_keyword_parser("nested", PASCAL_T_IDENTIFIER)),
+                NULL
+            ),
             NULL
         ));
         ParseResult of_object_res = parse(in, of_object);
