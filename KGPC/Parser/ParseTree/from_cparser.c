@@ -93,6 +93,86 @@ static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
 
+/* Global registry of enum type ranges across unit loads.
+ * Persists across calls to tree_from_pascal_ast so that enum types
+ * defined in already-loaded units can be resolved when parsing later units. */
+typedef struct EnumTypeEntry {
+    char *name;
+    int start;
+    int end;
+    struct EnumTypeEntry *next;
+} EnumTypeEntry;
+static EnumTypeEntry *g_enum_type_registry = NULL;
+
+static void enum_registry_add(const char *name, int start, int end) {
+    if (name == NULL) return;
+    /* Check for existing entry (case-insensitive) */
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            e->start = start;
+            e->end = end;
+            return;
+        }
+    }
+    EnumTypeEntry *entry = (EnumTypeEntry *)calloc(1, sizeof(EnumTypeEntry));
+    if (entry == NULL) return;
+    entry->name = strdup(name);
+    entry->start = start;
+    entry->end = end;
+    entry->next = g_enum_type_registry;
+    g_enum_type_registry = entry;
+}
+
+static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
+    if (name == NULL) return -1;
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            *out_start = e->start;
+            *out_end = e->end;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void enum_registry_free(void) {
+    EnumTypeEntry *e = g_enum_type_registry;
+    while (e != NULL) {
+        EnumTypeEntry *next = e->next;
+        free(e->name);
+        free(e);
+        e = next;
+    }
+    g_enum_type_registry = NULL;
+}
+
+/* Scan a PASCAL_T_TYPE_SECTION and register all enumerated types in the global registry. */
+static void enum_registry_scan_type_section(ast_t *type_section) {
+    if (type_section == NULL) return;
+    for (ast_t *decl = type_section->child; decl != NULL; decl = decl->next) {
+        if (decl->typ != PASCAL_T_TYPE_DECL) continue;
+        ast_t *id_node = decl->child;
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER ||
+            id_node->sym == NULL || id_node->sym->name == NULL)
+            continue;
+        /* Find the type spec */
+        ast_t *spec = id_node->next;
+        while (spec != NULL && spec->typ != PASCAL_T_TYPE_SPEC &&
+               spec->typ != PASCAL_T_ENUMERATED_TYPE)
+            spec = spec->next;
+        if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+            spec = spec->child;
+        if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+            int count = 0;
+            for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
+                if (lit->typ == PASCAL_T_IDENTIFIER) count++;
+            }
+            if (count > 0)
+                enum_registry_add(id_node->sym->name, 0, count - 1);
+        }
+    }
+}
+
 static int is_external_directive(const char *directive)
 {
     if (directive == NULL)
@@ -1033,6 +1113,16 @@ static int const_section_is_resourcestring(ast_t *const_section) {
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
+
+/* Parse a range bound string that may be a number or boolean literal.
+ * Used for multi-dimensional array range extraction. */
+static int parse_range_bound(const char *s) {
+    if (s == NULL) return 0;
+    if (strcasecmp(s, "true") == 0) return 1;
+    if (strcasecmp(s, "false") == 0) return 0;
+    return atoi(s);
+}
+
 static int select_range_primitive_tag(const TypeInfo *info);
 
 static int resolve_const_expr_from_sections(const char *expr, int *result)
@@ -4473,7 +4563,7 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
             /* Get the type name (first child) */
             ast_t *type_id = type_decl->child;
             if (type_id != NULL && type_id->typ == PASCAL_T_IDENTIFIER && type_id->sym != NULL) {
-                if (strcmp(type_id->sym->name, type_name) == 0) {
+                if (strcasecmp(type_id->sym->name, type_name) == 0) {
                     /* Found the type - now check if it's an enumerated type */
                     ast_t *type_spec_node = type_id->next;
                     
@@ -4502,6 +4592,7 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
                         if (count > 0) {
                             *out_start = 0;
                             *out_end = count - 1;
+                            enum_registry_add(type_name, 0, count - 1);
                             return 0; /* Success */
                         }
                     }
@@ -4693,6 +4784,9 @@ static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *t
     if (resolve_enum_type_range_in_section_chain(type_name, g_interface_section_ast, out_start, out_end) == 0)
         return 0;
     if (resolve_enum_type_range_in_section_chain(type_name, g_implementation_section_ast, out_start, out_end) == 0)
+        return 0;
+    /* Fallback: check the cross-unit enum registry */
+    if (enum_registry_lookup(type_name, out_start, out_end) == 0)
         return 0;
     return -1;
 }
@@ -4990,6 +5084,34 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
         }
         return -1;
     }
+    case PASCAL_T_NOT:
+    {
+        int inner = 0;
+        if (evaluate_const_int_expr(expr->child, &inner, depth + 1) == 0) {
+            *out_value = ~inner;
+            return 0;
+        }
+        return -1;
+    }
+    case PASCAL_T_AND:
+    case PASCAL_T_OR:
+    case PASCAL_T_XOR:
+    {
+        int left = 0, right = 0;
+        if (expr->child == NULL || expr->child->next == NULL)
+            return -1;
+        if (evaluate_const_int_expr(expr->child, &left, depth + 1) != 0)
+            return -1;
+        if (evaluate_const_int_expr(expr->child->next, &right, depth + 1) != 0)
+            return -1;
+        if (expr->typ == PASCAL_T_AND)
+            *out_value = left & right;
+        else if (expr->typ == PASCAL_T_OR)
+            *out_value = left | right;
+        else
+            *out_value = left ^ right;
+        return 0;
+    }
     default:
         return -1;
     }
@@ -5222,6 +5344,18 @@ static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out
         return 0;
     }
 
+    /* Handle boolean literals */
+    if (strcasecmp(ident, "false") == 0) {
+        free(ident);
+        *out_value = 0;
+        return 0;
+    }
+    if (strcasecmp(ident, "true") == 0) {
+        free(ident);
+        *out_value = 1;
+        return 0;
+    }
+
     int val = resolve_const_int_from_ast(ident, scanner->const_section, INT_MIN);
     free(ident);
     if (val == INT_MIN)
@@ -5252,6 +5386,13 @@ static int const_expr_parse_unary(ConstExprScanner *scanner, long long *out_valu
         if (const_expr_parse_unary(scanner, &inner) != 0)
             return -1;
         *out_value = -inner;
+        return 0;
+    }
+    if (const_expr_match_keyword(scanner, "not")) {
+        long long inner = 0;
+        if (const_expr_parse_unary(scanner, &inner) != 0)
+            return -1;
+        *out_value = ~inner;
         return 0;
     }
     return const_expr_parse_primary(scanner, out_value);
@@ -5346,7 +5487,37 @@ static int const_expr_parse_add(ConstExprScanner *scanner, long long *out_value)
 }
 
 static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out_value) {
-    return const_expr_parse_add(scanner, out_value);
+    long long lhs = 0;
+    if (const_expr_parse_add(scanner, &lhs) != 0)
+        return -1;
+
+    while (1) {
+        if (const_expr_match_keyword(scanner, "and")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs & rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "or")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs | rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "xor")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs ^ rhs;
+            continue;
+        }
+        break;
+    }
+
+    *out_value = lhs;
+    return 0;
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
@@ -9563,8 +9734,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
                     } else {
                         multidim_infer_bounds = 1;
                     }
@@ -9579,8 +9750,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        dim3_start = atoi(range_copy);
-                        dim3_end = atoi(dotdot + 2);
+                        dim3_start = parse_range_bound(range_copy);
+                        dim3_end = parse_range_bound(dotdot + 2);
                     } else {
                         dim3_infer_bounds = 1;
                     }
@@ -9597,8 +9768,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
                     } else {
                         /* Enum type - need to infer bounds from initializer */
                         multidim_infer_bounds = 1;
@@ -15334,6 +15505,11 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_case(stmt_node->line, selector_expr, list_builder_finish(&branches_builder), else_stmt);
     }
     default: {
+        /* Try to convert unknown tags as expressions (e.g., NOT, AND, OR in const contexts) */
+        struct Expression *expr = convert_expression(stmt_node);
+        if (expr != NULL)
+            return mk_exprstmt(stmt_node->line, stmt_node->col, expr);
+
         const char *name = tag_name(stmt_node->typ);
         fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",
                 stmt_node->typ, name, stmt_node->line);
@@ -17091,6 +17267,9 @@ void from_cparser_cleanup(void)
     typed_const_counter = 0;
     g_allow_pending_specializations = 0;
     g_frontend_error_count = 0;
+
+    /* Free cross-unit enum registry */
+    enum_registry_free();
 }
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
@@ -17527,6 +17706,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_interface_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &interface_type_decls,
                                 NULL, &interface_const_decls, &interface_var_builder, NULL);
                             break;
@@ -17641,6 +17821,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_implementation_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &implementation_type_decls,
                                 &subprograms, &implementation_const_decls, &implementation_var_builder, NULL);
                             break;
