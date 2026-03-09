@@ -1963,6 +1963,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->is_generic_specialization = record_type->is_generic_specialization;
     clone->method_clones_emitted = 0;
     clone->parent_fields_merged = 0;
+    clone->source_unit_index = record_type->source_unit_index;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
     {

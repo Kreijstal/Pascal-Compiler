@@ -3091,7 +3091,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
         {
             if (qualified_unit_index > 0 &&
                 node->source_unit_index > 0 &&
-                node->source_unit_index != qualified_unit_index)
+                node->source_unit_index != qualified_unit_index &&
+                node->source_unit_index != g_semcheck_current_unit_index)
             {
                 cur = cur->next;
                 continue;

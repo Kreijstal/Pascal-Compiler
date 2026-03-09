@@ -7852,6 +7852,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
     record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
@@ -8706,6 +8707,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
     record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->record_properties = list_builder_finish(&property_builder);

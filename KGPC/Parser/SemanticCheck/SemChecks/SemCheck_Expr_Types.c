@@ -2209,11 +2209,9 @@ int semcheck_recordaccess(int *type_return,
                 destroy_expr(record_expr);
                 expr->expr_data.record_access_data.record_expr = value_expr;
                 record_expr = value_expr;
-                if (record_kgpc_type != NULL)
-                {
-                    kgpc_type_release(record_kgpc_type);
-                    record_kgpc_type = NULL;
-                }
+                /* record_kgpc_type was a borrowed ref owned by the old record_expr
+                 * which was already freed by destroy_expr above — just clear it. */
+                record_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&record_kgpc_type, symtab,
                     record_expr, max_scope_lev, NO_MUTATE);
                 record_type = semcheck_tag_from_kgpc(record_kgpc_type);
@@ -2270,11 +2268,8 @@ int semcheck_recordaccess(int *type_return,
                             record_expr->expr_data.record_access_data.field_id = saved_id;
                             record_expr->expr_data.record_access_data.field_offset = field_offset;
 
-                            if (record_kgpc_type != NULL)
-                            {
-                                kgpc_type_release(record_kgpc_type);
-                                record_kgpc_type = NULL;
-                            }
+                            /* record_kgpc_type is borrowed — just clear it */
+                            record_kgpc_type = NULL;
                             error_count += semcheck_expr_with_type(&record_kgpc_type, symtab,
                                 record_expr, max_scope_lev, NO_MUTATE);
                             record_type = semcheck_tag_from_kgpc(record_kgpc_type);
@@ -3923,7 +3918,7 @@ FIELD_RESOLVED:
         if (type_node == NULL)
             type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
                 field_ref, type_id_to_use);
-        
+
         if (type_node == NULL && record_info != NULL && record_info->type_id != NULL)
         {
             snprintf(qualified_name_buf, sizeof(qualified_name_buf), "%s.%s", 
