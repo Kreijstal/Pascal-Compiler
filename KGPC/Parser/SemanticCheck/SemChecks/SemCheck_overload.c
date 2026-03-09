@@ -984,12 +984,12 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
 {
     if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
     {
-        /* Untyped formals are permissive, but when the actual is also unknown
-         * (e.g. forwarding an untyped const parameter), prefer typed overloads
-         * to avoid self-recursive overload selection. */
+        /* Untyped formals accept any argument, but score lower than typed formals
+         * so that typed overloads (e.g. FpRead(buf: PAnsiChar)) are preferred
+         * over untyped ones (e.g. FpRead(var buf)) when both match. */
         if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL)
             return semcheck_make_quality(MATCH_CONVERSION);
-        return semcheck_make_quality(MATCH_EXACT);
+        return semcheck_make_quality(MATCH_CONVERSION);
     }
 
     /* When the actual is untyped (e.g. forwarding an untyped const parameter),
@@ -1245,10 +1245,12 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                     q.int_promo_rank = 1;
                 return q;
             }
-            /* Untyped pointer -> typed non-class pointer: prefer this */
+            /* Untyped pointer -> typed non-class pointer: score as
+             * PROMOTION so it ties with untyped-formal PROMOTION, then
+             * the untyped-params tiebreaker picks the typed overload. */
             if (actual_sub == UNKNOWN_TYPE)
             {
-                MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
+                MatchQuality q = semcheck_make_quality(MATCH_PROMOTION);
                 q.exact_pointer_subtype = 1;  /* bonus for pointer match */
                 return q;
             }
@@ -2680,6 +2682,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                      * parameters.  E.g., Equals(TBits) should beat Equals(TObject) when
                      * the actual argument is TBits. */
                     specificity_cmp = semcheck_compare_class_specificity(candidate, best_match, symtab);
+                }
+                if (specificity_cmp == 0)
+                {
+                    /* Prefer overloads with typed params over untyped (var/const)
+                     * params.  E.g., FpRead(buf: PAnsiChar) should beat
+                     * FpRead(var buf) when both match a Pointer argument. */
+                    int cand_untyped = semcheck_count_untyped_params(candidate);
+                    int best_untyped = semcheck_count_untyped_params(best_match);
+                    if (cand_untyped != best_untyped)
+                        specificity_cmp = cand_untyped < best_untyped ? -1 : 1;
                 }
                 if (specificity_cmp == 0)
                 {
