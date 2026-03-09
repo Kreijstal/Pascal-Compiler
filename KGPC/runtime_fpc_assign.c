@@ -191,14 +191,14 @@ void kgpc_assign_t_s(void *textrec, const char *path)
 
 /* Wrapper for FPC RTL path — FPC system.pp mangles Assign(text,string) as assign_t_s.
  * KGPC's system.p uses external name 'kgpc_assign_t_s' so doesn't conflict. */
-void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
+static void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
 
 /* ------------------------------------------------------------------ */
 /* assign_t_c: Assign(var t: Text; c: AnsiChar)                        */
 /* FPC mangles this as assign_t_c.  The char value arrives in %rsi as  */
 /* an integer; we convert it to a 1-char string and delegate.          */
 /* ------------------------------------------------------------------ */
-void assign_t_c(void *textrec, char c)
+static void assign_t_c(void *textrec, char c)
 {
     char buf[2];
     buf[0] = c;
@@ -233,7 +233,7 @@ void kgpc_assign_f_s(void *filerec, const char *path)
     }
 }
 
-void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
+static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
 /* ------------------------------------------------------------------ */
 /* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
@@ -350,12 +350,12 @@ extern int  kgpc_tfile_seek(KGPCFileRec *file, long long index);
 extern int  kgpc_tfile_filepos(KGPCFileRec *file, long long *pos);
 extern int  kgpc_tfile_truncate_current(KGPCFileRec *file);
 
-void rewrite_f(void *filerec)
+static void rewrite_f(void *filerec)
 {
     kgpc_tfile_rewrite((KGPCFileRec *)filerec);
 }
 
-void rewrite_f_li(void *filerec, int32_t recsize)
+static void rewrite_f_li(void *filerec, int32_t recsize)
 {
     KGPCFileRec *f = (KGPCFileRec *)filerec;
     kgpc_tfile_rewrite(f);
@@ -366,12 +366,12 @@ void rewrite_f_li(void *filerec, int32_t recsize)
     }
 }
 
-void reset_f(void *filerec)
+static void reset_f(void *filerec)
 {
     kgpc_tfile_reset((KGPCFileRec *)filerec);
 }
 
-void reset_f_li(void *filerec, int32_t recsize)
+static void reset_f_li(void *filerec, int32_t recsize)
 {
     KGPCFileRec *f = (KGPCFileRec *)filerec;
     kgpc_tfile_reset(f);
@@ -381,12 +381,12 @@ void reset_f_li(void *filerec, int32_t recsize)
     }
 }
 
-void close_f(void *filerec)
+static void close_f(void *filerec)
 {
     kgpc_tfile_close((KGPCFileRec *)filerec);
 }
 
-void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *result)
+static void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -394,7 +394,7 @@ void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *resul
         *result = (int32_t)actual;
 }
 
-void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *result)
+static void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -402,7 +402,7 @@ void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *res
         *result = actual;
 }
 
-void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t *result)
+static void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -410,7 +410,7 @@ void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t
         *result = (int32_t)actual;
 }
 
-void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64_t *result)
+static void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -418,19 +418,19 @@ void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64
         *result = actual;
 }
 
-void seek_f_i64(void *filerec, int64_t pos)
+static void seek_f_i64(void *filerec, int64_t pos)
 {
     kgpc_tfile_seek((KGPCFileRec *)filerec, pos);
 }
 
-int64_t filepos_f(void *filerec)
+static int64_t filepos_f(void *filerec)
 {
     long long pos = 0;
     kgpc_tfile_filepos((KGPCFileRec *)filerec, &pos);
     return (int64_t)pos;
 }
 
-void truncate_f(void *filerec)
+static void truncate_f(void *filerec)
 {
     kgpc_tfile_truncate_current((KGPCFileRec *)filerec);
 }

@@ -15,8 +15,8 @@ type
     ptruint = cuintptr;
 
     { Common Win32 integral types }
-    BOOL    = cint32;
-    WordBool = cint32;
+    BOOL    = LongBool;
+    WordBool = LongBool;
     UINT    = cuint32;
     DWORD   = cuint32;
     LONG    = clong;
@@ -266,9 +266,9 @@ begin
     v := kgpc_query_performance_counter;
     value := v;
     if v <> 0 then
-      QueryPerformanceCounter := 1
+      QueryPerformanceCounter := True
     else
-      QueryPerformanceCounter := 0;
+      QueryPerformanceCounter := False;
 end;
 
 function QueryPerformanceFrequency(out freq: culonglong): BOOL;
@@ -277,9 +277,9 @@ begin
     f := kgpc_query_performance_frequency;
     freq := f;
     if f <> 0 then
-      QueryPerformanceFrequency := 1
+      QueryPerformanceFrequency := True
     else
-      QueryPerformanceFrequency := 0;
+      QueryPerformanceFrequency := False;
 end;
 
 function IsDebuggerPresent: BOOL;
@@ -295,9 +295,9 @@ end;
 function SetEnvironmentVariable(lpName: pchar; lpValue: pchar): BOOL;
 begin
     if kgpc_setenv(lpName, lpValue) = 0 then
-        SetEnvironmentVariable := 1
+        SetEnvironmentVariable := True
     else
-        SetEnvironmentVariable := 0;
+        SetEnvironmentVariable := False;
 end;
 
 end.

@@ -6421,7 +6421,7 @@ typedef struct KgpcStringHeaderShim {
     int64_t length;
 } KgpcStringHeaderShim;
 
-extern KgpcFpcDynLibsManager CurrentDLM __attribute__((weak));
+KgpcFpcDynLibsManager CurrentDLM = {0};
 
 static const KgpcStringHeaderShim *kgpc_string_header_shim(const char *value)
 {
@@ -6501,9 +6501,6 @@ static char *kgpc_fpc_dynlib_error(void)
 __attribute__((constructor))
 static void kgpc_fpc_init_dynlibs_manager(void)
 {
-    if ((uintptr_t)&CurrentDLM == 0)
-        return;
-
     CurrentDLM.LoadLibraryU = kgpc_fpc_dynlib_load_u;
     CurrentDLM.LoadLibraryA = kgpc_fpc_dynlib_load_a;
     CurrentDLM.GetProcAddress = kgpc_fpc_dynlib_get_proc;

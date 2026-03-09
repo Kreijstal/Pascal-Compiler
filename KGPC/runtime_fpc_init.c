@@ -155,9 +155,10 @@ static int64_t kgpc_get_current_thread_id(void) {
 }
 
 /* CurrentTM: FPC's TThreadManager record (35 function pointers).
- * Storage is provided by runtime_fpc_thread_symbols.S (.comm directive).
- * In FPC RTL mode, the compiler-generated .globl overrides the .comm. */
-extern void *CurrentTM[];
+ * Keep these as normal C globals so all targets use the same linkage model. */
+void *CurrentTM[34 + 1] = {0};
+void *NoThreadManager[34 + 1] = {0};
+void *LazyInitThreadingProcList = NULL;
 
 /* Called from kgpc_init_args to populate CurrentTM */
 void kgpc_fpc_init_thread_manager(void)
@@ -195,7 +196,7 @@ void kgpc_fpc_init_thread_manager(void)
 typedef struct { int32_t kind; int32_t reserved; union { int64_t v_int; double v_real; void *v_ptr; } data; } kgpc_tvarrec_t;
 extern char *kgpc_format(const char *fmt, const kgpc_tvarrec_t *args, size_t arg_count);
 
-char *format_s_a(const char *fmt, const void *args_desc)
+static char *format_s_a(const char *fmt, const void *args_desc)
 {
     const void *const *desc = (const void *const *)args_desc;
     const kgpc_tvarrec_t *args_array = (const kgpc_tvarrec_t *)desc[0];
