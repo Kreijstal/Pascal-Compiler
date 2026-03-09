@@ -937,6 +937,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                     free(path_token);
                     free(keyword);
                     free(content);
+                    *index = paren_style ? end + 1 : end;
                     return true;
                 }
                 // If not recognized, fall through to try as a file
