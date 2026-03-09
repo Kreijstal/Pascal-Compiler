@@ -5596,6 +5596,201 @@ void test_specialize_multi_arg(void) {
 }
 
 
+// Regression: 'otherwise' keyword as case statement alternative to 'else'
+void test_case_otherwise_keyword(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program P;\n"
+        "var x: integer;\n"
+        "begin\n"
+        "  case x of\n"
+        "    1: x := 2;\n"
+        "    2: x := 3;\n"
+        "    otherwise\n"
+        "      x := 0;\n"
+        "  end;\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: property with dotted read/write accessor (e.g., read data.typ)
+void test_property_dotted_accessor(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  TData = record typ: integer; end;\n"
+        "  TFoo = class\n"
+        "    data: TData;\n"
+        "    property datatype: integer read data.typ;\n"
+        "  end;\n"
+        "implementation\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: enum with plain '=' for ordinal values (not just ':=')
+void test_enum_equals_value(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program P;\n"
+        "type\n"
+        "  TInline = (\n"
+        "    in_none = -1,\n"
+        "    in_lo = 1,\n"
+        "    in_hi = 2\n"
+        "  );\n"
+        "begin end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: 'is nested' modifier on function/procedure types
+void test_function_type_is_nested(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program P;\n"
+        "type\n"
+        "  TMatchProc = function(n: integer): Boolean is nested;\n"
+        "  TDoProc = procedure(x: integer) is nested;\n"
+        "begin end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: 'reference' used as field name (soft keyword, not reserved)
+void test_reference_as_field_name(void) {
+    combinator_t* p = get_program_parser();
+    input_t* input = new_input();
+    const char* src =
+        "program P;\n"
+        "type\n"
+        "  TLoc = record\n"
+        "    loc: integer;\n"
+        "    reference: record\n"
+        "      alignment: integer;\n"
+        "    end;\n"
+        "  end;\n"
+        "var x: TLoc;\n"
+        "begin\n"
+        "  x.reference.alignment := 1;\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: nested class with parent class inheritance
+void test_nested_class_with_parent(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  TBase = class\n"
+        "    type\n"
+        "      TInner = class(TObject)\n"
+        "        x: integer;\n"
+        "      end;\n"
+        "  end;\n"
+        "implementation\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
+// Regression: 'final' method directive in class
+void test_class_final_directive(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  TFoo = class\n"
+        "    procedure DoSomething; virtual; final;\n"
+        "  end;\n"
+        "implementation\n"
+        "procedure TFoo.DoSomething;\n"
+        "begin end;\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
@@ -5785,5 +5980,12 @@ TEST_LIST = {
     { "test_case_qualified_enum_labels", test_case_qualified_enum_labels },
     { "test_generic_class_procedure_in_record", test_generic_class_procedure_in_record },
     { "test_specialize_multi_arg", test_specialize_multi_arg },
+    { "test_case_otherwise_keyword", test_case_otherwise_keyword },
+    { "test_property_dotted_accessor", test_property_dotted_accessor },
+    { "test_enum_equals_value", test_enum_equals_value },
+    { "test_function_type_is_nested", test_function_type_is_nested },
+    { "test_reference_as_field_name", test_reference_as_field_name },
+    { "test_nested_class_with_parent", test_nested_class_with_parent },
+    { "test_class_final_directive", test_class_final_directive },
     { NULL, NULL }
 };
