@@ -219,7 +219,8 @@ static bool case_branch_should_stop(input_t* in, combinator_t* case_label_list) 
     pascal_word_slice_t slice;
     if (pascal_peek_word(in, &slice)) {
         if (pascal_word_equals_ci(&slice, "else") ||
-            pascal_word_equals_ci(&slice, "end")) {
+            pascal_word_equals_ci(&slice, "end") ||
+            pascal_word_equals_ci(&slice, "otherwise")) {
             return true;
         }
     }

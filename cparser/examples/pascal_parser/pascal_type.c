@@ -544,17 +544,17 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("stored")),
-            token(cident(PASCAL_T_IDENTIFIER)),
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))),
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -772,17 +772,17 @@ combinator_t* class_type(tag_t tag) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("stored")),
-            token(cident(PASCAL_T_IDENTIFIER)),
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))),
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -1212,12 +1212,12 @@ combinator_t* interface_type(tag_t tag) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         token(match(";")),
