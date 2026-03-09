@@ -1369,6 +1369,14 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
     if (expr->array_element_type_id != NULL)
         return expr->array_element_type_id;
 
+    if (expr->resolved_kgpc_type != NULL && expr->resolved_kgpc_type->type_alias != NULL)
+    {
+        if (expr->resolved_kgpc_type->type_alias->alias_name != NULL)
+            return expr->resolved_kgpc_type->type_alias->alias_name;
+        if (expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+            return expr->resolved_kgpc_type->type_alias->target_type_id;
+    }
+
     if (expr->type != EXPR_VAR_ID)
         return NULL;
 
@@ -1582,25 +1590,77 @@ static int compare_single_quality(const MatchQuality *a, const MatchQuality *b)
 static int semcheck_compare_match_quality(int arg_count,
     const MatchQuality *a, const MatchQuality *b)
 {
-    int a_better_somewhere = 0;
-    int b_better_somewhere = 0;
+    int a_exact = 0;
+    int b_exact = 0;
+    int a_promotion = 0;
+    int b_promotion = 0;
+    int a_conversion = 0;
+    int b_conversion = 0;
+    int a_incompatible = 0;
+    int b_incompatible = 0;
 
     for (int i = 0; i < arg_count; i++)
     {
-        int cmp = compare_single_quality(&a[i], &b[i]);
-        if (cmp < 0)
-            a_better_somewhere = 1;
-        else if (cmp > 0)
-            b_better_somewhere = 1;
+        switch (a[i].kind)
+        {
+            case MATCH_EXACT:
+                a_exact++;
+                break;
+            case MATCH_PROMOTION:
+                a_promotion++;
+                break;
+            case MATCH_CONVERSION:
+                a_conversion++;
+                break;
+            case MATCH_INCOMPATIBLE:
+                a_incompatible++;
+                break;
+        }
+        switch (b[i].kind)
+        {
+            case MATCH_EXACT:
+                b_exact++;
+                break;
+            case MATCH_PROMOTION:
+                b_promotion++;
+                break;
+            case MATCH_CONVERSION:
+                b_conversion++;
+                break;
+            case MATCH_INCOMPATIBLE:
+                b_incompatible++;
+                break;
+        }
     }
 
-    /* A is strictly better if better somewhere and not worse anywhere */
-    if (a_better_somewhere && !b_better_somewhere)
-        return -1;
-    /* B is strictly better if better somewhere and not worse anywhere */
-    if (b_better_somewhere && !a_better_somewhere)
-        return 1;
-    /* Otherwise ambiguous (either equal everywhere, or mixed) */
+    if (a_incompatible != b_incompatible)
+        return a_incompatible < b_incompatible ? -1 : 1;
+    if (a_conversion != b_conversion)
+        return a_conversion < b_conversion ? -1 : 1;
+    if (a_promotion != b_promotion)
+        return a_promotion < b_promotion ? -1 : 1;
+    if (a_exact != b_exact)
+        return a_exact > b_exact ? -1 : 1;
+
+    /* Same conversion-class histogram: fall back to the per-argument compare
+     * so exact subtype/id matches can still dominate deterministically. */
+    {
+        int a_better_somewhere = 0;
+        int b_better_somewhere = 0;
+        for (int i = 0; i < arg_count; i++)
+        {
+            int cmp = compare_single_quality(&a[i], &b[i]);
+            if (cmp < 0)
+                a_better_somewhere = 1;
+            else if (cmp > 0)
+                b_better_somewhere = 1;
+        }
+        if (a_better_somewhere && !b_better_somewhere)
+            return -1;
+        if (b_better_somewhere && !a_better_somewhere)
+            return 1;
+    }
+
     return 0;
 }
 
@@ -2438,6 +2498,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                 ? arg_kgpc->type_alias->alias_name
                                 : arg_kgpc->type_alias->target_type_id;
                         }
+                        if (arg_type_id == NULL && arg_tag == STRING_TYPE)
+                            arg_type_id = "String";
                         if (formal_id != NULL && arg_type_id != NULL &&
                             pascal_identifier_equals(formal_id, arg_type_id))
                             quality.exact_type_id = 1;
@@ -2448,6 +2510,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             if (formal_num != NULL && arg_num != NULL &&
                                 pascal_identifier_equals(formal_num, arg_num))
                                 quality.exact_type_id = 1;
+                        }
+                        if (formal_id != NULL && arg_type_id != NULL &&
+                            is_string_type(formal_tag) && is_string_type(arg_tag))
+                        {
+                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != 0 && formal_kind == arg_kind)
+                                quality.exact_pointer_subtype = 1;
                         }
                         if (formal_id != NULL && arg_type_id != NULL &&
                             formal_tag == POINTER_TYPE && arg_tag == STRING_TYPE)
@@ -2665,6 +2735,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     best_match = candidate;
                     best_qualities = qualities;
                     best_missing = missing_args;
+                    num_best = 1;
                     continue;
                 }
                 /* True ambiguity: neither is strictly better.
