@@ -2343,13 +2343,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         }
                         else if (formal_id != NULL &&
                             (pascal_identifier_equals(formal_id, "UnicodeString") ||
-                             pascal_identifier_equals(formal_id, "RawByteString") ||
-                             pascal_identifier_equals(formal_id, "WideString") ||
-                             pascal_identifier_equals(formal_id, "AnsiString") ||
-                             pascal_identifier_equals(formal_id, "String")))
+                             pascal_identifier_equals(formal_id, "WideString")))
                         {
                             if (quality.kind == MATCH_EXACT)
                                 quality.kind = MATCH_PROMOTION;
+                            quality.char_promo_rank = 1;
+                        }
+                        else if (formal_id != NULL &&
+                            (pascal_identifier_equals(formal_id, "RawByteString") ||
+                             pascal_identifier_equals(formal_id, "AnsiString") ||
+                             pascal_identifier_equals(formal_id, "String")))
+                        {
+                            quality.kind = MATCH_EXACT;
                         }
                         else if (formal_id == NULL)
                         {
@@ -2359,8 +2364,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             }
                             else if (formal_tag == STRING_TYPE)
                             {
-                                if (quality.kind == MATCH_EXACT)
-                                    quality.kind = MATCH_PROMOTION;
+                                quality.kind = MATCH_EXACT;
                             }
                         }
                     }

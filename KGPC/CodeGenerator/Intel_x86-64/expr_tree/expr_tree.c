@@ -63,6 +63,59 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
+static int expr_tree_node_is_wide_string(expr_node_t *node)
+{
+    if (node == NULL || node->expr == NULL)
+        return 0;
+
+    if (node->expr->type == EXPR_ADDOP &&
+        node->expr->expr_data.addop_data.addop_type == PLUS &&
+        expr_get_type_tag(node->expr) == STRING_TYPE)
+    {
+        return expr_tree_node_is_wide_string(node->left_expr) ||
+               expr_tree_node_is_wide_string(node->right_expr);
+    }
+
+    if (node->expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_wide_string(node->expr->resolved_kgpc_type))
+            return 1;
+
+        if (node->expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = node->expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = node->expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                return 1;
+            }
+        }
+    }
+
+    if (node->expr->type == EXPR_FUNCTION_CALL &&
+        node->expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        node->expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *call_type = node->expr->expr_data.function_call_data.call_kgpc_type;
+        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+        if (ret_type != NULL && kgpc_type_is_wide_string(ret_type))
+            return 1;
+        if (call_type->info.proc_info.return_type_id != NULL &&
+            (pascal_identifier_equals(call_type->info.proc_info.return_type_id, "UnicodeString") ||
+             pascal_identifier_equals(call_type->info.proc_info.return_type_id, "WideString")))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -1493,6 +1546,30 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
     return inst_list;
 }
 
+static ListNode_t *promote_wide_operand_to_string(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *value_reg)
+{
+    if (node == NULL || node->expr == NULL || ctx == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (!expr_tree_node_is_wide_string(node))
+        return inst_list;
+
+    const char *arg_reg64 = current_arg_reg64(0);
+    if (arg_reg64 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_from_unicodestring");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
 static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGenContext *ctx,
     const char *value_operand, const Register_t *value_reg)
 {
@@ -1602,12 +1679,14 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
         inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+        inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
 
         if (codegen_target_is_windows())
         {
@@ -1630,12 +1709,14 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
         inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
         inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
         inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+        inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);

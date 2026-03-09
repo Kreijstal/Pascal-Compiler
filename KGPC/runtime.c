@@ -4324,6 +4324,13 @@ void kgpc_string_assign_from_unicodestring(char **target, const uint16_t *value)
     kgpc_string_assign_take(target, ansi);
 }
 
+char *kgpc_string_from_unicodestring(const uint16_t *value)
+{
+    char *result = NULL;
+    kgpc_string_assign_from_unicodestring(&result, value);
+    return result;
+}
+
 uint16_t *kgpc_unicodestring_from_string(const char *value)
 {
     if (value == NULL)

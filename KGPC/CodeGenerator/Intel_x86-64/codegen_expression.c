@@ -824,6 +824,14 @@ static int codegen_expr_is_wide_string_value(const struct Expression *expr)
     if (expr == NULL)
         return 0;
 
+    if (expr->type == EXPR_ADDOP &&
+        expr->expr_data.addop_data.addop_type == PLUS &&
+        expr_get_type_tag(expr) == STRING_TYPE)
+    {
+        return codegen_expr_is_wide_string_value(expr->expr_data.addop_data.left_expr) ||
+               codegen_expr_is_wide_string_value(expr->expr_data.addop_data.right_term);
+    }
+
     if (expr->resolved_kgpc_type != NULL)
     {
         if (kgpc_type_is_wide_string(expr->resolved_kgpc_type))
@@ -9124,8 +9132,22 @@ pass_value_arg:
                 if ((formal_decl_expects_string(formal_arg_decl) ||
                      builtin_arg_expects_string(procedure_name, arg_num)) &&
                     arg_expr != NULL &&
+                    codegen_expr_is_wide_string_value(arg_expr))
+                {
+                    const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_from_unicodestring");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                if ((formal_decl_expects_string(formal_arg_decl) ||
+                     builtin_arg_expects_string(procedure_name, arg_num)) &&
+                    arg_expr != NULL &&
                     arg_expr->type == EXPR_STRING &&
-                    expr_get_type_tag(arg_expr) != CHAR_TYPE)
+                    expr_get_type_tag(arg_expr) != CHAR_TYPE &&
+                    !codegen_expr_is_wide_string_value(arg_expr))
                 {
                     const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg64);
