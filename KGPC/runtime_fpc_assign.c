@@ -194,6 +194,19 @@ void kgpc_assign_t_s(void *textrec, const char *path)
 void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
 
 /* ------------------------------------------------------------------ */
+/* assign_t_c: Assign(var t: Text; c: AnsiChar)                        */
+/* FPC mangles this as assign_t_c.  The char value arrives in %rsi as  */
+/* an integer; we convert it to a 1-char string and delegate.          */
+/* ------------------------------------------------------------------ */
+void assign_t_c(void *textrec, char c)
+{
+    char buf[2];
+    buf[0] = c;
+    buf[1] = '\0';
+    kgpc_assign_t_s(textrec, buf);
+}
+
+/* ------------------------------------------------------------------ */
 /* assign_f_s: Assign(var f: File; const s: string)                    */
 /* Single implementation for both standard and FPC RTL mode.           */
 /* Calls kgpc_tfile_assign (KGPC proper init), then copies filename    */
@@ -309,202 +322,123 @@ int32_t fileopen_rbs_i(const char *filename, int32_t mode)
 }
 
 /* ------------------------------------------------------------------ */
-/* MODE_OPEN: FPC constant S_IRUSR|S_IWUSR|S_IRGRP|S_IWGRP|S_IROTH|S_IWOTH = 0666 octal = 438 */
-/* Referenced as a global variable by FPC RTL compiled code.           */
-/* ------------------------------------------------------------------ */
-int32_t MODE_OPEN = 0x1B6;   /* 438 decimal, 0o666 octal */
-
-/* ------------------------------------------------------------------ */
-/* operatingsystem_parameter_* : FPC system unit global variables      */
-/* Set by kgpc_fpc_init_os_params() called from kgpc_init_args.        */
-/* ------------------------------------------------------------------ */
-int32_t  operatingsystem_parameter_argc = 0;
-void    *operatingsystem_parameter_argv = NULL;
-void    *operatingsystem_parameter_envp = NULL;
-
-/* Called from kgpc_init_args to populate FPC globals */
-void kgpc_fpc_init_os_params(int argc, char **argv, char **envp)
-{
-    operatingsystem_parameter_argc = (int32_t)argc;
-    operatingsystem_parameter_argv = (void *)argv;
-    operatingsystem_parameter_envp = (void *)envp;
-}
-
-/* ------------------------------------------------------------------ */
-/* FPC_THREADVARTABLES: Thread variable tables (TltvInitTablesTable)   */
-/* count=0 means no thread variables — init/copy loops do nothing.     */
-/* ------------------------------------------------------------------ */
-struct {
-    int64_t count;
-    void   *tables[1];  /* placeholder, never accessed when count=0 */
-} FPC_THREADVARTABLES = { 0, { NULL } };
-
-/* ------------------------------------------------------------------ */
-/* dest / Dest: operator result parameters leaked as global references */
-/* These appear as dead code in .weak functions overridden by the      */
-/* runtime's strong widechar__op_assign_olevariant_wc.  Providing      */
-/* them as zero globals satisfies the linker.                          */
-/* ------------------------------------------------------------------ */
-void *dest = NULL;
-void *Dest = NULL;
-
-/* ------------------------------------------------------------------ */
-/* FPC TThreadManager implementation (single-threaded).                */
-/* FPC RTL's commoninit calls through CurrentTM function pointers.    */
-/* These are real implementations for a single-threaded runtime using  */
-/* POSIX primitives where needed.                                      */
+/* FPC-mangled untyped file operations                                 */
 /*                                                                     */
-/* TThreadManager layout (each field is a function pointer, 8 bytes): */
-/*   0: InitManager       8: DoneManager      16: BeginThread         */
-/*  24: EndThread         32: SuspendThread    40: ResumeThread        */
-/*  48: KillThread        56: CloseThread      64: ThreadSwitch        */
-/*  72: WaitForTerminate  80: SetPriority      88: GetPriority         */
-/*  96: GetCurrentThreadId 104: SetDebugNameA  112: SetDebugNameU      */
-/* 120: InitCritSection   128: DoneCritSection 136: EnterCritSection   */
-/* 144: TryEnterCritSection 152: LeaveCritSection                      */
-/* 160: InitThreadVar     168: RelocateThreadVar                       */
-/* 176: AllocateThreadVars 184: ReleaseThreadVars                      */
-/* 192: BasicEventCreate  200: BasicEventDestroy                       */
-/* 208: BasicEventReset   216: BasicEventSet   224: BasicEventWaitFor  */
-/* 232: RTLEventCreate    240: RTLEventDestroy  248: RTLEventSetEvent  */
-/* 256: RTLEventResetEvent 264: RTLEventWaitFor 272: RTLEventWaitTimeout */
+/* Strong overrides for FPC-compiled .weak file I/O functions.         */
+/* The FPC-compiled versions have a codegen bug: each var→var pass     */
+/* through do_read/do_write/fpread/fpwrite adds an extra level of      */
+/* pointer indirection, causing read()/write() to operate on the       */
+/* wrong buffer address.  These strong overrides delegate directly     */
+/* to KGPC's C runtime which handles everything correctly.             */
+/*                                                                     */
+/* This object file is only pulled from the archive when FPC-specific  */
+/* symbols are referenced (e.g. assign_t_s, assign_f_s).  In non-FPC  */
+/* mode the compiler generates these symbols from system.p, and this   */
+/* .o is never pulled in, avoiding multiple-definition errors.         */
+/* Init functions (kgpc_fpc_init_os_params, kgpc_fpc_init_thread_mgr)  */
+/* live in runtime_fpc_init.c (separate .o, always pulled in).         */
 /* ------------------------------------------------------------------ */
 
-#include <stdlib.h>
-#include <pthread.h>
+/* Forward declarations from KGPC runtime (runtime.c) */
+typedef struct KGPCFileRec KGPCFileRec;
+extern void kgpc_tfile_rewrite(KGPCFileRec *file);
+extern void kgpc_tfile_reset(KGPCFileRec *file);
+extern void kgpc_tfile_close(KGPCFileRec *file);
+extern int  kgpc_tfile_blockread(KGPCFileRec *file, void *buf, size_t count, long long *actual);
+extern int  kgpc_tfile_blockwrite(KGPCFileRec *file, const void *buf, size_t count, long long *actual);
+extern int  kgpc_tfile_seek(KGPCFileRec *file, long long index);
+extern int  kgpc_tfile_filepos(KGPCFileRec *file, long long *pos);
+extern int  kgpc_tfile_truncate_current(KGPCFileRec *file);
 
-/* RTL events: malloc'd flag + mutex + condvar for proper wait semantics */
-typedef struct {
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    int signaled;
-} KgpcRTLEvent;
-
-static void *kgpc_rtlevent_create(void) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)calloc(1, sizeof(KgpcRTLEvent));
-    if (ev == NULL) return NULL;
-    pthread_mutex_init(&ev->mutex, NULL);
-    pthread_cond_init(&ev->cond, NULL);
-    return ev;
-}
-
-static void kgpc_rtlevent_destroy(void *event) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
-    if (ev == NULL) return;
-    pthread_cond_destroy(&ev->cond);
-    pthread_mutex_destroy(&ev->mutex);
-    free(ev);
-}
-
-static void kgpc_rtlevent_set(void *event) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
-    if (ev == NULL) return;
-    pthread_mutex_lock(&ev->mutex);
-    ev->signaled = 1;
-    pthread_cond_signal(&ev->cond);
-    pthread_mutex_unlock(&ev->mutex);
-}
-
-static void kgpc_rtlevent_reset(void *event) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
-    if (ev == NULL) return;
-    pthread_mutex_lock(&ev->mutex);
-    ev->signaled = 0;
-    pthread_mutex_unlock(&ev->mutex);
-}
-
-static void kgpc_rtlevent_wait(void *event) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
-    if (ev == NULL) return;
-    pthread_mutex_lock(&ev->mutex);
-    while (!ev->signaled)
-        pthread_cond_wait(&ev->cond, &ev->mutex);
-    ev->signaled = 0;
-    pthread_mutex_unlock(&ev->mutex);
-}
-
-static void kgpc_rtlevent_wait_timeout(void *event, int timeout) {
-    KgpcRTLEvent *ev = (KgpcRTLEvent *)event;
-    if (ev == NULL) return;
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += timeout / 1000;
-    ts.tv_nsec += (timeout % 1000) * 1000000L;
-    if (ts.tv_nsec >= 1000000000L) {
-        ts.tv_sec++;
-        ts.tv_nsec -= 1000000000L;
-    }
-    pthread_mutex_lock(&ev->mutex);
-    while (!ev->signaled)
-        if (pthread_cond_timedwait(&ev->cond, &ev->mutex, &ts) != 0)
-            break;
-    ev->signaled = 0;
-    pthread_mutex_unlock(&ev->mutex);
-}
-
-/* Critical sections backed by pthread_mutex */
-static void kgpc_critsection_init(void *cs) {
-    pthread_mutexattr_t attr;
-    pthread_mutexattr_init(&attr);
-    pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_RECURSIVE);
-    pthread_mutex_init((pthread_mutex_t *)cs, &attr);
-    pthread_mutexattr_destroy(&attr);
-}
-static void kgpc_critsection_done(void *cs) {
-    pthread_mutex_destroy((pthread_mutex_t *)cs);
-}
-static void kgpc_critsection_enter(void *cs) {
-    pthread_mutex_lock((pthread_mutex_t *)cs);
-}
-static int64_t kgpc_critsection_tryenter(void *cs) {
-    return pthread_mutex_trylock((pthread_mutex_t *)cs) == 0 ? 1 : 0;
-}
-static void kgpc_critsection_leave(void *cs) {
-    pthread_mutex_unlock((pthread_mutex_t *)cs);
-}
-
-static int64_t kgpc_tm_init(void) { return 1; }
-static int64_t kgpc_get_current_thread_id(void) {
-    return (int64_t)pthread_self();
-}
-
-/* CurrentTM: FPC's TThreadManager record (35 function pointers).
- * Storage is provided by runtime_fpc_thread_symbols.S (.comm directive).
- * In FPC RTL mode, the compiler-generated .globl overrides the .comm. */
-extern void *CurrentTM[];
-
-/* Called from kgpc_init_args to populate CurrentTM */
-void kgpc_fpc_init_thread_manager(void)
+void rewrite_f(void *filerec)
 {
-    if (CurrentTM[29] != NULL)  /* already initialized */
-        return;
+    kgpc_tfile_rewrite((KGPCFileRec *)filerec);
+}
 
-    CurrentTM[0]  = (void *)kgpc_tm_init;               /* InitManager */
-    CurrentTM[1]  = (void *)kgpc_tm_init;               /* DoneManager */
-    CurrentTM[12] = (void *)kgpc_get_current_thread_id;
-    CurrentTM[15] = (void *)kgpc_critsection_init;
-    CurrentTM[16] = (void *)kgpc_critsection_done;
-    CurrentTM[17] = (void *)kgpc_critsection_enter;
-    CurrentTM[18] = (void *)kgpc_critsection_tryenter;
-    CurrentTM[19] = (void *)kgpc_critsection_leave;
-    CurrentTM[24] = (void *)kgpc_rtlevent_create;       /* BasicEventCreate */
-    CurrentTM[25] = (void *)kgpc_rtlevent_destroy;
-    CurrentTM[26] = (void *)kgpc_rtlevent_reset;
-    CurrentTM[27] = (void *)kgpc_rtlevent_set;
-    CurrentTM[28] = (void *)kgpc_rtlevent_wait;
-    CurrentTM[29] = (void *)kgpc_rtlevent_create;       /* RTLEventCreate */
-    CurrentTM[30] = (void *)kgpc_rtlevent_destroy;
-    CurrentTM[31] = (void *)kgpc_rtlevent_set;
-    CurrentTM[32] = (void *)kgpc_rtlevent_reset;
-    CurrentTM[33] = (void *)kgpc_rtlevent_wait;
-    CurrentTM[34] = (void *)kgpc_rtlevent_wait_timeout;
+void rewrite_f_li(void *filerec, int32_t recsize)
+{
+    KGPCFileRec *f = (KGPCFileRec *)filerec;
+    kgpc_tfile_rewrite(f);
+    if (recsize > 0) {
+        /* Set RecSize at offset 8 in FileRec */
+        int64_t rs = recsize;
+        memcpy((char *)filerec + 8, &rs, sizeof(rs));
+    }
+}
+
+void reset_f(void *filerec)
+{
+    kgpc_tfile_reset((KGPCFileRec *)filerec);
+}
+
+void reset_f_li(void *filerec, int32_t recsize)
+{
+    KGPCFileRec *f = (KGPCFileRec *)filerec;
+    kgpc_tfile_reset(f);
+    if (recsize > 0) {
+        int64_t rs = recsize;
+        memcpy((char *)filerec + 8, &rs, sizeof(rs));
+    }
+}
+
+void close_f(void *filerec)
+{
+    kgpc_tfile_close((KGPCFileRec *)filerec);
+}
+
+void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
+    if (result != NULL)
+        *result = (int32_t)actual;
+}
+
+void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
+    if (result != NULL)
+        *result = actual;
+}
+
+void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
+    if (result != NULL)
+        *result = (int32_t)actual;
+}
+
+void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64_t *result)
+{
+    long long actual = 0;
+    kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
+    if (result != NULL)
+        *result = actual;
+}
+
+void seek_f_i64(void *filerec, int64_t pos)
+{
+    kgpc_tfile_seek((KGPCFileRec *)filerec, pos);
+}
+
+int64_t filepos_f(void *filerec)
+{
+    long long pos = 0;
+    kgpc_tfile_filepos((KGPCFileRec *)filerec, &pos);
+    return (int64_t)pos;
+}
+
+void truncate_f(void *filerec)
+{
+    kgpc_tfile_truncate_current((KGPCFileRec *)filerec);
 }
 
 /* ------------------------------------------------------------------ */
-/* FPC-mangled untyped file operations: Rewrite, Reset, Close          */
-/* These map FPC system unit declarations to KGPC runtime functions.   */
+/* Format function override                                            */
+/*                                                                     */
+/* FPC-compiled Format has a codegen bug: variant record field access   */
+/* for vtChar dereferences the char value (e.g. 0x41) as a pointer.    */
+/* Override with KGPC's C Format which handles TVarRec correctly.       */
 /* ------------------------------------------------------------------ */
-/* rewrite_f, rewrite_f_li, reset_f, reset_f_li, close_f,
- * blockread_f_u_*, blockwrite_f_u_*, assign_t_s, assign_f_s removed —
- * compiler generates these from system.p declarations.
- * Having them here caused multiple-definition linker errors on MSYS2/MinGW. */

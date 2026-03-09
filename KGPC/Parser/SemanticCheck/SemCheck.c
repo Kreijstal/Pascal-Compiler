@@ -761,6 +761,8 @@ static int map_var_type_to_type_tag(enum VarType var_type)
             return LONGINT_TYPE;
         case HASHVAR_INT64:
             return INT64_TYPE;
+        case HASHVAR_QWORD:
+            return QWORD_TYPE;
         case HASHVAR_REAL:
             return REAL_TYPE;
         case HASHVAR_BOOLEAN:
@@ -794,7 +796,7 @@ static enum VarType map_type_tag_to_var_type(int type_tag)
         case BYTE_TYPE:       return HASHVAR_INTEGER;
         case WORD_TYPE:       return HASHVAR_INTEGER;
         case LONGWORD_TYPE:   return HASHVAR_LONGINT;
-        case QWORD_TYPE:      return HASHVAR_LONGINT;
+        case QWORD_TYPE:      return HASHVAR_QWORD;
         case FILE_TYPE:       return HASHVAR_FILE;
         default:              return HASHVAR_UNTYPED;
     }
@@ -3328,7 +3330,7 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
                 case BYTE_TYPE: return HASHVAR_INTEGER;
                 case WORD_TYPE: return HASHVAR_INTEGER;
                 case LONGWORD_TYPE: return HASHVAR_LONGINT;
-                case QWORD_TYPE: return HASHVAR_INT64;
+                case QWORD_TYPE: return HASHVAR_QWORD;
                 case REAL_TYPE:
                 case EXTENDED_TYPE: return HASHVAR_REAL;
                 case BOOL: return HASHVAR_BOOLEAN;
@@ -14789,7 +14791,7 @@ next_identifier:
                                 normalized_type = LONGWORD_TYPE;
                                 break;
                             case QWORD_TYPE:
-                                inferred_var_type = HASHVAR_INT64;
+                                inferred_var_type = HASHVAR_QWORD;
                                 normalized_type = QWORD_TYPE;
                                 break;
                             case INT64_TYPE:
@@ -14885,20 +14887,21 @@ next_identifier:
                                 if (current_var_type == HASHVAR_REAL &&
                                     (inferred_var_type == HASHVAR_INTEGER ||
                                      inferred_var_type == HASHVAR_LONGINT ||
-                                     inferred_var_type == HASHVAR_INT64))
+                                     inferred_var_type == HASHVAR_INT64 ||
+                                     inferred_var_type == HASHVAR_QWORD))
                                 {
                                     compatible = 1;
                                 }
                             }
                             if (!compatible)
                             {
-                                if (current_var_type == HASHVAR_INT64 &&
+                                if ((current_var_type == HASHVAR_INT64 || current_var_type == HASHVAR_QWORD) &&
                                     (inferred_var_type == HASHVAR_INTEGER || inferred_var_type == HASHVAR_LONGINT ||
-                                     inferred_var_type == HASHVAR_INT64))
+                                     inferred_var_type == HASHVAR_INT64 || inferred_var_type == HASHVAR_QWORD))
                                 {
                                     compatible = 1;
                                 }
-                                else if (inferred_var_type == HASHVAR_INT64 &&
+                                else if ((inferred_var_type == HASHVAR_INT64 || inferred_var_type == HASHVAR_QWORD) &&
                                          (current_var_type == HASHVAR_INTEGER || current_var_type == HASHVAR_LONGINT))
                                 {
                                     compatible = 1;

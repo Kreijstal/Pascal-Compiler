@@ -105,6 +105,7 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_widechar_assign_olevariant.c'
 endif
 runtime_sources += 'runtime_fpc_assign.c'
+runtime_sources += 'runtime_fpc_init.c'
 runtime_deps = []
 runtime_c_args = ['-O2']
 

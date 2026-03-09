@@ -237,8 +237,11 @@ static int are_primitive_tags_compatible(int tag_a, int tag_b)
     if (tag_a == LONGWORD_TYPE && tag_b == LONGWORD_TYPE)
         return 1;
     
-    /* Int64 and QWord have different signedness, so not compatible */
-    
+    /* Int64 and QWord are both 64-bit and interchangeable for var params */
+    if ((tag_a == INT64_TYPE || tag_a == QWORD_TYPE) &&
+        (tag_b == INT64_TYPE || tag_b == QWORD_TYPE))
+        return 1;
+
     return 0;
 }
 

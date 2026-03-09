@@ -3619,16 +3619,43 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
                     node != NULL);
 
-                /* If FindIdent returned a function but there's a builtin const with the same
+                /* If FindIdent returned a function but there's a const with the same
                  * name (e.g. FPC declares Pi as [internproc] function but we have it as a
-                 * real constant in builtins), prefer the builtin const. */
+                 * real constant), prefer the user-scope const first, then builtin const.
+                 * This ensures unit constants like 'PI = 3.14' shadow builtin Pi. */
                 if (found && node != NULL && node->hash_type == HASHTYPE_FUNCTION &&
-                    ctx != NULL && ctx->symtab != NULL && ctx->symtab->builtins != NULL)
+                    ctx != NULL && ctx->symtab != NULL)
                 {
-                    HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
-                        expr->expr_data.id);
-                    if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
-                        node = builtin_node;
+                    /* Check user scope for a constant with the same name */
+                    HashNode_t *user_const = NULL;
+                    ListNode_t *scope = ctx->symtab->stack_head;
+                    while (scope != NULL && user_const == NULL)
+                    {
+                        ListNode_t *all = FindAllIdentsInTable((HashTable_t *)scope->cur,
+                            expr->expr_data.id);
+                        for (ListNode_t *a = all; a != NULL; a = a->next)
+                        {
+                            HashNode_t *h = (HashNode_t *)a->cur;
+                            if (h != NULL && h->hash_type == HASHTYPE_CONST)
+                            {
+                                user_const = h;
+                                break;
+                            }
+                        }
+                        DestroyList(all);
+                        scope = scope->next;
+                    }
+                    if (user_const != NULL)
+                    {
+                        node = user_const;
+                    }
+                    else if (ctx->symtab->builtins != NULL)
+                    {
+                        HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
+                            expr->expr_data.id);
+                        if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
+                            node = builtin_node;
+                    }
                 }
 
                 if (found && node->hash_type == HASHTYPE_CONST)

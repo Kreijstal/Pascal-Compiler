@@ -163,7 +163,7 @@ static enum VarType ConvertParserTypeToVarType(int parser_type)
         case LONGWORD_TYPE:
             return HASHVAR_LONGINT;
         case QWORD_TYPE:
-            return HASHVAR_INT64;
+            return HASHVAR_QWORD;
         case REAL_TYPE:
             return HASHVAR_REAL;
         case STRING_TYPE:
@@ -255,10 +255,11 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     if (strcasecmp(type_name, "LongInt") == 0)
         return HASHVAR_LONGINT;
     
-    if (strcasecmp(type_name, "Int64") == 0 ||
-        strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeInt") == 0 ||
-        strcasecmp(type_name, "SizeUInt") == 0)
+    if (strcasecmp(type_name, "Int64") == 0 || strcasecmp(type_name, "SizeInt") == 0)
         return HASHVAR_INT64;
+
+    if (strcasecmp(type_name, "QWord") == 0 || strcasecmp(type_name, "SizeUInt") == 0)
+        return HASHVAR_QWORD;
     
     // Real types
     if (strcasecmp(type_name, "Real") == 0 || strcasecmp(type_name, "Double") == 0)
@@ -639,6 +640,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
                 case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
                 case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
+                case HASHVAR_QWORD:  type_suffix = "_aui64"; break; /* array of QWord */
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_ax";
@@ -671,6 +673,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
                 case HASHVAR_LONGINT: type_suffix = "_li"; break;
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
+                case HASHVAR_QWORD:  type_suffix = "_ui64"; break;
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_x";
