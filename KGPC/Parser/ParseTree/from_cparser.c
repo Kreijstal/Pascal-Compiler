@@ -5114,6 +5114,57 @@ static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_val
     return 0;
 }
 
+/* Resolve SizeOf(typename) to a compile-time constant for known types.
+   Returns the size in bytes on x86_64, or -1 if the type is unknown. */
+static int resolve_sizeof_type(const char *type_name) {
+    if (type_name == NULL)
+        return -1;
+    /* Pointer-sized types (8 bytes on x86_64) */
+    if (strcasecmp(type_name, "Pointer") == 0 ||
+        strcasecmp(type_name, "CodePointer") == 0 ||
+        strcasecmp(type_name, "SizeInt") == 0 ||
+        strcasecmp(type_name, "SizeUInt") == 0 ||
+        strcasecmp(type_name, "PtrInt") == 0 ||
+        strcasecmp(type_name, "PtrUInt") == 0 ||
+        strcasecmp(type_name, "Int64") == 0 ||
+        strcasecmp(type_name, "QWord") == 0 ||
+        strcasecmp(type_name, "NativeInt") == 0 ||
+        strcasecmp(type_name, "NativeUInt") == 0 ||
+        strcasecmp(type_name, "ValSInt") == 0 ||
+        strcasecmp(type_name, "ValUInt") == 0 ||
+        strcasecmp(type_name, "CodePtrInt") == 0 ||
+        strcasecmp(type_name, "CodePtrUInt") == 0)
+        return 8;
+    /* 4-byte types */
+    if (strcasecmp(type_name, "LongInt") == 0 ||
+        strcasecmp(type_name, "LongWord") == 0 ||
+        strcasecmp(type_name, "DWord") == 0 ||
+        strcasecmp(type_name, "Cardinal") == 0 ||
+        strcasecmp(type_name, "Integer") == 0 ||
+        strcasecmp(type_name, "Single") == 0)
+        return 4;
+    /* 2-byte types */
+    if (strcasecmp(type_name, "SmallInt") == 0 ||
+        strcasecmp(type_name, "Word") == 0 ||
+        strcasecmp(type_name, "WideChar") == 0)
+        return 2;
+    /* 1-byte types */
+    if (strcasecmp(type_name, "Byte") == 0 ||
+        strcasecmp(type_name, "ShortInt") == 0 ||
+        strcasecmp(type_name, "Boolean") == 0 ||
+        strcasecmp(type_name, "Char") == 0 ||
+        strcasecmp(type_name, "AnsiChar") == 0)
+        return 1;
+    /* 8-byte float */
+    if (strcasecmp(type_name, "Double") == 0 ||
+        strcasecmp(type_name, "Real") == 0)
+        return 8;
+    /* 10-byte extended (padded to 16 on x86_64 in some ABIs, but SizeOf returns 10) */
+    if (strcasecmp(type_name, "Extended") == 0)
+        return 10;
+    return -1;
+}
+
 static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out_value) {
     const_expr_skip_ws(scanner);
     size_t start = scanner->pos;
@@ -5134,6 +5185,42 @@ static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out
         return -1;
     memcpy(ident, scanner->input + start, len);
     ident[len] = '\0';
+
+    /* Handle SizeOf(typename) as a compile-time builtin */
+    if (strcasecmp(ident, "sizeof") == 0) {
+        free(ident);
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != '(')
+            return -1;
+        scanner->pos++;  /* skip '(' */
+        const_expr_skip_ws(scanner);
+        /* Read the type name argument */
+        size_t arg_start = scanner->pos;
+        while (scanner->input[scanner->pos] != '\0' &&
+               scanner->input[scanner->pos] != ')' &&
+               (isalnum((unsigned char)scanner->input[scanner->pos]) || scanner->input[scanner->pos] == '_'))
+            scanner->pos++;
+        size_t arg_len = scanner->pos - arg_start;
+        if (arg_len == 0)
+            return -1;
+        char *type_name = (char *)malloc(arg_len + 1);
+        if (type_name == NULL)
+            return -1;
+        memcpy(type_name, scanner->input + arg_start, arg_len);
+        type_name[arg_len] = '\0';
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != ')') {
+            free(type_name);
+            return -1;
+        }
+        scanner->pos++;  /* skip ')' */
+        int size = resolve_sizeof_type(type_name);
+        free(type_name);
+        if (size < 0)
+            return -1;
+        *out_value = size;
+        return 0;
+    }
 
     int val = resolve_const_int_from_ast(ident, scanner->const_section, INT_MIN);
     free(ident);

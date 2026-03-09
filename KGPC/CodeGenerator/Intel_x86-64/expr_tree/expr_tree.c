@@ -4973,6 +4973,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 const char *cmp_left = left;
                 const char *cmp_right = right;
                 Register_t *imm_reg = NULL;
+                Register_t *left_mem_tmp = NULL;
+                Register_t *right_mem_tmp = NULL;
                 if (use_qword)
                 {
                     const char *left_candidate = left;
@@ -5013,6 +5015,43 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         else
                             inst_list = codegen_zero_extend32_to64(inst_list, right_reg->bit_32, right_reg->bit_32);
                     }
+
+                    /* When a 32-bit operand is a memory reference (no register),
+                     * cmpq would read 8 bytes from a 4-byte stack slot, getting
+                     * garbage in the upper 32 bits.  Load into a temp register
+                     * and sign/zero-extend before the comparison. */
+                    if (left_reg == NULL && cmp_left != NULL &&
+                        cmp_left[0] != '$' && cmp_left[0] != '%' &&
+                        !codegen_type_uses_qword(left_type) &&
+                        !(left_expr != NULL && expr_uses_qword_kgpctype(left_expr)) &&
+                        is_integer_type(left_type))
+                    {
+                        left_mem_tmp = get_free_reg(get_reg_stack(), &inst_list);
+                        if (left_mem_tmp != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", cmp_left, left_mem_tmp->bit_32);
+                            inst_list = add_inst(inst_list, buffer);
+                            if (codegen_type_is_signed(left_type))
+                                inst_list = codegen_sign_extend32_to64(inst_list, left_mem_tmp->bit_32, left_mem_tmp->bit_64);
+                            cmp_left = left_mem_tmp->bit_64;
+                        }
+                    }
+                    if (right_reg == NULL && cmp_right != NULL &&
+                        cmp_right[0] != '$' && cmp_right[0] != '%' &&
+                        !codegen_type_uses_qword(right_type) &&
+                        !(right_expr != NULL && expr_uses_qword_kgpctype(right_expr)) &&
+                        is_integer_type(right_type))
+                    {
+                        right_mem_tmp = get_free_reg(get_reg_stack(), &inst_list);
+                        if (right_mem_tmp != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", cmp_right, right_mem_tmp->bit_32);
+                            inst_list = add_inst(inst_list, buffer);
+                            if (codegen_type_is_signed(right_type))
+                                inst_list = codegen_sign_extend32_to64(inst_list, right_mem_tmp->bit_32, right_mem_tmp->bit_64);
+                            cmp_right = right_mem_tmp->bit_64;
+                        }
+                    }
                 }
                 else
                 {
@@ -5049,6 +5088,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 inst_list = add_inst(inst_list, buffer);
                 if (imm_reg != NULL)
                     free_reg(get_reg_stack(), imm_reg);
+                if (left_mem_tmp != NULL)
+                    free_reg(get_reg_stack(), left_mem_tmp);
+                if (right_mem_tmp != NULL)
+                    free_reg(get_reg_stack(), right_mem_tmp);
 
                 const char *set_instr = NULL;
                 switch (relop_kind)

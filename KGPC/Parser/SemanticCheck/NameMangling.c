@@ -87,63 +87,6 @@ static int mangle_kgpc_type_is_extended_real(const KgpcType *type)
     return kgpc_type_real_storage_size(type) > 8;
 }
 
-static const char *mangle_builtin_integer_suffix(const char *type_id, int array_type)
-{
-    if (type_id == NULL)
-        return NULL;
-
-    if (strcasecmp(type_id, "Byte") == 0)
-        return array_type ? "_au8" : "_u8";
-    if (strcasecmp(type_id, "ShortInt") == 0)
-        return array_type ? "_ai8" : "_i8";
-    if (strcasecmp(type_id, "Word") == 0 || strcasecmp(type_id, "TSystemCodePage") == 0)
-        return array_type ? "_au16" : "_u16";
-    if (strcasecmp(type_id, "SmallInt") == 0)
-        return array_type ? "_ai16" : "_i16";
-    if (strcasecmp(type_id, "LongWord") == 0 || strcasecmp(type_id, "Cardinal") == 0 ||
-        strcasecmp(type_id, "DWord") == 0 || strcasecmp(type_id, "UInt32") == 0)
-        return array_type ? "_au32" : "_u32";
-    if (strcasecmp(type_id, "LongInt") == 0)
-        return array_type ? "_ali" : "_li";
-    if (strcasecmp(type_id, "QWord") == 0 || strcasecmp(type_id, "UInt64") == 0 ||
-        strcasecmp(type_id, "SizeUInt") == 0 || strcasecmp(type_id, "NativeUInt") == 0)
-        return array_type ? "_au64" : "_u64";
-    if (strcasecmp(type_id, "Int64") == 0 || strcasecmp(type_id, "SizeInt") == 0 ||
-        strcasecmp(type_id, "NativeInt") == 0)
-        return array_type ? "_ai64" : "_i64";
-
-    return NULL;
-}
-
-static const char *mangle_builtin_integer_name_from_tag(int type_tag)
-{
-    switch (type_tag)
-    {
-        case BYTE_TYPE: return "Byte";
-        case WORD_TYPE: return "Word";
-        case LONGWORD_TYPE: return "LongWord";
-        case QWORD_TYPE: return "QWord";
-        case LONGINT_TYPE: return "LongInt";
-        case INT64_TYPE: return "Int64";
-        default: return NULL;
-    }
-}
-
-static const char *mangle_builtin_integer_name_from_kgpc(const KgpcType *type)
-{
-    if (type == NULL)
-        return NULL;
-
-    if (type->type_alias != NULL && type->type_alias->alias_name != NULL &&
-        mangle_builtin_integer_suffix(type->type_alias->alias_name, 0) != NULL)
-        return type->type_alias->alias_name;
-
-    if (type->kind != TYPE_KIND_PRIMITIVE)
-        return NULL;
-
-    return mangle_builtin_integer_name_from_tag(type->info.primitive_type_tag);
-}
-
 static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
 {
     if (ref == NULL)
@@ -499,9 +442,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
                     type_ref_base_name_or_id(type_ref, type_id));
-                if (resolved_type != HASHVAR_UNTYPED &&
-                    mangle_builtin_integer_suffix(type_ref_base_name_or_id(type_ref, type_id), 0) != NULL)
-                    record_type_id = type_ref_base_name_or_id(type_ref, type_id);
                 if (resolved_type == HASHVAR_REAL &&
                     mangle_type_id_is_extended(type_ref_base_name_or_id(type_ref, type_id)))
                     record_type_id = "Extended";
@@ -550,10 +490,6 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 {
                     // It's a built-in type, convert from parser token to semantic type
                     resolved_type = ConvertParserTypeToVarType(decl_tree->tree_data.var_decl_data.type);
-                    if (resolved_type == HASHVAR_INTEGER || resolved_type == HASHVAR_LONGINT ||
-                        resolved_type == HASHVAR_INT64)
-                        record_type_id = mangle_builtin_integer_name_from_tag(
-                            decl_tree->tree_data.var_decl_data.type);
                     if (resolved_type == HASHVAR_REAL &&
                         decl_tree->tree_data.var_decl_data.type == EXTENDED_TYPE)
                         record_type_id = "Extended";
@@ -696,23 +632,13 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
         int type = mt != NULL ? mt->kind : HASHVAR_UNTYPED;
         const char* type_suffix = NULL;
         char *type_suffix_dynamic = NULL;
-        const char *integral_suffix = mt != NULL
-            ? mangle_builtin_integer_suffix(mt->type_id, 0)
-            : NULL;
-        const char *integral_array_suffix = mt != NULL
-            ? mangle_builtin_integer_suffix(mt->type_id, 1)
-            : NULL;
         /* Handle array element types (100+ range) */
         if (type >= 100) {
             int elem_type = type - 100;
             switch (elem_type) {
-                case HASHVAR_INTEGER:
-                case HASHVAR_LONGINT:
-                case HASHVAR_INT64:
-                    type_suffix = integral_array_suffix != NULL ? integral_array_suffix :
-                        (elem_type == HASHVAR_INTEGER ? "_ai" :
-                         (elem_type == HASHVAR_LONGINT ? "_ali" : "_ai64"));
-                    break;
+                case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
+                case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
+                case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_ax";
@@ -742,15 +668,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 type_suffix = "_u";
         } else {
             switch (type) {
-                case HASHVAR_INTEGER:
-                    type_suffix = integral_suffix != NULL ? integral_suffix : "_i";
-                    break;
-                case HASHVAR_LONGINT:
-                    type_suffix = integral_suffix != NULL ? integral_suffix : "_li";
-                    break;
-                case HASHVAR_INT64:
-                    type_suffix = integral_suffix != NULL ? integral_suffix : "_i64";
-                    break;
+                case HASHVAR_INTEGER: type_suffix = "_i"; break;
+                case HASHVAR_LONGINT: type_suffix = "_li"; break;
+                case HASHVAR_INT64:   type_suffix = "_i64"; break;
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_x";
@@ -827,9 +747,6 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
             semcheck_expr_main(symtab, arg_expr, max_scope_lev, NO_MUTATE, &arg_type);
             int type_tag = arg_type != NULL ? semcheck_tag_from_kgpc(arg_type) : UNKNOWN_TYPE;
             resolved_type = ConvertParserTypeToVarType(type_tag);
-            if (resolved_type == HASHVAR_INTEGER || resolved_type == HASHVAR_LONGINT ||
-                resolved_type == HASHVAR_INT64)
-                record_type_id = mangle_builtin_integer_name_from_kgpc(arg_type);
             /* Distinguish WideChar/UnicodeChar (2 bytes) from AnsiChar (1 byte) */
             if (resolved_type == HASHVAR_CHAR && arg_type != NULL &&
                 arg_type->kind == TYPE_KIND_PRIMITIVE &&

@@ -2987,17 +2987,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
             if (method != NULL && method->mangled_name != NULL) {
                 const char *full_mangled = method->resolved_mangled_id;
-                const char *fallback_mangled = method->mangled_name;
-                const char *slot_label = NULL;
-                if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, full_mangled))
-                    slot_label = full_mangled;
-                if (slot_label == NULL && fallback_mangled != NULL &&
-                    g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, fallback_mangled))
-                    slot_label = fallback_mangled;
-                if (slot_label != NULL) {
-                    fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
+                if (full_mangled != NULL) {
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
                 } else {
                     /* Abstract method or no definition - emit reference to runtime error handler */
                     fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
