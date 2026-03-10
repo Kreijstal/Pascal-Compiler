@@ -50,6 +50,37 @@ type
     EConvertError = class(Exception)
     end;
 
+    EAbort = class(Exception)
+    end;
+
+    EInOutError = class(Exception)
+    public
+        ErrorCode: Integer;
+    end;
+
+    EOSError = class(Exception)
+    public
+        ErrorCode: LongInt;
+    end;
+
+    EAbstractError = class(Exception)
+    end;
+
+    EAccessViolation = class(Exception)
+    end;
+
+    ERangeError = class(Exception)
+    end;
+
+    EOverflow = class(Exception)
+    end;
+
+    EInvalidPointer = class(Exception)
+    end;
+
+    EDivByZero = class(Exception)
+    end;
+
     TEncoding = class
     public
         class function UTF8: TEncoding; static;
