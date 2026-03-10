@@ -10401,6 +10401,24 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 continue;
             }
 
+            /* A single-field record constructor (Ch: [...]) gets parsed as FIELD_WIDTH.
+               Convert it to a single-child RECORD_CONSTRUCTOR for uniform handling.
+               Skip when the field value is a TUPLE — convert_expression's FIELD_WIDTH
+               handler already recognizes TUPLE values as record constructors. */
+            if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH &&
+                unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER) {
+                ast_t *fval = unwrapped->child->next;
+                ast_t *fval_unwrapped = unwrap_pascal_node(fval);
+                if (fval_unwrapped == NULL || fval_unwrapped->typ != PASCAL_T_TUPLE) {
+                    unwrapped->typ = PASCAL_T_ASSIGNMENT;
+                    ast_t *wrapper = new_ast();
+                    *wrapper = *unwrapped;
+                    wrapper->next = NULL;
+                    unwrapped->typ = PASCAL_T_RECORD_CONSTRUCTOR;
+                    unwrapped->child = wrapper;
+                    unwrapped->sym = NULL;
+                }
+            }
             /* Special handling for record constructors in const arrays */
             if (unwrapped != NULL &&
                 (unwrapped->typ == PASCAL_T_RECORD_CONSTRUCTOR ||
@@ -10661,6 +10679,35 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         return NULL;
     }
 
+    /* A single-field record constructor like (Ch: [Ch_Mop2]) gets parsed as a
+       parenthesized FIELD_WIDTH expression (the : is the WriteLn format operator).
+       When we have a typed const, convert FIELD_WIDTH back to a single-field
+       RECORD_CONSTRUCTOR so the lowering code handles it correctly.
+       FIELD_WIDTH structure:  child=IDENTIFIER(Ch) -> next=SET(...)
+       Needed structure:       RECORD_CONSTRUCTOR -> child=ASSIGNMENT -> child=IDENTIFIER(Ch) -> next=SET(...)
+       We repurpose the FIELD_WIDTH node as the ASSIGNMENT and create a wrapper. */
+    if (value_node->typ == PASCAL_T_FIELD_WIDTH && type_id != NULL &&
+        value_node->child != NULL && value_node->child->typ == PASCAL_T_IDENTIFIER) {
+        /* Check the field value — if it's a TUPLE, the existing convert_expression
+           FIELD_WIDTH handler already handles it as a single-field record constructor.
+           Only convert for non-TUPLE values (e.g. set constructors) that need help. */
+        ast_t *field_val = value_node->child->next;
+        ast_t *field_val_unwrapped = unwrap_pascal_node(field_val);
+        if (field_val_unwrapped == NULL || field_val_unwrapped->typ != PASCAL_T_TUPLE) {
+            /* Turn the FIELD_WIDTH into an ASSIGNMENT (same child structure) */
+            value_node->typ = PASCAL_T_ASSIGNMENT;
+            /* Wrap: create a RECORD_CONSTRUCTOR that replaces value_node in the AST.
+               We do this by swapping: copy value_node's ASSIGNMENT data into a new node,
+               then make value_node the RECORD_CONSTRUCTOR pointing to it. */
+            ast_t *assignment = new_ast();
+            *assignment = *value_node;
+            assignment->next = NULL;
+            value_node->typ = PASCAL_T_RECORD_CONSTRUCTOR;
+            value_node->child = assignment;
+            value_node->sym = NULL;
+        }
+    }
+
     if (type_info.is_array) {
         if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder, type_section, const_section) != 0)
             free(id);
@@ -10704,6 +10751,12 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
 
             destroy_type_info_contents(&type_info);
             return NULL;
+        }
+        /* If the value is a tuple that looks like a record constructor (field: value; ...),
+           treat it as a record constructor instead of a plain expression. */
+        if (value_node != NULL && value_node->typ == PASCAL_T_TUPLE &&
+            tuple_is_record_constructor(value_node)) {
+            value_node->typ = PASCAL_T_RECORD_CONSTRUCTOR;
         }
         if (value_node != NULL && value_node->typ != PASCAL_T_RECORD_CONSTRUCTOR && !empty_tuple_record_const) {
             struct Expression *init_expr = convert_expression(value_node);

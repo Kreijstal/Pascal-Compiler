@@ -487,6 +487,9 @@ var
   IsMultiThread: Boolean = False;
   IsLibrary: Boolean = False;
   InOutRes: Word;
+  ExitProc: CodePointer = nil;
+  ErrorAddr: CodePointer = nil;
+  ExitCode: LongInt = 0;
   FirstDotAtFileNameStartIsExtension: Boolean;
   RandSeed: LongWord; external name 'kgpc_randseed';
   widestringmanager: TUnicodeStringManager;

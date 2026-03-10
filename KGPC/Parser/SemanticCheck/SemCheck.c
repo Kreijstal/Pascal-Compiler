@@ -14327,6 +14327,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         var_type = HASHVAR_PCHAR;  /* ShortString is array of char */
                     else if(tree->tree_data.arr_decl_data.type == CHAR_TYPE)
                         var_type = HASHVAR_CHAR;
+                    else if(tree->tree_data.arr_decl_data.type == SET_TYPE)
+                        var_type = HASHVAR_SET;
                     else if(is_real_family_type(tree->tree_data.arr_decl_data.type))
                         var_type = HASHVAR_REAL;
                     else {
