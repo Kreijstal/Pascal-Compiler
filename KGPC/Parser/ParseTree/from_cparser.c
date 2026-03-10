@@ -9930,8 +9930,40 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (type_info->is_open_array) {
-        fprintf(stderr, "ERROR: Open array typed const %s is not supported.\n", *id_ptr);
-        return -1;
+        /* Open array typed constants: count initializer elements and convert
+         * to a static array[0..N-1].  This matches FPC behaviour where
+         * "const V: array of Integer = (1,2,3)" is laid out as a fixed-size
+         * array whose bounds are inferred from the initializer. */
+        ast_t *open_tuple = value_node;
+        if (open_tuple != NULL) {
+            ast_t *uw = unwrap_pascal_node(open_tuple);
+            if (uw != NULL &&
+                (uw->typ == PASCAL_T_TYPE_SPEC ||
+                 uw->typ == PASCAL_T_ARRAY_TYPE ||
+                 uw->typ == PASCAL_T_RECORD_TYPE ||
+                 uw->typ == PASCAL_T_POINTER_TYPE ||
+                 uw->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 uw->typ == PASCAL_T_FUNCTION_TYPE) &&
+                uw->next != NULL) {
+                open_tuple = unwrap_pascal_node(uw->next);
+            } else {
+                open_tuple = uw;
+            }
+        }
+        if (open_tuple == NULL || open_tuple->typ != PASCAL_T_TUPLE) {
+            fprintf(stderr, "ERROR: Open array typed const %s must have a tuple initializer.\n", *id_ptr);
+            return -1;
+        }
+        int elem_count = 0;
+        for (ast_t *e = open_tuple->child; e != NULL; e = e->next)
+            ++elem_count;
+        if (elem_count == 0) {
+            fprintf(stderr, "ERROR: Open array typed const %s has no elements.\n", *id_ptr);
+            return -1;
+        }
+        type_info->start = 0;
+        type_info->end = elem_count - 1;
+        type_info->is_open_array = 0;
     }
 
     ast_t *tuple_node = value_node;
