@@ -6624,7 +6624,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     int target_type_tag = (target_expr != NULL) ? expr_get_type_tag(target_expr) : UNKNOWN_TYPE;
     int target_is_long = (target_type_tag == LONGINT_TYPE);
     int target_is_pointer = (target_type_tag == POINTER_TYPE);
-    int target_uses_qword = target_is_long || target_is_pointer;
+    int target_uses_qword = target_is_pointer;
     if (!target_uses_qword && target_expr != NULL)
         target_uses_qword = expr_uses_qword_kgpctype(target_expr);
 
