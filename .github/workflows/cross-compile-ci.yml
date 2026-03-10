@@ -25,9 +25,8 @@ jobs:
 
     - name: Install dependencies
       run: |
-        sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 wine32:i386 flex bison
+        sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 flex bison
         sudo apt-get install -y llvm clang lld
         pip install meson ninja
 
