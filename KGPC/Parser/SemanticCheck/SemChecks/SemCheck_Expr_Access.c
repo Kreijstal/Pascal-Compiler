@@ -6517,7 +6517,8 @@ skip_overload_resolution:
                     if (!type_compatible &&
                         expected_kgpc == NULL &&
                         expected_type != UNKNOWN_TYPE &&
-                        expected_type != BUILTIN_ANY_TYPE)
+                        expected_type != BUILTIN_ANY_TYPE &&
+                        expected_type != PROCEDURE)
                     {
                         KGPC_SEMCHECK_HARD_ASSERT(0,
                             "missing expected KgpcType in argument compatibility: call=%s arg=%d expected_tag=%d",

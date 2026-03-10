@@ -2608,10 +2608,8 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                         if (method_node->type != NULL)
                         {
                             const char *real_mangled = method_node->mangled_id ? method_node->mangled_id : mangled_name;
-                            kgpc_type_retain(method_node->type);
                             PushFunctionOntoScope_Typed(symtab, binding->method_name,
                                                         real_mangled, method_node->type);
-                            destroy_kgpc_type(method_node->type);
                         }
                     }
                 }
@@ -15454,13 +15452,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
-            kgpc_type_retain(existing_decl->type);
             PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id,
                 existing_decl->type);
             semcheck_update_symbol_alias(symtab, id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id);
-            destroy_kgpc_type(existing_decl->type);
         }
 
         new_max_scope = max_scope_lev+1;

@@ -524,6 +524,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
+    if (type != NULL)
+        kgpc_type_retain(type);
     if (mangled_id != NULL)
     {
         hash_node->mangled_id = strdup(mangled_id);

@@ -373,17 +373,17 @@ void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr, KgpcTy
     if (expr == NULL)
         return;
 
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
+    if (expr->resolved_kgpc_type == type)
+        return;
 
+    /* Retain new type BEFORE destroying old, in case they share sub-objects */
     if (type != NULL)
-    {
         kgpc_type_retain(type);
-        expr->resolved_kgpc_type = type;
-    }
+
+    if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+
+    expr->resolved_kgpc_type = type;
 }
 
 void semcheck_reset_function_call_cache(struct Expression *expr)

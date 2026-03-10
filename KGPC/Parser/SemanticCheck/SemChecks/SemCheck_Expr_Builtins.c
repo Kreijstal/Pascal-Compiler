@@ -648,6 +648,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
      * Copy the addop data into the original expression node. */
     expr->type = result->type;
     expr->expr_data = result->expr_data;
+    kgpc_type_retain(result->resolved_kgpc_type);
     expr->resolved_kgpc_type = result->resolved_kgpc_type;
     semcheck_expr_set_resolved_type(expr, STRING_TYPE);
 
@@ -2050,8 +2051,10 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         semcheck_expr_set_resolved_type(expr, target_type);
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
-        if (target_kgpc_type != NULL)
+        if (target_kgpc_type != NULL) {
+            kgpc_type_retain(target_kgpc_type);
             expr->resolved_kgpc_type = target_kgpc_type;
+        }
         else if (record_type != NULL)
             expr->resolved_kgpc_type = create_record_type(record_type);
         else
