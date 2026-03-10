@@ -4499,17 +4499,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (total_size <= 0)
                     total_size = element_size;
 
-                /* For multi-dimensional arrays, the variable should have a KgpcType
-                 * with the correct total size. Look up by variable name. */
+                /* For multi-dimensional arrays, kgpc_type_sizeof only accounts
+                 * for the outer dimension.  Use kgpc_type_get_array_dimension_info
+                 * which correctly multiplies all dimension sizes together. */
                 if (id_list != NULL && symtab != NULL) {
                     const char *var_name = (const char *)id_list->cur;
                     HashNode_t *var_node = NULL;
                     int find_result = FindIdent(&var_node, symtab, var_name);
                     if (find_result >= 0 && var_node != NULL && var_node->type != NULL) {
-                        long long kgpc_size = kgpc_type_sizeof(var_node->type);
-                        if (kgpc_size > total_size) {
-                            /* KgpcType gives larger size - this is likely a multi-dimensional array */
-                            total_size = (int)kgpc_size;
+                        KgpcArrayDimensionInfo dim_info;
+                        if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0 &&
+                            dim_info.total_size > total_size) {
+                            total_size = (int)dim_info.total_size;
+                        } else {
+                            long long kgpc_size = kgpc_type_sizeof(var_node->type);
+                            if (kgpc_size > total_size)
+                                total_size = (int)kgpc_size;
                         }
                     }
                 }

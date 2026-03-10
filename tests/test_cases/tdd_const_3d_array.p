@@ -14,7 +14,10 @@ begin
     for Y := 0 to 1 do
     begin
       for Z := 0 to 2 do
-        Write(Cube[X, Y, Z], ' ');
+      begin
+        if Z > 0 then Write(' ');
+        Write(Cube[X, Y, Z]);
+      end;
       WriteLn;
     end;
 end.

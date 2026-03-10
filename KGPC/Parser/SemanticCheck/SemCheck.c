@@ -14487,8 +14487,30 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         temp_alias.is_shortstring = 1;
                     }
 
+                    /* Attach multi-dim array_dimensions from the AST declaration.
+                     * Only when there are 2+ dimensions — single-dim arrays
+                     * don't need linearization metadata. */
+                    if (tree->tree_data.arr_decl_data.array_dimensions != NULL &&
+                        tree->tree_data.arr_decl_data.array_dimensions->next != NULL)
+                    {
+                        temp_alias.is_array = 1;
+                        if (!has_alias)
+                        {
+                            temp_alias.array_start = start_bound;
+                            temp_alias.array_end = end_bound;
+                            temp_alias.array_element_type = tree->tree_data.arr_decl_data.type;
+                            if (tree->tree_data.arr_decl_data.type_id != NULL)
+                                temp_alias.array_element_type_id = tree->tree_data.arr_decl_data.type_id;
+                        }
+                        temp_alias.array_dimensions = tree->tree_data.arr_decl_data.array_dimensions;
+                        has_alias = 1;
+                    }
+
                     if (has_alias)
                         kgpc_type_set_type_alias(array_type, &temp_alias);
+
+                    /* Clear temp_alias.array_dimensions so it isn't freed (owned by AST) */
+                    temp_alias.array_dimensions = NULL;
                 }
                 
                 if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)

@@ -21,7 +21,10 @@ begin
   for I := OS_F32 to OS_F128 do
   begin
     for J := OS_F32 to OS_F128 do
-      Write(Ord(ConvertOp[I, J]), ' ');
+    begin
+      if J > OS_F32 then Write(' ');
+      Write(Ord(ConvertOp[I, J]));
+    end;
     WriteLn;
   end;
 end.

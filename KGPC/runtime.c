@@ -5340,6 +5340,26 @@ char *kgpc_int_to_str(int64_t value)
     return result;
 }
 
+char *kgpc_hexstr(int64_t value, int64_t digits)
+{
+    if (digits < 1)
+        digits = 1;
+    if (digits > 16)
+        digits = 16;
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%0*llX", (int)digits,
+                           (unsigned long long)value);
+    if (written < 0)
+        return kgpc_alloc_empty_string();
+
+    char *result = kgpc_string_alloc_with_length((size_t)written);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    return result;
+}
+
 static char *kgpc_apply_field_width(char *value, int64_t width)
 {
     if (value == NULL)

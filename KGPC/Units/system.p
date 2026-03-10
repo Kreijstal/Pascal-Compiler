@@ -581,6 +581,10 @@ function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int'
 function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
 function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper';
 
+{ HexStr(value, digits) - Converts an integer to a hexadecimal string }
+function HexStr(value: Int64; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
+function HexStr(value: LongWord; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
+
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.
 }

@@ -1332,6 +1332,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.arr_decl_data.init_guard_label);
           if (tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
               free(tree->tree_data.arr_decl_data.unresolved_index_type);
+          if (tree->tree_data.arr_decl_data.array_dimensions != NULL)
+              destroy_list(tree->tree_data.arr_decl_data.array_dimensions);
           break;
 
         case TREE_CONST_DECL:

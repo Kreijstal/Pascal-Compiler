@@ -688,6 +688,13 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     }
     if (record_type == NULL && record_access_expr->record_type != NULL)
         record_type = record_access_expr->record_type;
+    /* Fallback: check resolved_kgpc_type on base expression (e.g., array access
+     * yielding a record element in auto-generated typed const initializers) */
+    if (record_type == NULL && base_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_record(base_expr->resolved_kgpc_type))
+    {
+        record_type = kgpc_type_get_record(base_expr->resolved_kgpc_type);
+    }
     if (record_type == NULL)
     {
         if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
@@ -2423,9 +2430,15 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
 
     if (is_shortstring_out != NULL)
     {
-        /* For record field accesses, the shortstring determination was already
-         * made from the RecordField type — skip the heuristic. */
-        if (expr->type != EXPR_RECORD_ACCESS)
+        if (expr->type == EXPR_RECORD_ACCESS && *is_shortstring_out == 0)
+        {
+            /* Bounds may have been found via KgpcType; still check the RecordField
+             * for the authoritative shortstring flag. */
+            struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+            if (field != NULL && field->type == SHORTSTRING_TYPE)
+                *is_shortstring_out = 1;
+        }
+        if (expr->type != EXPR_RECORD_ACCESS || *is_shortstring_out == 0)
         {
             int is_short = (*is_shortstring_out != 0);
             if (!is_short)
