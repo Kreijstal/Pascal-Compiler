@@ -793,6 +793,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         free(buffer);
         return false;
     }
+    /* Define x86_64 — FPC compiler sources use {$if defined(x86_64)} */
+    if (!pascal_preprocessor_define(preprocessor, "x86_64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define x86_64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
     /* Define first_mm_imreg for FPC x86_64 paramgr.pas (CPU register constant from cpubase.pas) */
     if (!pascal_preprocessor_define_const(preprocessor, "first_mm_imreg", "32"))
     {
@@ -855,6 +863,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (!pascal_preprocessor_define(preprocessor, "UNIX"))
     {
         report_preprocessor_error(error_out, path, "unable to define UNIX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "HASUNIX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define HASUNIX symbol");
         pascal_preprocessor_free(preprocessor);
         free(buffer);
         return false;

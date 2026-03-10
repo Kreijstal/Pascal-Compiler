@@ -55,6 +55,13 @@ type
   PInt64 = ^Int64;
   PQWord = ^QWord;
   PBoolean = ^Boolean;
+  PSizeUInt = ^SizeUInt;
+  PSizeInt = ^SizeInt;
+  PPtrUInt = ^PtrUInt;
+  PPtrInt = ^PtrInt;
+  PNativeUInt = ^NativeUInt;
+  PNativeInt = ^NativeInt;
+  PDWord = ^DWord;
 
   { FPC bootstrap compatibility aliases }
   PText = ^text;
@@ -310,6 +317,8 @@ type
   UInt16 = Word;                 { 16-bit unsigned }
   Int32 = LongInt;               { 32-bit signed }
   UInt32 = Cardinal;             { 32-bit unsigned }
+  PInt32 = ^Int32;
+  PUInt32 = ^UInt32;
 
   { FPC-compatible TDateTime (days since 1899-12-30, with fractional day) }
   TDateTime = type Double;
@@ -321,6 +330,23 @@ type
   { Currency type - 64-bit fixed-point decimal scaled by 10000 (4 decimal places) }
   Currency = Int64;              { FPC Currency is Int64 scaled by 10000 }
   PCurrency = ^Currency;
+
+  { System time record }
+  TSystemTime = record
+    Year, Month, Day, DayOfWeek: Word;
+    Hour, Minute, Second, Millisecond: Word;
+  end;
+
+  { Heap status record }
+  TFPCHeapStatus = record
+    MaxHeapSize, MaxHeapUsed, CurrHeapSize, CurrHeapUsed, CurrHeapFree: PtrUInt;
+  end;
+
+  { Procedure type }
+  TProcedure = procedure;
+
+  { Unicode mapping stub (charset unit) }
+  punicodemap = Pointer;
 
   { Variant and PVariant are registered as built-in types (VARIANT_TYPE, 16 bytes)
     and auto-coerce to/from any value type.  No Pascal-level alias needed. }

@@ -2123,12 +2123,13 @@ int semcheck_recordaccess(int *type_return,
         if (FindIdent(&unit_sym, symtab, field_id) >= 0 && unit_sym != NULL)
         {
             /* Transform EXPR_RECORD_ACCESS into EXPR_VAR_ID for the resolved identifier */
+            char *saved_field_id = strdup(field_id);
             destroy_expr(record_expr);
             free(expr->expr_data.record_access_data.field_id);
             expr->expr_data.record_access_data.record_expr = NULL;
             expr->expr_data.record_access_data.field_id = NULL;
             expr->type = EXPR_VAR_ID;
-            expr->expr_data.id = strdup(field_id);
+            expr->expr_data.id = saved_field_id;
             if (expr->expr_data.id == NULL)
             {
                 *type_return = UNKNOWN_TYPE;
@@ -3682,8 +3683,9 @@ SKIP_SELF_FIELD_REWRITE:
     }
 
 FIELD_RESOLVED:
-    expr->expr_data.record_access_data.field_offset = field_offset;
-
+    /* Re-read field_id: property resolution may have freed and replaced
+       the original string, making the local pointer stale. */
+    field_id = expr->expr_data.record_access_data.field_id;
     expr->expr_data.record_access_data.field_offset = field_offset;
 
     /* Temporarily set unit context to the record's defining unit so field

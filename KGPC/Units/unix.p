@@ -74,6 +74,7 @@ type
 
     tsignalhandler = signalhandler_t;
     tsigactionhandler = sigactionhandler_t;
+    SignalHandler = signalhandler_t;
 
     { Signal action record for Linux x86-64 }
     psigactionrec = ^sigactionrec;

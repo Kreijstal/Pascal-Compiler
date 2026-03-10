@@ -20,6 +20,9 @@ type
     Byte = 0..255;
     TBytes = array of Byte;
 
+    TSysCharSet = set of Char;
+    TExecuteFlags = set of (ExecInheritsHandles);
+
     TFloatFormat = (ffGeneral, ffExponent, ffFixed, ffNumber, ffCurrency);
 
     TFormatSettings = record
@@ -33,6 +36,7 @@ type
         Size: Int64;
         Time: Longint;
     end;
+    TRawByteSearchRec = TSearchRec;
 
     Exception = class
     private
