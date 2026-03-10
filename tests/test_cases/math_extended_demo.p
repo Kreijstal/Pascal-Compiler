@@ -13,7 +13,7 @@ begin
     SampleValues[3] := 4;
     writeln('MaxIntValue=', MaxIntValue(SampleValues));
     writeln('MinIntValue=', MinIntValue(SampleValues));
-    writeln('Sum=', Sum(SampleValues));
+    writeln('Sum=', SumInt(SampleValues));
     writeln('Mean=', Mean(SampleValues):0:2);
     writeln('EnsureRange=', EnsureRange(15, 0, 10));
     writeln('EnsureRangeSwap=', EnsureRange(3, 10, 1));

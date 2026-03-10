@@ -284,6 +284,7 @@ type
     LineEnd: TLineEndStr;
     Buffer: TextBuf;
     CodePage: TSystemCodePage;
+    FullName: Pointer;
   end;
 
   TextFile = text;
@@ -446,13 +447,23 @@ const
   RTL_SIGLAST = RTL_SIGQUIT;
   RTL_SIGDEFAULT = -1;
 
+type
+  { TThreadManager: record of 35 function pointers matching FPC RTL thread.inc }
+  TThreadManager = array[0..34] of Pointer;
+
+  { TDynLibsManager: record of 6 function pointers matching FPC RTL dynlib.inc }
+  TDynLibsManager = array[0..5] of Pointer;
+
+  { PLazyInitThreadingProcInfo placeholder }
+  PLazyInitThreadingProcInfo = Pointer;
+
 var
   IsMultiThread: Boolean = False;
   IsLibrary: Boolean = False;
   InOutRes: Word;
   FirstDotAtFileNameStartIsExtension: Boolean;
   RandSeed: LongWord; external name 'kgpc_randseed';
-  WideStringManager: TUnicodeStringManager;
+  widestringmanager: TUnicodeStringManager;
   DefaultTextLineBreakStyle: TTextLineBreakStyle;
   DefaultSystemCodePage: TSystemCodePage;
   DefaultUnicodeCodePage: TSystemCodePage;
@@ -461,7 +472,17 @@ var
   UTF8CompareLocale: TSystemCodePage;
   StdInputHandle: THandle;
   StdOutputHandle: THandle;
+  { MemoryManager dispatch table — initialized by runtime at startup.
+    Layout matches FPC's TMemoryManager (96 bytes on x86-64). }
+  MemoryManager: array[0..95] of Byte;
   StdErrorHandle: THandle;
+
+  { Thread manager globals — defined here so both KGPC stdlib and FPC RTL
+    provide them from Pascal; the C runtime references them as extern. }
+  CurrentTM: TThreadManager; public name 'CurrentTM';
+  NoThreadManager: TThreadManager; public name 'NoThreadManager';
+  LazyInitThreadingProcList: PLazyInitThreadingProcInfo; public name 'LazyInitThreadingProcList';
+  CurrentDLM: TDynLibsManager; public name 'CurrentDLM';
 
 { ============================================================================
   Compiler Intrinsic Functions
@@ -527,10 +548,42 @@ function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
 
 function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
 
+{ FPC intrinsic bit manipulation functions }
+function SarInt64(value: Int64; shift: LongInt): Int64; cdecl; external name 'kgpc_sar_int64';
+function SarLongint(value: LongInt; shift: LongInt): LongInt; cdecl; external name 'kgpc_sar_longint';
+function SarSmallint(value: SmallInt; shift: LongInt): SmallInt; cdecl; external name 'kgpc_sar_smallint';
+function SarShortint(value: ShortInt; shift: LongInt): ShortInt; cdecl; external name 'kgpc_sar_shortint';
+
+function RolDWord(value: LongWord; shift: LongInt): LongWord; cdecl; external name 'kgpc_rol_dword';
+function RorDWord(value: LongWord; shift: LongInt): LongWord; cdecl; external name 'kgpc_ror_dword';
+function RolQWord(value: QWord; shift: LongInt): QWord; cdecl; external name 'kgpc_rol_qword';
+function RorQWord(value: QWord; shift: LongInt): QWord; cdecl; external name 'kgpc_ror_qword';
+function RolWord(value: Word; shift: LongInt): Word; cdecl; external name 'kgpc_rol_word';
+function RorWord(value: Word; shift: LongInt): Word; cdecl; external name 'kgpc_ror_word';
+function RolByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_rol_byte';
+function RorByte(value: Byte; shift: LongInt): Byte; cdecl; external name 'kgpc_ror_byte';
+
+function Hi(value: QWord): LongWord; cdecl; external name 'kgpc_hi_qword';
+function Hi(value: Int64): LongWord; cdecl; external name 'kgpc_hi_qword';
+function Hi(value: LongWord): Word; cdecl; external name 'kgpc_hi_dword';
+function Hi(value: Word): Byte; cdecl; external name 'kgpc_hi_word';
+function Lo(value: QWord): LongWord; cdecl; external name 'kgpc_lo_qword';
+function Lo(value: Int64): LongWord; cdecl; external name 'kgpc_lo_qword';
+function Lo(value: LongWord): Word; cdecl; external name 'kgpc_lo_dword';
+function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
+
+function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
+procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
+procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+
 function Random: Real; cdecl; external name 'kgpc_random_real';
 function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
 function Random(upper: Int64): Int64; cdecl; external name 'kgpc_random_int64';
 function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper';
+
+{ HexStr(value, digits) - Converts an integer to a hexadecimal string }
+function HexStr(value: Int64; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
+function HexStr(value: LongWord; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
 
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.
@@ -669,12 +722,14 @@ function kgpc_class_parent(self: Pointer): Pointer; cdecl; external name 'kgpc_c
 function kgpc_get_interface(self: Pointer; guid: Pointer; var intf): Integer; cdecl; external name 'kgpc_get_interface';
 procedure kgpc_string_to_shortstring(var dest; src: PAnsiChar; dest_size: SizeInt); cdecl; external name 'kgpc_string_to_shortstring';
 procedure kgpc_text_assign(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_text_assign';
+procedure kgpc_assign_t_s(var f: text; filename: PAnsiChar); cdecl; external name 'kgpc_assign_t_s';
 procedure kgpc_text_rewrite(var f: text); cdecl; external name 'kgpc_text_rewrite';
 procedure kgpc_text_reset(var f: text); cdecl; external name 'kgpc_text_reset';
 procedure kgpc_text_close(var f: text); cdecl; external name 'kgpc_text_close';
 procedure kgpc_text_app(var f: text); cdecl; external name 'kgpc_text_app';
 procedure kgpc_text_setbuf(var f: text; buf: Pointer; size: LongInt); cdecl; external name 'kgpc_text_setbuf';
 procedure kgpc_tfile_assign(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_tfile_assign';
+procedure kgpc_assign_f_s(var f: file; filename: PAnsiChar); cdecl; external name 'kgpc_assign_f_s';
 procedure kgpc_tfile_rewrite(var f: file); cdecl; external name 'kgpc_tfile_rewrite';
 procedure kgpc_tfile_reset(var f: file); cdecl; external name 'kgpc_tfile_reset';
 procedure kgpc_tfile_close(var f: file); cdecl; external name 'kgpc_tfile_close';
@@ -776,13 +831,13 @@ end;
 
 procedure assign_text_internal(var f: text; filename: string);
 begin
-    kgpc_text_assign(f, PAnsiChar(filename));
+    kgpc_assign_t_s(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar - used by FPC bootstrap (objpas.pp) }
 procedure assign_text_pchar_internal(var f: text; filename: PAnsiChar);
 begin
-    kgpc_text_assign(f, filename);
+    kgpc_assign_t_s(f, filename);
 end;
 
 procedure rewrite_text_internal(var f: text);
@@ -959,13 +1014,13 @@ end;
 
 procedure assign(var f: file; filename: string); overload;
 begin
-    kgpc_tfile_assign(f, PAnsiChar(filename));
+    kgpc_assign_f_s(f, PAnsiChar(filename));
 end;
 
 { Assign with PAnsiChar for typed/untyped files - FPC bootstrap compatibility }
 procedure assign(var f: file; filename: PAnsiChar); overload;
 begin
-    kgpc_tfile_assign(f, filename);
+    kgpc_assign_f_s(f, filename);
 end;
 
 { Assign with AnsiChar (single character filename) for files - FPC bootstrap compatibility }
@@ -1109,6 +1164,11 @@ begin
 end;
 
 procedure FillChar(var dest; count: longint; value: integer); overload;
+begin
+    fillchar_impl(dest, count, value);
+end;
+
+procedure FillByte(var dest; count: longint; value: integer);
 begin
     fillchar_impl(dest, count, value);
 end;

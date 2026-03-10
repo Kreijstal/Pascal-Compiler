@@ -98,7 +98,16 @@ gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 runtime_sources = ['runtime.c']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
+  runtime_sources += 'runtime_fpc_abstract_stubs.S'
+  runtime_sources += 'runtime_fpc_rtl_compat.S'
+  runtime_sources += 'runtime_fpc_interlocked_aliases.c'
+  runtime_sources += 'runtime_widechar_assign_olevariant.c'
+  runtime_sources += 'runtime_olevariant_assign.c'
 endif
+runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
+runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
+runtime_sources += 'runtime_fpc_assign.c'
+runtime_sources += 'runtime_fpc_init.c'
 runtime_deps = []
 runtime_c_args = ['-O2']
 
@@ -109,6 +118,9 @@ if gmp_dep.found()
 else
   runtime_c_args += ['-DHAVE_GMP=0']
 endif
+
+pthread_dep = dependency('threads', required: true)
+runtime_deps += [pthread_dep]
 
 if host_machine.system() != 'windows'
   runtime_deps += [compiler.find_library('dl', required: true)]

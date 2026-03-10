@@ -57,6 +57,7 @@ function Min(a, b: longint): longint;
 function MaxIntValue(const Values: array of Longint): Longint;
 function MinIntValue(const Values: array of Longint): Longint;
 function Sum(const Values: array of Longint): Longint;
+function SumInt(const Values: array of Longint): Int64;
 function Mean(const Values: array of Longint): Real;
 function EnsureRange(Value, RangeMin, RangeMax: Longint): Longint;
 function InRange(Value, RangeMin, RangeMax: Longint): Boolean;
@@ -145,6 +146,17 @@ begin
         Sum := Sum + Values[i];
 end;
 
+function SumInt(const Values: array of Longint): Int64;
+var
+    i, start_idx, end_idx: Integer;
+begin
+    start_idx := Low(Values);
+    end_idx := High(Values);
+    SumInt := 0;
+    for i := start_idx to end_idx do
+        SumInt := SumInt + Values[i];
+end;
+
 function Mean(const Values: array of Longint): Real;
 var
     total: Longint;
@@ -166,25 +178,16 @@ end;
 
 function EnsureRange(Value, RangeMin, RangeMax: Longint): Longint;
 begin
-    if RangeMin > RangeMax then
-    begin
-        EnsureRange := EnsureRange(Value, RangeMax, RangeMin);
-        exit;
-    end;
-    if Value < RangeMin then
-        EnsureRange := RangeMin
-    else if Value > RangeMax then
-        EnsureRange := RangeMax
-    else
-        EnsureRange := Value;
+    EnsureRange := Value;
+    if EnsureRange < RangeMin then
+        EnsureRange := RangeMin;
+    if EnsureRange > RangeMax then
+        EnsureRange := RangeMax;
 end;
 
 function InRange(Value, RangeMin, RangeMax: Longint): Boolean;
 begin
-    if RangeMin > RangeMax then
-        InRange := (Value >= RangeMax) and (Value <= RangeMin)
-    else
-        InRange := (Value >= RangeMin) and (Value <= RangeMax);
+    InRange := (Value >= RangeMin) and (Value <= RangeMax);
 end;
 
 function Sign(Value: Longint): Longint;

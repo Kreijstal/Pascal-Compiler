@@ -23,6 +23,8 @@ ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_lis
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *, CodeGenContext *ctx, Register_t **out_reg);
+ListNode_t *codegen_materialize_extended_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *dest_addr_reg);
 ListNode_t *codegen_array_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
 ListNode_t *codegen_array_element_address(struct Expression *, ListNode_t *, CodeGenContext *, Register_t **);
 ListNode_t *codegen_record_access(struct Expression *, ListNode_t *, CodeGenContext *, Register_t *);
@@ -57,6 +59,7 @@ const char *codegen_register_name16(const Register_t *reg);
 int expr_get_type_tag(const struct Expression *expr);
 struct KgpcType *expr_get_kgpc_type(const struct Expression *expr);
 long long expr_effective_size_bytes(const struct Expression *expr);
+int codegen_expr_involves_extended(const struct Expression *expr);
 
 /* Check if expression type matches a specific type tag, using KgpcType when available.
  * Returns 1 if match, 0 otherwise. */

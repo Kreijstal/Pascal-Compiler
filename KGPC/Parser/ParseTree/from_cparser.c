@@ -40,7 +40,6 @@ static char* strndup(const char* s, size_t n)
 #include "../../identifier_utils.h"
 #include "../pascal_frontend.h"
 #include "../ErrVars.h"
-
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
  * ============================================================================
@@ -93,6 +92,98 @@ static ast_t *g_interface_section_ast = NULL;
 static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
+
+/* Global registry of enum type ranges across unit loads.
+ * Persists across calls to tree_from_pascal_ast so that enum types
+ * defined in already-loaded units can be resolved when parsing later units. */
+typedef struct EnumTypeEntry {
+    char *name;
+    int start;
+    int end;
+    struct EnumTypeEntry *next;
+} EnumTypeEntry;
+static EnumTypeEntry *g_enum_type_registry = NULL;
+
+static void enum_registry_add(const char *name, int start, int end) {
+    if (name == NULL) return;
+    /* Check for existing entry (case-insensitive) */
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            e->start = start;
+            e->end = end;
+            return;
+        }
+    }
+    EnumTypeEntry *entry = (EnumTypeEntry *)calloc(1, sizeof(EnumTypeEntry));
+    if (entry == NULL) return;
+    entry->name = strdup(name);
+    entry->start = start;
+    entry->end = end;
+    entry->next = g_enum_type_registry;
+    g_enum_type_registry = entry;
+}
+
+static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
+    if (name == NULL) return -1;
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            *out_start = e->start;
+            *out_end = e->end;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void enum_registry_free(void) {
+    EnumTypeEntry *e = g_enum_type_registry;
+    while (e != NULL) {
+        EnumTypeEntry *next = e->next;
+        free(e->name);
+        free(e);
+        e = next;
+    }
+    g_enum_type_registry = NULL;
+}
+
+/* Forward declaration for const expression evaluator (defined later in the file). */
+static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth);
+
+/* Scan a PASCAL_T_TYPE_SECTION and register all enumerated and subrange types in the global registry. */
+static void enum_registry_scan_type_section(ast_t *type_section) {
+    if (type_section == NULL) return;
+    for (ast_t *decl = type_section->child; decl != NULL; decl = decl->next) {
+        if (decl->typ != PASCAL_T_TYPE_DECL) continue;
+        ast_t *id_node = decl->child;
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER ||
+            id_node->sym == NULL || id_node->sym->name == NULL)
+            continue;
+        /* Find the type spec */
+        ast_t *spec = id_node->next;
+        while (spec != NULL && spec->typ != PASCAL_T_TYPE_SPEC &&
+               spec->typ != PASCAL_T_ENUMERATED_TYPE &&
+               spec->typ != PASCAL_T_RANGE_TYPE)
+            spec = spec->next;
+        if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+            spec = spec->child;
+        if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+            int count = 0;
+            for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
+                if (lit->typ == PASCAL_T_IDENTIFIER) count++;
+            }
+            if (count > 0)
+                enum_registry_add(id_node->sym->name, 0, count - 1);
+        } else if (spec != NULL && spec->typ == PASCAL_T_RANGE_TYPE) {
+            ast_t *lower = spec->child;
+            ast_t *upper = (lower != NULL) ? lower->next : NULL;
+            int low_val = 0, high_val = 0;
+            if (evaluate_const_int_expr(lower, &low_val, 0) == 0 &&
+                evaluate_const_int_expr(upper, &high_val, 0) == 0) {
+                enum_registry_add(id_node->sym->name, low_val, high_val);
+            }
+        }
+    }
+}
 
 static int is_external_directive(const char *directive)
 {
@@ -333,6 +424,7 @@ typedef struct {
     long long range_start;
     long long range_end;
     int is_class_reference;  /* For "class of T" types */
+    char *unresolved_index_type;  /* Deferred enum index type name */
 } TypeInfo;
 
 /* Frontend error counter for errors during AST to tree conversion */
@@ -979,6 +1071,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
         destroy_kgpc_type(info->element_kgpc_type);
         info->element_kgpc_type = NULL;
     }
+    if (info->unresolved_index_type != NULL) {
+        free(info->unresolved_index_type);
+        info->unresolved_index_type = NULL;
+    }
 }
 
 static void reset_const_sections(void) {
@@ -1034,6 +1130,16 @@ static int const_section_is_resourcestring(ast_t *const_section) {
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
+
+/* Parse a range bound string that may be a number or boolean literal.
+ * Used for multi-dimensional array range extraction. */
+static int parse_range_bound(const char *s) {
+    if (s == NULL) return 0;
+    if (strcasecmp(s, "true") == 0) return 1;
+    if (strcasecmp(s, "false") == 0) return 0;
+    return atoi(s);
+}
+
 static int select_range_primitive_tag(const TypeInfo *info);
 
 static int resolve_const_expr_from_sections(const char *expr, int *result)
@@ -1133,10 +1239,20 @@ void from_cparser_disable_pending_specializations(void) {
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
 
+/* Global offset added to all source_index values during conversion.
+ * Set via from_cparser_set_source_offset() before converting each unit's AST,
+ * so that source_index values are globally unique across all source buffers. */
+static int g_source_offset = 0;
+
+void from_cparser_set_source_offset(int offset)
+{
+    g_source_offset = offset;
+}
+
 /* Helper to copy source index from AST node to Expression for accurate error context */
 static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
     if (expr != NULL && node != NULL) {
-        expr->source_index = node->index;
+        expr->source_index = node->index + g_source_offset;
     }
     return expr;
 }
@@ -1534,11 +1650,30 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
+    /* First pass: search under exact class name. */
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
         if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
             strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_virtual || binding->is_override)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
+     * registered under the unqualified name before renaming. Only try if no exact match. */
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = dot + 1;
+    cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, unqualified) == 0 &&
             strcasecmp(binding->method_name, method_name) == 0)
         {
             if (binding->is_virtual || binding->is_override)
@@ -1558,30 +1693,42 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
     if (param_sig == NULL && param_count < 0)
         return from_cparser_is_method_virtual(class_name, method_name);
 
+    /* Helper lambda-like: check bindings for a given class name string. */
+    #define CHECK_BINDINGS_FOR(cname) \
+        do { \
+            ListNode_t *_cur = class_method_bindings; \
+            while (_cur != NULL) { \
+                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
+                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
+                    strcasecmp(_b->class_name, (cname)) == 0 && \
+                    strcasecmp(_b->method_name, method_name) == 0) \
+                { \
+                    int _matches = 0; \
+                    if (param_sig != NULL && _b->param_sig != NULL) { \
+                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                    } else if (param_count >= 0 && _b->param_count == param_count) { \
+                        _matches = 1; \
+                    } \
+                    if (_matches) { \
+                        has_match = 1; \
+                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                    } \
+                } \
+                _cur = _cur->next; \
+            } \
+        } while (0)
+
     int has_match = 0;
     int has_virtual = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            int matches = 0;
-            if (param_sig != NULL && binding->param_sig != NULL) {
-                if (strcmp(binding->param_sig, param_sig) == 0)
-                    matches = 1;
-            } else if (param_count >= 0 && binding->param_count == param_count) {
-                matches = 1;
-            }
-            if (matches) {
-                has_match = 1;
-                if (binding->is_virtual || binding->is_override)
-                    has_virtual = 1;
-            }
-        }
-        cur = cur->next;
+    /* First pass: exact class name. */
+    CHECK_BINDINGS_FOR(class_name);
+    /* Second pass: unqualified fallback — only if nothing found under exact name. */
+    if (!has_match) {
+        const char *dot = strrchr(class_name, '.');
+        if (dot != NULL)
+            CHECK_BINDINGS_FOR(dot + 1);
     }
+    #undef CHECK_BINDINGS_FOR
     if (has_match)
         return has_virtual;
     return 0;
@@ -1778,14 +1925,14 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         *methods_out = NULL;
     if (count_out != NULL)
         *count_out = 0;
-    
+
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
-    
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
-    
+
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
@@ -1804,7 +1951,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         }
         cur = cur->next;
     }
-    
+
     *methods_out = head;
     *count_out = count;
 }
@@ -2204,6 +2351,51 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     arg_types = NULL;
 
     substitute_record_type_parameters(record, generic, record->generic_args);
+
+    /* Rewrite references to nested types within the generic class.
+     * E.g. field FOnCompare with type_id="TCompareFunc" needs to become
+     * "TFPGList$TMyRecord.TCompareFunc" for proper resolution. */
+    if (generic->nested_type_decls != NULL) {
+        /* Collect the short names of nested types (without the prefix) */
+        size_t gen_prefix_len = strlen(base_name);
+        ListNode_t *field_node = record->fields;
+        while (field_node != NULL) {
+            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL) {
+                struct RecordField *field = (struct RecordField *)field_node->cur;
+                if (field->type_id != NULL) {
+                    /* Check if this type_id matches a nested type name */
+                    ListNode_t *nt = generic->nested_type_decls;
+                    while (nt != NULL) {
+                        if (nt->type == LIST_TREE && nt->cur != NULL) {
+                            Tree_t *nt_tree = (Tree_t *)nt->cur;
+                            if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL) {
+                                const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                                /* nested type id is like "TFPGList.TCompareFunc" */
+                                if (strncmp(nt_id, base_name, gen_prefix_len) == 0 &&
+                                    nt_id[gen_prefix_len] == '.') {
+                                    const char *short_name = nt_id + gen_prefix_len + 1;
+                                    if (strcasecmp(field->type_id, short_name) == 0) {
+                                        /* Rewrite to specialized: "TFPGList$TMyRecord.TCompareFunc" */
+                                        size_t new_len = strlen(specialized_name) + 1 + strlen(short_name) + 1;
+                                        char *new_id = (char *)malloc(new_len);
+                                        if (new_id != NULL) {
+                                            snprintf(new_id, new_len, "%s.%s", specialized_name, short_name);
+                                            free(field->type_id);
+                                            field->type_id = new_id;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        nt = nt->next;
+                    }
+                }
+            }
+            field_node = field_node->next;
+        }
+    }
+
     generic_registry_add_specialization(base_name, record->generic_args, arg_count);
 
     if (specialized_name_out != NULL)
@@ -2375,11 +2567,15 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
         record->generic_args == NULL || record->num_generic_args <= 0)
         return;
 
+    const char *generic_name = record->generic_decl->name;
+    size_t gen_prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
     ast_t *cursor = node;
     while (cursor != NULL)
     {
         if (cursor->sym != NULL && cursor->sym->name != NULL)
         {
+            /* Substitute generic type parameters (e.g. T -> TMyRecord) */
             for (int i = 0; i < record->generic_decl->num_type_params && i < record->num_generic_args; ++i)
             {
                 const char *param_name = record->generic_decl->type_parameters[i];
@@ -2390,6 +2586,53 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
                     free(cursor->sym->name);
                     cursor->sym->name = strdup(arg_name);
                     break;
+                }
+            }
+            /* Substitute the generic class name itself with the specialized name
+             * (e.g. TFPGList -> TFPGList$TMyRecord in method parameter types) */
+            if (generic_name != NULL && record->type_id != NULL &&
+                strcasecmp(cursor->sym->name, generic_name) == 0)
+            {
+                free(cursor->sym->name);
+                cursor->sym->name = strdup(record->type_id);
+            }
+            /* Substitute nested type short names with their specialized full names.
+             * E.g. TFPGListEnumeratorSpec -> TFPGList$TMyRecord.TFPGListEnumeratorSpec
+             * inside method bodies of the specialized class. */
+            if (record->generic_decl->nested_type_decls != NULL && record->type_id != NULL)
+            {
+                ListNode_t *nt = record->generic_decl->nested_type_decls;
+                while (nt != NULL)
+                {
+                    if (nt->type == LIST_TREE && nt->cur != NULL)
+                    {
+                        Tree_t *nt_tree = (Tree_t *)nt->cur;
+                        if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL)
+                        {
+                            const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                            /* nested type id is like "TFPGList.TFPGListEnumeratorSpec" */
+                            if (gen_prefix_len > 0 &&
+                                strncmp(nt_id, generic_name, gen_prefix_len) == 0 &&
+                                nt_id[gen_prefix_len] == '.')
+                            {
+                                const char *short_name = nt_id + gen_prefix_len + 1;
+                                if (strcasecmp(cursor->sym->name, short_name) == 0)
+                                {
+                                    /* Rewrite to "TFPGList$TMyRecord.TFPGListEnumeratorSpec" */
+                                    size_t new_len = strlen(record->type_id) + 1 + strlen(short_name) + 1;
+                                    char *new_name = (char *)malloc(new_len);
+                                    if (new_name != NULL)
+                                    {
+                                        snprintf(new_name, new_len, "%s.%s", record->type_id, short_name);
+                                        free(cursor->sym->name);
+                                        cursor->sym->name = new_name;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    nt = nt->next;
                 }
             }
         }
@@ -2436,7 +2679,14 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
         return NULL;
 
     rewrite_method_impl_ast(method_copy, record);
+
+    /* Restore the source offset from when the template was parsed,
+     * so source_index values map to the correct source buffer. */
+    int saved_offset = g_source_offset;
+    g_source_offset = method_template->source_offset;
     Tree_t *method_tree = convert_method_impl(method_copy);
+    g_source_offset = saved_offset;
+
     free_ast(method_copy);
     return method_tree;
 }
@@ -2603,6 +2853,12 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     rewrite_generic_subprogram_ast(ast_copy, specialized_name,
         template->tree_data.subprogram_data.generic_type_params, arg_types, arg_count);
 
+    /* Restore the source offset from the unit that defined the template,
+     * so that source_index values in the specialized code map to the
+     * correct source buffer (e.g., fgl.pp, not the main program). */
+    int saved_offset = g_source_offset;
+    g_source_offset = template->tree_data.subprogram_data.generic_template_source_offset;
+
     Tree_t *result = NULL;
     if (template->type == TREE_SUBPROGRAM &&
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC)
@@ -2611,6 +2867,7 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC)
         result = convert_function(ast_copy);
 
+    g_source_offset = saved_offset;
     free_ast(ast_copy);
 
     if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
@@ -3245,14 +3502,249 @@ void append_generic_method_clones(Tree_t *program_tree)
     }
 }
 
+/* Clone nested type declarations from a generic class for a specialization.
+ * For example, if TFPGList has nested type TFPGList.PT = ^T, then specializing
+ * TFPGList<TMyRecord> produces TFPGList$TMyRecord.PT = ^TMyRecord.
+ * The cloned declarations are appended to the program's type declaration list. */
+static void clone_nested_types_for_specialization(
+    GenericTypeDecl *generic_decl,
+    const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
+    ListNode_t *type_args,        /* concrete type arguments */
+    ListNode_t **type_list_out,   /* where to append new type decls */
+    ListNode_t **subprograms_out) /* where to append method clones (may be NULL) */
+{
+    if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
+        specialized_name == NULL || type_list_out == NULL)
+        return;
+
+    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *generic_name = generic_decl->name;
+    size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
+    /* Build arg_types array for substitution */
+    int arg_count = 0;
+    ListNode_t *arg_cur = type_args;
+    while (arg_cur != NULL) {
+        if (arg_cur->type == LIST_STRING) arg_count++;
+        arg_cur = arg_cur->next;
+    }
+
+    ListNode_t *cur = generic_decl->nested_type_decls;
+    while (cur != NULL) {
+        if (cur->type == LIST_TREE && cur->cur != NULL) {
+            Tree_t *orig = (Tree_t *)cur->cur;
+            if (orig->type == TREE_TYPE_DECL && orig->tree_data.type_decl_data.id != NULL) {
+                const char *orig_id = orig->tree_data.type_decl_data.id;
+                /* Check that orig_id starts with generic_name + "." */
+                if (prefix_len > 0 && strncmp(orig_id, generic_name, prefix_len) == 0 &&
+                    orig_id[prefix_len] == '.')
+                {
+                    const char *suffix = orig_id + prefix_len; /* e.g., ".PT" */
+                    /* Build new id: specialized_name + suffix */
+                    size_t new_id_len = strlen(specialized_name) + strlen(suffix) + 1;
+                    char *new_id = (char *)malloc(new_id_len);
+                    if (new_id == NULL) { cur = cur->next; continue; }
+                    snprintf(new_id, new_id_len, "%s%s", specialized_name, suffix);
+
+                    Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
+                    if (clone == NULL) { free(new_id); cur = cur->next; continue; }
+
+                    clone->source_index = orig->source_index;
+                    clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
+                    clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
+
+                    if (orig->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *src_alias = &orig->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        *dst_alias = *src_alias; /* Shallow copy */
+                        dst_alias->target_type_id = src_alias->target_type_id ?
+                            strdup(src_alias->target_type_id) : NULL;
+                        dst_alias->pointer_type_id = src_alias->pointer_type_id ?
+                            strdup(src_alias->pointer_type_id) : NULL;
+                        dst_alias->array_element_type_id = src_alias->array_element_type_id ?
+                            strdup(src_alias->array_element_type_id) : NULL;
+                        dst_alias->inline_record_type = NULL;
+                        dst_alias->target_type_ref = src_alias->target_type_ref ?
+                            type_ref_clone(src_alias->target_type_ref) : NULL;
+                        dst_alias->array_element_type_ref = src_alias->array_element_type_ref ?
+                            type_ref_clone(src_alias->array_element_type_ref) : NULL;
+
+                        /* Substitute generic type parameters in type identifiers.
+                         * For example, if T → TMyRecord, then "T" → "TMyRecord",
+                         * and pointer_type_id "T" → "TMyRecord". */
+                        for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                            const char *param = generic_decl->type_parameters[pi];
+                            /* Get the concrete type for this parameter */
+                            ListNode_t *a = type_args;
+                            for (int ai = 0; ai < pi && a != NULL; ai++)
+                                a = a->next;
+                            if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                continue;
+                            const char *concrete = (const char *)a->cur;
+
+                            if (dst_alias->target_type_id != NULL &&
+                                strcasecmp(dst_alias->target_type_id, param) == 0) {
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->pointer_type_id != NULL &&
+                                strcasecmp(dst_alias->pointer_type_id, param) == 0) {
+                                free(dst_alias->pointer_type_id);
+                                dst_alias->pointer_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->array_element_type_id != NULL &&
+                                strcasecmp(dst_alias->array_element_type_id, param) == 0) {
+                                free(dst_alias->array_element_type_id);
+                                dst_alias->array_element_type_id = strdup(concrete);
+                            }
+                        }
+
+                        /* Substitute type parameters in mangled names like
+                         * "TFPGListEnumerator$T" -> "TFPGListEnumerator$TMyRecord" */
+                        if (dst_alias->target_type_id != NULL) {
+                            for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                                const char *param = generic_decl->type_parameters[pi];
+                                ListNode_t *a = type_args;
+                                for (int ai = 0; ai < pi && a != NULL; ai++)
+                                    a = a->next;
+                                if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                    continue;
+                                const char *concrete = (const char *)a->cur;
+                                if (param == NULL || concrete == NULL) continue;
+                                size_t param_len = strlen(param);
+                                /* Look for "$T" pattern at the end or "$T$" in the middle */
+                                char *pos = dst_alias->target_type_id;
+                                while ((pos = strchr(pos, '$')) != NULL) {
+                                    pos++; /* skip '$' */
+                                    if (strncasecmp(pos, param, param_len) == 0 &&
+                                        (pos[param_len] == '\0' || pos[param_len] == '$')) {
+                                        /* Found "$T" — rebuild the string with "$TMyRecord" */
+                                        size_t prefix_len2 = (pos - dst_alias->target_type_id);
+                                        size_t suffix_len = strlen(pos + param_len);
+                                        size_t concrete_len = strlen(concrete);
+                                        char *new_target = malloc(prefix_len2 + concrete_len + suffix_len + 1);
+                                        if (new_target != NULL) {
+                                            memcpy(new_target, dst_alias->target_type_id, prefix_len2);
+                                            memcpy(new_target + prefix_len2, concrete, concrete_len);
+                                            memcpy(new_target + prefix_len2 + concrete_len,
+                                                   pos + param_len, suffix_len + 1);
+                                            free(dst_alias->target_type_id);
+                                            dst_alias->target_type_id = new_target;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Also substitute qualified names: if target_type_id refers
+                         * to another nested type of the same generic (e.g., "TFPGList.PT"),
+                         * rewrite to "TFPGList$TMyRecord.PT" */
+                        if (dst_alias->target_type_id != NULL &&
+                            strncmp(dst_alias->target_type_id, generic_name, prefix_len) == 0 &&
+                            dst_alias->target_type_id[prefix_len] == '.') {
+                            const char *inner_suffix = dst_alias->target_type_id + prefix_len;
+                            size_t new_target_len = strlen(specialized_name) + strlen(inner_suffix) + 1;
+                            char *new_target = (char *)malloc(new_target_len);
+                            if (new_target != NULL) {
+                                snprintf(new_target, new_target_len, "%s%s", specialized_name, inner_suffix);
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = new_target;
+                            }
+                        }
+                    }
+
+                    /* If the target_type_id is a mangled generic name like
+                     * "TFPGListEnumerator$TMyRecord", ensure that specialization
+                     * actually exists by triggering instantiation. */
+                    int alias_type_set = 0;
+                    if (clone->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        if (debug_env != NULL && dst_alias->target_type_id != NULL)
+                            fprintf(stderr, "[KGPC] clone alias %s target_type_id=%s\n",
+                                clone->tree_data.type_decl_data.id, dst_alias->target_type_id);
+                        if (dst_alias->target_type_id != NULL) {
+                            char *dollar = strchr(dst_alias->target_type_id, '$');
+                            if (dollar != NULL) {
+                                /* Extract base name and type args from mangled name */
+                                size_t base_len = dollar - dst_alias->target_type_id;
+                                char *inner_base = strndup(dst_alias->target_type_id, base_len);
+                                GenericTypeDecl *inner_generic = generic_registry_find_decl(inner_base);
+                                if (inner_generic != NULL) {
+                                    /* Build type args from the suffix */
+                                    const char *arg_str = dollar + 1;
+                                    ListNode_t *inner_args = CreateListNode(strdup(arg_str), LIST_STRING);
+                                    char *inner_spec_name = NULL;
+                                    struct RecordType *inner_record =
+                                        instantiate_generic_record(inner_base, inner_args, &inner_spec_name);
+                                    if (inner_record != NULL) {
+                                        /* Set the alias clone's inline_record_type to the
+                                         * specialized record.  The semantic checker will
+                                         * register both the mangled name (inner_record->type_id)
+                                         * and the alias name in the symbol table (see line 7012+
+                                         * in SemCheck.c).  This also enables constructor
+                                         * resolution via record_info. */
+                                        dst_alias->inline_record_type = inner_record;
+                                        dst_alias->base_type = RECORD_TYPE;
+                                        KgpcType *alias_type = create_record_type(inner_record);
+                                        if (inner_record->is_class) {
+                                            KgpcType *ptr = create_pointer_type(alias_type);
+                                            kgpc_type_release(alias_type);
+                                            alias_type = ptr;
+                                        }
+                                        clone->tree_data.type_decl_data.kgpc_type = alias_type;
+                                        alias_type_set = 1;
+                                        if (debug_env != NULL)
+                                            fprintf(stderr, "[KGPC] triggered nested specialization %s\n",
+                                                inner_spec_name);
+                                    }
+                                    if (inner_spec_name != NULL) free(inner_spec_name);
+                                    destroy_list(inner_args);
+                                }
+                                free(inner_base);
+                            }
+                        }
+                    }
+
+                    /* Also handle procedure/function type declarations */
+                    if (!alias_type_set && orig->tree_data.type_decl_data.kgpc_type != NULL) {
+                        clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
+                        kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
+                    }
+
+                    ListNode_t *node = CreateListNode(clone, LIST_TREE);
+                    if (node != NULL) {
+                        node->next = *type_list_out;
+                        *type_list_out = node;
+                    } else {
+                        destroy_tree(clone);
+                    }
+
+                    /* If we triggered a nested specialization via inline_record_type,
+                     * also emit method clones for the inner specialization. */
+                    if (alias_type_set && subprograms_out != NULL)
+                        append_specialized_method_clones(clone, subprograms_out);
+
+                    if (debug_env != NULL)
+                        fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 void resolve_pending_generic_aliases(Tree_t *program_tree)
 {
     PendingGenericAlias *cur = g_pending_generic_aliases;
     g_pending_generic_aliases = NULL;
     ListNode_t **clone_dest = NULL;
+    ListNode_t **type_list = NULL;
     const char *debug_env = getenv("KGPC_DEBUG_TFPG");
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
         clone_dest = &program_tree->tree_data.program_data.subprograms;
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+    }
 
     while (cur != NULL) {
         PendingGenericAlias *next = cur->next;
@@ -3278,6 +3770,16 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
             }
             if (clone_dest != NULL)
                 append_specialized_method_clones(cur->decl, clone_dest);
+
+            /* Clone nested type declarations for this specialization */
+            if (type_list != NULL && specialized_name != NULL && cur->base_name != NULL) {
+                GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
+                if (generic != NULL && generic->nested_type_decls != NULL) {
+                    clone_nested_types_for_specialization(generic, specialized_name,
+                        cur->type_args, type_list, clone_dest);
+                }
+            }
+
             if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
                 cur->base_name != NULL)
             {
@@ -3647,7 +4149,7 @@ static int map_type_name(const char *name, char **type_id_out) {
     if (strcasecmp(name, "extended") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("Extended");
-        return REAL_TYPE;
+        return EXTENDED_TYPE;
     }
     if (strcasecmp(name, "valreal") == 0) {
         if (type_id_out != NULL)
@@ -3659,11 +4161,19 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("shortstring");
         return SHORTSTRING_TYPE;
     }
-    if (strcasecmp(name, "string") == 0 ||
-        strcasecmp(name, "ansistring") == 0 ||
-        strcasecmp(name, "widestring") == 0) {
+    if (strcasecmp(name, "string") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "ansistring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("AnsiString");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "widestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("WideString");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "shortstring") == 0) {
@@ -3737,9 +4247,9 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
 {
     if (base_type_id == NULL)
         return 0;
-    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    /* Real/Single/Double/Extended: helper Self is passed by value. */
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag == REAL_TYPE)
+    if (is_real_family_type(type_tag))
         return 0;
     /* String types are heap-allocated pointers — by value is correct. */
     if (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE ||
@@ -3772,16 +4282,18 @@ static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
         return NULL;
 
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag != REAL_TYPE)
+    if (!is_real_family_type(type_tag))
         return NULL;
 
     struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
     if (alias == NULL)
         return NULL;
 
-    alias->base_type = REAL_TYPE;
+    alias->base_type = type_tag;
     if (pascal_identifier_equals(base_type_id, "Single"))
         alias->storage_size = 4;
+    else if (pascal_identifier_equals(base_type_id, "Extended"))
+        alias->storage_size = 10;
     else
         alias->storage_size = 8;
 
@@ -4068,21 +4580,22 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
             /* Get the type name (first child) */
             ast_t *type_id = type_decl->child;
             if (type_id != NULL && type_id->typ == PASCAL_T_IDENTIFIER && type_id->sym != NULL) {
-                if (strcmp(type_id->sym->name, type_name) == 0) {
+                if (strcasecmp(type_id->sym->name, type_name) == 0) {
                     /* Found the type - now check if it's an enumerated type */
                     ast_t *type_spec_node = type_id->next;
                     
-                    while (type_spec_node != NULL && 
+                    while (type_spec_node != NULL &&
                            type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
-                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE &&
+                           type_spec_node->typ != PASCAL_T_RANGE_TYPE) {
                         type_spec_node = type_spec_node->next;
                     }
-                    
+
                     /* Unwrap TYPE_SPEC if needed */
                     ast_t *spec = type_spec_node;
                     if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
                         spec = spec->child;
-                    
+
                     /* Check if it's an enumerated type */
                     if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
                         /* Count the enum values */
@@ -4093,15 +4606,30 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
                                 count++;
                             literal = literal->next;
                         }
-                        
+
                         if (count > 0) {
                             *out_start = 0;
                             *out_end = count - 1;
+                            enum_registry_add(type_name, 0, count - 1);
                             return 0; /* Success */
                         }
                     }
-                    
-                    /* Found the type but it's not an enum */
+
+                    /* Check if it's a subrange type (e.g., 0..NUM_REGS - 1) */
+                    if (spec != NULL && spec->typ == PASCAL_T_RANGE_TYPE) {
+                        ast_t *lower = spec->child;
+                        ast_t *upper = (lower != NULL) ? lower->next : NULL;
+                        int low_val = 0, high_val = 0;
+                        if (evaluate_const_int_expr(lower, &low_val, 0) == 0 &&
+                            evaluate_const_int_expr(upper, &high_val, 0) == 0) {
+                            *out_start = low_val;
+                            *out_end = high_val;
+                            enum_registry_add(type_name, low_val, high_val);
+                            return 0; /* Success */
+                        }
+                    }
+
+                    /* Found the type but it's not an enum or resolved subrange */
                     return -1;
                 }
             }
@@ -4289,6 +4817,9 @@ static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *t
         return 0;
     if (resolve_enum_type_range_in_section_chain(type_name, g_implementation_section_ast, out_start, out_end) == 0)
         return 0;
+    /* Fallback: check the cross-unit enum registry */
+    if (enum_registry_lookup(type_name, out_start, out_end) == 0)
+        return 0;
     return -1;
 }
 
@@ -4449,9 +4980,9 @@ static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *con
         if (resolve_enum_type_range_with_fallback(range_str, type_section, &enum_start, &enum_end) == 0) {
             info->start = enum_start;
             info->end = enum_end;
-        } else if (id_for_error != NULL) {
-            fprintf(stderr, "ERROR: Could not resolve array index type '%s' for %s.\n",
-                    range_str, id_for_error);
+        } else {
+            /* Defer resolution — store the type name for a post-load fixup pass */
+            info->unresolved_index_type = strdup(range_str);
         }
     }
 
@@ -4585,6 +5116,34 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
         }
         return -1;
     }
+    case PASCAL_T_NOT:
+    {
+        int inner = 0;
+        if (evaluate_const_int_expr(expr->child, &inner, depth + 1) == 0) {
+            *out_value = ~inner;
+            return 0;
+        }
+        return -1;
+    }
+    case PASCAL_T_AND:
+    case PASCAL_T_OR:
+    case PASCAL_T_XOR:
+    {
+        int left = 0, right = 0;
+        if (expr->child == NULL || expr->child->next == NULL)
+            return -1;
+        if (evaluate_const_int_expr(expr->child, &left, depth + 1) != 0)
+            return -1;
+        if (evaluate_const_int_expr(expr->child->next, &right, depth + 1) != 0)
+            return -1;
+        if (expr->typ == PASCAL_T_AND)
+            *out_value = left & right;
+        else if (expr->typ == PASCAL_T_OR)
+            *out_value = left | right;
+        else
+            *out_value = left ^ right;
+        return 0;
+    }
     default:
         return -1;
     }
@@ -4709,6 +5268,57 @@ static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_val
     return 0;
 }
 
+/* Resolve SizeOf(typename) to a compile-time constant for known types.
+   Returns the size in bytes on x86_64, or -1 if the type is unknown. */
+static int resolve_sizeof_type(const char *type_name) {
+    if (type_name == NULL)
+        return -1;
+    /* Pointer-sized types (8 bytes on x86_64) */
+    if (strcasecmp(type_name, "Pointer") == 0 ||
+        strcasecmp(type_name, "CodePointer") == 0 ||
+        strcasecmp(type_name, "SizeInt") == 0 ||
+        strcasecmp(type_name, "SizeUInt") == 0 ||
+        strcasecmp(type_name, "PtrInt") == 0 ||
+        strcasecmp(type_name, "PtrUInt") == 0 ||
+        strcasecmp(type_name, "Int64") == 0 ||
+        strcasecmp(type_name, "QWord") == 0 ||
+        strcasecmp(type_name, "NativeInt") == 0 ||
+        strcasecmp(type_name, "NativeUInt") == 0 ||
+        strcasecmp(type_name, "ValSInt") == 0 ||
+        strcasecmp(type_name, "ValUInt") == 0 ||
+        strcasecmp(type_name, "CodePtrInt") == 0 ||
+        strcasecmp(type_name, "CodePtrUInt") == 0)
+        return 8;
+    /* 4-byte types */
+    if (strcasecmp(type_name, "LongInt") == 0 ||
+        strcasecmp(type_name, "LongWord") == 0 ||
+        strcasecmp(type_name, "DWord") == 0 ||
+        strcasecmp(type_name, "Cardinal") == 0 ||
+        strcasecmp(type_name, "Integer") == 0 ||
+        strcasecmp(type_name, "Single") == 0)
+        return 4;
+    /* 2-byte types */
+    if (strcasecmp(type_name, "SmallInt") == 0 ||
+        strcasecmp(type_name, "Word") == 0 ||
+        strcasecmp(type_name, "WideChar") == 0)
+        return 2;
+    /* 1-byte types */
+    if (strcasecmp(type_name, "Byte") == 0 ||
+        strcasecmp(type_name, "ShortInt") == 0 ||
+        strcasecmp(type_name, "Boolean") == 0 ||
+        strcasecmp(type_name, "Char") == 0 ||
+        strcasecmp(type_name, "AnsiChar") == 0)
+        return 1;
+    /* 8-byte float */
+    if (strcasecmp(type_name, "Double") == 0 ||
+        strcasecmp(type_name, "Real") == 0)
+        return 8;
+    /* 10-byte extended (padded to 16 on x86_64 in some ABIs, but SizeOf returns 10) */
+    if (strcasecmp(type_name, "Extended") == 0)
+        return 10;
+    return -1;
+}
+
 static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out_value) {
     const_expr_skip_ws(scanner);
     size_t start = scanner->pos;
@@ -4729,6 +5339,54 @@ static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out
         return -1;
     memcpy(ident, scanner->input + start, len);
     ident[len] = '\0';
+
+    /* Handle SizeOf(typename) as a compile-time builtin */
+    if (strcasecmp(ident, "sizeof") == 0) {
+        free(ident);
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != '(')
+            return -1;
+        scanner->pos++;  /* skip '(' */
+        const_expr_skip_ws(scanner);
+        /* Read the type name argument */
+        size_t arg_start = scanner->pos;
+        while (scanner->input[scanner->pos] != '\0' &&
+               scanner->input[scanner->pos] != ')' &&
+               (isalnum((unsigned char)scanner->input[scanner->pos]) || scanner->input[scanner->pos] == '_'))
+            scanner->pos++;
+        size_t arg_len = scanner->pos - arg_start;
+        if (arg_len == 0)
+            return -1;
+        char *type_name = (char *)malloc(arg_len + 1);
+        if (type_name == NULL)
+            return -1;
+        memcpy(type_name, scanner->input + arg_start, arg_len);
+        type_name[arg_len] = '\0';
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != ')') {
+            free(type_name);
+            return -1;
+        }
+        scanner->pos++;  /* skip ')' */
+        int size = resolve_sizeof_type(type_name);
+        free(type_name);
+        if (size < 0)
+            return -1;
+        *out_value = size;
+        return 0;
+    }
+
+    /* Handle boolean literals */
+    if (strcasecmp(ident, "false") == 0) {
+        free(ident);
+        *out_value = 0;
+        return 0;
+    }
+    if (strcasecmp(ident, "true") == 0) {
+        free(ident);
+        *out_value = 1;
+        return 0;
+    }
 
     int val = resolve_const_int_from_ast(ident, scanner->const_section, INT_MIN);
     free(ident);
@@ -4760,6 +5418,13 @@ static int const_expr_parse_unary(ConstExprScanner *scanner, long long *out_valu
         if (const_expr_parse_unary(scanner, &inner) != 0)
             return -1;
         *out_value = -inner;
+        return 0;
+    }
+    if (const_expr_match_keyword(scanner, "not")) {
+        long long inner = 0;
+        if (const_expr_parse_unary(scanner, &inner) != 0)
+            return -1;
+        *out_value = ~inner;
         return 0;
     }
     return const_expr_parse_primary(scanner, out_value);
@@ -4854,7 +5519,37 @@ static int const_expr_parse_add(ConstExprScanner *scanner, long long *out_value)
 }
 
 static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out_value) {
-    return const_expr_parse_add(scanner, out_value);
+    long long lhs = 0;
+    if (const_expr_parse_add(scanner, &lhs) != 0)
+        return -1;
+
+    while (1) {
+        if (const_expr_match_keyword(scanner, "and")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs & rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "or")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs | rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "xor")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs ^ rhs;
+            continue;
+        }
+        break;
+    }
+
+    *out_value = lhs;
+    return 0;
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
@@ -5426,6 +6121,23 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             destroy_expr(upper_expr);
         }
 
+        /* Fallback: try evaluating bounds from the AST using const int registry
+         * (handles cases like 0..NUM_REGS - 1 where NUM_REGS is a named constant) */
+        if (!have_start) {
+            int val = 0;
+            if (evaluate_const_int_expr(spec_node->child, &val, 0) == 0) {
+                start_value = val;
+                have_start = 1;
+            }
+        }
+        if (!have_end && spec_node->child != NULL) {
+            int val = 0;
+            if (evaluate_const_int_expr(spec_node->child->next, &val, 0) == 0) {
+                end_value = val;
+                have_end = 1;
+            }
+        }
+
         if (type_info != NULL) {
             type_info->is_range = 1;
             type_info->range_start = start_value;
@@ -5726,7 +6438,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         if (type_info != NULL) {
             type_info->is_file = 1;
             ast_t *elem = spec_node->child;
-            while (elem != NULL && elem->typ == PASCAL_T_NONE)
+            while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
                 elem = elem->child;
             if (elem != NULL && elem->typ == PASCAL_T_IDENTIFIER) {
                 char *dup = dup_symbol(elem);
@@ -5934,10 +6646,12 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         
         if (type_tag != UNKNOWN_TYPE) {
             KgpcType *type = create_primitive_type(type_tag);
-            /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
+            /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
             if (type != NULL && preserved_type_id != NULL &&
-                (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
-                 strcasecmp(preserved_type_id, "UnicodeString") == 0)) {
+                (strcasecmp(preserved_type_id, "AnsiString") == 0 ||
+                 strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0 ||
+                 strcasecmp(preserved_type_id, "WideString") == 0)) {
                 /* Create a TypeAlias to preserve the original type name */
                 struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
                 if (alias != NULL) {
@@ -6034,7 +6748,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
     /* Handle file types */
     if (spec_node->typ == PASCAL_T_FILE_TYPE) {
         ast_t *elem = spec_node->child;
-        while (elem != NULL && elem->typ == PASCAL_T_NONE)
+        while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
             elem = elem->child;
 
         if (elem == NULL) {
@@ -6449,6 +7163,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
+            /* string[N] fields are shortstrings (array[0..N] of Char with length byte) */
+            if (field_desc->type == UNKNOWN_TYPE && field_info.is_shortstring)
+                field_desc->type = SHORTSTRING_TYPE;
             field_desc->type_id = type_id_copy;
             field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
@@ -7024,6 +7741,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
+    template->source_offset = g_source_offset;
     return template;
 }
 
@@ -7344,6 +8062,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
     record->is_interface = 0;
+    record->is_packed = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -7355,6 +8074,8 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->num_generic_args = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
@@ -7516,6 +8237,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->methods = NULL;
     record->is_class = 0;
     record->is_interface = 1;
+    record->is_packed = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -7528,6 +8250,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->is_generic_specialization = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
@@ -8031,6 +8754,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->method_templates = NULL;
         record->is_class = 0;
         record->is_interface = 0;
+        record->is_packed = 0;
         record->is_type_helper = 1;
         record->helper_base_type_id = NULL;
         record->helper_parent_id = NULL;
@@ -8190,6 +8914,10 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->method_templates = list_builder_finish(&method_template_builder);
     record->is_class = 0;
     record->is_interface = 0;
+    record->is_packed = (record_node->sym != NULL &&
+        record_node->sym->name != NULL &&
+        (strcasecmp(record_node->sym->name, "packed") == 0 ||
+         strcasecmp(record_node->sym->name, "bitpacked") == 0));
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -8201,6 +8929,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->num_generic_args = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->record_properties = list_builder_finish(&property_builder);
@@ -8744,6 +9474,16 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         if (decl != NULL)
             decl->tree_data.arr_decl_data.type_ref =
                 type_ref_from_element_info(&type_info, element_type_id);
+        if (decl != NULL && type_info.unresolved_index_type != NULL) {
+            decl->tree_data.arr_decl_data.unresolved_index_type = type_info.unresolved_index_type;
+            type_info.unresolved_index_type = NULL;  /* ownership transferred */
+        }
+        /* Transfer array_dimensions for multi-dim linearization */
+        if (decl != NULL && type_info.array_dimensions != NULL &&
+            type_info.array_dimensions->next != NULL) {
+            decl->tree_data.arr_decl_data.array_dimensions = type_info.array_dimensions;
+            type_info.array_dimensions = NULL;
+        }
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         if (type_id != NULL)
@@ -9035,18 +9775,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
      * We support 2D and 3D arrays (one or two levels of nesting). */
     int is_multidim = (type_info->array_dimensions != NULL && type_info->array_dimensions->next != NULL);
     int is_3d = 0;
+    int is_4d = 0;
     int multidim_inner_start = 0, multidim_inner_end = -1;
     int multidim_infer_bounds = 0;  /* Set to 1 if we need to infer bounds from initializer */
     int dim3_start = 0, dim3_end = -1;
     int dim3_infer_bounds = 0;
+    int dim4_start = 0, dim4_end = -1;
+    int dim4_infer_bounds = 0;
     if (is_multidim) {
         /* Check for 3 dimensions */
         if (type_info->array_dimensions->next->next != NULL) {
             is_3d = 1;
-            /* Check for more than 3 dimensions - not yet supported */
+            /* Check for 4 dimensions */
             if (type_info->array_dimensions->next->next->next != NULL) {
-                fprintf(stderr, "ERROR: Unsupported 4+ dimensional const array %s.\n", *id_ptr);
-                return -1;
+                is_4d = 1;
+                /* Check for more than 4 dimensions - not yet supported */
+                if (type_info->array_dimensions->next->next->next->next != NULL) {
+                    fprintf(stderr, "ERROR: Unsupported 5+ dimensional const array %s.\n", *id_ptr);
+                    return -1;
+                }
             }
             /* Extract 2nd dimension bounds */
             const char *dim2_range = (const char *)type_info->array_dimensions->next->cur;
@@ -9056,8 +9803,23 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
+                        if (multidim_inner_start == 0 && multidim_inner_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    multidim_inner_start = s;
+                                    multidim_inner_end = e;
+                                } else {
+                                    multidim_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         multidim_infer_bounds = 1;
                     }
@@ -9072,12 +9834,60 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        dim3_start = atoi(range_copy);
-                        dim3_end = atoi(dotdot + 2);
+                        dim3_start = parse_range_bound(range_copy);
+                        dim3_end = parse_range_bound(dotdot + 2);
+                        if (dim3_start == 0 && dim3_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    dim3_start = s;
+                                    dim3_end = e;
+                                } else {
+                                    dim3_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         dim3_infer_bounds = 1;
                     }
                     free(range_copy);
+                }
+            }
+            /* Extract 4th dimension bounds */
+            if (is_4d) {
+                const char *dim4_range = (const char *)type_info->array_dimensions->next->next->next->cur;
+                if (dim4_range != NULL) {
+                    char *range_copy = strdup(dim4_range);
+                    if (range_copy != NULL) {
+                        char *dotdot = strstr(range_copy, "..");
+                        if (dotdot != NULL) {
+                            *dotdot = '\0';
+                            dim4_start = parse_range_bound(range_copy);
+                            dim4_end = parse_range_bound(dotdot + 2);
+                            if (dim4_start == 0 && dim4_end == 0) {
+                                int has_alpha = 0;
+                                for (const char *p = range_copy; *p; ++p)
+                                    if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                                if (has_alpha) {
+                                    int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                    int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                    if (s >= 0 && e >= 0) {
+                                        dim4_start = s;
+                                        dim4_end = e;
+                                    } else {
+                                        dim4_infer_bounds = 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            dim4_infer_bounds = 1;
+                        }
+                        free(range_copy);
+                    }
                 }
             }
         } else {
@@ -9090,8 +9900,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
+                        /* Enum subrange like OS_F32..OS_F128 parses as 0..0;
+                         * try resolving enum ordinals first */
+                        if (multidim_inner_start == 0 && multidim_inner_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    multidim_inner_start = s;
+                                    multidim_inner_end = e;
+                                } else {
+                                    multidim_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         /* Enum type - need to infer bounds from initializer */
                         multidim_infer_bounds = 1;
@@ -9103,8 +9930,40 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (type_info->is_open_array) {
-        fprintf(stderr, "ERROR: Open array typed const %s is not supported.\n", *id_ptr);
-        return -1;
+        /* Open array typed constants: count initializer elements and convert
+         * to a static array[0..N-1].  This matches FPC behaviour where
+         * "const V: array of Integer = (1,2,3)" is laid out as a fixed-size
+         * array whose bounds are inferred from the initializer. */
+        ast_t *open_tuple = value_node;
+        if (open_tuple != NULL) {
+            ast_t *uw = unwrap_pascal_node(open_tuple);
+            if (uw != NULL &&
+                (uw->typ == PASCAL_T_TYPE_SPEC ||
+                 uw->typ == PASCAL_T_ARRAY_TYPE ||
+                 uw->typ == PASCAL_T_RECORD_TYPE ||
+                 uw->typ == PASCAL_T_POINTER_TYPE ||
+                 uw->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 uw->typ == PASCAL_T_FUNCTION_TYPE) &&
+                uw->next != NULL) {
+                open_tuple = unwrap_pascal_node(uw->next);
+            } else {
+                open_tuple = uw;
+            }
+        }
+        if (open_tuple == NULL || open_tuple->typ != PASCAL_T_TUPLE) {
+            fprintf(stderr, "ERROR: Open array typed const %s must have a tuple initializer.\n", *id_ptr);
+            return -1;
+        }
+        int elem_count = 0;
+        for (ast_t *e = open_tuple->child; e != NULL; e = e->next)
+            ++elem_count;
+        if (elem_count == 0) {
+            fprintf(stderr, "ERROR: Open array typed const %s has no elements.\n", *id_ptr);
+            return -1;
+        }
+        type_info->start = 0;
+        type_info->end = elem_count - 1;
+        type_info->is_open_array = 0;
     }
 
     ast_t *tuple_node = value_node;
@@ -9241,9 +10100,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
     }
 
-    /* For 2D/3D arrays (array[a..b, c..d] or array[a..b, c..d, e..f]), treat as nested arrays */
+    /* For 2D/3D/4D arrays (array[a..b, c..d, ...]), treat as nested arrays */
     int element_is_2d_array = 0;  /* For 3D arrays, elements are 2D arrays */
+    int element_is_3d_array = 0;  /* For 4D arrays, elements are 3D arrays */
     TypeInfo element_2d_inner_info = {0};
+    TypeInfo element_3d_inner_info = {0};
     if (is_multidim && !element_is_array) {
         element_is_array = 1;
         element_array_info.is_array = 1;
@@ -9261,6 +10122,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             element_2d_inner_info.element_type = type_info->element_type;
             element_2d_inner_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
         }
+
+        /* For 4D arrays, elements of element_2d_inner are themselves arrays */
+        if (is_4d) {
+            element_is_3d_array = 1;
+            element_3d_inner_info.is_array = 1;
+            element_3d_inner_info.start = dim4_start;
+            element_3d_inner_info.end = dim4_end;
+            element_3d_inner_info.element_type = type_info->element_type;
+            element_3d_inner_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
+        }
+
+        /* No need to flatten — array_dimensions will be preserved for linearization */
 
         /* For enum-indexed arrays, infer inner dimension from first row of initializer */
         if (multidim_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
@@ -9291,6 +10164,32 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                                 ++innermost_count;
                             element_2d_inner_info.start = 0;
                             element_2d_inner_info.end = innermost_count - 1;
+                        }
+                    }
+                }
+            }
+        }
+        /* For 4D arrays with enum-indexed 4th dimension, infer from first element */
+        if (is_4d && dim4_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
+            ast_t *first_row = tuple_node->child;
+            if (first_row != NULL) {
+                ast_t *first_row_unwrapped = unwrap_pascal_node(first_row);
+                if (first_row_unwrapped != NULL && first_row_unwrapped->typ == PASCAL_T_TUPLE) {
+                    ast_t *first_inner = first_row_unwrapped->child;
+                    if (first_inner != NULL) {
+                        ast_t *first_inner_unwrapped = unwrap_pascal_node(first_inner);
+                        if (first_inner_unwrapped != NULL && first_inner_unwrapped->typ == PASCAL_T_TUPLE) {
+                            ast_t *first_inner2 = first_inner_unwrapped->child;
+                            if (first_inner2 != NULL) {
+                                ast_t *first_inner2_unwrapped = unwrap_pascal_node(first_inner2);
+                                if (first_inner2_unwrapped != NULL && first_inner2_unwrapped->typ == PASCAL_T_TUPLE) {
+                                    int innermost_count = 0;
+                                    for (ast_t *elem = first_inner2_unwrapped->child; elem != NULL; elem = elem->next)
+                                        ++innermost_count;
+                                    element_3d_inner_info.start = 0;
+                                    element_3d_inner_info.end = innermost_count - 1;
+                                }
+                            }
                         }
                     }
                 }
@@ -9381,6 +10280,60 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         int innermost_index = element_2d_inner_info.start;
                         for (ast_t *innermost = inner_unwrapped->child; innermost != NULL; innermost = innermost->next) {
                             ast_t *innermost_unwrapped = unwrap_pascal_node(innermost);
+
+                            /* For 4D arrays, handle the 4th dimension */
+                            if (element_is_3d_array) {
+                                if (innermost_unwrapped == NULL || innermost_unwrapped->typ != PASCAL_T_TUPLE) {
+                                    fprintf(stderr, "ERROR: Const 4D array %s expects tuple for element [%d][%d][%d].\n",
+                                            *id_ptr, index, inner_index, innermost_index);
+                                    destroy_list(stmt_builder.head);
+                                    destroy_type_info_contents(&element_array_info);
+                                    destroy_type_info_contents(&element_2d_inner_info);
+                                    destroy_type_info_contents(&element_3d_inner_info);
+                                    return -1;
+                                }
+
+                                int dim4_index = element_3d_inner_info.start;
+                                for (ast_t *dim4_elem = innermost_unwrapped->child; dim4_elem != NULL; dim4_elem = dim4_elem->next) {
+                                    ast_t *dim4_unwrapped = unwrap_pascal_node(dim4_elem);
+                                    struct Expression *rhs = convert_expression(dim4_unwrapped);
+                                    if (rhs == NULL) {
+                                        fprintf(stderr, "ERROR: Unsupported const array element in %s[%d][%d][%d][%d].\n",
+                                                *id_ptr, index, inner_index, innermost_index, dim4_index);
+                                        destroy_list(stmt_builder.head);
+                                        destroy_type_info_contents(&element_array_info);
+                                        destroy_type_info_contents(&element_2d_inner_info);
+                                        destroy_type_info_contents(&element_3d_inner_info);
+                                        return -1;
+                                    }
+
+                                    struct Expression *outer_index_expr = mk_inum(element->line, index);
+                                    struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                                    struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
+                                    struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
+                                    struct Expression *dim4_index_expr = mk_inum(element->line, dim4_index);
+                                    struct Expression *lhs;
+                                    if (type_info->array_dimensions != NULL) {
+                                        /* True multi-dim: arr[d1, d2, d3, d4] */
+                                        lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                        ListNode_t *extra3 = CreateListNode(dim4_index_expr, LIST_EXPR);
+                                        ListNode_t *extra2 = CreateListNode(innermost_index_expr, LIST_EXPR);
+                                        ListNode_t *extra1 = CreateListNode(inner_index_expr, LIST_EXPR);
+                                        extra1->next = extra2;
+                                        extra2->next = extra3;
+                                        lhs->expr_data.array_access_data.extra_indices = extra1;
+                                    } else {
+                                        /* Array-of-array-of-array-of-array: arr[d1][d2][d3][d4] */
+                                        struct Expression *a1 = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                        struct Expression *a2 = mk_arrayaccess(element->line, a1, inner_index_expr);
+                                        struct Expression *a3 = mk_arrayaccess(element->line, a2, innermost_index_expr);
+                                        lhs = mk_arrayaccess(element->line, a3, dim4_index_expr);
+                                    }
+                                    struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
+                                    list_builder_append(&stmt_builder, assign, LIST_STMT);
+                                    ++dim4_index;
+                                }
+                            } else {
                             struct Expression *rhs = convert_expression(innermost_unwrapped);
                             if (rhs == NULL) {
                                 fprintf(stderr, "ERROR: Unsupported const array element in %s[%d][%d][%d].\n",
@@ -9393,13 +10346,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
                             struct Expression *outer_index_expr = mk_inum(element->line, index);
                             struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                            struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
                             struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                            struct Expression *middle_access = mk_arrayaccess(element->line, outer_access, inner_index_expr);
                             struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
-                            struct Expression *lhs = mk_arrayaccess(element->line, middle_access, innermost_index_expr);
+                            struct Expression *lhs;
+                            if (type_info->array_dimensions != NULL) {
+                                /* True multi-dim: arr[outer, inner, innermost] */
+                                lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                ListNode_t *extra2 = CreateListNode(innermost_index_expr, LIST_EXPR);
+                                ListNode_t *extra1 = CreateListNode(inner_index_expr, LIST_EXPR);
+                                extra1->next = extra2;
+                                lhs->expr_data.array_access_data.extra_indices = extra1;
+                            } else {
+                                /* Array-of-array-of-array: arr[outer][inner][innermost] */
+                                struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                struct Expression *middle_access = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                                lhs = mk_arrayaccess(element->line, middle_access, innermost_index_expr);
+                            }
                             struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
                             list_builder_append(&stmt_builder, assign, LIST_STMT);
+                            }
                             ++innermost_index;
                         }
                     } else {
@@ -9413,9 +10378,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
                         struct Expression *outer_index_expr = mk_inum(element->line, index);
                         struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                        struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                        struct Expression *lhs;
                         struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                        struct Expression *lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                        if (type_info->array_dimensions != NULL) {
+                            /* True multi-dim: arr[outer, inner] */
+                            lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                            lhs->expr_data.array_access_data.extra_indices =
+                                CreateListNode(inner_index_expr, LIST_EXPR);
+                        } else {
+                            /* Array-of-array: arr[outer][inner] */
+                            struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                            lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                        }
                         struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
                         list_builder_append(&stmt_builder, assign, LIST_STMT);
                     }
@@ -9504,6 +10478,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
     destroy_type_info_contents(&element_array_info);
     destroy_type_info_contents(&element_2d_inner_info);
+    destroy_type_info_contents(&element_3d_inner_info);
 
     ListNode_t *assignments = list_builder_finish(&stmt_builder);
     struct Statement *initializer = NULL;
@@ -9530,11 +10505,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
     type_info->element_type_id = NULL;
 
-    if (type_info->array_dimensions != NULL) {
-        destroy_list(type_info->array_dimensions);
+    /* Transfer array_dimensions to declaration for multi-dim linearization.
+     * Only when 2+ dimensions — single-dim doesn't need linearization. */
+    if (type_info->array_dimensions != NULL &&
+        type_info->array_dimensions->next != NULL) {
+        array_decl->tree_data.arr_decl_data.array_dimensions = type_info->array_dimensions;
         type_info->array_dimensions = NULL;
     }
 
+    if (type_info->unresolved_index_type != NULL) {
+        array_decl->tree_data.arr_decl_data.unresolved_index_type = type_info->unresolved_index_type;
+        type_info->unresolved_index_type = NULL;
+    }
     array_decl->tree_data.arr_decl_data.is_typed_const = 1;
     array_decl->tree_data.arr_decl_data.has_static_storage = 1;
 
@@ -10561,6 +11543,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    ListNode_t *generic_nested_types = NULL;
     if (type_spec_node != NULL) {
         ast_t *spec_body = type_spec_node;
         if (spec_body->typ == PASCAL_T_TYPE_SPEC && spec_body->child != NULL)
@@ -10568,9 +11551,28 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         if (spec_body != NULL) {
             if (spec_body->typ == PASCAL_T_CLASS_TYPE)
             {
+                ListNode_t *nested_type_sections = NULL;
                 if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
-                record_template = convert_class_type_ex(id, spec_body, NULL);
+                record_template = convert_class_type_ex(id, spec_body, &nested_type_sections);
+                /* Convert nested type sections into type declarations for later specialization */
+                if (nested_type_sections != NULL) {
+                    ListNode_t *section_cursor = nested_type_sections;
+                    while (section_cursor != NULL) {
+                        ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                        if (type_section_ast != NULL) {
+                            append_type_decls_from_section(type_section_ast, &generic_nested_types,
+                                NULL, NULL, NULL, id);
+                        }
+                        section_cursor = section_cursor->next;
+                    }
+                    /* Clean up section list (not AST nodes) */
+                    while (nested_type_sections != NULL) {
+                        ListNode_t *next = nested_type_sections->next;
+                        free(nested_type_sections);
+                        nested_type_sections = next;
+                    }
+                }
             }
             else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
@@ -10598,7 +11600,16 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
-    generic_registry_add_decl(id, param_names, param_count, decl);
+    GenericTypeDecl *generic_decl = generic_registry_add_decl(id, param_names, param_count, decl);
+    if (generic_decl != NULL && generic_nested_types != NULL) {
+        generic_decl->nested_type_decls = generic_nested_types;
+        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
+            int count = 0;
+            ListNode_t *cur = generic_nested_types;
+            while (cur != NULL) { count++; cur = cur->next; }
+            fprintf(stderr, "[KGPC] stored %d nested type decls for generic %s\n", count, id);
+        }
+    }
 
     (void)type_spec_node; /* Placeholder for future template storage */
 
@@ -12494,10 +13505,26 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 destroy_expr(callee);
             return mk_functioncall(expr_node->line, NULL, args);
         }
+        int saw_inherited = 0;
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0) {
+                    saw_inherited = 1;
+                    child = child->next;
+                    /* Now child points to the method name; extract it */
+                    if (child != NULL && child->typ == PASCAL_T_IDENTIFIER) {
+                        id = dup_symbol(child);
+                        child = child->next;
+                    } else if (child != NULL) {
+                        ast_t *unwrapped = unwrap_pascal_node(child);
+                        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_IDENTIFIER) {
+                            id = dup_symbol(unwrapped);
+                            child = child->next;
+                        }
+                    }
+                }
+                else if (name != NULL)
                     id = dup_symbol(child);
             } else if (child->typ == PASCAL_T_TYPECAST &&
                        child->child != NULL &&
@@ -12519,12 +13546,15 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child->child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0)
+                    saw_inherited = 1;
+                else if (name != NULL)
                     id = dup_symbol(child->child);
             }
-            child = child->next;
+            if (!saw_inherited)
+                child = child->next;
         }
-        if (id == NULL) {
+        if (id == NULL && !saw_inherited) {
             for (ast_t *scan = expr_node->child; scan != NULL; scan = scan->next) {
                 ast_t *node = unwrap_pascal_node(scan);
                 if (node == NULL)
@@ -12537,20 +13567,21 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                     const char *name = ast_symbol_name(node);
                     if (name == NULL)
                         continue;
-                    if (strcasecmp(name, "inherited") == 0)
-                        continue;
                     id = strdup(name);
                     break;
                 }
             }
         }
-        if (id == NULL && g_current_method_name != NULL) {
+        if (id == NULL && saw_inherited && g_current_method_name != NULL) {
             /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
         }
         ListNode_t *args = convert_expression_list(child);
-        return mk_functioncall(expr_node->line, id, args);
+        struct Expression *result = mk_functioncall(expr_node->line, id, args);
+        if (saw_inherited && result != NULL)
+            result->expr_data.function_call_data.is_inherited_call = 1;
+        return result;
     }
     case PASCAL_T_ARRAY_ACCESS: {
         ast_t *array_node = expr_node->child;
@@ -13096,41 +14127,137 @@ tuple_cleanup:
         return set_expr_source_index(result, expr_node);
     }
     case PASCAL_T_ADDR:
-        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
-            expr_node != NULL && expr_node->line == 256)
+    {
+        /* Resolve @specialize Type<T>.Method at conversion time while
+         * preprocessed_source still points to the correct unit's buffer.
+         * Once units are merged into the program tree the source indices
+         * become invalid for the main program's buffer, so the semcheck
+         * fallback (which re-parses source text) would fail. */
+        ast_t *child = expr_node->child;
+        if (child != NULL && child->sym != NULL && child->sym->name != NULL &&
+            strcasecmp(child->sym->name, "specialize") == 0 &&
+            preprocessed_source != NULL && preprocessed_length > 0 &&
+            expr_node->index >= 0 && (size_t)expr_node->index < preprocessed_length)
         {
-            ast_t *child = expr_node->child;
-            fprintf(stderr,
-                "[KGPC_DEBUG_SPECIALIZE_CALLS] ADDR line=256 child=%d(%s:%s) child_child=%d(%s)\n",
-                child != NULL ? child->typ : -1,
-                child != NULL ? pascal_tag_to_string(child->typ) : "<null>",
-                (child != NULL && child->sym != NULL && child->sym->name != NULL)
-                    ? child->sym->name : "<null>",
-                (child != NULL && child->child != NULL) ? child->child->typ : -1,
-                (child != NULL && child->child != NULL)
-                    ? pascal_tag_to_string(child->child->typ) : "<null>");
-            for (ast_t *it = expr_node->next; it != NULL; it = it->next)
+            size_t idx = (size_t)expr_node->index;
+            /* Scan forward to find '@' on this line */
+            size_t line_end = idx;
+            while (line_end < preprocessed_length &&
+                   preprocessed_source[line_end] != '\n' &&
+                   preprocessed_source[line_end] != '\r' &&
+                   preprocessed_source[line_end] != ';')
+                line_end++;
+
+            size_t at_pos = idx;
+            for (size_t s = idx; s < line_end; ++s)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR expr.next typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                if (preprocessed_source[s] == '@') { at_pos = s; break; }
             }
-            for (ast_t *it = child != NULL ? child->next : NULL; it != NULL; it = it->next)
+            size_t i = at_pos;
+            if (i < line_end && preprocessed_source[i] == '@')
+                i++;
+            while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                i++;
+            /* Skip optional 'specialize' keyword */
+            const char *kw = "specialize";
+            size_t kw_len = 10;
+            if (i + kw_len <= line_end && strncasecmp(preprocessed_source + i, kw, kw_len) == 0)
             {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   ADDR sibling typ=%d(%s:%s) child=%d(%s)\n",
-                    it->typ,
-                    pascal_tag_to_string(it->typ),
-                    (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
-                    it->child != NULL ? it->child->typ : -1,
-                    it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                i += kw_len;
+                while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                    i++;
+            }
+            /* Parse type name including angle brackets: Type<T> */
+            size_t type_start = i;
+            int angle_depth = 0;
+            while (i < line_end)
+            {
+                char ch = preprocessed_source[i];
+                if (ch == '<') angle_depth++;
+                else if (ch == '>') { if (angle_depth > 0) angle_depth--; }
+                else if (ch == '.' && angle_depth == 0) break;
+                else if (ch == '\n' || ch == ';' || ch == '\r') break;
+                i++;
+            }
+            if (i < line_end && preprocessed_source[i] == '.' && i > type_start)
+            {
+                /* Extract type name */
+                size_t type_len = i - type_start;
+                char *type_raw = (char *)malloc(type_len + 1);
+                if (type_raw != NULL)
+                {
+                    memcpy(type_raw, preprocessed_source + type_start, type_len);
+                    type_raw[type_len] = '\0';
+                    i++; /* skip '.' */
+                    /* Parse method name */
+                    size_t method_start = i;
+                    while (i < line_end && (isalnum((unsigned char)preprocessed_source[i]) || preprocessed_source[i] == '_'))
+                        i++;
+                    if (i > method_start)
+                    {
+                        size_t method_len = i - method_start;
+                        char *method_id = (char *)malloc(method_len + 1);
+                        if (method_id != NULL)
+                        {
+                            memcpy(method_id, preprocessed_source + method_start, method_len);
+                            method_id[method_len] = '\0';
+                            /* Mangle generic type: Type<T> -> Type$T */
+                            char *lt = strchr(type_raw, '<');
+                            char *mangled = NULL;
+                            if (lt != NULL)
+                            {
+                                char *gt = strrchr(type_raw, '>');
+                                if (gt != NULL && gt > lt)
+                                {
+                                    size_t base_len = (size_t)(lt - type_raw);
+                                    char args_buf[256];
+                                    size_t args_len = 0;
+                                    int adepth = 0;
+                                    for (const char *p = lt + 1; p < gt; ++p)
+                                    {
+                                        char ac = *p;
+                                        if (ac == '<') { adepth++; continue; }
+                                        if (ac == '>') { if (adepth > 0) adepth--; continue; }
+                                        if (adepth == 0 && ac == ',') ac = '$';
+                                        if (adepth == 0 && ac == ' ') continue;
+                                        if (args_len + 1 < sizeof(args_buf))
+                                            args_buf[args_len++] = ac;
+                                    }
+                                    args_buf[args_len] = '\0';
+                                    size_t out_len = base_len + 1 + args_len;
+                                    mangled = (char *)malloc(out_len + 1);
+                                    if (mangled != NULL)
+                                        snprintf(mangled, out_len + 1, "%.*s$%s", (int)base_len, type_raw, args_buf);
+                                }
+                            }
+                            if (mangled == NULL)
+                                mangled = strdup(type_raw);
+
+                            if (mangled != NULL)
+                            {
+                                /* Rewrite: @(specialize) -> @(MangledType.Method) */
+                                struct Expression *base_expr = mk_varid(expr_node->line, mangled);
+                                struct Expression *access = mk_recordaccess(expr_node->line, base_expr, method_id);
+                                if (access != NULL)
+                                {
+                                    access->is_specialize_addr_target = 1;
+                                    struct Expression *result = mk_addressof(expr_node->line, access);
+                                    free(type_raw);
+                                    return set_expr_source_index(result, expr_node);
+                                }
+                                /* access creation failed; fall through */
+                                destroy_expr(base_expr);
+                            }
+                            else
+                            {
+                                free(method_id);
+                            }
+                        }
+                    }
+                    free(type_raw);
+                }
             }
         }
-    {
         struct Expression *result = mk_addressof(expr_node->line, convert_expression(expr_node->child));
         return set_expr_source_index(result, expr_node);
     }
@@ -13266,11 +14393,8 @@ tuple_cleanup:
     }
     default: {
         const char *name = tag_name(expr_node->typ);
-        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
+        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.\n",
                 expr_node->typ, name, expr_node->line);
-        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
-            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
-        fprintf(stderr, "\n");
         break;
     }
     }
@@ -13830,7 +14954,10 @@ static struct Expression *convert_member_access_chain(int line,
                     continue;
                 ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
                 if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
                     continue;
+                }
                 if (args_list == NULL) {
                     args_list = new_node;
                     tail = new_node;
@@ -13840,9 +14967,27 @@ static struct Expression *convert_member_access_chain(int line,
                 }
             }
         } else if (cast_value_node != NULL) {
-            struct Expression *arg_expr = convert_expression(cast_value_node);
-            if (arg_expr != NULL)
-                args_list = CreateListNode(arg_expr, LIST_EXPR);
+            /* Convert all argument expressions (siblings linked via ->next).
+             * With sep_by in the parser, multi-argument specialize calls
+             * produce sibling nodes rather than a single expression. */
+            for (ast_t *arg = cast_value_node; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
+                    continue;
+                }
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
         }
 
         args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
@@ -14017,7 +15162,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
     }
     struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
     if (stmt != NULL) {
-        stmt->source_index = assign_node->index;
+        stmt->source_index = assign_node->index + g_source_offset;
     }
     return stmt;
 }
@@ -14098,7 +15243,7 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     ListNode_t *args = convert_expression_list(args_start);
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
-        call->source_index = call_node->index;
+        call->source_index = call_node->index + g_source_offset;
         /* If id starts with __, it's a method call placeholder from convert_method_call_statement.
          * Extract the bare method name and set the structured flag. */
         if (id != NULL && strncmp(id, "__", 2) == 0) {
@@ -14262,6 +15407,14 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         if (label_node != NULL && label_node != ast_nil)
             label = dup_symbol(label_node);
         return mk_goto(stmt_node->line, label);
+    }
+    case PASCAL_T_STATEMENT_LIST: {
+        /* A STATEMENT_LIST appearing as a statement — flatten as compound statement */
+        ast_t *inner = stmt_node->child;
+        if (inner == NULL)
+            return NULL;
+        ListNode_t *stmts = convert_statement_list(inner);
+        return mk_compoundstatement(stmt_node->line, stmts);
     }
     case PASCAL_T_STATEMENT: {
         ast_t *inner = unwrap_pascal_node(stmt_node->child);
@@ -14661,11 +15814,18 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_case(stmt_node->line, selector_expr, list_builder_finish(&branches_builder), else_stmt);
     }
     default: {
+        /* Try to convert unknown tags as expressions (e.g., NOT, AND, OR in const contexts) */
+        struct Expression *expr = convert_expression(stmt_node);
+        if (expr != NULL)
+            return mk_exprstmt(stmt_node->line, stmt_node->col, expr);
+
         const char *name = tag_name(stmt_node->typ);
         fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",
                 stmt_node->typ, name, stmt_node->line);
         if (stmt_node->sym != NULL && stmt_node->sym->name != NULL)
             fprintf(stderr, " (symbol: %s)", stmt_node->sym->name);
+        if (stmt_node->child != NULL)
+            fprintf(stderr, " (child: %s/%d)", tag_name(stmt_node->child->typ), stmt_node->child->line);
         fprintf(stderr, "\n");
         break;
     }
@@ -15035,7 +16195,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL)
-                                tree->source_index = method_node->index;
+                                tree->source_index = method_node->index + g_source_offset;
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.return_type_ref =
                                     return_type_ref != NULL ? type_ref_clone(return_type_ref)
@@ -15090,9 +16250,15 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *ident_nodes[32];  // more than enough for any reasonable nesting depth
     int ident_count = 0;
 
+    ast_t *method_type_param_list = NULL;  /* TYPE_PARAM_LIST after the last IDENTIFIER (method-level generic) */
+    ast_t *pending_type_param_list = NULL;
     for (ast_t *cursor = class_node; cursor != NULL; cursor = cursor->next) {
         if (cursor->typ == PASCAL_T_IDENTIFIER && ident_count < 32) {
             ident_nodes[ident_count++] = cursor;
+            pending_type_param_list = NULL;  /* TYPE_PARAM_LIST before an IDENTIFIER is class-level, reset */
+        }
+        if (cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+            pending_type_param_list = cursor;
         }
         if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
@@ -15100,6 +16266,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                     (cursor->sym && cursor->sym->name) ? cursor->sym->name : "<null>");
         }
     }
+    method_type_param_list = pending_type_param_list;  /* Last TYPE_PARAM_LIST with no IDENTIFIER after it */
 
     if (ident_count < 2)
         return NULL;  // Need at least ClassName and MethodName
@@ -15270,6 +16437,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     list_builder_init(&params_builder);
     char **generic_type_params = NULL;
     int num_generic_type_params = 0;
+    /* Extract method-level generic type params found inside the qualified identifier */
+    if (method_type_param_list != NULL) {
+        num_generic_type_params = extract_generic_type_params(method_type_param_list, &generic_type_params);
+    }
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
@@ -15508,7 +16679,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            nested_subs, body, 0, 0);
     }
     if (tree != NULL)
-        tree->source_index = method_node->index;
+        tree->source_index = method_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -15566,6 +16737,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
             tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
             num_generic_type_params = 0;
         }
@@ -15679,6 +16851,8 @@ static char *map_internproc_to_runtime(const char *fpc_name)
         {"fpc_in_hi_qword",    "hi_qw"},
         /* Integer Abs */
         {"fpc_in_abs_long",    "kgpc_abs_int"},
+        /* Chr intrinsic */
+        {"fpc_in_chr_byte",    "kgpc_chr"},
         {NULL, NULL}
     };
     for (int i = 0; table[i].fpc != NULL; i++) {
@@ -15763,6 +16937,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -15849,6 +17024,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
                         char *mapped = map_internproc_to_runtime(val->sym->name);
                         if (mapped != NULL) {
                             if (external_alias != NULL)
@@ -15867,6 +17046,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
                     }
                 }
                 free(self_sym);
@@ -15911,7 +17093,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
     if (tree != NULL)
-        tree->source_index = proc_node->index;
+        tree->source_index = proc_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -15922,10 +17104,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -16079,6 +17266,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -16162,6 +17350,10 @@ static Tree_t *convert_function(ast_t *func_node) {
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
                         char *mapped = map_internproc_to_runtime(val->sym->name);
                         if (mapped != NULL) {
                             if (external_alias != NULL)
@@ -16180,6 +17372,9 @@ static Tree_t *convert_function(ast_t *func_node) {
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
                     }
                 }
                 free(self_sym);
@@ -16224,7 +17419,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
     if (tree != NULL)
-        tree->source_index = func_node->index;
+        tree->source_index = func_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -16240,10 +17435,15 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -16320,6 +17520,41 @@ static ast_t *find_last_node_by_type(ast_t *node, int target_type) {
     return last;
 }
 
+static void resolve_deferred_arrays_in_list(ListNode_t *decl_list)
+{
+    for (ListNode_t *cur = decl_list; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_TREE) continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_ARR_DECL) continue;
+        if (decl->tree_data.arr_decl_data.unresolved_index_type == NULL) continue;
+
+        const char *type_name = decl->tree_data.arr_decl_data.unresolved_index_type;
+        int start, end;
+        if (enum_registry_lookup(type_name, &start, &end) == 0) {
+            decl->tree_data.arr_decl_data.s_range = start;
+            decl->tree_data.arr_decl_data.e_range = end;
+            free(decl->tree_data.arr_decl_data.unresolved_index_type);
+            decl->tree_data.arr_decl_data.unresolved_index_type = NULL;
+        } else {
+            const char *id = "(unknown)";
+            if (decl->tree_data.arr_decl_data.ids != NULL &&
+                decl->tree_data.arr_decl_data.ids->cur != NULL)
+                id = (const char *)decl->tree_data.arr_decl_data.ids->cur;
+            fprintf(stderr, "ERROR: Could not resolve deferred array index type '%s' for %s.\n",
+                    type_name, id);
+        }
+    }
+}
+
+void from_cparser_resolve_deferred_arrays(Tree_t *program)
+{
+    if (program == NULL) return;
+
+    if (program->type == TREE_PROGRAM_TYPE) {
+        resolve_deferred_arrays_in_list(program->tree_data.program_data.var_declaration);
+    }
+}
+
 void from_cparser_cleanup(void)
 {
     /* Free type helper mappings (strdup'd strings + struct + list nodes) */
@@ -16378,6 +17613,9 @@ void from_cparser_cleanup(void)
     typed_const_counter = 0;
     g_allow_pending_specializations = 0;
     g_frontend_error_count = 0;
+
+    /* Free cross-unit enum registry */
+    enum_registry_free();
 }
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
@@ -16814,6 +18052,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_interface_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &interface_type_decls,
                                 NULL, &interface_const_decls, &interface_var_builder, NULL);
                             break;
@@ -16928,6 +18167,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_implementation_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &implementation_type_decls,
                                 &subprograms, &implementation_const_decls, &implementation_var_builder, NULL);
                             break;

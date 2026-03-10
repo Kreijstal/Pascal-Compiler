@@ -27,6 +27,7 @@ SymTab_t *InitSymTab()
     assert(new_symtab != NULL);
     new_symtab->stack_head = NULL;
     new_symtab->builtins = InitHashTable();
+    new_symtab->unit_context = 0;
 
     return new_symtab;
 }
@@ -241,6 +242,10 @@ int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
 /* Mutating tells whether it's being referenced in an assignment context */
 int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
+    /* When a unit context is active, use unit-aware resolution */
+    if (symtab->unit_context > 0)
+        return FindIdentInUnit(hash_return, symtab, id, symtab->unit_context);
+
     int return_val = 0;
     assert(symtab != NULL);
     assert(id != NULL);
@@ -275,6 +280,42 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     return_val = -1;
 
     return return_val;
+}
+
+int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index)
+{
+    int return_val = 0;
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    ListNode_t *cur;
+    HashNode_t *hash_node;
+
+    /* Walk scopes from innermost to outermost */
+    cur = symtab->stack_head;
+    while (cur != NULL)
+    {
+        hash_node = FindIdentInTableForUnit((HashTable_t *)cur->cur, id, caller_unit_index);
+        if (hash_node != NULL)
+        {
+            *hash_return = hash_node;
+            return return_val;
+        }
+
+        ++return_val;
+        cur = cur->next;
+    }
+
+    /* Then check built-ins */
+    hash_node = FindIdentInTable(symtab->builtins, id);
+    if (hash_node != NULL)
+    {
+        *hash_return = hash_node;
+        return return_val;
+    }
+
+    *hash_return = NULL;
+    return -1;
 }
 
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)

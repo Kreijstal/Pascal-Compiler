@@ -31,12 +31,35 @@
 
 #include "../../identifier_utils.h"
 
+static int codegen_return_storage_size(KgpcType *return_type);
+static int codegen_return_type_id_storage_size(const char *return_type_id);
+static int codegen_float_native_distance(Tree_t *sub);
+static ListNode_t *g_codegen_available_subprograms = NULL;
+
+static int codegen_template_matches_methodinfo(const struct MethodTemplate *tmpl,
+    const struct MethodInfo *method)
+{
+    if (tmpl == NULL || method == NULL || tmpl->name == NULL || method->name == NULL)
+        return 0;
+    if (strcasecmp(method->name, tmpl->name) != 0)
+        return 0;
+
+    int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+    if (wanted_params >= 0 && method->param_count >= 0)
+        return wanted_params == method->param_count;
+    return 1;
+}
+
 int codegen_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
         return UNKNOWN_TYPE;
     if (type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        if (type->info.primitive_type_tag == EXTENDED_TYPE)
+            return REAL_TYPE;
         return type->info.primitive_type_tag;
+    }
     if (kgpc_type_is_array_of_const(type))
         return ARRAY_OF_CONST_TYPE;
     if (kgpc_type_is_array(type) &&
@@ -130,6 +153,88 @@ static void codegen_set_destroy(CodeGenStringSet *set)
     }
 }
 /* ---- End string hash set ---- */
+
+static int codegen_list_contains_string(ListNode_t *list, const char *value)
+{
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next) {
+        if (cur->type == LIST_STRING && cur->cur != NULL &&
+            strcmp((const char *)cur->cur, value) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (sub == NULL || sub->type != TREE_SUBPROGRAM) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        if (sub->tree_data.subprogram_data.statement_list == NULL) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (mangled_id != NULL) {
+            int this_unit = sub->tree_data.subprogram_data.source_unit_index;
+            int has_later_override = 0;
+            int current_dist = codegen_float_native_distance(sub);
+            ListNode_t *later = sub_list->next;
+            while (later != NULL) {
+                if (later->type == LIST_TREE && later->cur != NULL) {
+                    Tree_t *later_sub = (Tree_t *)later->cur;
+                    if (later_sub->type == TREE_SUBPROGRAM &&
+                        later_sub->tree_data.subprogram_data.statement_list != NULL &&
+                        later_sub->tree_data.subprogram_data.mangled_id != NULL &&
+                        later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
+                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0) {
+                        int later_dist = codegen_float_native_distance(later_sub);
+                        if (later_dist <= current_dist) {
+                            has_later_override = 1;
+                            break;
+                        }
+                    }
+                }
+                later = later->next;
+            }
+            if (has_later_override) {
+                sub_list = sub_list->next;
+                continue;
+            }
+        }
+
+        if (mangled_id != NULL &&
+            (strcmp(mangled_id, "arctan2_r_r") == 0 ||
+             strcmp(mangled_id, "tan_r") == 0 ||
+             strcmp(mangled_id, "cotan_r") == 0 ||
+             strcmp(mangled_id, "copysign_r_r") == 0)) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (mangled_id != NULL && !codegen_list_contains_string(g_codegen_available_subprograms, mangled_id)) {
+            ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
+            if (g_codegen_available_subprograms == NULL)
+                g_codegen_available_subprograms = node;
+            else
+                g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+        }
+
+        if (sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_collect_available_subprogram_labels(sub->tree_data.subprogram_data.subprograms);
+
+        sub_list = sub_list->next;
+    }
+}
 
 static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
 {
@@ -243,6 +348,8 @@ static ListNode_t *codegen_emit_tfile_configure(ListNode_t *inst_list,
 static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_t *symtab,
     long long *element_size_out, int *element_hash_tag_out);
 static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *name);
+static void codegen_emit_bss_or_comm(FILE *out, const char *sym, const char *label,
+                                     int size, int alignment, int defined_in_unit);
 
 /* Helper function to check if a node is a record type */
 static inline int node_is_record_type(HashNode_t *node)
@@ -263,6 +370,94 @@ static inline int node_is_file_type(HashNode_t *node)
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
+}
+
+typedef struct EmittedClassSet
+{
+    const char **labels;
+    int count;
+    int capacity;
+} EmittedClassSet;
+
+static int emitted_class_set_contains(const EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 0;
+
+    for (int i = 0; i < set->count; ++i)
+    {
+        if (set->labels[i] != NULL && strcmp(set->labels[i], label) == 0)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int emitted_class_set_add(EmittedClassSet *set, const char *label)
+{
+    if (set == NULL || label == NULL)
+        return 1;
+
+    if (emitted_class_set_contains(set, label))
+        return 0;
+
+    if (set->count == set->capacity)
+    {
+        int new_capacity = (set->capacity > 0) ? set->capacity * 2 : 64;
+        const char **new_labels = (const char **)realloc(set->labels,
+            sizeof(const char *) * (size_t)new_capacity);
+        if (new_labels == NULL)
+            return 1;
+        set->labels = new_labels;
+        set->capacity = new_capacity;
+    }
+
+    set->labels[set->count++] = label;
+    return 0;
+}
+
+static void emitted_class_set_destroy(EmittedClassSet *set)
+{
+    if (set == NULL)
+        return;
+
+    free((void *)set->labels);
+    set->labels = NULL;
+    set->count = 0;
+    set->capacity = 0;
+}
+
+static int codegen_type_decl_suppressed(const Tree_t *decl)
+{
+    return (decl != NULL &&
+        decl->type == TREE_TYPE_DECL &&
+        decl->tree_data.type_decl_data.suppress_codegen);
+}
+
+static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_TYPE_DECL)
+        return NULL;
+
+    KgpcType *kgpc = decl->tree_data.type_decl_data.kgpc_type;
+    if (kgpc != NULL)
+    {
+        if (kgpc->kind == TYPE_KIND_RECORD && kgpc->info.record_info != NULL)
+            return kgpc->info.record_info;
+        if (kgpc->kind == TYPE_KIND_POINTER &&
+            kgpc->info.points_to != NULL &&
+            kgpc->info.points_to->kind == TYPE_KIND_RECORD &&
+            kgpc->info.points_to->info.record_info != NULL)
+            return kgpc->info.points_to->info.record_info;
+    }
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+        return decl->tree_data.type_decl_data.info.record;
+
+    if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        return decl->tree_data.type_decl_data.info.alias.inline_record_type;
+
+    return NULL;
 }
 
 /* Get field offset within a record by field name.
@@ -403,6 +598,9 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
                 case POINTER_TYPE:
                     elem_size = 8;
                     break;
+                case EXTENDED_TYPE:
+                    elem_size = 10;
+                    break;
                 default:
                     elem_size = DOUBLEWORD;
                     break;
@@ -426,6 +624,9 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
         case QWORD_TYPE:
             field_size = 8;
             break;
+        case EXTENDED_TYPE:
+            field_size = 10;
+            break;
         case CHAR_TYPE:
         case BOOL:
         case BYTE_TYPE:
@@ -447,6 +648,18 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
     return field_size;
 }
 
+static int codegen_record_field_alignment(const struct RecordField *field, int field_size)
+{
+    if (field != NULL)
+    {
+        if (field->type == EXTENDED_TYPE)
+            return 16;
+        if (field->type_id != NULL && pascal_identifier_equals(field->type_id, "Extended"))
+            return 16;
+    }
+    return (field_size > 8) ? 16 : ((field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1));
+}
+
 static long long codegen_class_var_storage_size(SymTab_t *symtab, const struct RecordType *record_info,
     int include_all_fields)
 {
@@ -463,7 +676,7 @@ static long long codegen_class_var_storage_size(SymTab_t *symtab, const struct R
             if (field != NULL && (include_all_fields || field->is_class_var == 1))
             {
                 int field_size = codegen_class_var_field_size(symtab, field);
-                int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+                int alignment = codegen_record_field_alignment(field, field_size);
                 current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
                 current_offset += field_size;
             }
@@ -643,7 +856,7 @@ static void codegen_add_class_vars_for_static_method(const char *owner_class,
             }
             
             /* Advance offset with alignment (using standard power-of-two alignment formula) */
-            int alignment = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+            int alignment = codegen_record_field_alignment(field, field_size);
             current_offset = (current_offset + alignment - 1) & ~(alignment - 1);
             current_offset += field_size;
         }
@@ -694,6 +907,11 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 {
     if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
     {
+        if (arg_decl->tree_data.var_decl_data.type == EXTENDED_TYPE)
+            return 16;
+        if (arg_decl->tree_data.var_decl_data.type_id != NULL &&
+            pascal_identifier_equals(arg_decl->tree_data.var_decl_data.type_id, "Extended"))
+            return 16;
         struct TypeAlias *alias = arg_decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->storage_size > 0)
             return (int)alias->storage_size;
@@ -701,6 +919,16 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 
     if (resolved_type_node != NULL && resolved_type_node->type != NULL)
     {
+        if (kgpc_type_is_extended(resolved_type_node->type))
+            return 16;
+        if (kgpc_type_is_real(resolved_type_node->type))
+        {
+            long long real_size = kgpc_type_real_storage_size(resolved_type_node->type);
+            if (real_size > 8)
+                return 16;
+            if (real_size > 0)
+                return (int)real_size;
+        }
         long long size = kgpc_type_sizeof(resolved_type_node->type);
         if (size > 0)
             return (int)size;
@@ -708,6 +936,16 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
 
     if (cached_arg_type != NULL)
     {
+        if (kgpc_type_is_extended(cached_arg_type))
+            return 16;
+        if (kgpc_type_is_real(cached_arg_type))
+        {
+            long long real_size = kgpc_type_real_storage_size(cached_arg_type);
+            if (real_size > 8)
+                return 16;
+            if (real_size > 0)
+                return (int)real_size;
+        }
         long long size = kgpc_type_sizeof(cached_arg_type);
         if (size > 0)
             return (int)size;
@@ -917,7 +1155,7 @@ int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangle
     return 0;
 }
 
-static void codegen_reset_static_link_cache(CodeGenContext *ctx)
+void codegen_reset_static_link_cache(CodeGenContext *ctx)
 {
     if (ctx == NULL)
         return;
@@ -944,6 +1182,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         Tree_t *decl = (Tree_t *)cur->cur;
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (codegen_type_decl_suppressed(decl))
             continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_RECORD)
             continue;
@@ -974,6 +1214,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         Tree_t *decl = (Tree_t *)cur->cur;
         if (decl->type != TREE_TYPE_DECL ||
             decl->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (codegen_type_decl_suppressed(decl))
             continue;
         if (decl->tree_data.type_decl_data.kind != TYPE_DECL_ALIAS)
             continue;
@@ -1562,6 +1804,52 @@ static char *codegen_make_program_var_label(CodeGenContext *ctx, const char *nam
     return strdup(buffer);
 }
 
+/* Emit either a .bss allocation with a bare-name alias (when the variable's
+ * user-facing symbol differs from its internal label, e.g. unit variables)
+ * or a simple .comm directive.  Using .bss instead of .comm is required
+ * because .set cannot target .comm symbols on most assemblers.
+ *
+ *   sym   – the user-facing symbol name (e.g. "MyVar")
+ *   label – the internal storage label (e.g. "__kgpc_program_var_MyVar_1")
+ *   size  – allocation size in bytes
+ *   alignment – required alignment
+ *   defined_in_unit – non-zero when the var comes from a unit (needs alias)
+ */
+static void codegen_emit_bss_or_comm(FILE *out, const char *sym, const char *label,
+                                     int size, int alignment, int defined_in_unit)
+{
+    int need_alias = (label != NULL && sym != NULL &&
+                      defined_in_unit && strcmp(sym, label) != 0);
+
+    if (need_alias) {
+        if (codegen_target_is_windows()) {
+            fprintf(out, "\t.section .bss\n");
+        } else {
+            fprintf(out, "\t.pushsection .bss\n");
+        }
+        if (alignment > 0)
+            fprintf(out, "\t.align\t%d\n", alignment);
+        fprintf(out, ".globl\t%s\n", label);
+        fprintf(out, "%s:\n", label);
+        fprintf(out, "\t.zero\t%d\n", size);
+        fprintf(out, ".globl\t%s\n", sym);
+        fprintf(out, "\t.set\t%s, %s\n", sym, label);
+        if (codegen_target_is_windows()) {
+            fprintf(out, "\t.section .text\n");
+        } else {
+            fprintf(out, "\t.popsection\n");
+        }
+    } else {
+        const char *effective = label != NULL ? label : sym;
+        if (effective == NULL)
+            return;
+        if (alignment > 0)
+            fprintf(out, "\t.comm\t%s,%d,%d\n", effective, size, alignment);
+        else
+            fprintf(out, "\t.comm\t%s,%d\n", effective, size);
+    }
+}
+
 static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char *type_name,
     struct TypeAlias *alias)
 {
@@ -1587,42 +1875,47 @@ static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s\n", typeinfo_label);
     fprintf(ctx->output_file, "%s:\n", typeinfo_label);
-    fprintf(ctx->output_file, "\t.long\t%d\n", count);
-    fprintf(ctx->output_file, "\t.long\t0\n");
 
-    int index = 0;
-    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    /* Emit enum TypeInfo/TTypeData in the layout KGPC's current FPC RTL
+     * TypInfo build expects:
+     *   Kind: Byte = tkEnumeration (3)
+     *   Name: ShortString
+     *   AttributeTable: Pointer = nil
+     *   OrdType: Byte = otULong (5) for default zero-based enums
+     *   MinValue, MaxValue: LongInt
+     *   BaseType: PPTypeInfo (nil)
+     *   NameList: packed shortstrings for each literal, followed by unit/type owner
+     * This keeps KGPC-emitted enum RTTI aligned with the TypInfo offsets
+     * produced by KGPC's own FPC RTL build. */
     {
-        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
-        if (name_len > 0)
-        {
-            char *name_label = (char *)malloc((size_t)name_len + 1);
-            if (name_label != NULL)
-            {
-                snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
-                fprintf(ctx->output_file, "\t.quad\t%s\n", name_label);
-                free(name_label);
-            }
-        }
+        char escaped_type_name[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_type_name, type_name, sizeof(escaped_type_name));
+        fprintf(ctx->output_file, "\t.byte\t3,%zu\n", strlen(type_name));
+        if (type_name[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_type_name);
+        fprintf(ctx->output_file, "\t.quad\t0\n");
+        fprintf(ctx->output_file, "\t.byte\t5\n");
+        fprintf(ctx->output_file, "\t.long\t0,%d\n", count - 1);
+        fprintf(ctx->output_file, "\t.quad\t0\n");
     }
 
-    index = 0;
-    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++index)
+    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next)
     {
         const char *literal = (lit->cur != NULL) ? (const char *)lit->cur : "";
-        int name_len = snprintf(NULL, 0, "__kgpc_enum_%s_name_%d", type_label, index);
-        char *name_label = NULL;
-        if (name_len > 0)
-            name_label = (char *)malloc((size_t)name_len + 1);
         char escaped_literal[CODEGEN_MAX_INST_BUF];
         escape_string(escaped_literal, literal, sizeof(escaped_literal));
-        if (name_label != NULL)
-        {
-            snprintf(name_label, (size_t)name_len + 1, "__kgpc_enum_%s_name_%d", type_label, index);
-            fprintf(ctx->output_file, "%s:\n", name_label);
-            fprintf(ctx->output_file, "\t.string \"%s\"\n", escaped_literal);
-            free(name_label);
-        }
+        fprintf(ctx->output_file, "\t.byte\t%zu\n", strlen(literal));
+        if (literal[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_literal);
+    }
+
+    {
+        char escaped_owner_name[CODEGEN_MAX_INST_BUF];
+        escape_string(escaped_owner_name, type_name, sizeof(escaped_owner_name));
+        fprintf(ctx->output_file, "\t.byte\t%zu\n", strlen(type_name));
+        if (type_name[0] != '\0')
+            fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_owner_name);
+        fprintf(ctx->output_file, "\t.byte\t0\n");
     }
     free(typeinfo_label);
 }
@@ -1892,9 +2185,7 @@ void codegen_function_header_ex_alias(char *func_name, CodeGenContext *ctx, int 
     codegen_function_header_ex_alias_vis(func_name, ctx, nostackframe, cname_override, 0);
 }
 
-/* Emit the function header. When emit_weak is non-zero, emit .weak instead of
- * .globl so that the runtime library can provide strong overrides (e.g. for
- * FPC RTL heap functions that require uninitialised HeapInc). */
+/* Emit the function header.  Always uses .globl for symbol visibility. */
 void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak)
 {
     #ifdef DEBUG_CODEGEN
@@ -1903,7 +2194,10 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
-    const char *vis = emit_weak ? codegen_weak_or_globl() : ".globl";
+    /* All functions use .globl — the compiler produces a single .s file but
+     * the runtime library (.a) needs to call many unit-defined functions. */
+    const char *vis = ".globl";
+    (void)emit_weak;
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
         fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
@@ -1999,6 +2293,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    g_codegen_available_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -2012,6 +2307,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
+    codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
     codegen_vmt(ctx, symtab, tree);
 
     prgm_name = codegen_program(tree, ctx, symtab);
@@ -2023,6 +2319,11 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     {
         DestroyList(ctx->emitted_subprograms);
         ctx->emitted_subprograms = NULL;
+    }
+    if (g_codegen_available_subprograms != NULL)
+    {
+        DestroyList(g_codegen_available_subprograms);
+        g_codegen_available_subprograms = NULL;
     }
 
     free_stackmng();
@@ -2052,6 +2353,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    g_codegen_available_subprograms = NULL;
 
     ctx->symtab = symtab;
 
@@ -2064,6 +2366,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_program_header(input_file_name, ctx);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
+    codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
 
     /* Generate code for unit subprograms */
     codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);
@@ -2186,6 +2489,11 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     {
         DestroyList(ctx->emitted_subprograms);
         ctx->emitted_subprograms = NULL;
+    }
+    if (g_codegen_available_subprograms != NULL)
+    {
+        DestroyList(g_codegen_available_subprograms);
+        g_codegen_available_subprograms = NULL;
     }
 
     free_stackmng();
@@ -2479,28 +2787,18 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
-/* Track emitted class labels to avoid duplicates (e.g., TObject from merged units) */
-#define MAX_EMITTED_CLASSES 256
-
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++) {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0) {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     /* Emit interface entry table if this class implements interfaces */
     int actual_iface_count = 0;
@@ -2551,12 +2849,33 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
+    /* Resolve the canonical label for the parent class (handles case mismatches
+     * e.g. math.pp declares "EInvalidArgument = class(ematherror)" with lowercase,
+     * but EMathError's VMT is emitted with its declaration-case label "EMathError"). */
+    const char *parent_vmt_label = record_info->parent_class_name;
+    if (parent_vmt_label != NULL) {
+        HashNode_t *parent_node = NULL;
+        if (FindIdent(&parent_node, symtab, parent_vmt_label) == 0 && parent_node != NULL) {
+            struct RecordType *parent_rec = get_record_type_from_node(parent_node);
+            /* Only use the resolved type_id if it's actually a class. If FindIdent
+             * resolved to a plain record (e.g. TTimeZone = timezone record alias
+             * instead of TTimeZone = class abstract), keep the original name which
+             * matches the class VMT label. */
+            if (parent_rec != NULL && parent_rec->is_class && parent_rec->type_id != NULL)
+                parent_vmt_label = parent_rec->type_id;
+            else if (parent_rec != NULL && !parent_rec->is_class) {
+                /* Resolved to a non-class record; keep original parent_class_name */
+            } else if (parent_node->id != NULL)
+                parent_vmt_label = parent_node->id;
+        }
+    }
+
     fprintf(ctx->output_file, "\n# RTTI for class %s\n", class_label);
     fprintf(ctx->output_file, "\t.align 8\n");
     fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", class_label);
     fprintf(ctx->output_file, "%s_TYPEINFO:\n", class_label);
     if (record_info->parent_class_name != NULL)
-        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", parent_vmt_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
 
@@ -2577,28 +2896,16 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s:\n\t.string \"%s\"\n", name_label, escaped_label);
     }
 
-    /* Emit class name as a ShortString (length byte + characters) for vClassName.
-     * The compiled FPC ClassName body does PVmt(Self)^.vClassName^ which generates
-     * two dereferences: one to load the PShortString from the VMT field, and one
-     * to dereference the PShortString. Our codegen treats the second ^ as a pointer
-     * load, so vClassName must be a PPShortString (pointer to PShortString). We emit:
-     *   __kgpc_vmt_classname_ptr_X: .quad __kgpc_vmt_classname_X  (PPShortString)
-     *   __kgpc_vmt_classname_X:     .byte len, .ascii "X"         (ShortString data)
-     * The VMT's vClassName slot points to the _ptr_ label. */
+    /* Emit class name as ShortString data for vClassName.
+     * The generated TObject.ClassName body loads the slot once and then treats
+     * the resulting address as a PShortString, so the VMT must point directly to
+     * the ShortString payload rather than an intermediate pointer cell. */
     {
         char classname_ss_label[256];
-        char classname_ptr_label[256];
         char escaped_classname[256];
         snprintf(classname_ss_label, sizeof(classname_ss_label),
             "__kgpc_vmt_classname_%s", class_label);
-        snprintf(classname_ptr_label, sizeof(classname_ptr_label),
-            "__kgpc_vmt_classname_ptr_%s", class_label);
         escape_string(escaped_classname, class_label, sizeof(escaped_classname));
-        /* Emit PShortString pointer (the PPShortString level) */
-        fprintf(ctx->output_file, "\t.align 8\n");
-        fprintf(ctx->output_file, "%s:\n", classname_ptr_label);
-        fprintf(ctx->output_file, "\t.quad\t%s\n", classname_ss_label);
-        /* Emit ShortString data */
         fprintf(ctx->output_file, "%s:\n", classname_ss_label);
         fprintf(ctx->output_file, "\t.byte\t%d\n", (int)strlen(class_label));
         fprintf(ctx->output_file, "\t.ascii\t\"%s\"\n", escaped_classname);
@@ -2608,7 +2915,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (record_info->parent_class_name != NULL) {
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "__kgpc_vmt_parentref_%s:\n", class_label);
-        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", record_info->parent_class_name);
+        fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", parent_vmt_label);
     }
 
     /* Compute instance size for vInstanceSize */
@@ -2644,8 +2951,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_parentref_%s\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
-    /* Slot 3: vClassName (PShortString — actually PPShortString for our codegen) */
-    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_ptr_%s\n", class_label);
+    /* Slot 3: vClassName (PShortString) */
+    fprintf(ctx->output_file, "\t.quad\t__kgpc_vmt_classname_%s\n", class_label);
     /* Slot 4: vDynamicTable */
     fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 5: vMethodTable */
@@ -2666,6 +2973,74 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Slot 11: vMsgStrPtr */
     fprintf(ctx->output_file, "\t.quad\t0\n");
 
+    /* Generic specializations can carry a cloned VMT from semcheck while the
+     * actual specialized methods are only visible here by their emitted
+     * symbols. Refresh matching virtual slots by method name before emitting
+     * the final table so inherited slots point at the specialized overrides. */
+    if (record_info->method_templates != NULL && record_info->methods != NULL &&
+        class_label != NULL) {
+        for (ListNode_t *tmpl_node = record_info->method_templates;
+             tmpl_node != NULL; tmpl_node = tmpl_node->next) {
+            if (tmpl_node->type != LIST_METHOD_TEMPLATE || tmpl_node->cur == NULL)
+                continue;
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_node->cur;
+            if (tmpl->name == NULL || (!tmpl->is_virtual && !tmpl->is_override))
+                continue;
+
+            size_t base_len = strlen(class_label) + 2 + strlen(tmpl->name) + 1;
+            char *base_name = (char *)malloc(base_len);
+            if (base_name == NULL)
+                continue;
+            snprintf(base_name, base_len, "%s__%s", class_label, tmpl->name);
+
+            const char *resolved_id = NULL;
+            int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            const char *fallback_id = NULL;
+            for (ListNode_t *m = matches; m != NULL; m = m->next) {
+                HashNode_t *cand = (HashNode_t *)m->cur;
+                if (cand == NULL || cand->type == NULL ||
+                    cand->type->kind != TYPE_KIND_PROCEDURE ||
+                    cand->type->info.proc_info.definition == NULL)
+                    continue;
+                if (fallback_id == NULL) {
+                    fallback_id = cand->mangled_id;
+                    if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
+                        fallback_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
+                }
+                int count = ListLength(cand->type->info.proc_info.params);
+                if (!tmpl->is_static && count > 0)
+                    count -= 1;
+                if (count != wanted_params)
+                    continue;
+                resolved_id = cand->mangled_id;
+                if (cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id != NULL)
+                    resolved_id = cand->type->info.proc_info.definition->tree_data.subprogram_data.mangled_id;
+                break;
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            free(base_name);
+
+            if (resolved_id == NULL)
+                resolved_id = fallback_id;
+            if (resolved_id == NULL)
+                continue;
+
+            for (ListNode_t *method_node = record_info->methods;
+                 method_node != NULL; method_node = method_node->next) {
+                struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                if (!codegen_template_matches_methodinfo(tmpl, method))
+                    continue;
+                if (method->resolved_mangled_id != NULL &&
+                    method->resolved_mangled_id != method->mangled_name)
+                    free(method->resolved_mangled_id);
+                method->resolved_mangled_id = strdup(resolved_id);
+                break;
+            }
+        }
+    }
+
     /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
     if (record_info->methods != NULL) {
         ListNode_t *method_node = record_info->methods;
@@ -2673,10 +3048,34 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
             if (method != NULL && method->mangled_name != NULL) {
                 const char *full_mangled = method->resolved_mangled_id;
-                if (full_mangled != NULL) {
-                    fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                const char *fallback_mangled = method->mangled_name;
+                const char *slot_label = NULL;
+                if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
+                    codegen_list_contains_string(g_codegen_available_subprograms, full_mangled))
+                    slot_label = full_mangled;
+                if (slot_label == NULL && fallback_mangled != NULL &&
+                    g_codegen_available_subprograms != NULL &&
+                    codegen_list_contains_string(g_codegen_available_subprograms, fallback_mangled))
+                    slot_label = fallback_mangled;
+                if (slot_label != NULL) {
+                    fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
+                } else if (full_mangled != NULL) {
+                    /* Not in available subprograms — check symtab for a real
+                     * implementation (has statement_list).  This handles
+                     * cross-unit methods while keeping abstract methods as
+                     * error handlers. */
+                    HashNode_t *sym = NULL;
+                    int has_impl = 0;
+                    if (FindIdent(&sym, symtab, full_mangled) == 0 && sym != NULL &&
+                        sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
+                        sym->type->info.proc_info.definition != NULL &&
+                        sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                        has_impl = 1;
+                    if (has_impl)
+                        fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+                    else
+                        fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
                 } else {
-                    /* Abstract method or no definition - emit reference to runtime error handler */
                     fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
                 }
             }
@@ -2813,7 +3212,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 
 static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    const char **emitted_classes, int *emitted_count)
+    EmittedClassSet *emitted_classes)
 {
     if (record_info == NULL || record_type_is_class(record_info) || class_label == NULL)
         return;
@@ -2824,20 +3223,11 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     if (!has_class_vars && !has_class_methods)
         return;
 
-    int already_emitted = 0;
-    for (int i = 0; i < *emitted_count; i++)
-    {
-        if (emitted_classes[i] != NULL && strcmp(emitted_classes[i], class_label) == 0)
-        {
-            already_emitted = 1;
-            break;
-        }
-    }
-    if (already_emitted)
+    if (emitted_class_set_contains(emitted_classes, class_label))
         return;
 
-    if (*emitted_count < MAX_EMITTED_CLASSES)
-        emitted_classes[(*emitted_count)++] = class_label;
+    if (emitted_class_set_add(emitted_classes, class_label) != 0)
+        return;
 
     long long class_var_size = codegen_class_var_storage_size(symtab, record_info,
         has_class_vars ? 0 : 1);
@@ -2924,27 +3314,31 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
-    const char *emitted_classes[MAX_EMITTED_CLASSES];
-    int emitted_count = 0;
+    EmittedClassSet emitted_classes = {0};
 
     /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
+            if (codegen_type_decl_suppressed(type_tree))
+            {
+                cur = cur->next;
+                continue;
+            }
             struct RecordType *record_info = NULL;
             const char *class_label = NULL;
             
             /* Check if this is a record/class type with methods */
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                record_info = type_tree->tree_data.type_decl_data.info.record;
+                record_info = codegen_record_from_type_decl(type_tree);
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
                 class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
             }
             /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+                record_info = codegen_record_from_type_decl(type_tree);
                 if (record_info != NULL && record_info->type_id != NULL) {
                     /* Check if this is a specialized generic */
                     if (record_info->is_generic_specialization) {
@@ -2954,9 +3348,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                emitted_classes, &emitted_count);
+                &emitted_classes);
         }
         cur = cur->next;
     }
@@ -2995,9 +3389,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
                         class_label = hash_node->id;
 
                     codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                     codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                        emitted_classes, &emitted_count);
+                        &emitted_classes);
                 }
                 node = node->next;
             }
@@ -3010,18 +3404,13 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
+            !codegen_type_decl_suppressed(type_tree) &&
             type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
             const char *alias_name = type_tree->tree_data.type_decl_data.id;
             const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
             if (alias_name != NULL && target_name != NULL) {
                 /* Check if the target type has been emitted as a class/interface */
-                int target_emitted = 0;
-                for (int i = 0; i < emitted_count; i++) {
-                    if (strcasecmp(emitted_classes[i], target_name) == 0) {
-                        target_emitted = 1;
-                        break;
-                    }
-                }
+                int target_emitted = emitted_class_set_contains(&emitted_classes, target_name);
                 if (target_emitted) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
@@ -3034,6 +3423,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
         cur = cur->next;
     }
 
+    emitted_class_set_destroy(&emitted_classes);
     fprintf(ctx->output_file, ".text\n");
 
     #ifdef DEBUG_CODEGEN
@@ -3480,38 +3870,6 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
-    /* Emit .set aliases from unmangled Pascal id to mangled label for
-       subprograms that have bodies (so inline asm cross-references like
-       `jmp FillXxxx_MoreThanTwoXmms` resolve to the mangled label).
-       Only emit the first alias for each unmangled name to avoid
-       "redefined symbol" assembler errors from overloaded functions. */
-    if (ctx->output_file != NULL) {
-        CodeGenStringSet emitted_names;
-        memset(&emitted_names, 0, sizeof(emitted_names));
-
-        ListNode_t *id_alias_scan = data->subprograms;
-        while (id_alias_scan != NULL) {
-            if (id_alias_scan->type == LIST_TREE && id_alias_scan->cur != NULL) {
-                Tree_t *sub = (Tree_t *)id_alias_scan->cur;
-                if (sub->type == TREE_SUBPROGRAM &&
-                    sub->tree_data.subprogram_data.statement_list != NULL) {
-                    const char *id = sub->tree_data.subprogram_data.id;
-                    const char *mangled = sub->tree_data.subprogram_data.mangled_id;
-                    if (id != NULL && mangled != NULL && strcasecmp(id, mangled) != 0 &&
-                        codegen_set_contains(&emitted_labels, mangled)) {
-                        if (!codegen_set_contains_ci(&emitted_names, id)) {
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), id);
-                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", id, mangled);
-                            codegen_set_insert_ci(&emitted_names, id);
-                        }
-                    }
-                }
-            }
-            id_alias_scan = id_alias_scan->next;
-        }
-        codegen_set_destroy(&emitted_names);
-    }
-
     codegen_set_destroy(&emitted_labels);
     codegen_set_destroy(&emitted_cname_aliases);
 
@@ -3597,27 +3955,39 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
         if (tree->type == TREE_VAR_DECL)
         {
             id_list = tree->tree_data.var_decl_data.ids;
-           HashNode_t *type_node = NULL;
-           if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
-               FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
-           }
+            HashNode_t *type_node = NULL;
+            if (symtab != NULL && tree->tree_data.var_decl_data.type_id != NULL) {
+                FindIdent(&type_node, symtab, tree->tree_data.var_decl_data.type_id);
+            }
+            int decl_type_owned = 0;
+            KgpcType *decl_type = resolve_type_from_vardecl(tree, symtab, &decl_type_owned);
             KgpcType *cached_type = tree->tree_data.var_decl_data.cached_kgpc_type;
 
             while(id_list != NULL)
             {
+                HashNode_t decl_type_node;
                 HashNode_t cached_type_node;
                 HashNode_t *fallback_type_node = NULL;
                 HashNode_t *var_info = NULL;
+                if (decl_type != NULL)
+                {
+                    memset(&decl_type_node, 0, sizeof(decl_type_node));
+                    decl_type_node.type = decl_type;
+                    fallback_type_node = &decl_type_node;
+                }
                 if (cached_type != NULL)
                 {
                     memset(&cached_type_node, 0, sizeof(cached_type_node));
                     cached_type_node.type = cached_type;
-                    fallback_type_node = &cached_type_node;
+                    if (fallback_type_node == NULL)
+                        fallback_type_node = &cached_type_node;
                 }
                 if (symtab != NULL)
                     FindIdent(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
+                if (decl_type != NULL && kgpc_type_is_array(decl_type))
+                    effective_type_node = &decl_type_node;
                 if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
@@ -3709,8 +4079,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && static_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, (int)total_size, alignment);
+                                codegen_emit_bss_or_comm(ctx->output_file,
+                                    (const char *)id_list->cur, static_label,
+                                    (int)total_size, alignment,
+                                    tree->tree_data.var_decl_data.defined_in_unit);
                             }
                             add_static_array((char *)id_list->cur, (int)total_size, element_size,
                                 array_start, static_label);
@@ -3782,8 +4154,10 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && static_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    static_label, (int)total_size, alignment);
+                                codegen_emit_bss_or_comm(ctx->output_file,
+                                    (const char *)id_list->cur, static_label,
+                                    (int)total_size, alignment,
+                                    tree->tree_data.var_decl_data.defined_in_unit);
                             }
                             add_static_array((char *)id_list->cur, (int)total_size,
                                 (int)element_size_ll, start, static_label);
@@ -3928,41 +4302,16 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                 /* No .comm directive needed - the symbol is defined elsewhere */
                             } else {
                                 int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
-                                /* Check whether we need a bare-name alias for inline asm references.
-                                   .set cannot target .comm symbols, so use .bss allocation instead. */
-                                int need_bare_alias = (cname_override == NULL && id_list->cur != NULL &&
-                                                       tree->tree_data.var_decl_data.defined_in_unit &&
-                                                       strcmp((const char *)id_list->cur, static_label) != 0);
-                                if (need_bare_alias) {
-                                    /* Use .bss section with explicit label so .set can reference it.
-                                       .comm symbols can't be the target of .set, so we allocate
-                                       explicitly and switch to .bss then back to .text. */
-                                    if (codegen_target_is_windows()) {
-                                        /* PE/COFF: .pushsection is not supported; use explicit section switches */
-                                        fprintf(ctx->output_file, "\t.section .bss\n");
-                                    } else {
-                                        fprintf(ctx->output_file, "\t.pushsection .bss\n");
-                                    }
-                                    fprintf(ctx->output_file, "\t.align\t%d\n", alignment);
-                                    fprintf(ctx->output_file, ".globl\t%s\n", static_label);
-                                    fprintf(ctx->output_file, "%s:\n", static_label);
-                                    fprintf(ctx->output_file, "\t.zero\t%d\n", alloc_size);
-                                    fprintf(ctx->output_file, ".globl\t%s\n", (const char *)id_list->cur);
-                                    fprintf(ctx->output_file, "\t.set\t%s, %s\n",
-                                        (const char *)id_list->cur, static_label);
-                                    if (codegen_target_is_windows()) {
-                                        fprintf(ctx->output_file, "\t.section .text\n");
-                                    } else {
-                                        fprintf(ctx->output_file, "\t.popsection\n");
-                                    }
-                                } else {
-                                    if (cname_override != NULL) {
-                                        /* Public name: make it globally visible */
-                                        fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
-                                    }
-                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                        static_label, alloc_size, alignment);
+                                /* Only emit a bare-name alias when there is no explicit cname override */
+                                int defined_for_alias = (cname_override == NULL) ?
+                                    tree->tree_data.var_decl_data.defined_in_unit : 0;
+                                if (cname_override != NULL) {
+                                    /* Public name: make it globally visible */
+                                    fprintf(ctx->output_file, "\t.globl\t%s\n", static_label);
                                 }
+                                codegen_emit_bss_or_comm(ctx->output_file,
+                                    (const char *)id_list->cur, static_label,
+                                    alloc_size, alignment, defined_for_alias);
                             }
                         }
                         add_static_var((char *)id_list->cur, alloc_size, static_label);
@@ -4031,6 +4380,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 }
                 id_list = id_list->next;
             };
+
+            if (decl_type_owned && decl_type != NULL)
+                destroy_kgpc_type(decl_type);
         }
         else if (tree->type == TREE_ARR_DECL)
         {
@@ -4147,17 +4499,22 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (total_size <= 0)
                     total_size = element_size;
 
-                /* For multi-dimensional arrays, the variable should have a KgpcType
-                 * with the correct total size. Look up by variable name. */
+                /* For multi-dimensional arrays, kgpc_type_sizeof only accounts
+                 * for the outer dimension.  Use kgpc_type_get_array_dimension_info
+                 * which correctly multiplies all dimension sizes together. */
                 if (id_list != NULL && symtab != NULL) {
                     const char *var_name = (const char *)id_list->cur;
                     HashNode_t *var_node = NULL;
                     int find_result = FindIdent(&var_node, symtab, var_name);
                     if (find_result >= 0 && var_node != NULL && var_node->type != NULL) {
-                        long long kgpc_size = kgpc_type_sizeof(var_node->type);
-                        if (kgpc_size > total_size) {
-                            /* KgpcType gives larger size - this is likely a multi-dimensional array */
-                            total_size = (int)kgpc_size;
+                        KgpcArrayDimensionInfo dim_info;
+                        if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0 &&
+                            dim_info.total_size > total_size) {
+                            total_size = (int)dim_info.total_size;
+                        } else {
+                            long long kgpc_size = kgpc_type_sizeof(var_node->type);
+                            if (kgpc_size > total_size)
+                                total_size = (int)kgpc_size;
                         }
                     }
                 }
@@ -4189,8 +4546,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             if (ctx->output_file != NULL && generated_label != NULL)
                             {
                                 int alignment = total_size >= 8 ? 8 : DOUBLEWORD;
-                                fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
-                                    generated_label, total_size, alignment);
+                                codegen_emit_bss_or_comm(ctx->output_file,
+                                    (const char *)id_list->cur, generated_label,
+                                    total_size, alignment, arr->defined_in_unit);
                             }
                             label_to_use = generated_label;
                         }
@@ -4234,6 +4592,47 @@ ListNode_t *codegen_vect_reg(ListNode_t *inst_list, int num_vec)
     return add_inst(inst_list, buffer);
 }
 
+/* Returns the distance between the total declared size of value (non-var) float
+ * parameters and KGPC's native float size (8 bytes per param).  A distance of 0
+ * means all value float params are Double/Real (8 bytes) — the KGPC-native size.
+ * Used by has_later_override to prefer Double sincos over Single or Extended. */
+static int codegen_float_native_distance(Tree_t *sub)
+{
+    int n_value = 0;
+    int total_declared = 0;
+    ListNode_t *p = sub->tree_data.subprogram_data.args_var;
+    while (p != NULL)
+    {
+        Tree_t *decl = (Tree_t *)p->cur;
+        if (decl != NULL && decl->type == TREE_VAR_DECL)
+        {
+            int is_var = decl->tree_data.var_decl_data.is_var_param;
+            if (!is_var)
+            {
+                n_value++;
+                const char *tid = decl->tree_data.var_decl_data.type_id;
+                int sz = 8; /* default: double/real/float → 8 bytes (KGPC native) */
+                if (tid != NULL)
+                {
+                    if (pascal_identifier_equals(tid, "single"))
+                        sz = 4;
+                    else if (pascal_identifier_equals(tid, "extended") ||
+                             pascal_identifier_equals(tid, "extended80"))
+                        sz = 16;
+                    /* double, real, float, currency, longreal → sz stays 8 */
+                }
+                total_declared += sz;
+            }
+        }
+        p = p->next;
+    }
+    if (n_value == 0)
+        return 0; /* no value params: distance 0 (use original later-wins rule) */
+    int native = n_value * 8;
+    int dist = total_declared - native;
+    return dist < 0 ? -dist : dist;
+}
+
 /* Codegen for a list of subprograms */
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -4250,7 +4649,6 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         sub = (Tree_t *)sub_list->cur;
         assert(sub != NULL);
         assert(sub->type == TREE_SUBPROGRAM);
-
 
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
@@ -4291,6 +4689,11 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         {
             int this_unit = sub->tree_data.subprogram_data.source_unit_index;
             int has_later_override = 0;
+            /* For float overloads (e.g. sincos Single/Double/Extended), prefer the
+             * one whose value param sizes are closest to KGPC's native 8-byte float.
+             * Only skip the current if a later same-unit same-mangled body has a
+             * distance to native that is ≤ the current one's distance. */
+            int current_dist = codegen_float_native_distance(sub);
             ListNode_t *later = sub_list->next;
             while (later != NULL)
             {
@@ -4303,8 +4706,16 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                         later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
                         strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
                     {
-                        has_later_override = 1;
-                        break;
+                        int later_dist = codegen_float_native_distance(later_sub);
+                        if (later_dist <= current_dist)
+                        {
+                            has_later_override = 1;
+                            break;
+                        }
+                        /* later_dist > current_dist: the later body is farther from
+                         * KGPC's native float size (e.g. Single at dist=4 vs Double
+                         * at dist=0).  Don't let it override the current better one;
+                         * continue scanning for a yet-better later body. */
                     }
                 }
                 later = later->next;
@@ -4314,6 +4725,22 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub_list = sub_list->next;
                 continue;
             }
+        }
+
+        /* Skip FPC RTL functions that use the Extended stack ABI (nostackframe)
+         * which is incompatible with KGPC's xmm-register calling convention.
+         * The generated .s would emit a .weak definition that wins over the
+         * strong override in runtime_fpc_rtl_compat.S.  By skipping the body
+         * here, the symbol remains an external reference that the linker
+         * resolves from the runtime library (correct xmm convention). */
+        if (mangled_id != NULL &&
+            (strcmp(mangled_id, "arctan2_r_r")  == 0 ||
+             strcmp(mangled_id, "tan_r")         == 0 ||
+             strcmp(mangled_id, "cotan_r")       == 0 ||
+             strcmp(mangled_id, "copysign_r_r")  == 0))
+        {
+            sub_list = sub_list->next;
+            continue;
         }
 
         /* Skip unused functions (dead code elimination / reachability pass). */
@@ -4961,68 +5388,44 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     
     int return_size = DOUBLEWORD;
-    /* Check for Single type (4 bytes) return by checking return_type_id */
-    int is_single_return = (func->return_type_id != NULL && 
-                           pascal_identifier_equals(func->return_type_id, "Single"));
     if (returns_dynamic_array)
         return_size = dynamic_array_descriptor_size;
     else if (has_record_return)
         return_size = (int)record_return_size;
-    else if (is_single_return)
-        return_size = 4;  /* Single is 4 bytes */
-    else if (func_node != NULL && func_node->type != NULL &&
+    else if (func->return_type_id != NULL)
+    {
+        int return_type_id_size = codegen_return_type_id_storage_size(func->return_type_id);
+        if (return_type_id_size > 0)
+            return_size = return_type_id_size;
+    }
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PROCEDURE)
     {
         /* Get return type from KgpcType */
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
-        if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
+        if (return_type != NULL)
         {
-            int tag = kgpc_type_get_primitive_tag(return_type);
             struct TypeAlias *alias = kgpc_type_get_type_alias(return_type);
-            if (alias != NULL && alias->storage_size > 0)
-            {
-                return_size = (int)alias->storage_size;
-            }
-            /* Check for Single type (4 bytes) by type_id */
-            else if (alias != NULL && alias->target_type_id != NULL &&
+            if (alias != NULL && alias->target_type_id != NULL &&
                      pascal_identifier_equals(alias->target_type_id, "Single"))
             {
                 return_size = 4;  /* Single is 4 bytes */
             }
-            else switch (tag)
+            else
             {
-                case LONGINT_TYPE:
-                    return_size = DOUBLEWORD;  /* 32-bit FPC-compatible LongInt */
-                    break;
-                case INT64_TYPE:
-                    return_size = 8;  /* 64-bit Int64 */
-                    break;
-                case REAL_TYPE:
-                case STRING_TYPE:  /* PCHAR */
-                case POINTER_TYPE:
-                    return_size = 8;
-                    break;
-                case BOOL:
-                    return_size = DOUBLEWORD;
-                    break;
-                default:
-                    return_size = DOUBLEWORD;
-                    break;
+                return_size = codegen_return_storage_size(return_type);
             }
         }
-        else if (return_type != NULL && return_type->kind == TYPE_KIND_POINTER)
-        {
-            /* Pointer return (e.g., PChar) */
-            return_size = 8;
-        }
     }
-    else if (func_node != NULL && func_node->type != NULL &&
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_PRIMITIVE)
     {
         int tag = kgpc_type_get_primitive_tag(func_node->type);
         struct TypeAlias *alias = kgpc_type_get_type_alias(func_node->type);
         if (alias != NULL && alias->storage_size > 0)
             return_size = (int)alias->storage_size;
+        else if (tag == EXTENDED_TYPE)
+            return_size = 10;
         else if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE ||
                  tag == INT64_TYPE)
             return_size = 8;
@@ -5031,7 +5434,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         else if (tag == BOOL)
             return_size = DOUBLEWORD;
     }
-    else if (func_node != NULL && func_node->type != NULL &&
+    if (return_size == DOUBLEWORD && func_node != NULL && func_node->type != NULL &&
              func_node->type->kind == TYPE_KIND_POINTER)
     {
         return_size = 8;
@@ -5128,8 +5531,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     inst_list = codegen_var_initializers(func->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(func->statement_list, inst_list, ctx, symtab);
-    
-    if (returns_dynamic_array)
+
+    /* For nostackframe+assembler functions, the asm block handles the return
+     * value entirely.  Skip the compiler-generated return-value epilogue,
+     * which would read from an invalid %rbp offset. */
+    if (func->nostackframe)
+    {
+        /* Skip return value loading — asm is responsible */
+    }
+    else if (returns_dynamic_array)
     {
 #if KGPC_ENABLE_REG_DEBUG
         const char *prev_reg_ctx = g_reg_debug_context;
@@ -5254,7 +5664,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (return_type != NULL && return_type->kind == TYPE_KIND_PRIMITIVE)
             {
                 int tag = kgpc_type_get_primitive_tag(return_type);
-                if (tag == REAL_TYPE)
+                if (is_real_family_type(tag))
                     is_real_return = 1;
             }
         }
@@ -5262,14 +5672,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                  func_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
             int tag = kgpc_type_get_primitive_tag(func_node->type);
-            if (tag == REAL_TYPE)
+            if (is_real_family_type(tag))
                 is_real_return = 1;
         }
         
         /* Use movss for Single (4-byte), movsd for Double/Real (8-byte), return in xmm0.
          * Check element_size which stores the unaligned size, not size which may be padded. */
         long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-        if (is_real_return && unaligned_return_size <= 4)
+        if (is_real_return && return_var->element_size == 10)
+            snprintf(buffer, 50, "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+        else if (is_real_return && unaligned_return_size <= 4)
             snprintf(buffer, 50, "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
         else if (is_real_return)
             snprintf(buffer, 50, "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
@@ -5278,15 +5690,20 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             /* Use actual return type size (not stack slot size which may be
              * padded) to choose movl vs movq.  A 4-byte record allocated in
              * an 8-byte slot would otherwise read 4 bytes of garbage. */
-            long long actual_return_size = return_var->size;
+            long long actual_return_size =
+                return_var->element_size > 0 ? return_var->element_size : return_var->size;
+            if (func->return_type_id != NULL)
+            {
+                int return_type_id_size = codegen_return_type_id_storage_size(func->return_type_id);
+                if (return_type_id_size > 0)
+                    actual_return_size = return_type_id_size;
+            }
             if (func_node != NULL && func_node->type != NULL)
             {
                 KgpcType *ret_type = kgpc_type_get_return_type(func_node->type);
                 if (ret_type != NULL)
                 {
-                    long long type_size = kgpc_type_sizeof(ret_type);
-                    if (type_size > 0)
-                        actual_return_size = type_size;
+                    actual_return_size = codegen_return_storage_size(ret_type);
                 }
             }
             if (actual_return_size >= 8)
@@ -5341,11 +5758,73 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 /* Helper function to determine the size in bytes for a return type */
 static int get_return_type_size(int return_type)
 {
+    if (return_type == EXTENDED_TYPE)
+        return 10;
     if (return_type == STRING_TYPE || 
         return_type == POINTER_TYPE || return_type == REAL_TYPE ||
         return_type == INT64_TYPE)
         return 8;
     return 4; /* Default for INT_TYPE, LONGINT_TYPE, BOOL, CHAR_TYPE, etc. */
+}
+
+static int codegen_return_storage_size(KgpcType *return_type)
+{
+    if (return_type == NULL)
+        return DOUBLEWORD;
+
+    long long type_size = kgpc_type_sizeof(return_type);
+    if (type_size > 0 && type_size <= INT_MAX)
+        return (int)type_size;
+
+    if (return_type->kind == TYPE_KIND_POINTER)
+        return 8;
+
+    if (return_type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        int tag = kgpc_type_get_primitive_tag(return_type);
+        if (tag == EXTENDED_TYPE)
+            return 10;
+        if (tag == REAL_TYPE || tag == STRING_TYPE || tag == POINTER_TYPE ||
+            tag == INT64_TYPE || tag == QWORD_TYPE)
+            return 8;
+    }
+
+    return DOUBLEWORD;
+}
+
+static int codegen_return_type_id_storage_size(const char *return_type_id)
+{
+    if (return_type_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(return_type_id, "Single"))
+        return 4;
+    if (pascal_identifier_equals(return_type_id, "Extended"))
+        return 10;
+    if (pascal_identifier_equals(return_type_id, "Real") ||
+        pascal_identifier_equals(return_type_id, "Double"))
+        return 8;
+    if (pascal_identifier_equals(return_type_id, "string") ||
+        pascal_identifier_equals(return_type_id, "AnsiString") ||
+        pascal_identifier_equals(return_type_id, "UnicodeString") ||
+        pascal_identifier_equals(return_type_id, "WideString") ||
+        pascal_identifier_equals(return_type_id, "Int64") ||
+        pascal_identifier_equals(return_type_id, "QWord") ||
+        pascal_identifier_equals(return_type_id, "UInt64") ||
+        pascal_identifier_equals(return_type_id, "NativeInt") ||
+        pascal_identifier_equals(return_type_id, "NativeUInt") ||
+        pascal_identifier_equals(return_type_id, "SizeInt") ||
+        pascal_identifier_equals(return_type_id, "SizeUInt") ||
+        pascal_identifier_equals(return_type_id, "PtrInt") ||
+        pascal_identifier_equals(return_type_id, "PtrUInt") ||
+        pascal_identifier_equals(return_type_id, "IntPtr") ||
+        pascal_identifier_equals(return_type_id, "UIntPtr") ||
+        pascal_identifier_equals(return_type_id, "Pointer") ||
+        pascal_identifier_equals(return_type_id, "PChar") ||
+        pascal_identifier_equals(return_type_id, "PAnsiChar"))
+        return 8;
+
+    return 0;
 }
 
 /* Helper to add an alias label for a return variable so multiple identifiers share storage. */
@@ -5397,6 +5876,7 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     alias->element_size = target->element_size;
     alias->is_alias = 1;
     alias->is_static = target->is_static;
+    alias->is_reference = target->is_reference;
     if (target->static_label != NULL)
         alias->static_label = strdup(target->static_label);
 
@@ -5444,6 +5924,7 @@ static int add_absolute_var_alias_with_offset(const char *alias_label, const cha
     alias->element_size = alias_size;
     alias->is_alias = 1;
     alias->is_static = target->is_static;
+    alias->is_reference = target->is_reference;
     if (target->static_label != NULL)
     {
         /* For static variables, create a new label with offset suffix.
@@ -5672,24 +6153,24 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     if (anon->is_function && return_var != NULL)
     {
         char buffer[64];
-        int uses_qword = (anon->return_type == STRING_TYPE || 
-                         anon->return_type == REAL_TYPE || anon->return_type == POINTER_TYPE ||
-                         anon->return_type == INT64_TYPE);
-        if (uses_qword)
-        {
-            /* Check element_size which stores the unaligned size */
-            long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-            if (anon->return_type == REAL_TYPE && unaligned_return_size <= 4)
-                snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            else if (anon->return_type == REAL_TYPE)
-                snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-            else
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
-        }
+        int return_is_real = (anon->return_type == REAL_TYPE || anon->return_type == EXTENDED_TYPE);
+        int return_size = get_return_type_size(anon->return_type);
+        int use_qword = return_size >= 8;
+        if (return_size == 0 && return_var->size >= 8)
+            use_qword = 1;
+
+        /* Check element_size for unaligned Single type (4 bytes) */
+        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+        if (return_is_real && return_var->element_size == 10)
+            snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
+        else if (return_is_real && unaligned_return_size <= 4)
+            snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (return_is_real)
+            snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
+        else if (use_qword)
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
         else
-        {
             snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%eax\n", return_var->offset);
-        }
         inst_list = add_inst(inst_list, buffer);
     }
     
@@ -5847,15 +6328,22 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             {
                 int scan_type = scan_decl->tree_data.var_decl_data.type;
                 int scan_is_var = scan_decl->tree_data.var_decl_data.is_var_param;
+                KgpcType *scan_cached_type = scan_decl->tree_data.var_decl_data.cached_kgpc_type;
                 ListNode_t *scan_ids = scan_decl->tree_data.var_decl_data.ids;
                 while(scan_ids != NULL)
                 {
+                    int scan_real_storage_size = 8;
+                    if (!scan_is_var && (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE))
+                        scan_real_storage_size = codegen_real_param_storage_size(scan_decl,
+                            NULL, scan_cached_type);
                     /* Float (REAL_TYPE) parameters that are not passed by reference
                      * use SSE/XMM registers, NOT integer registers. Skip integer
                      * register allocation for them so subsequent integer params
                      * get the correct registers. SSE regs are not clobbered by
                      * kgpc_move calls, so no presave slot is needed. */
-                    if (!scan_is_var && scan_type == REAL_TYPE)
+                    if (!scan_is_var &&
+                        (scan_type == REAL_TYPE || scan_type == EXTENDED_TYPE) &&
+                        scan_real_storage_size < 16)
                     {
                         if (scan_sse_index < kgpc_max_sse_arg_regs())
                             scan_sse_index++;
@@ -6125,6 +6613,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_array_type = 0;
                     int type_requires_qword = 0;
                     int real_storage_size = 8;
+                    int use_extended_stack_param = 0;
                     int is_shortstring_param = 0;
                     
                     /* Determine if parameter is an array type via resolved type only */
@@ -6165,22 +6654,84 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             is_shortstring_param = 1;
                     }
 
-                    if (inferred_type_tag == REAL_TYPE)
+                    if (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE)
                         real_storage_size = codegen_real_param_storage_size(arg_decl,
                             resolved_type_node, cached_arg_type);
+
+                    use_extended_stack_param =
+                        (!is_var_param && !is_array_type && !is_shortstring_param &&
+                         (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                         real_storage_size == 16);
                     
                      int use_64bit = is_var_param || is_array_type || type_requires_qword ||
                          (inferred_type_tag == STRING_TYPE || inferred_type_tag == POINTER_TYPE ||
                           type == PROCEDURE ||
-                          (inferred_type_tag == REAL_TYPE && real_storage_size > 4));
+                          ((inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                           real_storage_size > 4));
                     int use_sse_reg = 0;
                     if (!is_var_param && !is_array_type && !is_shortstring_param &&
-                        inferred_type_tag == REAL_TYPE)
+                        (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
+                        real_storage_size < 16)
                         use_sse_reg = 1;
-                    arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
+                    if (use_extended_stack_param)
+                        arg_stack = add_l_z_bytes((char *)arg_ids->cur, 10);
+                    else
+                        arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
                         arg_stack->is_reference = 1;
-                    if (use_sse_reg)
+                    if (use_extended_stack_param)
+                    {
+                        Register_t *src_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        Register_t *dst_addr_reg = NULL;
+                        if (src_addr_reg == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for Extended parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        dst_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                        {
+                            free_reg(get_reg_stack(), src_addr_reg);
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate destination register for Extended parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t%d(%%rbp), %s\n",
+                            stack_arg_offset, src_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            arg_stack->offset, dst_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = add_inst(inst_list, "\tmovl\t$10, %r8d\n");
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = add_inst(inst_list, "\tmovl\t$10, %edx\n");
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                        free_arg_regs();
+                        free_reg(get_reg_stack(), dst_addr_reg);
+                        free_reg(get_reg_stack(), src_addr_reg);
+                        stack_arg_offset += 16;
+                    }
+                    else if (use_sse_reg)
                     {
                         if (next_sse_index < kgpc_max_sse_arg_regs())
                         {

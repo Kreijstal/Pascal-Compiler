@@ -162,6 +162,7 @@ struct MethodTemplate
     struct ast_t *return_type_ast;  /* Pointer inside method_ast for return type */
     struct ast_t *directives_ast;   /* Pointer inside method_ast for directives */
     struct ast_t *method_impl_ast;  /* Cloned AST for the implementation */
+    int source_offset;              /* g_source_offset when template was created */
 };
 
 struct RecordType
@@ -173,10 +174,12 @@ struct RecordType
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
     int is_interface;         /* 1 if this record represents an interface */
+    int is_packed;            /* 1 if declared as packed/bitpacked record/object */
     int is_type_helper;       /* 1 if this record represents a type helper */
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
+    int parent_fields_merged; /* 1 if parent class fields have been merged into fields */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
@@ -525,6 +528,7 @@ struct Expression
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
+            int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
         } function_call_data;
 
         /* Integer number */

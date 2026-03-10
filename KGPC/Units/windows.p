@@ -15,8 +15,8 @@ type
     ptruint = cuintptr;
 
     { Common Win32 integral types }
-    BOOL    = cint32;
-    WordBool = cint32;
+    BOOL    = LongBool;
+    WordBool = LongBool;
     UINT    = cuint32;
     DWORD   = cuint32;
     LONG    = clong;
@@ -122,6 +122,8 @@ procedure Sleep(milliseconds: DWORD);
 function QueryPerformanceCounter(out value: culonglong): BOOL;
 function QueryPerformanceFrequency(out freq: culonglong): BOOL;
 function IsDebuggerPresent: BOOL;
+function GetCurrentProcessId: DWORD;
+function SetEnvironmentVariable(lpName: pchar; lpValue: pchar): BOOL;
 
 {-------------------------------------------------------------------------}
 { Common constants (minimal subset needed by examples)                     }
@@ -221,6 +223,8 @@ procedure kgpc_sleep_ms(milliseconds: cint32); external;
 function kgpc_query_performance_counter: culonglong; external;
 function kgpc_query_performance_frequency: culonglong; external;
 function kgpc_is_debugger_present: BOOL; external;
+function kgpc_getpid: DWORD; cdecl; external name 'kgpc_getpid';
+function kgpc_setenv(name: pchar; value: pchar): cint32; cdecl; external name 'kgpc_setenv';
 
 function LOWORD(v: ptruint): cuint16; inline;
 begin
@@ -262,9 +266,9 @@ begin
     v := kgpc_query_performance_counter;
     value := v;
     if v <> 0 then
-      QueryPerformanceCounter := 1
+      QueryPerformanceCounter := True
     else
-      QueryPerformanceCounter := 0;
+      QueryPerformanceCounter := False;
 end;
 
 function QueryPerformanceFrequency(out freq: culonglong): BOOL;
@@ -273,14 +277,27 @@ begin
     f := kgpc_query_performance_frequency;
     freq := f;
     if f <> 0 then
-      QueryPerformanceFrequency := 1
+      QueryPerformanceFrequency := True
     else
-      QueryPerformanceFrequency := 0;
+      QueryPerformanceFrequency := False;
 end;
 
 function IsDebuggerPresent: BOOL;
 begin
     IsDebuggerPresent := kgpc_is_debugger_present;
+end;
+
+function GetCurrentProcessId: DWORD;
+begin
+    GetCurrentProcessId := kgpc_getpid;
+end;
+
+function SetEnvironmentVariable(lpName: pchar; lpValue: pchar): BOOL;
+begin
+    if kgpc_setenv(lpName, lpValue) = 0 then
+        SetEnvironmentVariable := True
+    else
+        SetEnvironmentVariable := False;
 end;
 
 end.

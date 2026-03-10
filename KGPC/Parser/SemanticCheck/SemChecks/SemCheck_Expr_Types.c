@@ -1457,7 +1457,10 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.id = id_copy;
     expr->expr_data.function_call_data.mangled_id = mangled_copy;
     expr->expr_data.function_call_data.args_expr = arg_node;
-    expr->expr_data.function_call_data.resolved_func = NULL;
+    /* Set resolved_func so semcheck_funccall goes via method_call_resolved (which runs
+     * the VMT dispatch check at lines 5241-5283) rather than the funccall_cleanup
+     * fast-path (which skips VMT dispatch, causing direct calls to abstract methods). */
+    expr->expr_data.function_call_data.resolved_func = method_node;
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
@@ -1746,6 +1749,42 @@ int semcheck_recordaccess(int *type_return,
                 return semcheck_signterm(type_return, symtab, expr, max_scope_lev, mutating);
             }
         }
+
+    /* Extended NOT restructuring: for chained member access like `not x.a.b`,
+     * the parser produces `((NOT x).a).b`. The single-level NOT fix below only
+     * handles the immediate case. Walk the nested RECORD_ACCESS chain to find
+     * NOT buried deeper and pull it to the top level. */
+    {
+        struct Expression *walk = record_expr;
+        while (walk != NULL && walk->type == EXPR_RECORD_ACCESS)
+        {
+            struct Expression *inner = walk->expr_data.record_access_data.record_expr;
+            if (inner != NULL && inner->type == EXPR_RELOP &&
+                inner->expr_data.relop_data.type == NOT &&
+                inner->expr_data.relop_data.left != NULL &&
+                inner->expr_data.relop_data.right == NULL)
+            {
+                /* Found NOT buried inside the chain. Remove it from the chain
+                 * and wrap the entire current expression in NOT. */
+                struct Expression *not_node = inner;
+                struct Expression *not_operand = not_node->expr_data.relop_data.left;
+                walk->expr_data.record_access_data.record_expr = not_operand;
+
+                /* Reuse the orphaned NOT node to hold the current expr's data */
+                *not_node = *expr;
+
+                /* Make current expr a NOT wrapping the chain */
+                expr->type = EXPR_RELOP;
+                memset(&expr->expr_data, 0, sizeof(expr->expr_data));
+                expr->expr_data.relop_data.type = NOT;
+                expr->expr_data.relop_data.left = not_node;
+                expr->expr_data.relop_data.right = NULL;
+
+                return semcheck_relop(type_return, symtab, expr, max_scope_lev, mutating);
+            }
+            walk = inner;
+        }
+    }
 
     /* Similar AST transformation for NOT operator: parser produces (NOT record).field
      * instead of NOT (record.field). Detect EXPR_RELOP with NOT and restructure so the
@@ -2170,11 +2209,9 @@ int semcheck_recordaccess(int *type_return,
                 destroy_expr(record_expr);
                 expr->expr_data.record_access_data.record_expr = value_expr;
                 record_expr = value_expr;
-                if (record_kgpc_type != NULL)
-                {
-                    kgpc_type_release(record_kgpc_type);
-                    record_kgpc_type = NULL;
-                }
+                /* record_kgpc_type was a borrowed ref owned by the old record_expr
+                 * which was already freed by destroy_expr above — just clear it. */
+                record_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&record_kgpc_type, symtab,
                     record_expr, max_scope_lev, NO_MUTATE);
                 record_type = semcheck_tag_from_kgpc(record_kgpc_type);
@@ -2231,11 +2268,8 @@ int semcheck_recordaccess(int *type_return,
                             record_expr->expr_data.record_access_data.field_id = saved_id;
                             record_expr->expr_data.record_access_data.field_offset = field_offset;
 
-                            if (record_kgpc_type != NULL)
-                            {
-                                kgpc_type_release(record_kgpc_type);
-                                record_kgpc_type = NULL;
-                            }
+                            /* record_kgpc_type is borrowed — just clear it */
+                            record_kgpc_type = NULL;
                             error_count += semcheck_expr_with_type(&record_kgpc_type, symtab,
                                 record_expr, max_scope_lev, NO_MUTATE);
                             record_type = semcheck_tag_from_kgpc(record_kgpc_type);
@@ -2455,15 +2489,8 @@ SKIP_SELF_FIELD_REWRITE:
             /* Check for type helpers on Pointer type before giving up.
              * Type helpers can be defined for Pointer, PChar, etc. */
             const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-            const char *alias_type_name = NULL;
-            if (record_expr->resolved_kgpc_type != NULL &&
-                record_expr->resolved_kgpc_type->type_alias != NULL &&
-                record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
-            {
-                alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
-            }
-            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
-                alias_type_name != NULL ? alias_type_name : expr_type_name);
+            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                record_type, expr_type_name, field_id);
             if (helper_record != NULL)
             {
                 record_type = RECORD_TYPE;
@@ -2481,18 +2508,33 @@ SKIP_SELF_FIELD_REWRITE:
     else
     {
         const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-        const char *alias_type_name = NULL;
-        if (record_expr->resolved_kgpc_type != NULL &&
-            record_expr->resolved_kgpc_type->type_alias != NULL &&
-            record_expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+        /* When the record_expr is literally "Self" inside a type helper
+         * method body, use the current method's owning helper type rather
+         * than the most-recently-registered helper for this base type.
+         * This matters when multiple type helpers exist for the same base
+         * type (e.g. TWideStringHelper from SysUtils and a user-defined
+         * TWideHelper): Self.Length inside TWideStringHelper must resolve
+         * to TWideStringHelper's Length property, not TWideHelper's. */
+        struct RecordType *helper_record = NULL;
+        int is_self_expr = (record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(record_expr->expr_data.id, "Self"));
+        if (is_self_expr)
         {
-            alias_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+            const char *current_owner = semcheck_get_current_method_owner();
+            if (current_owner != NULL)
+            {
+                struct RecordType *owner_rec = semcheck_lookup_record_type(symtab, current_owner);
+                if (owner_rec != NULL && owner_rec->is_type_helper)
+                    helper_record = owner_rec;
+            }
         }
-        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab, record_type,
-            alias_type_name != NULL ? alias_type_name : expr_type_name);
-        if (helper_record == NULL && record_type == REAL_TYPE)
+        if (helper_record == NULL)
+            helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                record_type, expr_type_name, field_id);
+        if (helper_record == NULL && is_real_family_type(record_type))
         {
-            const char *helper_base = alias_type_name != NULL ? alias_type_name : expr_type_name;
+            const char *helper_base = expr_type_name;
             if (helper_base != NULL)
             {
                 char helper_name[256];
@@ -2505,7 +2547,7 @@ SKIP_SELF_FIELD_REWRITE:
             record_type = RECORD_TYPE;
             record_info = helper_record;
         }
-        else if (record_type == REAL_TYPE && field_id != NULL &&
+        else if (is_real_family_type(record_type) && field_id != NULL &&
                  pascal_identifier_equals(field_id, "IsNan"))
         {
             /* FPC allows Float.IsNan via type helpers. If helpers weren't registered,
@@ -3360,8 +3402,8 @@ SKIP_SELF_FIELD_REWRITE:
         if (record_info != NULL && !record_type_is_class(record_info) &&
             record_info->type_id != NULL && !record_info->is_type_helper)
         {
-            struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                UNKNOWN_TYPE, record_info->type_id);
+            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                UNKNOWN_TYPE, record_info->type_id, field_id);
             if (helper_record != NULL)
             {
                 HashNode_t *method_node = semcheck_find_class_method(symtab,
@@ -3446,7 +3488,8 @@ SKIP_SELF_FIELD_REWRITE:
             (pascal_identifier_equals(record_info->helper_base_type_id, "AnsiString") ||
              pascal_identifier_equals(record_info->helper_base_type_id, "String") ||
              pascal_identifier_equals(record_info->helper_base_type_id, "ShortString") ||
-             pascal_identifier_equals(record_info->helper_base_type_id, "UnicodeString")))
+             pascal_identifier_equals(record_info->helper_base_type_id, "UnicodeString") ||
+             pascal_identifier_equals(record_info->helper_base_type_id, "WideString")))
         {
             if (pascal_identifier_equals(field_id, "Length"))
             {
@@ -3875,7 +3918,7 @@ FIELD_RESOLVED:
         if (type_node == NULL)
             type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
                 field_ref, type_id_to_use);
-        
+
         if (type_node == NULL && record_info != NULL && record_info->type_id != NULL)
         {
             snprintf(qualified_name_buf, sizeof(qualified_name_buf), "%s.%s", 

@@ -8,6 +8,7 @@
 */
 
 #include "../../../identifier_utils.h"
+#include "../../../unit_registry.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
 
@@ -207,6 +208,65 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     return NULL;
 }
 
+HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index)
+{
+    ListNode_t *cur;
+    HashNode_t *hash_node;
+    int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
+    ListNode_t *list = table->table[hash];
+    if (list == NULL)
+    {
+        free(canonical_id);
+        return NULL;
+    }
+
+    /* Scan all matches, pick by priority:
+     * 4. Same unit as caller (exact match)
+     * 3. Symbol from a unit that caller directly uses (dependency)
+     * 2. Program-local (source_unit_index == 0) fallback
+     * 1. Any match (fallback) */
+    HashNode_t *best = NULL;
+    int best_priority = 0;
+
+    cur = list;
+    while (cur != NULL)
+    {
+        hash_node = (HashNode_t *)cur->cur;
+        if (strcmp(hash_node->canonical_id, canonical_id) == 0)
+        {
+            int priority = 1; /* any match */
+            if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
+                priority = 4; /* same unit */
+            else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
+                priority = 4; /* program-local for program code */
+            else if (caller_unit_index > 0 && hash_node->source_unit_index > 0 &&
+                     unit_registry_is_dep(caller_unit_index, hash_node->source_unit_index))
+                priority = 3; /* from a unit that caller uses */
+            else if (hash_node->source_unit_index == 0)
+                priority = 2; /* program-local fallback */
+
+            if (priority > best_priority)
+            {
+                best = hash_node;
+                best_priority = priority;
+            }
+        }
+        cur = cur->next;
+    }
+
+    free(canonical_id);
+    return best;
+}
+
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
 {
     assert(table != NULL);
@@ -368,6 +428,8 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->owner_class_full);
             if (hash_node->owner_class_outer != NULL)
                 free(hash_node->owner_class_outer);
+            if (hash_node->internproc_id != NULL)
+                free(hash_node->internproc_id);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -495,7 +557,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->owner_class = NULL;
     hash_node->owner_class_full = NULL;
     hash_node->owner_class_outer = NULL;
-    
+    hash_node->internproc_id = NULL;
+
     /* Set identifier */
     hash_node->id = strdup(id);
     if (hash_node->id == NULL)
@@ -574,6 +637,16 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+    /* Allow local constants to shadow imported unit functions/procedures.
+     * In Pascal, user declarations at program scope can shadow unit-level
+     * symbols.  E.g. user 'const min = 5' shadows system 'function min',
+     * and user 'const pi = 3.14' shadows FPC's 'function Pi [internproc]'. */
+    if (is_existing_proc_func &&
+        existing_node->defined_in_unit &&
+        new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
+
     /* Allow local types to shadow imported unit types. */
     if (existing_node->hash_type == HASHTYPE_TYPE &&
         existing_node->defined_in_unit &&
@@ -581,12 +654,23 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+
+
     /* Allow const shadowing in the same scope (unit/system consts share the program scope). */
     if (existing_node->hash_type == HASHTYPE_CONST &&
         new_hash_type == HASHTYPE_CONST) {
         return 1;
     }
     
+    /* Allow variables/arrays to coexist when at least one is from a unit.
+     * Unit-aware FindIdentInUnit resolves which one is visible.
+     * Two program-local vars with the same name would still be caught by
+     * semcheck's duplicate-declaration check before reaching here. */
+    if ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+
     /* No other collisions allowed */
     return 0;
 }

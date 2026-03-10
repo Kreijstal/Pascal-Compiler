@@ -53,7 +53,7 @@ void semcheck_set_error_context(int line_num, int col_num, int source_index);
 void semcheck_clear_error_context(void);
 void semcheck_set_source_path(const char *path);
 void semcheck_set_source_buffer(const char *buffer, size_t length);
-void semcheck_register_source_buffer(const char *path, const char *buffer, size_t length);
+int semcheck_register_source_buffer(const char *path, const char *buffer, size_t length);
 
 HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char *type_id);
 HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,

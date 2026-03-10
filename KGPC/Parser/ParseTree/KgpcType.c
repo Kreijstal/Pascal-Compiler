@@ -57,6 +57,303 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit);
 
+static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
+{
+    if (symtab == NULL || id == NULL || out_value == NULL)
+        return 1;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, symtab, id) >= 0 &&
+        node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+    {
+        *out_value = node->const_int_value;
+        return 0;
+    }
+
+    return 1;
+}
+
+static void kgpc_skip_const_expr_ws(const char **p)
+{
+    while (p != NULL && *p != NULL && (**p == ' ' || **p == '\t'))
+        (*p)++;
+}
+
+static int kgpc_match_const_expr_keyword(const char **p, const char *keyword)
+{
+    size_t len = strlen(keyword);
+    if (strncasecmp(*p, keyword, len) != 0)
+        return 0;
+    char next = (*p)[len];
+    if ((next >= 'A' && next <= 'Z') || (next >= 'a' && next <= 'z') ||
+        (next >= '0' && next <= '9') || next == '_')
+        return 0;
+    *p += len;
+    return 1;
+}
+
+static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p, long long *out_value);
+
+static int kgpc_eval_const_expr_primary(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (p == NULL || *p == NULL || out_value == NULL)
+        return -1;
+
+    kgpc_skip_const_expr_ws(p);
+
+    if (**p == '(')
+    {
+        (*p)++;
+        if (kgpc_eval_const_expr_additive(symtab, p, out_value) != 0)
+            return -1;
+        kgpc_skip_const_expr_ws(p);
+        if (**p != ')')
+            return -1;
+        (*p)++;
+        return 0;
+    }
+
+    if (kgpc_match_const_expr_keyword(p, "sizeof"))
+    {
+        kgpc_skip_const_expr_ws(p);
+        if (**p != '(')
+            return -1;
+        (*p)++;
+        kgpc_skip_const_expr_ws(p);
+
+        const char *start = *p;
+        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+            (*p)++;
+        if (*p == start)
+            return -1;
+
+        size_t len = (size_t)(*p - start);
+        char *type_id = (char *)malloc(len + 1);
+        if (type_id == NULL)
+            return -1;
+        memcpy(type_id, start, len);
+        type_id[len] = '\0';
+
+        kgpc_skip_const_expr_ws(p);
+        if (**p != ')')
+        {
+            free(type_id);
+            return -1;
+        }
+        (*p)++;
+
+        HashNode_t *type_node = kgpc_find_type_node(symtab, type_id);
+        free(type_id);
+        if (type_node == NULL || type_node->type == NULL)
+            return -1;
+        *out_value = kgpc_type_sizeof(type_node->type);
+        return (*out_value >= 0) ? 0 : -1;
+    }
+
+    if ((**p >= '0' && **p <= '9') ||
+        ((**p == '+' || **p == '-') && ((*p)[1] >= '0' && (*p)[1] <= '9')))
+    {
+        char *endptr = NULL;
+        errno = 0;
+        long long value = strtoll(*p, &endptr, 10);
+        if (endptr == *p || errno == ERANGE)
+            return -1;
+        *p = endptr;
+        *out_value = value;
+        return 0;
+    }
+
+    if ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') || **p == '_')
+    {
+        const char *start = *p;
+        while ((**p >= 'A' && **p <= 'Z') || (**p >= 'a' && **p <= 'z') ||
+               (**p >= '0' && **p <= '9') || **p == '_' || **p == '.')
+            (*p)++;
+        size_t len = (size_t)(*p - start);
+        char *id = (char *)malloc(len + 1);
+        if (id == NULL)
+            return -1;
+        memcpy(id, start, len);
+        id[len] = '\0';
+        int ok = (kgpc_resolve_const_identifier(symtab, id, out_value) == 0);
+        free(id);
+        return ok ? 0 : -1;
+    }
+
+    return -1;
+}
+
+static int kgpc_eval_const_expr_unary(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (p == NULL || *p == NULL || out_value == NULL)
+        return -1;
+
+    kgpc_skip_const_expr_ws(p);
+    if (**p == '+')
+    {
+        (*p)++;
+        return kgpc_eval_const_expr_unary(symtab, p, out_value);
+    }
+    if (**p == '-')
+    {
+        long long inner = 0;
+        (*p)++;
+        if (kgpc_eval_const_expr_unary(symtab, p, &inner) != 0)
+            return -1;
+        *out_value = -inner;
+        return 0;
+    }
+
+    return kgpc_eval_const_expr_primary(symtab, p, out_value);
+}
+
+static int kgpc_eval_const_expr_multiplicative(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (kgpc_eval_const_expr_unary(symtab, p, out_value) != 0)
+        return -1;
+
+    while (1)
+    {
+        long long rhs = 0;
+        kgpc_skip_const_expr_ws(p);
+        if (**p == '*')
+        {
+            (*p)++;
+            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value *= rhs;
+            continue;
+        }
+        if (kgpc_match_const_expr_keyword(p, "div"))
+        {
+            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
+                return -1;
+            *out_value /= rhs;
+            continue;
+        }
+        if (kgpc_match_const_expr_keyword(p, "mod"))
+        {
+            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs == 0)
+                return -1;
+            *out_value %= rhs;
+            continue;
+        }
+        if (kgpc_match_const_expr_keyword(p, "shl"))
+        {
+            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
+                return -1;
+            *out_value <<= rhs;
+            continue;
+        }
+        if (kgpc_match_const_expr_keyword(p, "shr"))
+        {
+            if (kgpc_eval_const_expr_unary(symtab, p, &rhs) != 0 || rhs < 0)
+                return -1;
+            *out_value >>= rhs;
+            continue;
+        }
+        break;
+    }
+
+    return 0;
+}
+
+static int kgpc_eval_const_expr_additive(SymTab_t *symtab, const char **p, long long *out_value)
+{
+    if (kgpc_eval_const_expr_multiplicative(symtab, p, out_value) != 0)
+        return -1;
+
+    while (1)
+    {
+        long long rhs = 0;
+        kgpc_skip_const_expr_ws(p);
+        if (**p == '+')
+        {
+            (*p)++;
+            if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value += rhs;
+            continue;
+        }
+        if (**p == '-')
+        {
+            (*p)++;
+            if (kgpc_eval_const_expr_multiplicative(symtab, p, &rhs) != 0)
+                return -1;
+            *out_value -= rhs;
+            continue;
+        }
+        break;
+    }
+
+    return 0;
+}
+
+static int kgpc_resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
+{
+    if (expr == NULL || out_value == NULL)
+        return -1;
+
+    const char *p = expr;
+    long long result = 0;
+    if (kgpc_eval_const_expr_additive(symtab, &p, &result) != 0)
+        return -1;
+    kgpc_skip_const_expr_ws(&p);
+    if (*p != '\0' || result < INT_MIN || result > INT_MAX)
+        return -1;
+    *out_value = (int)result;
+    return 0;
+}
+
+static void kgpc_resolve_alias_array_bounds(struct TypeAlias *alias, SymTab_t *symtab)
+{
+    if (alias == NULL || !alias->is_array || alias->array_dimensions == NULL || symtab == NULL)
+        return;
+
+    ListNode_t *first_dim = alias->array_dimensions;
+    if (first_dim == NULL || first_dim->type != LIST_STRING || first_dim->cur == NULL)
+        return;
+
+    const char *dim_str = (const char *)first_dim->cur;
+    const char *separator = strstr(dim_str, "..");
+    if (separator == NULL)
+        return;
+
+    size_t start_len = (size_t)(separator - dim_str);
+    char *start_str = (char *)malloc(start_len + 1);
+    char *end_str = strdup(separator + 2);
+    if (start_str == NULL || end_str == NULL)
+    {
+        free(start_str);
+        free(end_str);
+        return;
+    }
+
+    memcpy(start_str, dim_str, start_len);
+    start_str[start_len] = '\0';
+
+    char *start_trim = start_str;
+    char *end_trim = end_str;
+    while (*start_trim == ' ' || *start_trim == '\t')
+        start_trim++;
+    while (*end_trim == ' ' || *end_trim == '\t')
+        end_trim++;
+
+    int start_val = 0;
+    int end_val = 0;
+    if (kgpc_resolve_array_bound_expr(symtab, start_trim, &start_val) == 0 &&
+        kgpc_resolve_array_bound_expr(symtab, end_trim, &end_val) == 0)
+    {
+        alias->array_start = start_val;
+        alias->array_end = end_val;
+        alias->is_open_array = (end_val < start_val);
+    }
+
+    free(start_str);
+    free(end_str);
+}
+
 static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
     const TypeRef *type_ref, int defined_in_unit)
 {
@@ -129,6 +426,16 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 /* Forward declarations for TypeAlias copy functions */
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
+
+int kgpc_type_is_real_family_tag(int primitive_tag)
+{
+    return is_real_family_type(primitive_tag);
+}
+
+int kgpc_type_is_extended_tag(int primitive_tag)
+{
+    return (primitive_tag == EXTENDED_TYPE);
+}
 
 // --- Constructor Implementations ---
 
@@ -276,6 +583,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     
     /* Handle array type aliases: type TIntArray = array[1..10] of Integer */
     if (alias->is_array) {
+        kgpc_resolve_alias_array_bounds(alias, symtab);
         int start = alias->array_start;
         int end = alias->array_end;
 
@@ -637,11 +945,15 @@ static int types_numeric_compatible(int lhs, int rhs) {
         return 1;
 
     /* Real can accept any integer type */
-    if (lhs == REAL_TYPE && is_integer_type(rhs))
+    if (is_real_family_type(lhs) && is_integer_type(rhs))
         return 1;
 
     /* Integer can accept real (truncation, as in FPC Trunc semantics) */
-    if (is_integer_type(lhs) && rhs == REAL_TYPE)
+    if (is_integer_type(lhs) && is_real_family_type(rhs))
+        return 1;
+
+    /* Floating-point types interoperate with each other. */
+    if (is_real_family_type(lhs) && is_real_family_type(rhs))
         return 1;
 
     /* Integer can accept char (for compatibility) */
@@ -660,11 +972,56 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
     if (owns_type != NULL)
         *owns_type = 0;
 
+    const char *decl_type_id = NULL;
+    int decl_defined_in_unit = 0;
+    if (var_decl->type == TREE_VAR_DECL)
+    {
+        decl_type_id = var_decl->tree_data.var_decl_data.type_id;
+        decl_defined_in_unit = var_decl->tree_data.var_decl_data.defined_in_unit;
+    }
+
     /* Prefer declaration-time type cache to avoid late scope shadowing
-     * changing the meaning of parameter type identifiers (e.g. TSize). */
+     * changing the meaning of parameter type identifiers (e.g. TSize).
+     * However, older cached types may have collapsed imported array aliases
+     * such as TFDSet to a scalar. Rebuild those from the symbol-table alias. */
     if (var_decl->type == TREE_VAR_DECL &&
         var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
     {
+        struct TypeAlias *inline_alias = var_decl->tree_data.var_decl_data.inline_type_alias;
+        if (inline_alias != NULL && inline_alias->is_array &&
+            !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
+        {
+            KgpcType *alias_type = create_kgpc_type_from_type_alias(inline_alias, symtab,
+                decl_defined_in_unit);
+            if (alias_type != NULL)
+            {
+                if (owns_type != NULL)
+                    *owns_type = 1;
+                return alias_type;
+            }
+        }
+
+        if (decl_type_id != NULL && symtab != NULL &&
+            !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
+        {
+            struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+                decl_type_id, decl_defined_in_unit);
+            if (type_node != NULL)
+            {
+                struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+                if (alias != NULL && alias->is_array)
+                {
+                    KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
+                        decl_defined_in_unit);
+                    if (alias_type != NULL)
+                    {
+                        if (owns_type != NULL)
+                            *owns_type = 1;
+                        return alias_type;
+                    }
+                }
+            }
+        }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
         return var_decl->tree_data.var_decl_data.cached_kgpc_type;
     }
@@ -790,6 +1147,8 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 builtin_tag = INT_TYPE;
             else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double"))
                 builtin_tag = REAL_TYPE;
+            else if (pascal_identifier_equals(type_id, "Extended"))
+                builtin_tag = EXTENDED_TYPE;
             else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar"))
                 builtin_tag = CHAR_TYPE;
             else if (pascal_identifier_equals(type_id, "Boolean"))
@@ -814,6 +1173,19 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
             type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
         if (type_node != NULL && type_node->type != NULL) {
+            struct TypeAlias *alias = hashnode_get_type_alias(type_node);
+            if (alias != NULL && alias->is_array &&
+                !kgpc_type_is_array(type_node->type))
+            {
+                KgpcType *alias_type = create_kgpc_type_from_type_alias(alias, symtab,
+                    var_decl->tree_data.var_decl_data.defined_in_unit);
+                if (alias_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return alias_type;
+                }
+            }
             /* Return a shared reference from the symbol table - caller doesn't own it */
             if (owns_type != NULL)
                 *owns_type = 0;
@@ -854,6 +1226,9 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         /* Other types */
         else if (pascal_identifier_equals(type_id, "Real") || pascal_identifier_equals(type_id, "Double")) {
             builtin_tag = REAL_TYPE;
+        }
+        else if (pascal_identifier_equals(type_id, "Extended")) {
+            builtin_tag = EXTENDED_TYPE;
         }
         else if (pascal_identifier_equals(type_id, "Char") || pascal_identifier_equals(type_id, "AnsiChar")) {
             builtin_tag = CHAR_TYPE;
@@ -1034,6 +1409,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
         return 1;
     }
+    /* Allow PChar := Char (single character promoted to static PChar) */
+    int rhs_is_char = (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+                       rhs_type->info.primitive_type_tag == CHAR_TYPE);
+    if (lhs_is_pchar && rhs_is_char)
+        return 1;
 
     /* Allow assigning typed pointers to/from generic Pointer. */
     if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
@@ -1649,23 +2029,32 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                     return 1;
                 return 0;
             }
-            
-            /* Check element type compatibility */
-            int elem_compatible = are_types_compatible_for_assignment(
-                lhs_type->info.array_info.element_type,
-                rhs_type->info.array_info.element_type,
-                symtab);
-            if (elem_compatible)
+
+            /* Pascal array assignment/call compatibility is stricter than scalar
+             * assignment compatibility: array element types must match structurally
+             * rather than relying on scalar widening (for example, array of LongInt
+             * must not match array of Real). */
+            if (kgpc_type_equals(lhs_type->info.array_info.element_type,
+                                 rhs_type->info.array_info.element_type))
                 return 1;
-            
-            /* Fallback: If element types have same string representation, treat as compatible */
-            /* This handles cases where types are structurally identical but represented differently */
+
+            if (lhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                rhs_type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int lhs_elem_tag = lhs_type->info.array_info.element_type->info.primitive_type_tag;
+                int rhs_elem_tag = rhs_type->info.array_info.element_type->info.primitive_type_tag;
+                if (is_integer_type(lhs_elem_tag) && is_integer_type(rhs_elem_tag))
+                    return 1;
+            }
+
+            /* Fallback for structurally equal types represented through different
+             * alias objects but with the same resolved spelling. */
             const char *lhs_elem_str = kgpc_type_to_string(lhs_type->info.array_info.element_type);
             const char *rhs_elem_str = kgpc_type_to_string(rhs_type->info.array_info.element_type);
-            if (lhs_elem_str != NULL && rhs_elem_str != NULL && 
+            if (lhs_elem_str != NULL && rhs_elem_str != NULL &&
                 strcasecmp(lhs_elem_str, rhs_elem_str) == 0)
                 return 1;
-            
+
             return 0;
         }
         case TYPE_KIND_ARRAY_OF_CONST:
@@ -1844,6 +2233,7 @@ const char* kgpc_type_to_string(KgpcType *type) {
             switch (type->info.primitive_type_tag) {
                 case INT_TYPE: return "Integer";
                 case REAL_TYPE: return "Real";
+                case EXTENDED_TYPE: return "Extended";
                 case LONGINT_TYPE: return "LongInt";
                 case STRING_TYPE: return "String";
                 case CHAR_TYPE: return "Char";
@@ -1904,6 +2294,47 @@ const char* kgpc_type_to_string(KgpcType *type) {
 
 // --- Helper Function Implementations ---
 
+static int kgpc_list_length(ListNode_t *list)
+{
+    int count = 0;
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
+        ++count;
+    return count;
+}
+
+static long long kgpc_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long kgpc_set_storage_size(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = kgpc_list_length(alias->inline_enum_values);
+        if (count > 0)
+            return kgpc_default_set_storage_size_for_high((long long)count - 1);
+    }
+
+    return 4;
+}
+
 long long kgpc_type_sizeof(KgpcType *type)
 {
     if (type == NULL)
@@ -1922,24 +2353,25 @@ long long kgpc_type_sizeof(KgpcType *type)
             switch (type->info.primitive_type_tag)
             {
                 case INT_TYPE:
+                    return 4;
                 case BOOL:
+                    return 1;
                 case ENUM_TYPE:
+                    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+                        return type->type_alias->storage_size;
+                    if (type->type_alias != NULL && type->type_alias->enum_literals != NULL)
+                    {
+                        int count = ListLength(type->type_alias->enum_literals);
+                        if (count > 0 && count <= 0x100)
+                            return 1;
+                        if (count > 0 && count <= 0x10000)
+                            return 2;
+                    }
                     return 4;
                 case SET_TYPE:
                 {
-                    /* Check if this is a character set (set of char) */
                     if (type->type_alias != NULL && type->type_alias->is_set)
-                    {
-                        if (type->type_alias->set_element_type == CHAR_TYPE ||
-                            (type->type_alias->set_element_type_id != NULL &&
-                             (pascal_identifier_equals(type->type_alias->set_element_type_id, "Char") ||
-                              pascal_identifier_equals(type->type_alias->set_element_type_id, "AnsiChar"))))
-                        {
-                            /* Character sets need 256 bits = 32 bytes */
-                            return 32;
-                        }
-                    }
-                    /* Regular sets (0-31 range) use 32 bits = 4 bytes */
+                        return kgpc_set_storage_size(type->type_alias);
                     return 4;
                 }
                 case LONGINT_TYPE:
@@ -1948,16 +2380,20 @@ long long kgpc_type_sizeof(KgpcType *type)
                     return 8;  /* 64-bit Int64 */
                 case REAL_TYPE:
                     return 8;
+                case EXTENDED_TYPE:
+                    return 10;
                 case STRING_TYPE:
                 case POINTER_TYPE:
                 case PROCEDURE:
                     return 8; /* Pointers are 8 bytes on x86-64 */
                 case SHORTSTRING_TYPE:
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
                     return 256; /* length byte + 255 chars */
                 case FILE_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
-                    return 368;
+                    return 376;  /* FPC x86_64: Handle(4)+Mode(4)+RecSize(8)+_private(64)+UserData(32)+name(256)+FullName(8) */
                 case TEXT_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
@@ -2103,7 +2539,14 @@ int kgpc_type_is_real(const KgpcType *type)
 {
     return (type != NULL &&
         type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == REAL_TYPE);
+        is_real_family_type(type->info.primitive_type_tag));
+}
+
+int kgpc_type_is_extended(const KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == EXTENDED_TYPE);
 }
 
 int kgpc_type_is_numeric(const KgpcType *type)
@@ -2112,7 +2555,27 @@ int kgpc_type_is_numeric(const KgpcType *type)
         return 0;
     if (is_integer_type(type->info.primitive_type_tag))
         return 1;
-    return (type->info.primitive_type_tag == REAL_TYPE);
+    return is_real_family_type(type->info.primitive_type_tag);
+}
+
+long long kgpc_type_real_storage_size(const KgpcType *type)
+{
+    if (!kgpc_type_is_real(type))
+        return -1;
+
+    if (type->type_alias != NULL && type->type_alias->storage_size > 0)
+        return type->type_alias->storage_size;
+
+    return kgpc_type_sizeof((KgpcType *)type);
+}
+
+KgpcFloatAbiClass kgpc_type_float_abi_class(const KgpcType *type)
+{
+    if (!kgpc_type_is_real(type))
+        return KGPC_FLOAT_ABI_NONE;
+    if (kgpc_type_is_extended(type))
+        return KGPC_FLOAT_ABI_X87;
+    return KGPC_FLOAT_ABI_SSE;
 }
 
 int kgpc_type_is_boolean(const KgpcType *type)
@@ -2706,6 +3169,7 @@ int kgpc_type_uses_qword(KgpcType *type)
         case TYPE_KIND_PRIMITIVE:
             switch (type->info.primitive_type_tag) {
                 case REAL_TYPE:
+                case EXTENDED_TYPE:
                 case STRING_TYPE:
                 case SHORTSTRING_TYPE:
                 case FILE_TYPE:
@@ -2925,8 +3389,16 @@ int kgpc_type_conversion_rank(KgpcType *from, KgpcType *to)
             }
             return 1;
         }
-        if (is_integer_type(from_tag) && to_tag == REAL_TYPE)
+        if (is_integer_type(from_tag) && is_real_family_type(to_tag))
             return 2;
+        if (is_real_family_type(from_tag) && is_real_family_type(to_tag))
+        {
+            long long from_size = kgpc_type_sizeof(from);
+            long long to_size = kgpc_type_sizeof(to);
+            if (from_size == to_size)
+                return 1;
+            return (to_size > from_size) ? 2 : 3;
+        }
         if (from_tag == CHAR_TYPE && is_string_type(to_tag))
             return 1;
         if (is_string_type(from_tag) && is_string_type(to_tag))
@@ -3069,6 +3541,7 @@ const char* type_tag_to_string(int type_tag)
         case UNKNOWN_TYPE: return "Unknown";
         case INT_TYPE: return "Integer";
         case REAL_TYPE: return "Real";
+        case EXTENDED_TYPE: return "Extended";
         case LONGINT_TYPE: return "LongInt";
         case STRING_TYPE: return "String";
         case BUILTIN_ANY_TYPE: return "Any";

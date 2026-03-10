@@ -237,6 +237,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->return_type_ast = NULL;
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast(method->method_impl_ast) : NULL;
+    clone->source_offset = method->source_offset;
 
     return clone;
 }
@@ -1253,6 +1254,8 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.mangled_id);
           if (tree->tree_data.subprogram_data.cname_override != NULL)
             free(tree->tree_data.subprogram_data.cname_override);
+          if (tree->tree_data.subprogram_data.internproc_id != NULL)
+            free(tree->tree_data.subprogram_data.internproc_id);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
           if (tree->tree_data.subprogram_data.return_type_ref != NULL)
@@ -1327,6 +1330,10 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.arr_decl_data.static_label);
           if (tree->tree_data.arr_decl_data.init_guard_label != NULL)
               free(tree->tree_data.arr_decl_data.init_guard_label);
+          if (tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
+              free(tree->tree_data.arr_decl_data.unresolved_index_type);
+          if (tree->tree_data.arr_decl_data.array_dimensions != NULL)
+              destroy_list(tree->tree_data.arr_decl_data.array_dimensions);
           break;
 
         case TREE_CONST_DECL:
@@ -1948,6 +1955,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
     clone->is_interface = record_type->is_interface;
+    clone->is_packed = record_type->is_packed;
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;
@@ -1960,6 +1968,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->num_generic_args = record_type->num_generic_args;
     clone->is_generic_specialization = record_type->is_generic_specialization;
     clone->method_clones_emitted = 0;
+    clone->parent_fields_merged = 0;
+    clone->source_unit_index = record_type->source_unit_index;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
     {
@@ -2386,8 +2396,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_array = is_array;
     alias->array_start = start;
     alias->array_end = end;
-    alias->array_element_type = UNKNOWN_TYPE;
-    alias->array_element_type_id = NULL;
+    alias->array_element_type = is_array ? actual_type : UNKNOWN_TYPE;
+    alias->array_element_type_id = (is_array && type_id != NULL) ? strdup(type_id) : NULL;
     alias->array_element_type_ref = NULL;
     alias->is_shortstring = 0;
     alias->is_open_array = (alias->is_array && end < start);
@@ -2483,6 +2493,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.init_guard_label = NULL;
     new_tree->tree_data.arr_decl_data.defined_in_unit = 0;
     new_tree->tree_data.arr_decl_data.unit_is_public = 0;
+    new_tree->tree_data.arr_decl_data.unresolved_index_type = NULL;
 
     return new_tree;
 }
@@ -3127,6 +3138,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.self_class_name = NULL;
     new_expr->expr_data.function_call_data.is_class_method_call = 0;
     new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    new_expr->expr_data.function_call_data.is_inherited_call = 0;
 
     return new_expr;
 }

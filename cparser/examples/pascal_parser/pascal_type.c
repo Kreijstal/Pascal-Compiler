@@ -187,7 +187,7 @@ static ParseResult range_type_fn(input_t* in, void* args, char* parser_name) {
     save_input_state(in, &state);
 
     combinator_t* expr_parser = new_combinator();
-    init_pascal_expression_parser(&expr_parser, NULL);
+    init_pascal_type_expression_parser(&expr_parser);
 
     ParseResult expr_result = parse(in, expr_parser);
     free_combinator(expr_parser);
@@ -436,13 +436,15 @@ static combinator_t* create_type_ref_parser(void) {
     combinator_t* simple_type = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
     
     // Include array types, records, and other complex type specs
-    // This allows class fields to have types like "array of T"
+    // This allows class fields to have types like "array of T" or "string[40]"
     cached_type_ref = multi(new_combinator(), PASCAL_T_NONE,
         constructed_type,
         array_type(PASCAL_T_ARRAY_TYPE),
+        record_type(PASCAL_T_RECORD_TYPE),
         set_type(PASCAL_T_SET),
         pointer_type(PASCAL_T_POINTER_TYPE),
         file_type(PASCAL_T_FILE_TYPE),
+        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
         simple_type,
         NULL
     );
@@ -542,17 +544,17 @@ static combinator_t* create_property_decl_parser(void) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("stored")),
-            token(cident(PASCAL_T_IDENTIFIER)),
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))),
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -770,17 +772,17 @@ combinator_t* class_type(tag_t tag) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("stored")),
-            token(cident(PASCAL_T_IDENTIFIER)),
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))),
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
@@ -982,8 +984,16 @@ combinator_t* class_type(tag_t tag) {
 
     combinator_t* nested_class_body = many(nested_class_member);
 
+    // Optional parent class for nested classes: class(TParent)
+    combinator_t* nested_parent_class = optional(between(
+        token(match("(")),
+        token(match(")")),
+        sep_by(create_type_ref_parser(), token(match(",")))
+    ));
+
     combinator_t* nested_class_type = seq(new_combinator(), PASCAL_T_CLASS_TYPE,
         token(keyword_ci("class")),
+        nested_parent_class,
         nested_class_body,
         token(keyword_ci("end")),
         NULL
@@ -1202,12 +1212,12 @@ combinator_t* interface_type(tag_t tag) {
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("read")),
-            token(cident(PASCAL_T_IDENTIFIER)), // read field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
             token(keyword_ci("write")),
-            token(cident(PASCAL_T_IDENTIFIER)), // write field/method
+            sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
         token(match(";")),
@@ -1385,6 +1395,7 @@ static combinator_t* create_record_field_type_spec(void) {
         procedure_type(PASCAL_T_PROCEDURE_TYPE),  /* Allow procedure/function fields with calling conventions */
         function_type(PASCAL_T_FUNCTION_TYPE),
         type_name(PASCAL_T_IDENTIFIER),
+        token(pascal_identifier_with_subscript(PASCAL_T_IDENTIFIER)),
         token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
         token(pascal_identifier(PASCAL_T_IDENTIFIER)),
         token(cident(PASCAL_T_IDENTIFIER)),
@@ -1454,6 +1465,7 @@ static combinator_t* create_class_method_directives(void) {
         token(create_keyword_parser("experimental", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("dynamic", PASCAL_T_IDENTIFIER)),
         token(create_keyword_parser("message", PASCAL_T_IDENTIFIER)),
+        token(create_keyword_parser("final", PASCAL_T_IDENTIFIER)),
         NULL
     );
     combinator_t* class_method_directive = seq(new_combinator(), PASCAL_T_METHOD_DIRECTIVE,
@@ -2709,19 +2721,73 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
     free_ast(open_res.value.ast);
     free_combinator(open_paren);
 
-    // Parse enumerated values: identifier, identifier, ...
-    combinator_t* enum_value = token(cident(PASCAL_T_IDENTIFIER));
-    combinator_t* value_list = sep_by(enum_value, token(match(",")));
-    ParseResult values_res = parse(in, value_list);
+    // Parse enumerated values: identifier [:= expression], identifier [:= expression], ...
+    // FPC supports explicit ordinal values like (ms_on := 1, ms_off := 2)
+    // We parse the := expression but only keep the identifier for now
     ast_t* values_ast = NULL;
-    if (values_res.is_success) {
-        values_ast = values_res.value.ast;
-    } else {
-        discard_failure(values_res);
-        free_combinator(value_list);
-        return fail_with_message("Expected enumerated values", in, &state, parser_name);
+    ast_t** values_tail = &values_ast;
+    int first = 1;
+    while (1) {
+        if (!first) {
+            // Parse comma separator
+            combinator_t* comma = token(match(","));
+            ParseResult comma_res = parse(in, comma);
+            free_combinator(comma);
+            if (!comma_res.is_success) {
+                discard_failure(comma_res);
+                break; // No more values
+            }
+            free_ast(comma_res.value.ast);
+        }
+        first = 0;
+
+        // Parse identifier
+        combinator_t* ident = token(cident(PASCAL_T_IDENTIFIER));
+        ParseResult ident_res = parse(in, ident);
+        free_combinator(ident);
+        if (!ident_res.is_success) {
+            discard_failure(ident_res);
+            if (values_ast == NULL) {
+                return fail_with_message("Expected enumerated values", in, &state, parser_name);
+            }
+            break;
+        }
+
+        // Check for optional := or = expression (explicit ordinal value)
+        // FPC uses := but also accepts = for enum values
+        combinator_t* assign_op = token(match(":="));
+        ParseResult assign_res = parse(in, assign_op);
+        free_combinator(assign_op);
+        if (!assign_res.is_success) {
+            discard_failure(assign_res);
+            // Try plain = as well
+            combinator_t* eq_op = token(match("="));
+            assign_res = parse(in, eq_op);
+            free_combinator(eq_op);
+        }
+        if (assign_res.is_success) {
+            free_ast(assign_res.value.ast);
+            // Parse the value expression and discard it
+            combinator_t* val_expr = new_combinator();
+            init_pascal_type_expression_parser(&val_expr);
+            ParseResult val_res = parse(in, val_expr);
+            free_combinator(val_expr);
+            if (val_res.is_success) {
+                free_ast(val_res.value.ast); // Discard the value for now
+            } else {
+                discard_failure(val_res);
+                free_ast(ident_res.value.ast);
+                free_ast(values_ast);
+                return fail_with_message("Expected expression after '=' in enum value", in, &state, parser_name);
+            }
+        } else {
+            discard_failure(assign_res);
+        }
+
+        // Append the identifier to the values list
+        *values_tail = ident_res.value.ast;
+        values_tail = &(*values_tail)->next;
     }
-    free_combinator(value_list);
 
     // Parse closing parenthesis
     combinator_t* close_paren = token(match(")"));
@@ -2988,11 +3054,19 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         set_ast_position(return_ast, in);
     }
 
-    // 3.5 Optional "of object" for method pointer types (procedure of object)
+    // 3.5 Optional "of object" or "is nested" for method pointer / nested types
     {
-        combinator_t* of_object = optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("of")),
-            token(keyword_ci("object")),
+        combinator_t* of_object = optional(multi(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("of")),
+                token(keyword_ci("object")),
+                NULL
+            ),
+            seq(new_combinator(), PASCAL_T_NONE,
+                token(keyword_ci("is")),
+                token(create_keyword_parser("nested", PASCAL_T_IDENTIFIER)),
+                NULL
+            ),
             NULL
         ));
         ParseResult of_object_res = parse(in, of_object);

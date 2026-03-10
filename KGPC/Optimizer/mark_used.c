@@ -146,6 +146,8 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map);
 static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map);
 static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map);
 static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
+static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
+    const char *method_name, SubprogramMap *map);
 
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
@@ -802,7 +804,8 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                         struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
                         const char *lookup_id = NULL;
                         if (method != NULL)
-                            lookup_id = method->mangled_name != NULL ? method->mangled_name : method->name;
+                            lookup_id = method->resolved_mangled_id != NULL ? method->resolved_mangled_id :
+                                (method->mangled_name != NULL ? method->mangled_name : method->name);
                         if (lookup_id != NULL)
                         {
                             Tree_t *sub = map_find(map, lookup_id);
@@ -810,6 +813,19 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                                 mark_subprogram_recursive(sub, map);
                             /* Also mark all overloads that share the base id. */
                             mark_subprograms_by_id(map, lookup_id);
+                            /* Some FPC RTL VMT slots resolve to wrapper labels whose
+                             * emitted bodies are tracked in the subprogram map under the
+                             * Pascal method id rather than the final VMT target symbol.
+                             * If exact lookup misses, fall back to the method name so
+                             * wrapper overloads are still retained for the VMT. */
+                            if (sub == NULL && method->name != NULL)
+                            {
+                                mark_class_methods_by_owner(
+                                    program->tree_data.program_data.subprograms,
+                                    type_tree->tree_data.type_decl_data.id,
+                                    method->name, map);
+                                mark_subprograms_by_id(map, method->name);
+                            }
                         }
                         method_node = method_node->next;
                     }
@@ -903,4 +919,55 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
         }
     }
     free(lower_id);
+}
+
+static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
+    const char *method_name, SubprogramMap *map)
+{
+    if (sub_list == NULL || owner_class == NULL || method_name == NULL || map == NULL)
+        return;
+
+    size_t owner_len = strlen(owner_class);
+    size_t method_len = strlen(method_name);
+
+    for (ListNode_t *node = sub_list; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+
+        Tree_t *sub = (Tree_t *)node->cur;
+        if (sub->type != TREE_SUBPROGRAM)
+            continue;
+
+        const char *sub_owner = sub->tree_data.subprogram_data.owner_class;
+        const char *sub_method = sub->tree_data.subprogram_data.method_name;
+        const char *sub_mangled = sub->tree_data.subprogram_data.mangled_id;
+        int matches_mangled_prefix = 0;
+        if (sub_mangled != NULL)
+        {
+            if (strncasecmp(sub_mangled, owner_class, owner_len) == 0 &&
+                sub_mangled[owner_len] == '_' &&
+                sub_mangled[owner_len + 1] == '_' &&
+                strncasecmp(sub_mangled + owner_len + 2, method_name, method_len) == 0)
+            {
+                matches_mangled_prefix = 1;
+            }
+        }
+        if (sub_owner != NULL && sub_method != NULL &&
+            strcasecmp(sub_owner, owner_class) == 0 &&
+            strcasecmp(sub_method, method_name) == 0)
+        {
+            mark_subprogram_recursive(sub, map);
+        }
+        else if (matches_mangled_prefix)
+        {
+            mark_subprogram_recursive(sub, map);
+        }
+
+        if (sub->tree_data.subprogram_data.subprograms != NULL)
+        {
+            mark_class_methods_by_owner(sub->tree_data.subprogram_data.subprograms,
+                owner_class, method_name, map);
+        }
+    }
 }

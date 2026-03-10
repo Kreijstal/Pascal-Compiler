@@ -39,11 +39,13 @@ enum VarType{
     HASHVAR_SET,
     HASHVAR_ENUM,
     HASHVAR_FILE,
+    HASHVAR_TYPEDFILE,
     HASHVAR_TEXT,
     HASHVAR_RAWBYTESTRING,
     HASHVAR_UNICODESTRING,
     HASHVAR_SHORTSTRING,
-    HASHVAR_WIDECHAR
+    HASHVAR_WIDECHAR,
+    HASHVAR_QWORD
 };
 
 /* Items we put in the hash table */
@@ -97,6 +99,8 @@ typedef struct HashNode
     char *owner_class_full;  /* Full dotted class path for nested classes (NULL if not nested) */
     char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
+    char *internproc_id;     /* FPC [INTERNPROC: name] identifier (NULL if not an internproc) */
+
 } HashNode_t;
 
 /* Our actual hash table */
@@ -117,6 +121,10 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
+
+/* Like FindIdentInTable but prefers matches from caller_unit_index.
+ * Priority: same unit > program-local (0) > any other unit. */
+HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix. Returns first match or NULL */
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix);

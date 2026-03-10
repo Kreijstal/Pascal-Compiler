@@ -77,6 +77,8 @@ struct Expression *clone_expression(const struct Expression *expr)
         return NULL;
 
     clone->line_num = expr->line_num;
+    clone->col_num = expr->col_num;
+    clone->source_index = expr->source_index;
     clone->type = expr->type;
     clone->pointer_subtype = expr->pointer_subtype;
     

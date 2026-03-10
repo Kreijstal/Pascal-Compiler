@@ -117,11 +117,10 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
-/* .weak is ELF-only; PE/COFF (Windows) resolves unmatched weak externs to
- * NULL, causing crashes.  Always fall back to .globl on Windows targets. */
+/* Use .globl for class vars and aliases that need external linkage. */
 static inline const char *codegen_weak_or_globl(void)
 {
-    return codegen_target_is_windows() ? ".globl" : ".weak";
+    return ".globl";
 }
 
 static inline const char *codegen_readonly_section_directive(void)
@@ -306,6 +305,7 @@ void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_
 int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
 int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
 
+void codegen_reset_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);

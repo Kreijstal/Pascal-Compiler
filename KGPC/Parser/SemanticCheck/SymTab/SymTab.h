@@ -22,6 +22,7 @@ typedef struct SymTab
 {
     ListNode_t *stack_head;
     HashTable_t *builtins;
+    int unit_context;  /* Active unit index for unit-aware resolution (0 = program) */
 } SymTab_t;
 
 /* Initializes the SymTab with stack_head pointing to NULL */
@@ -96,6 +97,10 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
 int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
+
+/* Like FindIdent but uses unit-aware resolution.
+ * Prefers symbols from caller_unit_index, then program-local, then any. */
+int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix */
 /* Returns -1 and sets hash_return to NULL if not found */

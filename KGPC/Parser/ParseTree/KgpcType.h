@@ -23,6 +23,12 @@ struct HashNode;
 // Forward declaration for VarType enum (defined in HashTable.h)
 enum VarType;
 
+typedef enum {
+    KGPC_FLOAT_ABI_NONE = 0,
+    KGPC_FLOAT_ABI_SSE = 1,
+    KGPC_FLOAT_ABI_X87 = 2
+} KgpcFloatAbiClass;
+
 // Defines what kind of type we are dealing with.
 typedef enum {
     TYPE_KIND_PRIMITIVE, // Integer, Real, Char, Boolean, etc.
@@ -149,8 +155,13 @@ int kgpc_type_is_wide_string(const KgpcType *type);
 int kgpc_type_is_shortstring(const KgpcType *type);
 int kgpc_type_is_integer(const KgpcType *type);
 int kgpc_type_is_real(const KgpcType *type);
+int kgpc_type_is_extended(const KgpcType *type);
 int kgpc_type_is_numeric(const KgpcType *type);
 int kgpc_type_is_boolean(const KgpcType *type);
+int kgpc_type_is_real_family_tag(int primitive_tag);
+int kgpc_type_is_extended_tag(int primitive_tag);
+long long kgpc_type_real_storage_size(const KgpcType *type);
+KgpcFloatAbiClass kgpc_type_float_abi_class(const KgpcType *type);
 
 /* Check if a type is a record type. */
 int kgpc_type_is_record(const KgpcType *type);

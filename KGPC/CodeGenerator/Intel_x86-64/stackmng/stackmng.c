@@ -138,11 +138,13 @@ static inline int align_up(int value, int alignment)
     return value + (alignment - remainder);
 }
 
-static inline int stack_slot_alignment(void)
+static inline int stack_slot_alignment_for_size(int size)
 {
     int alignment = (int)sizeof(void *);
     if (alignment < DOUBLEWORD)
         alignment = DOUBLEWORD;
+    if ((size == 10 || size >= 16) && alignment < 16)
+        alignment = 16;
     return alignment;
 }
 
@@ -164,7 +166,7 @@ StackNode_t *add_l_t(char *label)
 
     cur_scope = global_stackmng->cur_scope;
 
-    int alignment = stack_slot_alignment();
+    int alignment = stack_slot_alignment_for_size(temp_size);
     cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
     cur_scope->t_offset = align_up(cur_scope->t_offset, temp_size);
     cur_scope->t_offset += temp_size;
@@ -201,13 +203,19 @@ StackNode_t *add_l_t_bytes(char *label, int size)
 
     if (size <= 0)
         size = DOUBLEWORD;
-    int alignment = stack_slot_alignment();
+    int alignment = stack_slot_alignment_for_size(size);
     int aligned_size = align_up(size, alignment);
 
-    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
+    /* Align the cumulative offset (z + x + t) so the final stack slot
+       is properly aligned.  Aligning t_offset alone is insufficient when
+       x_offset is not a multiple of the required alignment. */
+    int base = cur_scope->z_offset + cur_scope->x_offset;
+    int total_before = base + cur_scope->t_offset;
+    int total_aligned = align_up(total_before, alignment);
+    cur_scope->t_offset = total_aligned - base;
     cur_scope->t_offset += aligned_size;
 
-    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    int offset = base + cur_scope->t_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
@@ -242,7 +250,7 @@ StackNode_t *add_l_x(char *label, int size)
     if (size <= 0)
         size = DOUBLEWORD;
 
-    int alignment = stack_slot_alignment();
+    int alignment = stack_slot_alignment_for_size(size);
     int aligned_size = align_up(size, alignment);
 
     cur_scope->x_offset = align_up(cur_scope->x_offset, alignment);
@@ -457,6 +465,39 @@ StackNode_t *add_l_z(char *label)
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d\n", label, offset);
+    #endif
+
+    return new_node;
+}
+
+StackNode_t *add_l_z_bytes(char *label, int size)
+{
+    assert(global_stackmng != NULL);
+    assert(global_stackmng->cur_scope != NULL);
+    assert(label != NULL);
+
+    StackScope_t *cur_scope = global_stackmng->cur_scope;
+    if (size <= 0)
+        size = DOUBLEWORD;
+
+    int alignment = stack_slot_alignment_for_size(size);
+    int aligned_size = align_up(size, alignment);
+    cur_scope->z_offset = align_up(cur_scope->z_offset, alignment);
+    cur_scope->z_offset += aligned_size;
+
+    int offset = cur_scope->z_offset;
+    StackNode_t *new_node = init_stack_node(offset, label, aligned_size);
+    new_node->element_size = size;
+
+    if (cur_scope->z == NULL)
+        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
+    else
+        cur_scope->z = PushListNodeBack(cur_scope->z,
+            CreateListNode(new_node, LIST_UNSPECIFIED));
+
+    #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d (bytes=%d)\n",
+            label, offset, aligned_size);
     #endif
 
     return new_node;
