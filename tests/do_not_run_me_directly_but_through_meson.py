@@ -34,6 +34,19 @@ IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS
 # This happens during cross-compilation testing
 # Check for Wine-specific environment variables
 IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
+EXE_EXT = ".exe" if IS_WINDOWS_ABI else ""
+
+_original_subprocess_run = subprocess.run
+
+def _patched_subprocess_run(args, **kwargs):
+    """Wrapper that resolves executable to absolute path on Wine."""
+    if IS_WINE and args and isinstance(args, (list, tuple)):
+        args = list(args)
+        if os.path.exists(args[0]):
+            args[0] = os.path.abspath(args[0])
+    return _original_subprocess_run(args, **kwargs)
+
+subprocess.run = _patched_subprocess_run
 
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
@@ -1352,7 +1365,9 @@ class TestCompiler(unittest.TestCase):
         try:
             command = list(self.c_compiler_cmd)
             command.append("-O2")
-            if not IS_WINDOWS_ABI:
+            if IS_WINDOWS_ABI:
+                command.append("-static")
+            else:
                 command.append("-no-pie")
             if is_coverage_enabled():
                 command.append("--coverage")
@@ -1377,7 +1392,7 @@ class TestCompiler(unittest.TestCase):
     def _get_test_paths(self, name, extension="p"):
         input_file = os.path.join(TEST_CASES_DIR, f"{name}.{extension}")
         asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, name)
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"{name}{EXE_EXT}")
         return input_file, asm_file, executable_file
 
     @classmethod
@@ -1500,7 +1515,7 @@ class TestCompiler(unittest.TestCase):
         """Tests DateUtils with custom regex verification."""
         input_file = os.path.join(TEST_CASES_DIR, "missing_dateutils.p")
         output_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"missing_dateutils{EXE_EXT}")
 
         # Compile
         run_compiler(input_file, output_file)
@@ -1841,7 +1856,7 @@ class TestCompiler(unittest.TestCase):
 
         run_compiler(input_file, asm_file)
 
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_dll_demo{EXE_EXT}")
         if self.ctypes_helper_link is None:
             self.fail(
                 "Unable to locate ctypes helper import library; ensure Meson exposed it"
@@ -1881,7 +1896,7 @@ class TestCompiler(unittest.TestCase):
         """Ensures pointer helper aliases in ctypes behave like regular Pascal pointers."""
         input_file = os.path.join(TEST_CASES_DIR, "ctypes_pointer_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_pointer_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -1900,7 +1915,7 @@ class TestCompiler(unittest.TestCase):
         """Compiling pointer operators program should produce the expected output."""
         input_file = os.path.join(TEST_CASES_DIR, "pointer_operators.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"pointer_operators{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -1919,7 +1934,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and runs a program that assigns NIL to a typed pointer."""
         input_file = os.path.join(TEST_CASES_DIR, "pointer_simple.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"pointer_simple{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.assertTrue(os.path.exists(asm_file))
@@ -1942,7 +1957,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and runs a program that dereferences a typed pointer to a record."""
         input_file = os.path.join(TEST_CASES_DIR, "test_dereference_minimal.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"test_dereference_minimal{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.assertTrue(os.path.exists(asm_file))
@@ -1989,7 +2004,7 @@ class TestCompiler(unittest.TestCase):
         """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
         input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"runtime_features{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2008,7 +2023,7 @@ class TestCompiler(unittest.TestCase):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "KGPC/TestPrograms/sign_test.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"sign_test{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2043,7 +2058,7 @@ class TestCompiler(unittest.TestCase):
         """Tests that the helloworld program prints 'Hello, World!'."""
         input_file = os.path.join(TEST_CASES_DIR, "helloworld.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "helloworld.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "helloworld")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"helloworld{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2065,7 +2080,7 @@ class TestCompiler(unittest.TestCase):
         """Ensure extended statements parse, compile, and execute."""
         input_file = os.path.join(TEST_CASES_DIR, "statement_extensions.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"statement_extensions{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2084,7 +2099,7 @@ class TestCompiler(unittest.TestCase):
         """Exercise raise statements with try/except/finally control flow."""
         input_file = os.path.join(TEST_CASES_DIR, "exception_flow.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"exception_flow{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2115,7 +2130,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and executes a program exercising REAL arithmetic and IO."""
         input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"real_arithmetic{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.record_failure_context(
@@ -2139,7 +2154,7 @@ class TestCompiler(unittest.TestCase):
 
         input_file = os.path.join(TEST_CASES_DIR, "text_file_roundtrip.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"text_file_roundtrip{EXE_EXT}")
         output_path = os.path.join(TEST_OUTPUT_DIR, "text_roundtrip.txt")
 
         run_compiler(input_file, asm_file)
@@ -2261,7 +2276,7 @@ class TestCompiler(unittest.TestCase):
 
         source = os.path.join(TEST_CASES_DIR, "keyboard_arrow.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow.s")
-        exe_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow")
+        exe_file = os.path.join(TEST_OUTPUT_DIR, f"keyboard_arrow{EXE_EXT}")
 
         run_compiler(source, asm_file)
         self.compile_executable(asm_file, exe_file)
@@ -2421,7 +2436,7 @@ sys.exit(3)
         """Tests const expressions with bitwise ops, NOT, and shifts."""
         input_file = os.path.join(TEST_CASES_DIR, "const_expr_operators.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"const_expr_operators{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2442,7 +2457,7 @@ sys.exit(3)
         """Tests integer typecasts in const expressions."""
         input_file = os.path.join(TEST_CASES_DIR, "const_expr_typecasts.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"const_expr_typecasts{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2463,7 +2478,7 @@ sys.exit(3)
         """Tests FPC-style bracket directives and interface-level properties."""
         input_file = os.path.join(TEST_CASES_DIR, "directives_and_properties.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"directives_and_properties{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2481,7 +2496,7 @@ sys.exit(3)
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"repeat_infer{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2499,7 +2514,7 @@ sys.exit(3)
         """Tests that const declarations and array indexing work together."""
         input_file = os.path.join(TEST_CASES_DIR, "array_const.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "array_const.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "array_const")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"array_const{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2521,7 +2536,7 @@ sys.exit(3)
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"record_decl_only{EXE_EXT}")
 
         # Compile the pascal program to assembly. This exercises the record type
         # conversion logic added to the cparser import path.
@@ -2544,7 +2559,7 @@ sys.exit(3)
         """Exercises record assignment, address-of, and var parameter support."""
         input_file = os.path.join(TEST_CASES_DIR, "record_reference_features.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"record_reference_features{EXE_EXT}")
         expected_output_file = os.path.join(
             TEST_CASES_DIR, "record_reference_features.expected"
         )
@@ -2614,7 +2629,7 @@ sys.exit(3)
         """Compiles and runs a minimal variant record example."""
         input_file = os.path.join(TEST_CASES_DIR, "variant_record_minimal.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"variant_record_minimal{EXE_EXT}")
         expected_output_file = os.path.join(
             TEST_CASES_DIR, "variant_record_minimal.expected"
         )
@@ -2672,7 +2687,7 @@ sys.exit(3)
             TEST_CASES_DIR, "with_nested_multi_context.p"
         )
         asm_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"with_nested_multi_context{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2692,7 +2707,7 @@ sys.exit(3)
         """Tests that the mod operator works correctly."""
         input_file = os.path.join(TEST_CASES_DIR, "mod_test.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "mod_test.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "mod_test")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"mod_test{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2714,7 +2729,7 @@ sys.exit(3)
         """Tests that string addition produces a concatenated result."""
         input_file = os.path.join(TEST_CASES_DIR, "string_concat_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"string_concat_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2737,7 +2752,7 @@ sys.exit(3)
         """Tests that the SysUtils unit links and provides basic helpers."""
         input_file = os.path.join(TEST_CASES_DIR, "sysutils_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"sysutils_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2773,7 +2788,7 @@ sys.exit(3)
         """Ensures inline asm constants are emitted from Pascal const declarations."""
         input_file = os.path.join(TEST_CASES_DIR, "asm_const_equ.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"asm_const_equ{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
 
@@ -2800,7 +2815,7 @@ sys.exit(3)
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"unix_gethostname_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2854,7 +2869,7 @@ sys.exit(3)
         """Ensures the Ord builtin converts characters to their ordinal values."""
         input_file = os.path.join(TEST_CASES_DIR, "ord_builtin.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ord_builtin{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2881,7 +2896,7 @@ sys.exit(3)
         """Ensures typed constant arrays are lowered into runtime initializers."""
         input_file = os.path.join(TEST_CASES_DIR, "typed_const_array_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"typed_const_array_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2947,7 +2962,7 @@ sys.exit(3)
         """Ensures the ctypes unit exposes C compatible aliases."""
         input_file = os.path.join(TEST_CASES_DIR, "ctypes_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2988,7 +3003,7 @@ sys.exit(3)
         """Ensures the zahlen classification demo compiles and executes with dynamic arrays."""
         input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"zahlen_run{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -3028,7 +3043,7 @@ sys.exit(3)
         """Tests the for program, including edge cases."""
         input_file = "KGPC/TestPrograms/CodeGeneration/for.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"for{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -3070,7 +3085,7 @@ sys.exit(3)
         """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
         input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"assert_fail{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -3141,7 +3156,7 @@ def _discover_and_add_auto_tests():
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
-                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto{EXE_EXT}")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
@@ -3286,7 +3301,7 @@ def _discover_and_add_fpc_rtl_tests():
                 """FPC RTL test case."""
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl.s")
-                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl{EXE_EXT}")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
