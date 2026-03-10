@@ -8149,12 +8149,37 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     /* Handle string typecast on LHS: e.g., RawByteString(ptr) := ''
      * Treat the pointer location as a string variable — get its address
-     * and call kgpc_string_assign so refcounting works properly. */
+     * and call kgpc_string_assign so refcounting works properly.
+     * Special case: RHS is empty string '' → store nil directly (FPC
+     * AnsiString semantics: empty string == nil pointer). */
     if (lhs_is_string_typecast)
     {
         struct Expression *inner = var_expr->expr_data.typecast_data.expr;
 
-        /* Evaluate RHS string value */
+        /* Detect empty string literal: RawByteString(ptr) := ''
+         * In FPC, this means "set pointer to nil". */
+        int rhs_is_empty = (assign_expr != NULL && assign_expr->type == EXPR_STRING &&
+            assign_expr->expr_data.string != NULL &&
+            assign_expr->expr_data.string[0] == '\0');
+        if (rhs_is_empty)
+        {
+            /* Store nil directly into the pointer location */
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+            char buffer[CODEGEN_MAX_INST_BUF];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$0, (%s)\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        /* Non-empty string: evaluate RHS and call kgpc_string_assign */
         Register_t *value_reg = NULL;
         inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
         if (codegen_had_error(ctx) || value_reg == NULL)

@@ -2869,16 +2869,6 @@ void kgpc_string_assign(char **target, const char *value)
         return;
     }
 
-    /* An unmanaged empty C string (e.g., from string literal '') should
-     * become nil — FPC AnsiString semantics: empty string == nil pointer.
-     * This matters when FPC RTL code does RawByteString(ptr) := '' and
-     * later checks Assigned(ptr). */
-    if (value[0] == '\0')
-    {
-        *target = NULL;
-        return;
-    }
-
     *target = kgpc_string_duplicate(value);
 }
 
@@ -4023,8 +4013,10 @@ void *SysTryResizeMem(void *p, intptr_t size)
 /*   offset 88: GetFPCHeapStatus (function pointer)                    */
 /* ------------------------------------------------------------------ */
 
-/* MemoryManager symbol — defined in the compiler's output as BSS */
-extern char MemoryManager[] __attribute__((weak));
+/* MemoryManager — the FPC heap manager dispatch table.
+ * Declared in system.p (KGPC mode) or system.pp (FPC mode).
+ * We populate the function pointers at startup. */
+extern char MemoryManager[];
 
 /* Simple heap wrappers matching FPC's TMemoryManager function signatures */
 static void *kgpc_mm_getmem(uintptr_t size)
@@ -4081,9 +4073,6 @@ static void kgpc_mm_noop(void) {}
 __attribute__((constructor))
 static void kgpc_init_memory_manager(void)
 {
-    if (MemoryManager == NULL)
-        return; /* MemoryManager not defined (non-FPC mode) */
-
     char *mm = (char *)MemoryManager;
     /* Skip NeedLock at offset 0 (leave as false/0) */
     void *ptrs[] = {

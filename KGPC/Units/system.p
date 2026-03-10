@@ -472,6 +472,9 @@ var
   UTF8CompareLocale: TSystemCodePage;
   StdInputHandle: THandle;
   StdOutputHandle: THandle;
+  { MemoryManager dispatch table — initialized by runtime at startup.
+    Layout matches FPC's TMemoryManager (96 bytes on x86-64). }
+  MemoryManager: array[0..95] of Byte;
   StdErrorHandle: THandle;
 
   { Thread manager globals — defined here so both KGPC stdlib and FPC RTL
