@@ -6356,11 +6356,13 @@ skip_type_receiver_rewrite:
 
                 if (record_type == NULL || record_type->type_id == NULL)
                 {
+                    int helper_tag = UNKNOWN_TYPE;
+                    semcheck_stmt_expr_tag(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+                    /* Resolve arg_type AFTER semcheck_stmt_expr_tag — the latter may
+                       free and replace types on the expression, invalidating earlier pointers. */
                     int arg_type_owned = 0;
                     KgpcType *arg_type = semcheck_resolve_expression_kgpc_type(symtab,
                         first_arg, max_scope_lev, NO_MUTATE, &arg_type_owned);
-                    int helper_tag = UNKNOWN_TYPE;
-                    semcheck_stmt_expr_tag(&helper_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
                     const char *helper_name = NULL;
                     if (arg_type != NULL)
                     {
