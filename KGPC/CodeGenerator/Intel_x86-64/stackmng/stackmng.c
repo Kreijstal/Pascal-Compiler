@@ -206,10 +206,16 @@ StackNode_t *add_l_t_bytes(char *label, int size)
     int alignment = stack_slot_alignment_for_size(size);
     int aligned_size = align_up(size, alignment);
 
-    cur_scope->t_offset = align_up(cur_scope->t_offset, alignment);
+    /* Align the cumulative offset (z + x + t) so the final stack slot
+       is properly aligned.  Aligning t_offset alone is insufficient when
+       x_offset is not a multiple of the required alignment. */
+    int base = cur_scope->z_offset + cur_scope->x_offset;
+    int total_before = base + cur_scope->t_offset;
+    int total_aligned = align_up(total_before, alignment);
+    cur_scope->t_offset = total_aligned - base;
     cur_scope->t_offset += aligned_size;
 
-    int offset = cur_scope->z_offset + cur_scope->x_offset + cur_scope->t_offset;
+    int offset = base + cur_scope->t_offset;
 
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
