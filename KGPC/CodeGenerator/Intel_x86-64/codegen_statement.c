@@ -2315,6 +2315,15 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
         if (alias != NULL && alias->is_shortstring)
             return 1;
     }
+    /* For record field access, only the RecordField's type is authoritative.
+     * Plain array[0..255] of AnsiChar fields are NOT shortstrings. */
+    if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+        if (field != NULL && field->type == SHORTSTRING_TYPE)
+            return 1;
+        return 0;
+    }
     /* Also check by type bounds: string[N] is char array with bounds 0..N */
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
@@ -2430,15 +2439,17 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
 
     if (is_shortstring_out != NULL)
     {
-        if (expr->type == EXPR_RECORD_ACCESS && *is_shortstring_out == 0)
+        if (expr->type == EXPR_RECORD_ACCESS)
         {
-            /* Bounds may have been found via KgpcType; still check the RecordField
-             * for the authoritative shortstring flag. */
+            /* For record field access, the RecordField's type is authoritative.
+             * Do NOT fall through to the array[0..255] heuristic. */
             struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
             if (field != NULL && field->type == SHORTSTRING_TYPE)
                 *is_shortstring_out = 1;
+            else
+                *is_shortstring_out = 0;
         }
-        if (expr->type != EXPR_RECORD_ACCESS || *is_shortstring_out == 0)
+        else
         {
             int is_short = (*is_shortstring_out != 0);
             if (!is_short)
