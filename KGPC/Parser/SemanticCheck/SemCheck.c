@@ -10439,14 +10439,28 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             kgpc_type = wrapped;
             tree->tree_data.type_decl_data.kgpc_type = wrapped;
         }
-        if (kgpc_type == NULL &&
-            tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+        if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             alias_info != NULL)
         {
-            /* Ensure alias types get KgpcType even when parser couldn't resolve */
-            kgpc_type = create_kgpc_type_from_type_alias(alias_info, symtab,
-                tree->tree_data.type_decl_data.defined_in_unit);
-            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+            /* Rebuild KgpcType from alias when parser's pre-built type is missing
+             * or wrong (e.g., string[3] parsed as primitive SHORTSTRING instead of
+             * array[0..3] of char). */
+            int need_rebuild = (kgpc_type == NULL);
+            if (!need_rebuild && alias_info->is_array &&
+                kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+                need_rebuild = 1;
+            if (need_rebuild)
+            {
+                KgpcType *rebuilt = create_kgpc_type_from_type_alias(alias_info, symtab,
+                    tree->tree_data.type_decl_data.defined_in_unit);
+                if (rebuilt != NULL)
+                {
+                    if (kgpc_type != NULL)
+                        kgpc_type_release(kgpc_type);
+                    kgpc_type = rebuilt;
+                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                }
+            }
         }
 
         /* Check if this type was already pre-declared by predeclare_types().
@@ -12051,8 +12065,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "file", create_primitive_type_with_size(FILE_TYPE, 368));
     add_builtin_type_owned(symtab, "File", create_primitive_type_with_size(FILE_TYPE, 368));
     add_builtin_type_owned(symtab, "TypedFile", create_primitive_type_with_size(FILE_TYPE, 368));
-    add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 632));
-    add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 632));
+    add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 672));
+    add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 672));
 
     AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
 

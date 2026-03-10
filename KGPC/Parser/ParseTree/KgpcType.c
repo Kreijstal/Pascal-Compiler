@@ -1409,6 +1409,11 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
     if ((lhs_is_pchar && rhs_is_string) || (lhs_is_string && rhs_is_pchar)) {
         return 1;
     }
+    /* Allow PChar := Char (single character promoted to static PChar) */
+    int rhs_is_char = (rhs_type->kind == TYPE_KIND_PRIMITIVE &&
+                       rhs_type->info.primitive_type_tag == CHAR_TYPE);
+    if (lhs_is_pchar && rhs_is_char)
+        return 1;
 
     /* Allow assigning typed pointers to/from generic Pointer. */
     if (lhs_type->kind == TYPE_KIND_PRIMITIVE &&
@@ -2382,6 +2387,8 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case PROCEDURE:
                     return 8; /* Pointers are 8 bytes on x86-64 */
                 case SHORTSTRING_TYPE:
+                    if (type->size_in_bytes > 0)
+                        return type->size_in_bytes;
                     return 256; /* length byte + 255 chars */
                 case FILE_TYPE:
                     if (type->size_in_bytes > 0)

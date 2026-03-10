@@ -249,22 +249,26 @@ typedef enum {
 
 typedef struct KGPCTextRec
 {
-    int32_t handle;
-    int32_t mode;
-    int64_t bufsize;
-    int64_t private_data;
-    int64_t bufpos;
-    int64_t bufend;
-    char *bufptr;
-    void *openfunc;
-    void *inoutfunc;
-    void *flushfunc;
-    void *closefunc;
-    unsigned char userdata[32];
-    char name[256];
-    char line_end[4];
-    char buffer[256];
-    uint16_t codepage;
+    int32_t handle;         /* offset 0 */
+    int32_t mode;           /* offset 4 */
+    int64_t bufsize;        /* offset 8 */
+    int64_t private_data;   /* offset 16 */
+    int64_t bufpos;         /* offset 24 */
+    int64_t bufend;         /* offset 32 */
+    char *bufptr;           /* offset 40 */
+    void *openfunc;         /* offset 48 */
+    void *inoutfunc;        /* offset 56 */
+    void *flushfunc;        /* offset 64 */
+    void *closefunc;        /* offset 72 */
+    unsigned char userdata[32]; /* offset 80 */
+    char name[256];         /* offset 112 */
+    char line_end[4];       /* offset 368 */
+    char _pad_buffer[12];   /* offset 372: padding to align buffer at 384 */
+    char buffer[256];       /* offset 384 */
+    uint16_t codepage;      /* offset 640 */
+    unsigned char _pad_fullname[6]; /* padding: 642..647 */
+    void *fullname;         /* offset 648 */
+    unsigned char _pad_end[16]; /* padding: 656..671, total = 672 */
 } KGPCTextRec;
 
 typedef struct KGPCFileRec
@@ -366,13 +370,111 @@ static void kgpc_textrec_init_defaults(KGPCTextRec *file)
         file->mode = KGPC_FM_CLOSED;
 }
 
+/* Side-table tracking which handle+mode each cached FILE* was created for.
+ * Detects stale caches after FPC RTL close+reopen cycles. */
+#define KGPC_STREAM_CACHE_SLOTS 16
+static struct {
+    KGPCTextRec *textrec;
+    int32_t original_handle;
+    int32_t original_mode;
+} kgpc_stream_cache[KGPC_STREAM_CACHE_SLOTS];
+
+static int kgpc_stream_cache_find(KGPCTextRec *file)
+{
+    for (int i = 0; i < KGPC_STREAM_CACHE_SLOTS; i++)
+        if (kgpc_stream_cache[i].textrec == file)
+            return i;
+    return -1;
+}
+
+static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle, int32_t mode)
+{
+    int idx = kgpc_stream_cache_find(file);
+    if (idx < 0)
+    {
+        /* Find empty slot */
+        for (int i = 0; i < KGPC_STREAM_CACHE_SLOTS; i++)
+            if (kgpc_stream_cache[i].textrec == NULL)
+            {
+                idx = i;
+                break;
+            }
+    }
+    if (idx >= 0)
+    {
+        kgpc_stream_cache[idx].textrec = file;
+        kgpc_stream_cache[idx].original_handle = handle;
+        kgpc_stream_cache[idx].original_mode = mode;
+    }
+}
+
+static void kgpc_stream_cache_clear(KGPCTextRec *file)
+{
+    int idx = kgpc_stream_cache_find(file);
+    if (idx >= 0)
+    {
+        kgpc_stream_cache[idx].textrec = NULL;
+        kgpc_stream_cache[idx].original_handle = -1;
+        kgpc_stream_cache[idx].original_mode = 0;
+    }
+}
+
 static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
 {
     kgpc_init_stdio();
     if (file == NULL)
         return fallback;
+    /* When FPC RTL opens a file, it sets TextRec.Handle but not
+     * private_data.  Use the handle to create a FILE* stream.
+     * FPC mode constants: fmClosed=0xD7B0, fmInput=0xD7B1,
+     * fmOutput=0xD7B2, fmInOut=0xD7B3, fmAppend=0xD7B4 */
+    int32_t h = file->handle;
     if (file->private_data != 0)
-        return (FILE *)(uintptr_t)file->private_data;
+    {
+        FILE *cached = (FILE *)(uintptr_t)file->private_data;
+        /* Validate that the cached stream is still valid.
+         * Two modes of operation:
+         * (1) KGPC RTL: FILE* owns the fd directly (fileno(cached)==handle).
+         *     Cache is always valid unless explicitly cleared by close_stream.
+         * (2) FPC RTL: FILE* wraps a dup'd fd (fileno(cached)!=handle).
+         *     Detect stale cache via handle+mode comparison with side-table. */
+        int cached_fd = fileno(cached);
+        if (cached_fd >= 0 && cached_fd == h)
+            return cached;  /* KGPC RTL: direct ownership, always valid */
+        /* FPC RTL path: validate via side-table */
+        int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
+        int idx = kgpc_stream_cache_find(file);
+        if (!is_closed && h >= 0 && idx >= 0 &&
+            h == kgpc_stream_cache[idx].original_handle &&
+            file->mode == kgpc_stream_cache[idx].original_mode)
+            return cached;
+        /* Stale cache: close the old stream and clear */
+        fclose(cached);
+        file->private_data = 0;
+        kgpc_stream_cache_clear(file);
+    }
+    if (h >= 0 && file->mode != 0 && file->mode != (int32_t)0xD7B0)
+    {
+        if (h == STDOUT_FILENO)
+            return stdout;
+        if (h == STDERR_FILENO)
+            return stderr;
+        if (h == STDIN_FILENO)
+            return stdin;
+        /* Valid fd opened by FPC — wrap in FILE* and cache */
+        const char *fmode = "w";
+        if (file->mode == (int32_t)0xD7B1) /* fmInput */
+            fmode = "r";
+        else if (file->mode == (int32_t)0xD7B4) /* fmAppend */
+            fmode = "a";
+        FILE *stream = fdopen(dup(h), fmode);
+        if (stream != NULL)
+        {
+            file->private_data = (int64_t)(uintptr_t)stream;
+            kgpc_stream_cache_set(file, h, file->mode);
+            return stream;
+        }
+    }
     return fallback;
 }
 
@@ -382,7 +484,12 @@ static void kgpc_textrec_set_stream(KGPCTextRec *file, FILE *stream)
         return;
     file->private_data = (int64_t)(uintptr_t)stream;
     if (stream != NULL)
+    {
         file->handle = fileno(stream);
+        kgpc_stream_cache_set(file, file->handle, file->mode);
+    }
+    else
+        kgpc_stream_cache_clear(file);
 }
 
 void kgpc_text_setbuf(KGPCTextRec *file, void *buffer, int32_t size)
@@ -2759,6 +2866,16 @@ void kgpc_string_assign(char **target, const char *value)
     {
         kgpc_string_retain(value);
         *target = (char *)value;
+        return;
+    }
+
+    /* An unmanaged empty C string (e.g., from string literal '') should
+     * become nil — FPC AnsiString semantics: empty string == nil pointer.
+     * This matters when FPC RTL code does RawByteString(ptr) := '' and
+     * later checks Assigned(ptr). */
+    if (value[0] == '\0')
+    {
+        *target = NULL;
         return;
     }
 

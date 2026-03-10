@@ -668,10 +668,37 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     struct RecordType *record_type = base_expr->record_type;
     if (record_type == NULL && base_expr->array_element_record_type != NULL)
         record_type = base_expr->array_element_record_type;
+    /* Unwrap typecasts to find record type (e.g., TextRec(t).Name) */
+    if (record_type == NULL && base_expr->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = base_expr->expr_data.typecast_data.expr;
+        if (inner != NULL)
+        {
+            if (inner->record_type != NULL)
+                record_type = inner->record_type;
+            else if (inner->array_element_record_type != NULL)
+                record_type = inner->array_element_record_type;
+        }
+        /* Also check typecast's own resolved_kgpc_type for record info */
+        if (record_type == NULL && base_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_record(base_expr->resolved_kgpc_type))
+        {
+            record_type = kgpc_type_get_record(base_expr->resolved_kgpc_type);
+        }
+    }
     if (record_type == NULL && record_access_expr->record_type != NULL)
         record_type = record_access_expr->record_type;
     if (record_type == NULL)
+    {
+        if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+        {
+            const char *fid = record_access_expr->expr_data.record_access_data.field_id;
+            fprintf(stderr, "[codegen] lookup_record_field FAIL: field=%s base_type=%d rec_type=%p\n",
+                fid ? fid : "<null>", base_expr->type,
+                (void*)record_access_expr->record_type);
+        }
         return NULL;
+    }
 
     const char *field_name = record_access_expr->expr_data.record_access_data.field_id;
     if (field_name == NULL)
@@ -2361,6 +2388,31 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
                 }
             }
         }
+        else if (expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Look up the record field to check if it's a char array */
+            struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+            if (getenv("KGPC_DEBUG_CHARARRAY") != NULL)
+            {
+                const char *fid = expr->expr_data.record_access_data.field_id;
+                fprintf(stderr, "[CHARARRAY] field_lookup=%p name=%s is_array=%d elem_type=%d type=%d\n",
+                    (void*)field, fid ? fid : "<null>",
+                    field ? field->is_array : -1,
+                    field ? field->array_element_type : -1,
+                    field ? field->type : -1);
+            }
+            if (field != NULL && field->is_array &&
+                (field->array_element_type == CHAR_TYPE || field->array_element_type == BYTE_TYPE))
+            {
+                lower = field->array_start;
+                upper = field->array_end;
+                found = 1;
+                /* Record fields: only SHORTSTRING_TYPE fields are shortstrings.
+                 * Plain array[0..255] of AnsiChar is NOT a shortstring. */
+                if (is_shortstring_out != NULL)
+                    *is_shortstring_out = (field->type == SHORTSTRING_TYPE) ? 1 : 0;
+            }
+        }
     }
 
     if (!found)
@@ -2371,18 +2423,23 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
 
     if (is_shortstring_out != NULL)
     {
-        int is_short = (*is_shortstring_out != 0);
-        if (!is_short)
-            is_short = codegen_expr_is_shortstring_array(expr);
-        if (!is_short)
+        /* For record field accesses, the shortstring determination was already
+         * made from the RecordField type — skip the heuristic. */
+        if (expr->type != EXPR_RECORD_ACCESS)
         {
-            KgpcType *kgpc = expr_get_kgpc_type(expr);
-            if (kgpc != NULL && kgpc->type_alias != NULL && kgpc->type_alias->is_shortstring)
+            int is_short = (*is_shortstring_out != 0);
+            if (!is_short)
+                is_short = codegen_expr_is_shortstring_array(expr);
+            if (!is_short)
+            {
+                KgpcType *kgpc = expr_get_kgpc_type(expr);
+                if (kgpc != NULL && kgpc->type_alias != NULL && kgpc->type_alias->is_shortstring)
+                    is_short = 1;
+            }
+            if (!is_short && lower == 0 && upper == 255)
                 is_short = 1;
+            *is_shortstring_out = is_short;
         }
-        if (!is_short && lower == 0 && upper == 255)
-            is_short = 1;
-        *is_shortstring_out = is_short;
     }
 
     return 1;
@@ -8076,26 +8133,53 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+    /* Handle string typecast on LHS: e.g., RawByteString(ptr) := 'value'
+     * The typecast means this pointer should be treated as a string variable.
+     * Generate a string assignment (kgpc_string_assign) instead of direct store. */
+    int lhs_is_string_typecast = 0;
     if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
         var_expr->expr_data.typecast_data.expr != NULL)
     {
-        var_expr = var_expr->expr_data.typecast_data.expr;
+        int target_type = var_expr->expr_data.typecast_data.target_type;
+        if (is_string_type(target_type))
+            lhs_is_string_typecast = 1;
+        else
+            var_expr = var_expr->expr_data.typecast_data.expr;
     }
 
-    if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+    /* Handle string typecast on LHS: e.g., RawByteString(ptr) := ''
+     * Treat the pointer location as a string variable — get its address
+     * and call kgpc_string_assign so refcounting works properly. */
+    if (lhs_is_string_typecast)
     {
-        fprintf(stderr, "[codegen] var_assignment: var_expr->type=%d, assign_expr->type=%d\n",
-            var_expr ? var_expr->type : -1, assign_expr ? assign_expr->type : -1);
-        if (var_expr && var_expr->type == EXPR_ARRAY_ACCESS)
+        struct Expression *inner = var_expr->expr_data.typecast_data.expr;
+
+        /* Evaluate RHS string value */
+        Register_t *value_reg = NULL;
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || value_reg == NULL)
         {
-            struct Expression *base = var_expr->expr_data.array_access_data.array_expr;
-            if (base && base->type == EXPR_VAR_ID)
-                fprintf(stderr, "[codegen]   base_id=%s\n", base->expr_data.id);
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            return inst_list;
         }
+
+        /* Get address of the inner pointer (the location to assign to) */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(inner, inst_list, ctx, &addr_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL)
+        {
+            free_reg(get_reg_stack(), value_reg);
+            if (addr_reg != NULL)
+                free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
     }
-
-    
-
 
     if (codegen_expr_is_mp_integer(var_expr))
     {
@@ -8138,6 +8222,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     else if (var_expr->type == EXPR_RECORD_ACCESS)
     {
         struct RecordField *field = codegen_lookup_record_field(var_expr);
+        if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+        {
+            const char *fid = var_expr->expr_data.record_access_data.field_id;
+            fprintf(stderr, "[codegen] static_array_check: field=%s found=%p is_array=%d\n",
+                fid ? fid : "<null>", (void*)field, field ? field->is_array : -1);
+        }
         if (field != NULL)
         {
             int field_is_static_array = (field->is_array && !field->array_is_open);
@@ -8174,12 +8264,31 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     /* ShortStrings need record-like handling when assigned from function calls
-     * because they use SRET (struct return) convention */
+     * because they use SRET (struct return) convention.
+     * But NOT if the LHS is actually a plain char array (array[0..N] of AnsiChar)
+     * that was incorrectly typed as SHORTSTRING_TYPE by the heuristic. */
     if ((expr_get_type_tag(var_expr) == SHORTSTRING_TYPE ||
          codegen_expr_is_shortstring_array(var_expr)) &&
         !expr_is_dynamic_array(var_expr) &&
         assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL)
-        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+    {
+        /* Check resolved_kgpc_type: if it's an array of char (not shortstring),
+         * this is a plain char array mislabeled as shortstring. Don't intercept. */
+        int really_shortstring = 1;
+        KgpcType *lhs_ktype = expr_get_kgpc_type(var_expr);
+        if (lhs_ktype != NULL && kgpc_type_is_array(lhs_ktype) &&
+            !kgpc_type_is_shortstring(lhs_ktype))
+        {
+            KgpcType *elem = lhs_ktype->info.array_info.element_type;
+            if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
+                (elem->info.primitive_type_tag == CHAR_TYPE ||
+                 elem->info.primitive_type_tag == BYTE_TYPE))
+                really_shortstring = 0;
+        }
+        if (really_shortstring)
+            return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+        /* Fall through to EXPR_RECORD_ACCESS handler which uses char_array copy */
+    }
 
     if (var_expr->type == EXPR_VAR_ID)
     {
@@ -8681,7 +8790,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     }
                 }
                 if (!value_is_qword)
-                    inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+                {
+                    if (assign_expr != NULL && !codegen_expr_is_signed(assign_expr))
+                        inst_list = codegen_zero_extend32_to64(inst_list, reg->bit_32, reg->bit_32);
+                    else
+                        inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+                }
             }
             if (var->is_static)
             {
@@ -8821,7 +8935,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     }
                 }
                 if (!value_is_qword)
-                    inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+                {
+                    if (assign_expr != NULL && !codegen_expr_is_signed(assign_expr))
+                        inst_list = codegen_zero_extend32_to64(inst_list, reg->bit_32, reg->bit_32);
+                    else
+                        inst_list = codegen_sign_extend32_to64(inst_list, reg->bit_32, reg->bit_64);
+                }
                 snprintf(buffer, 50, "\tmovq\t%s, -%d(%s)\n", reg->bit_64, offset, current_non_local_reg64());
             }
             else if (use_byte)
@@ -9077,6 +9196,55 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
+        }
+
+        /* Check if the target record field is a char array (e.g., Name: array[0..255] of AnsiChar).
+         * If so, use proper string-to-char-array copy instead of string pointer assignment. */
+        int rec_arr_lower = 0, rec_arr_upper = -1, rec_arr_is_short = 0;
+        int rec_field_is_char_array = codegen_get_char_array_bounds(var_expr, ctx,
+            &rec_arr_lower, &rec_arr_upper, &rec_arr_is_short);
+        if (getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            const char *fid = var_expr->expr_data.record_access_data.field_id;
+            fprintf(stderr, "[codegen] RECORD char_array_check: field=%s found=%d lower=%d upper=%d is_short=%d\n",
+                fid ? fid : "<null>", rec_field_is_char_array, rec_arr_lower, rec_arr_upper, rec_arr_is_short);
+        }
+        if (rec_field_is_char_array && (expr_get_type_tag(assign_expr) == STRING_TYPE ||
+            expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+            codegen_expr_is_shortstring_value_local(assign_expr)))
+        {
+            int arr_size = rec_arr_upper - rec_arr_lower + 1;
+            if (arr_size < 0) arr_size = 0;
+            if (rec_arr_is_short)
+            {
+                if (assign_expr != NULL && assign_expr->type == EXPR_STRING)
+                    inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, arr_size);
+                else if (codegen_expr_is_shortstring_value_local(assign_expr))
+                {
+                    char buf2[128];
+                    snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdi\n", addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buf2);
+                    snprintf(buf2, sizeof(buf2), "\tmovq\t$%d, %%rsi\n", arr_size);
+                    inst_list = add_inst(inst_list, buf2);
+                    snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                    inst_list = add_inst(inst_list, buf2);
+                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+                    free_arg_regs();
+                }
+                else
+                    inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, arr_size);
+            }
+            else
+            {
+                if (codegen_expr_is_shortstring_value_local(assign_expr))
+                    inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx, addr_reload, value_reg, arr_size);
+                else
+                    inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reload, value_reg, arr_size);
+            }
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reload);
+            return inst_list;
         }
 
         if (var_type_2 == STRING_TYPE)

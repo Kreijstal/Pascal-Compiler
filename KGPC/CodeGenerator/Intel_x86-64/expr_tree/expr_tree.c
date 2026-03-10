@@ -3343,8 +3343,12 @@ cleanup_constructor:
         }
         else
         {
-            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
-                buf_leaf, target_reg->bit_64);
+            if (expr != NULL && !codegen_expr_is_signed(expr))
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n",
+                    buf_leaf, target_reg->bit_32);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                    buf_leaf, target_reg->bit_64);
         }
         return add_inst(inst_list, buffer);
     }
@@ -5202,6 +5206,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     free_reg(get_reg_stack(), right_mem_tmp);
 
                 const char *set_instr = NULL;
+                /* Use unsigned comparison instructions when either operand
+                 * is an unsigned type (e.g. LongWord, Cardinal, DWord).
+                 * EQ/NE are the same for signed and unsigned. */
+                int use_unsigned_cmp = 0;
+                if (left_expr != NULL && !codegen_expr_is_signed(left_expr))
+                    use_unsigned_cmp = 1;
+                if (right_expr != NULL && !codegen_expr_is_signed(right_expr))
+                    use_unsigned_cmp = 1;
                 switch (relop_kind)
                 {
                     case EQ:
@@ -5211,16 +5223,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         set_instr = "setne";
                         break;
                     case LT:
-                        set_instr = "setl";
+                        set_instr = use_unsigned_cmp ? "setb" : "setl";
                         break;
                     case LE:
-                        set_instr = "setle";
+                        set_instr = use_unsigned_cmp ? "setbe" : "setle";
                         break;
                     case GT:
-                        set_instr = "setg";
+                        set_instr = use_unsigned_cmp ? "seta" : "setg";
                         break;
                     case GE:
-                        set_instr = "setge";
+                        set_instr = use_unsigned_cmp ? "setae" : "setge";
                         break;
                     default:
                         break;

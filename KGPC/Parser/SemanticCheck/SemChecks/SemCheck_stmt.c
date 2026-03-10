@@ -2658,6 +2658,18 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
                             strcasecmp(formal_type_id, "UnicodeString") == 0)
                             current_score += 2;  /* penalize UnicodeString */
                     }
+                    /* When both are FILE_TYPE, prefer the exact match:
+                     * File formal for File actual, TypedFile for TypedFile.
+                     * A TypedFile formal should not match a plain File actual. */
+                    if (formal_type == FILE_TYPE)
+                    {
+                        const char *formal_type_id = NULL;
+                        if (formal_decl->type == TREE_VAR_DECL)
+                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
+                        if (formal_type_id != NULL &&
+                            strcasecmp(formal_type_id, "TypedFile") == 0)
+                            current_score += 3;  /* penalize TypedFile when actual is plain File */
+                    }
                 }
                 else if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
                          (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
@@ -3805,6 +3817,15 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         struct Expression *inner = var->expr_data.typecast_data.expr;
         if (inner != NULL)
         {
+            /* Don't strip string typecasts on pointer targets (e.g.,
+             * RawByteString(ptr):='') — codegen needs the typecast to know
+             * this is a string assignment, not a direct pointer store. */
+            int target_type = var->expr_data.typecast_data.target_type;
+            int inner_prim_tag = (inner->resolved_kgpc_type != NULL)
+                ? inner->resolved_kgpc_type->info.primitive_type_tag : UNKNOWN_TYPE;
+            int is_string_to_pointer = is_string_type(target_type) &&
+                (inner_prim_tag == POINTER_TYPE || inner_prim_tag == UNKNOWN_TYPE);
+
             int compatible = 0;
             KgpcType *lhs_type = var->resolved_kgpc_type;
             KgpcType *inner_type = inner->resolved_kgpc_type;
@@ -3818,7 +3839,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 if (target_ref != NULL && target_ref->num_generic_args > 0)
                     compatible = 1;
             }
-            if (compatible)
+            if (compatible && !is_string_to_pointer)
             {
                 stmt->stmt_data.var_assign_data.var = inner;
                 var->expr_data.typecast_data.expr = NULL;

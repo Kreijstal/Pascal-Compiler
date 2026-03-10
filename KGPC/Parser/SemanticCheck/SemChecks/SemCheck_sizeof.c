@@ -445,6 +445,10 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     if (depth > SIZEOF_RECURSION_LIMIT)
         return 1;
 
+    /* Pointer fields (^Type) are always pointer-sized. */
+    if (field->is_pointer)
+        return POINTER_SIZE_BYTES;
+
     /* Dynamic/open arrays are references for layout purposes. */
     if (field->is_array && field->array_is_open)
         return POINTER_SIZE_BYTES;
@@ -512,6 +516,13 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         semcheck_error_with_context("Error on line %d, SizeOf exceeded recursion depth while resolving record field.\n",
             line_num);
         return 1;
+    }
+
+    /* Pointer fields (^Type) are always pointer-sized. */
+    if (field->is_pointer)
+    {
+        *size_out = POINTER_SIZE_BYTES;
+        return 0;
     }
 
     if (field->is_array)

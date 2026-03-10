@@ -740,7 +740,10 @@ static int formal_decl_expects_string(Tree_t *decl)
     {
         const char *type_id = decl->tree_data.var_decl_data.type_id;
         if (pascal_identifier_equals(type_id, "string") ||
-            pascal_identifier_equals(type_id, "ansistring"))
+            pascal_identifier_equals(type_id, "ansistring") ||
+            pascal_identifier_equals(type_id, "rawbytestring") ||
+            pascal_identifier_equals(type_id, "utf8string") ||
+            pascal_identifier_equals(type_id, "shortstring"))
             return 1;
     }
 
@@ -6708,8 +6711,12 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
             snprintf(buffer, sizeof(buffer), "\tmovl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
         }
         inst_list = add_inst(inst_list, buffer);
-        if (expr_has_type_tag(expr, LONGINT_TYPE))
-            inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+        if (expr_has_type_tag(expr, LONGINT_TYPE)) {
+            if (codegen_expr_is_signed(expr))
+                inst_list = codegen_sign_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+            else
+                inst_list = codegen_zero_extend32_to64(inst_list, target_reg->bit_32, target_reg->bit_64);
+        }
     }
 
     free_reg(get_reg_stack(), addr_reg);
@@ -9115,11 +9122,28 @@ pass_value_arg:
 
                 /* Promote char arguments to strings when the formal parameter expects string,
                  * unless the semantic checker already rewrote the call to a runtime
-                 * overload that accepts a char natively (e.g. kgpc_string_pos_ca). */
-                if ((formal_decl_expects_string(formal_arg_decl) ||
-                     builtin_arg_expects_string(procedure_name, arg_num)) &&
-                    expr_has_type_tag(arg_expr, CHAR_TYPE) &&
-                    !mangled_call_expects_char(call_expr, arg_num))
+                 * overload that accepts a char natively (e.g. kgpc_string_pos_ca).
+                 * Also handle explicit char-to-string typecasts like AnsiString(c)
+                 * where build_expr_tree strips the typecast, leaving a raw char value. */
+                int arg_is_char_value = expr_has_type_tag(arg_expr, CHAR_TYPE);
+                /* Detect explicit char-to-string typecasts like AnsiString(c).
+                 * build_expr_tree strips the typecast, so the result in top_reg
+                 * is a raw char value that needs promotion to a string. */
+                int char_to_string_typecast = 0;
+                if (!arg_is_char_value && arg_expr != NULL &&
+                    arg_expr->type == EXPR_TYPECAST &&
+                    arg_expr->expr_data.typecast_data.expr != NULL &&
+                    is_string_type(arg_expr->expr_data.typecast_data.target_type) &&
+                    expr_has_type_tag(arg_expr->expr_data.typecast_data.expr, CHAR_TYPE))
+                {
+                    arg_is_char_value = 1;
+                    char_to_string_typecast = 1;
+                }
+                if (((formal_decl_expects_string(formal_arg_decl) ||
+                      builtin_arg_expects_string(procedure_name, arg_num)) &&
+                     arg_is_char_value &&
+                     !mangled_call_expects_char(call_expr, arg_num)) ||
+                    char_to_string_typecast)
                 {
                     const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
                     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);

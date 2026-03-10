@@ -2394,8 +2394,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_array = is_array;
     alias->array_start = start;
     alias->array_end = end;
-    alias->array_element_type = UNKNOWN_TYPE;
-    alias->array_element_type_id = NULL;
+    alias->array_element_type = is_array ? actual_type : UNKNOWN_TYPE;
+    alias->array_element_type_id = (is_array && type_id != NULL) ? strdup(type_id) : NULL;
     alias->array_element_type_ref = NULL;
     alias->is_shortstring = 0;
     alias->is_open_array = (alias->is_array && end < start);

@@ -284,6 +284,7 @@ type
     LineEnd: TLineEndStr;
     Buffer: TextBuf;
     CodePage: TSystemCodePage;
+    FullName: Pointer;
   end;
 
   TextFile = text;

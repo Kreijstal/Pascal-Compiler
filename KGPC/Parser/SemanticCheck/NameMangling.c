@@ -198,6 +198,8 @@ static enum VarType GetVarTypeFromTypeNode(HashNode_t* type_node) {
     
     if (type_node->id != NULL && strcasecmp(type_node->id, "text") == 0)
         return HASHVAR_TEXT;
+    if (type_node->id != NULL && strcasecmp(type_node->id, "TypedFile") == 0)
+        return HASHVAR_TYPEDFILE;
 
     // If KgpcType is available, extract VarType from it
     if (type_node->type != NULL) {
@@ -275,6 +277,8 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
     // File types
     if (strcasecmp(type_name, "Text") == 0)
         return HASHVAR_TEXT;
+    if (strcasecmp(type_name, "TypedFile") == 0)
+        return HASHVAR_TYPEDFILE;
     if (strcasecmp(type_name, "File") == 0)
         return HASHVAR_FILE;
     
@@ -691,6 +695,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_SET:     type_suffix = "_set"; break;
                 case HASHVAR_ENUM:    type_suffix = "_e"; break;
                 case HASHVAR_FILE:    type_suffix = "_f"; break;
+                case HASHVAR_TYPEDFILE: type_suffix = "_tf"; break; // TypedFile (distinct from File)
                 case HASHVAR_TEXT:    type_suffix = "_t"; break; // For text files
                 case HASHVAR_RECORD:  type_suffix = "_u"; break; // Record types treated as unknown for mangling
                 case HASHVAR_ARRAY:   type_suffix = "_a"; break; // Array
