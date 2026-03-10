@@ -101,11 +101,11 @@ if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_fpc_abstract_stubs.S'
   runtime_sources += 'runtime_fpc_rtl_compat.S'
   runtime_sources += 'runtime_fpc_interlocked_aliases.c'
-  runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
-  runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
   runtime_sources += 'runtime_widechar_assign_olevariant.c'
   runtime_sources += 'runtime_olevariant_assign.c'
 endif
+runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
+runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
 runtime_sources += 'runtime_fpc_assign.c'
 runtime_sources += 'runtime_fpc_init.c'
 runtime_deps = []
