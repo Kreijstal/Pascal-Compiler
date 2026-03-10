@@ -48,6 +48,19 @@ def _patched_subprocess_run(args, **kwargs):
 
 subprocess.run = _patched_subprocess_run
 
+# Wine's CreateProcess sometimes returns invalid thread handles, causing
+# _winapi.CloseHandle(ht) to raise OSError [WinError 6].  Patch CloseHandle
+# to silently ignore "invalid handle" errors so subprocess.Popen doesn't crash.
+if IS_WINE:
+    import _winapi  # type: ignore
+    _original_CloseHandle = _winapi.CloseHandle
+    def _safe_CloseHandle(handle):
+        try:
+            _original_CloseHandle(handle)
+        except OSError:
+            pass
+    _winapi.CloseHandle = _safe_CloseHandle
+
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
 # Default to "build" for local testing.
