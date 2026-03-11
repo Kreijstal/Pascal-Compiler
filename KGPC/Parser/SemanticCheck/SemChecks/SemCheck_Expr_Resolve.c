@@ -194,6 +194,14 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         if (alias->base_type != UNKNOWN_TYPE)
             *out_type = alias->base_type;
 
+        if (alias->target_type_ref != NULL)
+        {
+            HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                alias->target_type_ref, alias->target_type_id);
+            if (target_node != NULL)
+                set_type_from_hashtype(out_type, target_node);
+        }
+
         if (alias->target_type_id != NULL)
         {
             HashNode_t *target_node = NULL;
@@ -201,6 +209,12 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
                 target_node != NULL)
             {
                 set_type_from_hashtype(out_type, target_node);
+            }
+            else
+            {
+                target_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+                if (target_node != NULL)
+                    set_type_from_hashtype(out_type, target_node);
             }
         }
 

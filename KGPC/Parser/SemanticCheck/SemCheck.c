@@ -4939,6 +4939,9 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
     return NULL; /* Unknown type */
 }
 
+static int resolve_range_bounds_for_type_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
+    long long *out_low, long long *out_high);
+
 static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name,
     long long *out_low, long long *out_high)
 {
@@ -4967,6 +4970,20 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
         {
             *out_low = alias->range_start;
             *out_high = alias->range_end;
+            return 1;
+        }
+
+        if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL &&
+            resolve_range_bounds_for_type_ref(symtab, alias->target_type_ref->name,
+                out_low, out_high))
+        {
+            return 1;
+        }
+
+        if (alias->target_type_id != NULL &&
+            !pascal_identifier_equals(alias->target_type_id, type_name) &&
+            resolve_range_bounds_for_type(symtab, alias->target_type_id, out_low, out_high))
+        {
             return 1;
         }
     }
@@ -5077,6 +5094,150 @@ static int resolve_range_bounds_for_type_ref(SymTab_t *symtab, const QualifiedId
         return 1;
     }
 
+    if (alias != NULL)
+    {
+        if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL &&
+            !qualified_ident_equals_ci(alias->target_type_ref->name, type_ref) &&
+            resolve_range_bounds_for_type_ref(symtab, alias->target_type_ref->name,
+                out_low, out_high))
+        {
+            return 1;
+        }
+
+        if (alias->target_type_id != NULL)
+        {
+            char *qualified = qualified_ident_join(type_ref, ".");
+            int same_target = (qualified != NULL &&
+                pascal_identifier_equals(alias->target_type_id, qualified));
+            free(qualified);
+            if (!same_target &&
+                resolve_range_bounds_for_type(symtab, alias->target_type_id,
+                    out_low, out_high))
+            {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+static int evaluate_const_expr_ordinal_bounds(SymTab_t *symtab, struct Expression *expr,
+    long long *out_low, long long *out_high)
+{
+    if (expr == NULL || out_low == NULL || out_high == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL)
+        {
+            if (alias->is_enum && alias->enum_literals != NULL)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    *out_low = 0;
+                    *out_high = (long long)count - 1;
+                    return 1;
+                }
+            }
+            if (alias->range_known)
+            {
+                *out_low = alias->range_start;
+                *out_high = alias->range_end;
+                return 1;
+            }
+            if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL &&
+                resolve_range_bounds_for_type_ref(symtab, alias->target_type_ref->name,
+                    out_low, out_high))
+            {
+                return 1;
+            }
+            if (alias->target_type_id != NULL &&
+                resolve_range_bounds_for_type(symtab, alias->target_type_id, out_low, out_high))
+            {
+                return 1;
+            }
+            if (alias->alias_name != NULL &&
+                get_builtin_type_bounds(alias->alias_name, out_low, out_high))
+            {
+                return 1;
+            }
+            if (alias->target_type_id != NULL &&
+                get_builtin_type_bounds(alias->target_type_id, out_low, out_high))
+            {
+                return 1;
+            }
+        }
+
+        if (expr->resolved_kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            switch (expr->resolved_kgpc_type->info.primitive_type_tag)
+            {
+                case BYTE_TYPE: *out_low = 0; *out_high = 255; return 1;
+                case WORD_TYPE: *out_low = 0; *out_high = 65535; return 1;
+                case LONGWORD_TYPE: *out_low = 0; *out_high = 4294967295LL; return 1;
+                case QWORD_TYPE: *out_low = 0; *out_high = 9223372036854775807LL; return 1;
+                case INT_TYPE:
+                case LONGINT_TYPE: *out_low = -2147483648LL; *out_high = 2147483647LL; return 1;
+                case INT64_TYPE: *out_low = (-9223372036854775807LL - 1); *out_high = 9223372036854775807LL; return 1;
+                case BOOL: *out_low = 0; *out_high = 1; return 1;
+                case CHAR_TYPE: *out_low = 0; *out_high = 255; return 1;
+                default: break;
+            }
+        }
+    }
+
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        resolve_range_bounds_for_type(symtab, expr->expr_data.id, out_low, out_high))
+    {
+        return 1;
+    }
+
+    if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        QualifiedIdent *qid = build_qualified_ident_from_expr(expr);
+        if (qid != NULL)
+        {
+            int resolved = resolve_range_bounds_for_type_ref(symtab, qid, out_low, out_high);
+            qualified_ident_free(qid);
+            if (resolved)
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int const_typecast_target_is_ordinal(SymTab_t *symtab, struct Expression *expr,
+    long long *out_low, long long *out_high)
+{
+    const TypeRef *target_ref = NULL;
+    const char *target_id = NULL;
+
+    if (expr == NULL || out_low == NULL || out_high == NULL)
+        return 0;
+
+    target_ref = expr->expr_data.typecast_data.target_type_ref;
+    target_id = expr->expr_data.typecast_data.target_type_id;
+
+    if (target_ref != NULL && target_ref->name != NULL &&
+        resolve_range_bounds_for_type_ref(symtab, target_ref->name, out_low, out_high))
+    {
+        return 1;
+    }
+    if (target_id != NULL &&
+        resolve_range_bounds_for_type(symtab, target_id, out_low, out_high))
+    {
+        return 1;
+    }
+    if (target_id != NULL &&
+        get_builtin_type_bounds(semcheck_base_type_name(target_id), out_low, out_high))
+    {
+        return 1;
+    }
     return 0;
 }
 
@@ -5152,6 +5313,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         case EXPR_TYPECAST:
         {
             long long inner_value = 0;
+            long long ordinal_low = 0;
+            long long ordinal_high = 0;
             if (evaluate_const_expr(symtab, expr->expr_data.typecast_data.expr, &inner_value) != 0)
             {
                 double real_value = 0.0;
@@ -5276,11 +5439,35 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     *out_value = inner_value;
                     return 0;
                 case POINTER_TYPE:
+                    *out_value = inner_value;
+                    return 0;
                 case UNKNOWN_TYPE:
-                    /* Treat other (or unresolved) integer-like casts as passthrough */
+                    if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
+                    {
+                        if (inner_value < ordinal_low || inner_value > ordinal_high)
+                        {
+                            fprintf(stderr,
+                                "Error: typecast value %lld out of range for ordinal target.\n",
+                                inner_value);
+                            return 1;
+                        }
+                    }
+                    /* Treat unresolved ordinal aliases as integer-like passthrough */
                     *out_value = inner_value;
                     return 0;
                 default:
+                    if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
+                    {
+                        if (inner_value < ordinal_low || inner_value > ordinal_high)
+                        {
+                            fprintf(stderr,
+                                "Error: typecast value %lld out of range for ordinal target.\n",
+                                inner_value);
+                            return 1;
+                        }
+                        *out_value = inner_value;
+                        return 0;
+                    }
                     fprintf(stderr, "Error: unsupported const typecast target.\n");
                     return 1;
             }
@@ -5445,6 +5632,37 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             /* Handle Ord() function for constant expressions */
             char *id = expr->expr_data.function_call_data.id;
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+
+            if (id != NULL &&
+                (pascal_identifier_equals(id, "Succ") || pascal_identifier_equals(id, "Pred")))
+            {
+                struct Expression *arg = extract_single_const_arg(args, id);
+                long long arg_value = 0;
+                long long low = 0;
+                long long high = 0;
+                long long result = 0;
+                int is_succ = pascal_identifier_equals(id, "Succ");
+
+                if (arg == NULL)
+                    return 1;
+                if (evaluate_const_expr(symtab, arg, &arg_value) != 0)
+                    return 1;
+                if (!evaluate_const_expr_ordinal_bounds(symtab, arg, &low, &high))
+                {
+                    fprintf(stderr, "Error: %s expects an ordinal constant argument.\n", id);
+                    return 1;
+                }
+
+                result = is_succ ? (arg_value + 1) : (arg_value - 1);
+                if (result < low || result > high)
+                {
+                    fprintf(stderr, "Error: %s result out of range for ordinal type.\n", id);
+                    return 1;
+                }
+
+                *out_value = result;
+                return 0;
+            }
 
             if (id != NULL && args != NULL && args->next == NULL)
             {

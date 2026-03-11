@@ -2003,6 +2003,8 @@ int semcheck_recordaccess(int *type_return,
             {
                 /* Search for field_id in enum_literals */
                 int ordinal = 0;
+                long long alias_target_value = 0;
+                int resolved_via_target = 0;
                 ListNode_t *literal_node = type_alias->enum_literals;
                 while (literal_node != NULL)
                 {
@@ -2030,6 +2032,27 @@ int semcheck_recordaccess(int *type_return,
                     }
                     ++ordinal;
                     literal_node = literal_node->next;
+                }
+                if (type_alias->target_type_ref != NULL &&
+                    type_alias->target_type_ref->name != NULL)
+                {
+                    resolved_via_target = semcheck_resolve_scoped_enum_literal_ref(symtab,
+                        type_alias->target_type_ref->name, field_id, &alias_target_value);
+                }
+                else if (type_alias->target_type_id != NULL)
+                {
+                    resolved_via_target = semcheck_resolve_scoped_enum_literal(symtab,
+                        type_alias->target_type_id, field_id, &alias_target_value);
+                }
+                if (resolved_via_target)
+                {
+                    expr->type = EXPR_INUM;
+                    expr->expr_data.i_num = alias_target_value;
+                    semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+                    if (type_alias->kgpc_type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, type_alias->kgpc_type);
+                    *type_return = ENUM_TYPE;
+                    return 0;
                 }
                 /* Enum literal not found in this type */
                 semcheck_error_with_context("Error on line %d, '%s' is not a value of enum type '%s'.\n\n",

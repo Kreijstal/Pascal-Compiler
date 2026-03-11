@@ -559,7 +559,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         else if (field->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            type_node = semcheck_find_preferred_type_node(symtab, field->array_element_type_id);
+            type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field->array_element_type_ref, field->array_element_type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field->array_element_type_ref, field->array_element_type_id);
             if (type_node != NULL)
             {
                 if (type_node->type != NULL)
@@ -588,7 +592,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         KgpcType *pointee_type = NULL;
         if (field->pointer_type_id != NULL)
         {
-            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
+            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field->pointer_type_ref, field->pointer_type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field->pointer_type_ref, field->pointer_type_id);
             if (type_node != NULL)
             {
                 if (type_node->type != NULL)
@@ -615,7 +623,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        type_node = semcheck_find_preferred_type_node(symtab, field->type_id);
+        type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+            field->type_ref, field->type_id);
+        if (type_node == NULL)
+            type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                field->type_ref, field->type_id);
         if (type_node != NULL)
         {
             if (type_node->type != NULL)

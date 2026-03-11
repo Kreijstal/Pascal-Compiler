@@ -111,6 +111,32 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
     return 0;
 }
 
+static int semcheck_type_is_ordinal(const KgpcType *type, int type_tag)
+{
+    struct TypeAlias *alias = NULL;
+
+    if (type != NULL)
+    {
+        alias = kgpc_type_get_type_alias((KgpcType *)type);
+        if (alias != NULL)
+        {
+            if (alias->is_enum || alias->range_known)
+                return 1;
+            if (alias->target_type_id != NULL)
+            {
+                const char *base = semcheck_base_type_name(alias->target_type_id);
+                int builtin_tag = semcheck_map_builtin_type_name(NULL, base);
+                if (base != NULL && builtin_tag != UNKNOWN_TYPE)
+                    return is_ordinal_type(builtin_tag);
+            }
+        }
+        if (type->kind == TYPE_KIND_PRIMITIVE)
+            return is_ordinal_type(type->info.primitive_type_tag);
+    }
+
+    return is_ordinal_type(type_tag);
+}
+
 int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
 {
@@ -1753,10 +1779,15 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     KgpcType *arg_kgpc_type = NULL;
+    int arg_type_tag = UNKNOWN_TYPE;
+    struct TypeAlias *arg_alias = NULL;
+    struct Expression *rhs = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !kgpc_type_is_integer(arg_kgpc_type))
+    if (error_count == 0)
+        arg_type_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (error_count == 0 && !semcheck_type_is_ordinal(arg_kgpc_type, arg_type_tag))
     {
-        semcheck_error_with_context("Error on line %d, %s expects an integer argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects an ordinal argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         ++error_count;
     }
@@ -1767,8 +1798,10 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
         return error_count;
     }
 
+    arg_alias = kgpc_type_get_type_alias(arg_kgpc_type);
+
     /* Rewrite Pred/Succ to arg +/- 1 */
-    struct Expression *rhs = mk_inum(expr->line_num, 1);
+    rhs = mk_inum(expr->line_num, 1);
     if (rhs == NULL)
     {
         semcheck_error_with_context("Error on line %d, failed to build %s expression.\n",
@@ -1795,6 +1828,14 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     expr->expr_data.addop_data.left_expr = arg_expr;
     expr->expr_data.addop_data.right_term = rhs;
     semcheck_reset_function_call_cache(expr);
+    if (arg_alias != NULL && (arg_alias->is_enum || arg_alias->range_known))
+    {
+        expr->resolved_kgpc_type = create_primitive_type(arg_type_tag);
+        kgpc_type_set_type_alias(expr->resolved_kgpc_type, arg_alias);
+        semcheck_expr_set_resolved_type(expr, arg_type_tag);
+        *type_return = arg_type_tag;
+        return 0;
+    }
 
     /* Use legacy_tag here since this function's API returns int type tag via type_return.
      * The expression is rewritten to an ADDOP and needs to be re-checked. */
