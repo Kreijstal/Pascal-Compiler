@@ -7293,7 +7293,11 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     /* Skip to the type specification */
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE) {
+           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_FILE_TYPE &&
+           cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
+           cursor->typ != PASCAL_T_FUNCTION_TYPE &&
+           cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
         cursor = cursor->next;
     }
 
@@ -8076,9 +8080,10 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 }
                 for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
                 {
-                    if (child->typ == PASCAL_T_FIELD_DECL)
+                    ast_t *node = unwrap_pascal_node(child);
+                    if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
                     {
-                        ListNode_t *fields = convert_class_field_decl(child);
+                        ListNode_t *fields = convert_class_field_decl(node);
                         if (is_class_var_section && fields != NULL)
                         {
                             for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next)
@@ -8139,6 +8144,15 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 }
                 break;
             }
+            case PASCAL_T_CLASS_BODY:
+            case PASCAL_T_ACCESS_MODIFIER:
+            case PASCAL_T_PRIVATE_SECTION:
+            case PASCAL_T_PUBLIC_SECTION:
+            case PASCAL_T_PROTECTED_SECTION:
+            case PASCAL_T_PUBLISHED_SECTION:
+                collect_class_members(unwrapped->child, class_name, field_builder,
+                    property_builder, method_builder, nested_type_builder);
+                break;
             default:
                 break;
             }
@@ -8515,6 +8529,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
            cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
            cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
@@ -9497,6 +9512,9 @@ static int is_node_to_skip_as_initializer(ast_t *node) {
     return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
 
+static int select_range_primitive_tag(const TypeInfo *info);
+static long long compute_range_storage_size(const TypeInfo *info);
+
 static Tree_t *convert_var_decl(ast_t *decl_node) {
     ast_t *cur = decl_node->child;
     ast_t *first_non_identifier = cur;
@@ -9767,7 +9785,22 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     }
 
     struct TypeAlias *inline_alias = NULL;
-    if (type_info.is_file && type_id == NULL)
+    if (type_info.is_range)
+    {
+        inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (inline_alias != NULL)
+        {
+            inline_alias->is_range = 1;
+            inline_alias->range_known = type_info.range_known;
+            inline_alias->range_start = type_info.range_start;
+            inline_alias->range_end = type_info.range_end;
+            inline_alias->base_type = select_range_primitive_tag(&type_info);
+            inline_alias->storage_size = compute_range_storage_size(&type_info);
+            if (var_type == UNKNOWN_TYPE)
+                var_type = inline_alias->base_type;
+        }
+    }
+    if (inline_alias == NULL && type_info.is_file && type_id == NULL)
     {
         inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
         if (inline_alias != NULL)
@@ -11292,6 +11325,8 @@ static int select_range_primitive_tag(const TypeInfo *info)
     /* Signed range exceeds 32-bit, use 64-bit Int64 */
     return INT64_TYPE;
 }
+
+static long long compute_range_storage_size(const TypeInfo *info);
 
 static long long compute_range_storage_size(const TypeInfo *info)
 {

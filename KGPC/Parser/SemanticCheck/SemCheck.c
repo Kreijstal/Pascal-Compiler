@@ -9268,8 +9268,56 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
     for (int depth = 0; depth < 8; ++depth)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, current_type) < 0 || type_node == NULL ||
-            type_node->hash_type != HASHTYPE_TYPE)
+        ListNode_t *matches = FindAllIdents(symtab, current_type);
+        HashNode_t *best_type_node = NULL;
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                continue;
+
+            struct TypeAlias *candidate_alias = kgpc_type_get_type_alias(candidate->type);
+            int has_enum_literals = (candidate_alias != NULL &&
+                candidate_alias->is_enum &&
+                candidate_alias->enum_literals != NULL);
+            int has_alias_target = (candidate_alias != NULL &&
+                (candidate_alias->target_type_ref != NULL ||
+                 candidate_alias->target_type_id != NULL));
+            int unit_match = (symtab->unit_context > 0 &&
+                candidate->source_unit_index == symtab->unit_context);
+
+            if (best_type_node == NULL)
+            {
+                best_type_node = candidate;
+                if (has_enum_literals && unit_match)
+                    break;
+                continue;
+            }
+
+            struct TypeAlias *best_alias = kgpc_type_get_type_alias(best_type_node->type);
+            int best_has_enum_literals = (best_alias != NULL &&
+                best_alias->is_enum &&
+                best_alias->enum_literals != NULL);
+            int best_has_alias_target = (best_alias != NULL &&
+                (best_alias->target_type_ref != NULL ||
+                 best_alias->target_type_id != NULL));
+            int best_unit_match = (symtab->unit_context > 0 &&
+                best_type_node->source_unit_index == symtab->unit_context);
+
+            if ((has_enum_literals && !best_has_enum_literals) ||
+                (unit_match && !best_unit_match) ||
+                (has_alias_target && !best_has_alias_target))
+            {
+                best_type_node = candidate;
+                if (has_enum_literals && unit_match)
+                    break;
+            }
+        }
+        if (matches != NULL)
+            DestroyList(matches);
+        type_node = best_type_node;
+
+        if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
         {
             QualifiedIdent *qid = qualified_ident_from_dotted(current_type);
             if (qid != NULL && qid->count > 1)
@@ -11301,6 +11349,16 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree != NULL);
     assert(tree->type == TREE_CONST_DECL);
 
+    int saved_unit_context = symtab->unit_context;
+    int saved_imported_unit = g_semcheck_imported_decl_unit_index;
+    if (tree->tree_data.const_decl_data.defined_in_unit &&
+        tree->tree_data.const_decl_data.source_unit_index > 0)
+    {
+        symtab->unit_context = tree->tree_data.const_decl_data.source_unit_index;
+        g_semcheck_imported_decl_unit_index =
+            tree->tree_data.const_decl_data.source_unit_index;
+    }
+
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
     if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
         tree->tree_data.const_decl_data.id != NULL &&
@@ -11632,6 +11690,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     existing->const_int_value == value)
                 {
                     /* Same constant with same value - treat as re-export, skip silently */
+                    g_semcheck_imported_decl_unit_index = saved_imported_unit;
+                    symtab->unit_context = saved_unit_context;
                     return 0;
                 }
 
@@ -11726,6 +11786,8 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
             }
         }
 
+    g_semcheck_imported_decl_unit_index = saved_imported_unit;
+    symtab->unit_context = saved_unit_context;
     return return_val;
 }
 

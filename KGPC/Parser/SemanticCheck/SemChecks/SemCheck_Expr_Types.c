@@ -2057,11 +2057,6 @@ int semcheck_recordaccess(int *type_return,
                     *type_return = ENUM_TYPE;
                     return 0;
                 }
-                /* Enum literal not found in this type */
-                semcheck_error_with_context("Error on line %d, '%s' is not a value of enum type '%s'.\n\n",
-                    expr->line_num, field_id, unit_id);
-                *type_return = UNKNOWN_TYPE;
-                return 1;
             }
 
             /* If this type is an alias to another type, try resolving scoped enum literal

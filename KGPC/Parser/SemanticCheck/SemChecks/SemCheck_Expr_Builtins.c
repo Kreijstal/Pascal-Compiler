@@ -2279,6 +2279,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
     const char *type_name = NULL;
     char *qualified_name = NULL;
     char *type_name_owned = NULL;
+    int has_declared_type = 0;
 
     if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
     {
@@ -2299,6 +2300,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
                 type_node = semcheck_find_preferred_type_node(symtab, base_name);
             if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
+                has_declared_type = 1;
                 alias = get_type_alias_from_node(type_node);
                 if (alias == NULL && type_node->type != NULL)
                     alias = kgpc_type_get_type_alias(type_node->type);
@@ -2334,14 +2336,17 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
             return error_count;
         }
         if (resolved_type != NULL)
+        {
+            has_declared_type = 1;
             alias = kgpc_type_get_type_alias(resolved_type);
+        }
         if (alias != NULL && alias->alias_name != NULL)
             type_name = alias->alias_name;
     }
 
-    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+    if (!has_declared_type)
     {
-        semcheck_error_with_context("Error on line %d, TypeInfo currently supports enum types only.\n",
+        semcheck_error_with_context("Error on line %d, TypeInfo expects a declared type.\n",
             expr->line_num);
         if (type_name_owned != NULL)
             free(type_name_owned);
@@ -2706,8 +2711,103 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
     }
 
-    /* Ordinal overloads - use type tag for detailed matching */
     int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
+
+    /* Ordinal overloads on enum/range variables keep their declared bounds. */
+    {
+        struct TypeAlias *arg_alias = kgpc_type_get_type_alias(arg_kgpc_type);
+        if (arg_alias != NULL)
+        {
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = arg_type != UNKNOWN_TYPE ? arg_type : INT_TYPE;
+
+            if (arg_alias->is_enum && arg_alias->enum_literals != NULL &&
+                !arg_alias->enum_has_explicit_values)
+            {
+                int count = ListLength(arg_alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = (long long)count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && arg_alias->range_known)
+            {
+                low = arg_alias->range_start;
+                high = arg_alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+            if (!have_bounds && arg_alias->target_type_id != NULL)
+            {
+                const char *target_name = arg_alias->target_type_id;
+                if (pascal_identifier_equals(target_name, "SmallInt")) {
+                    low = -32768LL;
+                    high = 32767LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Word")) {
+                    low = 0;
+                    high = 65535LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "ShortInt")) {
+                    low = -128LL;
+                    high = 127LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Byte")) {
+                    low = 0;
+                    high = 255LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "LongInt") ||
+                           pascal_identifier_equals(target_name, "Integer")) {
+                    low = -2147483648LL;
+                    high = 2147483647LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Cardinal") ||
+                           pascal_identifier_equals(target_name, "LongWord") ||
+                           pascal_identifier_equals(target_name, "DWord")) {
+                    low = 0;
+                    high = 4294967295LL;
+                    have_bounds = 1;
+                    result_type = INT64_TYPE;
+                } else if (pascal_identifier_equals(target_name, "Int64")) {
+                    low = (-9223372036854775807LL - 1);
+                    high = 9223372036854775807LL;
+                    have_bounds = 1;
+                    result_type = INT64_TYPE;
+                } else if (pascal_identifier_equals(target_name, "QWord") ||
+                           pascal_identifier_equals(target_name, "UInt64")) {
+                    low = 0;
+                    high = 9223372036854775807LL;
+                    have_bounds = 1;
+                    result_type = QWORD_TYPE;
+                } else if (pascal_identifier_equals(target_name, "Boolean")) {
+                    low = 0;
+                    high = 1;
+                    have_bounds = 1;
+                    result_type = BOOL;
+                } else if (pascal_identifier_equals(target_name, "Char") ||
+                           pascal_identifier_equals(target_name, "AnsiChar")) {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                    result_type = CHAR_TYPE;
+                }
+            }
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                semcheck_expr_set_resolved_type(expr, result_type);
+                *type_return = result_type;
+                return 0;
+            }
+        }
+    }
+
+    /* Ordinal overloads - use type tag for detailed matching */
     if (arg_type == INT_TYPE)
     {
         semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
@@ -2878,9 +2978,44 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             
             if (!is_builtin_type)
             {
-                semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
-                    expr->line_num, arg_id);
-                error_count++;
+                HashNode_t *self_node = NULL;
+                struct RecordField *self_field = NULL;
+                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                {
+                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    if (self_record != NULL)
+                    {
+                        self_field = semcheck_find_class_field_including_hidden(symtab,
+                            self_record, arg_id, NULL);
+                    }
+                }
+
+                if (self_field != NULL)
+                {
+                    KgpcType *field_type = semcheck_field_expected_kgpc_type(symtab, self_field);
+                    if (field_type != NULL)
+                    {
+                        long long field_size = kgpc_type_sizeof(field_type);
+                        destroy_kgpc_type(field_type);
+                        if (field_size >= 0)
+                        {
+                            computed_size = field_size;
+                            size_computed = 1;
+                        }
+                    }
+                    if (!size_computed)
+                    {
+                        semcheck_error_with_context("Error on line %d, unable to compute SizeOf(%s).\n",
+                            expr->line_num, arg_id);
+                        error_count++;
+                    }
+                }
+                else
+                {
+                    semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
+                        expr->line_num, arg_id);
+                    error_count++;
+                }
             }
         }
         else

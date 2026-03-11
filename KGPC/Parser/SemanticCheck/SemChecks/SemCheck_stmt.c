@@ -7258,8 +7258,36 @@ proccall_parent_resolve_done:
         {
             struct Expression *with_expr = NULL;
             int wm = semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
-            if (wm == 0 && with_expr != NULL)
+            if ((wm == 0 || wm == 2) && with_expr != NULL)
             {
+                if (wm == 2)
+                {
+                    struct Expression *field_access = mk_recordaccess(stmt->line_num,
+                        with_expr, strdup(proc_id));
+                    if (field_access == NULL)
+                    {
+                        semcheck_error_with_context("Error on line %d: failed to allocate procedural field expression.\n",
+                            stmt->line_num);
+                        DestroyList(overload_candidates);
+                        free(mangled_name);
+                        return return_val + 1;
+                    }
+
+                    stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                    stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                    stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                    stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+
+                    DestroyList(overload_candidates);
+                    free(mangled_name);
+
+                    {
+                        int field_tag = UNKNOWN_TYPE;
+                        return return_val + semcheck_stmt_expr_tag(&field_tag, symtab,
+                            field_access, max_scope_lev, NO_MUTATE);
+                    }
+                }
+
                 /* Prepend the WITH context expression as Self argument */
                 ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
                 if (self_node != NULL)
