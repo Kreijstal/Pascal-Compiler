@@ -81,6 +81,13 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
 static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
     const char *field_id, struct RecordType **out_record);
 static long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
+static int codegen_get_indexable_element_size(struct Expression *array_expr,
+    CodeGenContext *ctx, long long *out_size);
+static int codegen_collect_nested_array_access_chain(struct Expression *expr,
+    struct Expression **base_expr_out, struct Expression **indices_out, int *index_count_out);
+static ListNode_t *codegen_emit_linearized_array_address(struct Expression *base_expr,
+    struct Expression **indices, int index_count, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg);
 static struct RecordType *codegen_expr_record_type(const struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL)
@@ -229,6 +236,11 @@ static int codegen_expr_is_shortstring_array_local(const struct Expression *expr
 {
     if (expr == NULL)
         return 0;
+    if ((expr->array_element_size == 2) ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
@@ -247,9 +259,27 @@ static int codegen_expr_is_shortstring_array_local(const struct Expression *expr
     return 0;
 }
 
+static int codegen_expr_has_widechar_array_metadata(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->array_element_size == 2)
+        return 1;
+    if (expr->array_element_type_id != NULL &&
+        (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+         pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")))
+    {
+        return 1;
+    }
+    return 0;
+}
+
 static int codegen_expr_is_shortstring_value(const struct Expression *expr)
 {
     if (expr == NULL)
+        return 0;
+
+    if (codegen_expr_has_widechar_array_metadata(expr))
         return 0;
 
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
@@ -281,6 +311,8 @@ static int codegen_expr_is_shortstring_value(const struct Expression *expr)
             elem_type->kind == TYPE_KIND_PRIMITIVE &&
             elem_type->info.primitive_type_tag == CHAR_TYPE)
         {
+            if (codegen_expr_has_widechar_array_metadata(expr))
+                return 0;
             int start = 0;
             int end = -1;
             if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
@@ -291,6 +323,10 @@ static int codegen_expr_is_shortstring_value(const struct Expression *expr)
 
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
+        expr->array_element_size != 2 &&
+        (expr->array_element_type_id == NULL ||
+         (!pascal_identifier_equals(expr->array_element_type_id, "WideChar") &&
+          !pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))) &&
         expr_get_array_lower_bound(expr) == 0)
     {
         int upper = expr_get_array_upper_bound(expr);
@@ -501,11 +537,21 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
         return 0;
     if (expr->type != EXPR_ARRAY_ACCESS)
         return 0;
+    if (expr->array_element_size == 2 ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
     if (codegen_expr_is_shortstring_value(expr))
         return 1;
 
     struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
     if (base_expr == NULL)
+        return 0;
+    if (base_expr->array_element_size == 2 ||
+        (base_expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(base_expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(base_expr->array_element_type_id, "UnicodeChar"))))
         return 0;
 
     KgpcType *base_type = base_expr->resolved_kgpc_type;
@@ -2624,6 +2670,27 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
 
     if (expr->array_element_type == ARRAY_OF_CONST_TYPE)
         return (long long)sizeof(kgpc_tvarrec);
+
+    if (expr->type == EXPR_ARRAY_ACCESS && expr->resolved_kgpc_type != NULL)
+    {
+        long long result_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (result_size > 0)
+            return result_size;
+    }
+
+    if (expr->array_element_size > 0)
+    {
+        long long tag_size = -1;
+        if (expr->array_element_type != UNKNOWN_TYPE)
+            tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+        if (tag_size <= 0 || expr->array_element_size != tag_size ||
+            (expr->array_element_type_id != NULL &&
+             (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+              pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        {
+            return expr->array_element_size;
+        }
+    }
     
     /* Prefer KgpcType if available */
     if (expr->resolved_kgpc_type != NULL && (kgpc_type_is_array(expr->resolved_kgpc_type) || kgpc_type_is_shortstring(expr->resolved_kgpc_type)))
@@ -2648,6 +2715,17 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
 
     if (expr->array_element_type != UNKNOWN_TYPE)
     {
+        if (expr->array_element_size > 0)
+        {
+            long long tag_size = codegen_sizeof_type_tag(expr->array_element_type);
+            if (expr->array_element_size != tag_size ||
+                (expr->array_element_type_id != NULL &&
+                 (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+                  pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+            {
+                return expr->array_element_size;
+            }
+        }
         if (expr->array_element_type == CHAR_TYPE && ctx != NULL && ctx->symtab != NULL &&
             expr->array_element_type_id != NULL)
         {
@@ -2896,6 +2974,18 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         const struct Expression *base = expr->expr_data.array_access_data.array_expr;
         if (base != NULL)
         {
+            KgpcType *base_type = expr_get_kgpc_type(base);
+            int base_is_pointer_like = expr_has_type_tag(base, POINTER_TYPE) ||
+                (base_type != NULL && kgpc_type_is_pointer(base_type));
+            int base_is_string_like = is_string_type(expr_get_type_tag(base)) ||
+                (base_type != NULL && kgpc_type_is_string(base_type));
+            long long indexed_size = -1;
+            if ((base_is_pointer_like || base_is_string_like) &&
+                codegen_get_indexable_element_size((struct Expression *)base, ctx, &indexed_size) &&
+                indexed_size > 0)
+            {
+                return indexed_size;
+            }
             long long base_elem_size = expr_get_array_element_size(base, ctx);
             if (base_elem_size > 0)
                 return base_elem_size;
@@ -5811,10 +5901,34 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
         return 1;
     }
 
-    if (base_is_array && array_expr->array_element_size > 0)
+    if (base_is_array)
     {
-        *out_size = array_expr->array_element_size;
-        return 1;
+        KgpcType *base_type = expr_get_kgpc_type(array_expr);
+        if (base_type == NULL && array_expr->type == EXPR_VAR_ID &&
+            ctx != NULL && ctx->symtab != NULL && array_expr->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                var_node != NULL)
+            {
+                base_type = var_node->type;
+            }
+        }
+        if (base_type != NULL && kgpc_type_is_array(base_type) &&
+            !codegen_expr_has_widechar_array_metadata(array_expr))
+        {
+            long long direct_elem_size = kgpc_type_get_array_element_size(base_type);
+            if (direct_elem_size > 0)
+            {
+                *out_size = direct_elem_size;
+                return 1;
+            }
+        }
+        if (array_expr->array_element_size > 0)
+        {
+            *out_size = array_expr->array_element_size;
+            return 1;
+        }
     }
 
     if (base_is_pointer)
@@ -5981,6 +6095,138 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
     return 1;
 }
 
+static int codegen_collect_nested_array_access_chain(struct Expression *expr,
+    struct Expression **base_expr_out, struct Expression **indices_out, int *index_count_out)
+{
+    struct Expression *reversed_indices[16];
+    int reversed_count = 0;
+    struct Expression *current = expr;
+
+    if (base_expr_out != NULL)
+        *base_expr_out = NULL;
+    if (index_count_out != NULL)
+        *index_count_out = 0;
+    if (expr == NULL || base_expr_out == NULL || indices_out == NULL || index_count_out == NULL)
+        return 0;
+
+    while (current != NULL && current->type == EXPR_ARRAY_ACCESS)
+    {
+        if (current->expr_data.array_access_data.extra_indices != NULL)
+            return 0;
+        if (reversed_count >= (int)(sizeof(reversed_indices) / sizeof(reversed_indices[0])))
+            return 0;
+        reversed_indices[reversed_count++] = current->expr_data.array_access_data.index_expr;
+        current = current->expr_data.array_access_data.array_expr;
+    }
+
+    if (current == NULL || reversed_count <= 1)
+        return 0;
+
+    *base_expr_out = current;
+    for (int i = 0; i < reversed_count; ++i)
+        indices_out[i] = reversed_indices[reversed_count - 1 - i];
+    *index_count_out = reversed_count;
+    return 1;
+}
+
+static ListNode_t *codegen_emit_linearized_array_address(struct Expression *base_expr,
+    struct Expression **indices, int index_count, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    KgpcType *array_type = NULL;
+    KgpcType *current_type = NULL;
+    KgpcArrayDimensionInfo info;
+    Register_t *addr_reg = NULL;
+    char buffer[128];
+
+    if (out_reg != NULL)
+        *out_reg = NULL;
+    if (base_expr == NULL || indices == NULL || index_count <= 1 || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    array_type = base_expr->resolved_kgpc_type;
+    if (base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL && base_expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 &&
+            node != NULL && node->type != NULL)
+            array_type = node->type;
+    }
+
+    if (array_type == NULL || !kgpc_type_is_array(array_type) ||
+        kgpc_type_get_array_dimension_info(array_type, ctx->symtab, &info) != 0 ||
+        info.dim_count < index_count)
+        return inst_list;
+
+    current_type = array_type;
+    for (int i = 0; i < index_count - 1; ++i)
+    {
+        KgpcType *next_type = kgpc_type_get_array_element_type_resolved(current_type, ctx->symtab);
+        if (next_type == NULL || !kgpc_type_is_array(next_type) ||
+            kgpc_type_is_string(next_type) || kgpc_type_is_shortstring(next_type))
+            return inst_list;
+        current_type = next_type;
+    }
+
+    inst_list = codegen_address_for_expr(base_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    for (int i = 0; i < index_count; ++i)
+    {
+        struct Expression *index_expr = indices[i];
+        Register_t *index_reg = NULL;
+        long long lower_bound = info.dim_lowers[i];
+        long long stride = info.strides[i];
+
+        inst_list = codegen_expr_with_result(index_expr, inst_list, ctx, &index_reg);
+        if (codegen_had_error(ctx) || index_reg == NULL)
+        {
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+
+        if (lower_bound > 0)
+        {
+            if (expression_uses_qword(index_expr))
+                snprintf(buffer, sizeof(buffer), "\tsubq\t$%lld, %s\n", lower_bound, index_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tsubl\t$%lld, %s\n", lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (lower_bound < 0)
+        {
+            if (expression_uses_qword(index_expr))
+                snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n", -lower_bound, index_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\taddl\t$%lld, %s\n", -lower_bound, index_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        if (!expression_uses_qword(index_expr))
+            inst_list = codegen_sign_extend32_to64(inst_list, index_reg->bit_32, index_reg->bit_64);
+
+        if (stride == 1 || stride == 2 || stride == 4 || stride == 8)
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t(%s,%s,%d), %s\n",
+                addr_reg->bit_64, index_reg->bit_64, (int)stride, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\timulq\t$%lld, %s\n", stride, index_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\taddq\t%s, %s\n", index_reg->bit_64, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), index_reg);
+    }
+
+    *out_reg = addr_reg;
+    return inst_list;
+}
+
 
 int expr_contains_function_call(const struct Expression *expr)
 {
@@ -6056,11 +6302,27 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
     struct Expression *index_expr = expr->expr_data.array_access_data.index_expr;
+    struct Expression *linear_base_expr = NULL;
+    struct Expression *linear_indices[16];
+    int linear_index_count = 0;
 
     if (array_expr == NULL)
     {
         codegen_report_error(ctx, "ERROR: Array access missing base expression.");
         return inst_list;
+    }
+
+    if (codegen_collect_nested_array_access_chain(expr, &linear_base_expr,
+            linear_indices, &linear_index_count))
+    {
+        Register_t *linearized_reg = NULL;
+        ListNode_t *linearized_list = codegen_emit_linearized_array_address(linear_base_expr,
+            linear_indices, linear_index_count, inst_list, ctx, &linearized_reg);
+        if (linearized_reg != NULL)
+        {
+            *out_reg = linearized_reg;
+            return linearized_list;
+        }
     }
 
     StackNode_t *array_stack_node = NULL;
@@ -6237,11 +6499,27 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     char buffer[128];
 
     KgpcType *array_type = array_expr->resolved_kgpc_type;
-    if (array_type == NULL && array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    if (array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
         if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 && node != NULL)
-            array_type = node->type;
+        {
+            if (node->type != NULL)
+            {
+                if (array_type == NULL)
+                    array_type = node->type;
+                else if (kgpc_type_is_array(node->type))
+                {
+                    long long current_size = kgpc_type_sizeof(array_type);
+                    long long declared_size = kgpc_type_sizeof(node->type);
+                    if (!kgpc_type_is_array(array_type) ||
+                        (declared_size > 0 && declared_size > current_size))
+                    {
+                        array_type = node->type;
+                    }
+                }
+            }
+        }
     }
     if (array_type == NULL && record_field_type != NULL && kgpc_type_is_array(record_field_type))
         array_type = record_field_type;
@@ -6273,10 +6551,39 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     {
         has_info = 1;
     }
-
     long long first_index_stride = 1;
     long long first_lower_bound = 0;
     int shortstring_index = 0;
+    long long indexed_elem_size = expr_get_array_element_size(expr, ctx);
+    int wide_char_index = (indexed_elem_size == 2) ||
+        (expr->array_element_size == 2) ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
+    if (!wide_char_index && array_expr != NULL)
+    {
+        KgpcType *indexable_type = array_expr->resolved_kgpc_type;
+        if (indexable_type == NULL &&
+            array_expr->type == EXPR_VAR_ID &&
+            array_expr->expr_data.id != NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                node != NULL && node->type != NULL)
+                indexable_type = node->type;
+        }
+        if (indexable_type != NULL && kgpc_type_is_array(indexable_type))
+        {
+            KgpcType *base_elem_type = kgpc_type_get_array_element_type_resolved(indexable_type, ctx->symtab);
+            if (base_elem_type != NULL &&
+                kgpc_type_is_char(base_elem_type) &&
+                kgpc_type_sizeof(base_elem_type) == 2)
+            {
+                wide_char_index = 1;
+            }
+        }
+    }
 
     if (has_info)
     {
@@ -6295,17 +6602,30 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
     }
-
+    if (wide_char_index)
+    {
+        first_index_stride = 2;
+        if (first_lower_bound < 0)
+            first_lower_bound = 0;
+    }
+    else if (expr->resolved_kgpc_type != NULL && kgpc_type_is_array(expr->resolved_kgpc_type))
+    {
+        long long result_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
+        if (result_size > first_index_stride)
+            first_index_stride = result_size;
+    }
     /* ShortString indexing is 1-based even though it is stored with a length byte at index 0.
      * Only apply shortstring indexing for character access within a ShortString (stride == 1),
      * NOT for element access in an array of ShortStrings (stride == 256). */
-    if (first_index_stride <= 1 &&
+    if (!wide_char_index &&
+        first_index_stride <= 1 &&
         (codegen_array_access_targets_shortstring(expr, ctx) ||
          codegen_expr_is_shortstring_value(array_expr)))
     {
         shortstring_index = 1;
     }
-    else if (array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
+    else if (!wide_char_index &&
+             array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
     {
         struct Expression *ptr_expr = array_expr->expr_data.pointer_deref_data.pointer_expr;
         KgpcType *ptr_type = NULL;
@@ -6690,7 +7010,15 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
     else
     {
-        if (expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1)
+        if (element_size == 2)
+        {
+            int type_tag = expr_get_type_tag(expr);
+            if (!codegen_type_is_signed(type_tag))
+                snprintf(buffer, sizeof(buffer), "\tmovzwl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovswl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
+        }
+        else if (expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1)
         {
             int type_tag = expr_get_type_tag(expr);
             if (type_tag == CHAR_TYPE || !codegen_type_is_signed(type_tag))
@@ -7903,8 +8231,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             is_var_param =
                 (formal_arg_decl->tree_data.var_decl_data.is_var_param ||
                  formal_arg_decl->tree_data.var_decl_data.is_untyped_param);
-        }
 
+        }
         if (is_self_param && codegen_self_param_is_class(formal_arg_decl, ctx))
             is_var_param = 0;
         int is_array_param = (formal_arg_decl != NULL && formal_arg_decl->type == TREE_ARR_DECL);
@@ -7945,6 +8273,29 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         const char *call_mangled = NULL;
         if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
             call_mangled = call_expr->expr_data.function_call_data.mangled_id;
+        if (formal_arg_decl != NULL &&
+            formal_arg_decl->type == TREE_VAR_DECL &&
+            formal_arg_decl->tree_data.var_decl_data.is_untyped_param &&
+            arg_expr != NULL &&
+            arg_expr->type != EXPR_POINTER_DEREF)
+        {
+            KgpcType *arg_type = expr_get_kgpc_type(arg_expr);
+            int arg_is_pointer = (expr_has_type_tag(arg_expr, POINTER_TYPE) ||
+                (arg_type != NULL && kgpc_type_is_pointer(arg_type)));
+            int pass_pointer_value = 0;
+            if (arg_is_pointer)
+            {
+                if (formal_arg_decl->tree_data.var_decl_data.is_const_param)
+                    pass_pointer_value = 1;
+                else if ((procedure_name != NULL &&
+                          pascal_identifier_equals(procedure_name, "FpRead")) ||
+                         (call_mangled != NULL &&
+                          strncmp(call_mangled, "fpread_", 7) == 0))
+                    pass_pointer_value = 1;
+            }
+            if (pass_pointer_value)
+                is_var_param = 0;
+        }
         if ((procedure_name != NULL && strcmp(procedure_name, "kgpc_trunc_currency") == 0) ||
             (call_mangled != NULL && strcmp(call_mangled, "kgpc_trunc_currency") == 0))
             expected_type = INT64_TYPE;
@@ -9139,8 +9490,14 @@ pass_value_arg:
                     arg_is_char_value = 1;
                     char_to_string_typecast = 1;
                 }
-                if (((formal_decl_expects_string(formal_arg_decl) ||
-                      builtin_arg_expects_string(procedure_name, arg_num)) &&
+                int formal_expects_string =
+                    (formal_decl_expects_string(formal_arg_decl) ||
+                     builtin_arg_expects_string(procedure_name, arg_num));
+                int formal_expects_wide_string =
+                    formal_decl_expects_wide_string(formal_arg_decl, ctx->symtab);
+
+                if (((formal_expects_string &&
+                      !formal_expects_wide_string) &&
                      arg_is_char_value &&
                      !mangled_call_expects_char(call_expr, arg_num)) ||
                     char_to_string_typecast)
@@ -9153,8 +9510,26 @@ pass_value_arg:
                     inst_list = add_inst(inst_list, buffer);
                 }
 
-                if ((formal_decl_expects_string(formal_arg_decl) ||
-                     builtin_arg_expects_string(procedure_name, arg_num)) &&
+                if (formal_expects_wide_string &&
+                    arg_is_char_value &&
+                    !codegen_expr_is_wide_string_value(arg_expr))
+                {
+                    const char *arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                    const char *arg_reg64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", top_reg->bit_32, arg_reg32);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", top_reg->bit_64, arg_reg64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_from_string");
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                if (formal_expects_string &&
+                    !formal_expects_wide_string &&
                     arg_expr != NULL &&
                     codegen_expr_is_wide_string_value(arg_expr))
                 {
@@ -9166,8 +9541,8 @@ pass_value_arg:
                     inst_list = add_inst(inst_list, buffer);
                 }
 
-                if ((formal_decl_expects_string(formal_arg_decl) ||
-                     builtin_arg_expects_string(procedure_name, arg_num)) &&
+                if (formal_expects_string &&
+                    !formal_expects_wide_string &&
                     arg_expr != NULL &&
                     arg_expr->type == EXPR_STRING &&
                     expr_get_type_tag(arg_expr) != CHAR_TYPE &&
@@ -9181,7 +9556,7 @@ pass_value_arg:
                     inst_list = add_inst(inst_list, buffer);
                 }
 
-                if (formal_decl_expects_wide_string(formal_arg_decl, ctx->symtab) &&
+                if (formal_expects_wide_string &&
                     !codegen_expr_is_wide_string_value(arg_expr) &&
                     (expr_has_type_tag(arg_expr, STRING_TYPE) ||
                      expr_has_type_tag(arg_expr, SHORTSTRING_TYPE) ||

@@ -60,6 +60,8 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
 #include "NameMangling.h"
 #include <stdarg.h>
 
+void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
+
 #ifdef _WIN32
 /* Windows CRT does not provide strndup; caller owns returned buffer. */
 static char* strndup(const char* s, size_t n)
@@ -745,6 +747,17 @@ static int semcheck_alias_should_be_char_like(const char *alias_id, const char *
         semcheck_is_char_alias_name(target_id));
 }
 
+static int semcheck_kgpc_type_is_char_like(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_char((KgpcType *)type))
+        return 1;
+    if (type->type_alias != NULL && type->type_alias->is_char_alias)
+        return 1;
+    return 0;
+}
+
 static int semcheck_is_currency_type_id(const char *type_id)
 {
     const char *base = semcheck_base_type_name(type_id);
@@ -835,6 +848,64 @@ static int semcheck_find_ident_with_qualified_fallback_ref(HashNode_t **out, Sym
     }
 
     return found;
+}
+
+static ListNode_t *semcheck_clone_string_list(const ListNode_t *src)
+{
+    if (src == NULL)
+        return NULL;
+
+    ListNode_t *head = NULL;
+    ListNode_t *tail = NULL;
+    for (const ListNode_t *cur = src; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_STRING || cur->cur == NULL)
+            continue;
+
+        ListNode_t *node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+        if (node == NULL)
+        {
+            destroy_list(head);
+            return NULL;
+        }
+        node->type = LIST_STRING;
+        node->cur = strdup((const char *)cur->cur);
+        if (node->cur == NULL)
+        {
+            free(node);
+            destroy_list(head);
+            return NULL;
+        }
+
+        if (head == NULL)
+            head = node;
+        else
+            tail->next = node;
+        tail = node;
+    }
+
+    return head;
+}
+
+static int semcheck_alias_targets_match(const struct TypeAlias *lhs, const struct TypeAlias *rhs)
+{
+    if (lhs == NULL || rhs == NULL)
+        return 0;
+
+    if (lhs->target_type_ref != NULL && rhs->target_type_ref != NULL &&
+        lhs->target_type_ref->name != NULL && rhs->target_type_ref->name != NULL &&
+        qualified_ident_equals_ci(lhs->target_type_ref->name, rhs->target_type_ref->name))
+    {
+        return 1;
+    }
+
+    if (lhs->target_type_id != NULL && rhs->target_type_id != NULL &&
+        pascal_identifier_equals(lhs->target_type_id, rhs->target_type_id))
+    {
+        return 1;
+    }
+
+    return 0;
 }
 
 static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const char *type_id,
@@ -2193,18 +2264,12 @@ static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
         return;
 
     HashNode_t *target_node = NULL;
-    int found = -1;
-    if (alias->target_type_ref != NULL)
+    if (alias->target_type_ref != NULL || alias->target_type_id != NULL)
     {
-        found = semcheck_find_ident_with_qualified_fallback_ref(&target_node, symtab,
-            alias->target_type_ref->name);
+        target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+            alias->target_type_ref, alias->target_type_id);
     }
-    else if (alias->target_type_id != NULL)
-    {
-        found = semcheck_find_ident_with_qualified_fallback(&target_node, symtab,
-            alias->target_type_id);
-    }
-    if (found == -1 || target_node == NULL)
+    if (target_node == NULL)
         return;
 
     struct TypeAlias *target_alias = get_type_alias_from_node(target_node);
@@ -2224,6 +2289,20 @@ static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 
     if (alias->base_type == UNKNOWN_TYPE && target_alias->base_type != UNKNOWN_TYPE)
         alias->base_type = target_alias->base_type;
+
+    if (!alias->is_enum && target_alias->is_enum)
+        alias->is_enum = 1;
+    if (target_alias->enum_is_scoped)
+        alias->enum_is_scoped = 1;
+    if (target_alias->enum_has_explicit_values)
+        alias->enum_has_explicit_values = 1;
+    if (alias->enum_literals == NULL && target_alias->enum_literals != NULL)
+        alias->enum_literals = semcheck_clone_string_list(target_alias->enum_literals);
+    if (alias->kgpc_type == NULL && target_alias->kgpc_type != NULL)
+    {
+        alias->kgpc_type = target_alias->kgpc_type;
+        kgpc_type_retain(alias->kgpc_type);
+    }
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -3106,8 +3185,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
         {
             if (qualified_unit_index > 0 &&
                 node->source_unit_index > 0 &&
-                node->source_unit_index != qualified_unit_index &&
-                node->source_unit_index != g_semcheck_current_unit_index)
+                node->source_unit_index != qualified_unit_index)
             {
                 cur = cur->next;
                 continue;
@@ -9278,12 +9356,40 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
         HashNode_t *type_node = NULL;
         if (current_ref->count > 1)
         {
-            const char *unit_name = current_ref->segments != NULL ? current_ref->segments[0] : NULL;
+            const char *unit_name = (current_ref->segments != NULL) ? current_ref->segments[0] : NULL;
             const char *base_name = qualified_ident_last(current_ref);
+
             if (unit_name != NULL && base_name != NULL)
             {
-                /* Explicit unit qualification should work even without a uses entry. */
-                type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
+                ListNode_t *matches = FindAllIdents(symtab, base_name);
+                for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *candidate = (HashNode_t *)cur->cur;
+                    if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                        continue;
+                    const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                    if (candidate_unit != NULL &&
+                        pascal_identifier_equals(candidate_unit, unit_name))
+                    {
+                        type_node = candidate;
+                        break;
+                    }
+                }
+                if (matches != NULL)
+                    DestroyList(matches);
+            }
+
+            /* Prefer the fully-qualified reference first. Falling back directly to the
+             * base name can loop back to a local alias (e.g. SysUtils.TEndian) instead
+             * of the intended target (ObjPas.TEndian). */
+            if (type_node == NULL)
+            {
+                char *qualified = qualified_ident_join(current_ref, ".");
+                if (qualified != NULL)
+                {
+                    type_node = semcheck_find_type_node_with_unit_flag(symtab, qualified, 1);
+                    free(qualified);
+                }
             }
         }
         if (type_node == NULL)
@@ -10437,21 +10543,40 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                 target_node->hash_type == HASHTYPE_TYPE &&
                                 !target_node->defined_in_unit)
                             {
+                                const char *unit_name =
+                                    (alias_info->target_type_ref->name != NULL &&
+                                     alias_info->target_type_ref->name->segments != NULL &&
+                                     alias_info->target_type_ref->name->count > 0)
+                                        ? alias_info->target_type_ref->name->segments[0]
+                                        : NULL;
                                 const char *base_name = type_ref_base_name(alias_info->target_type_ref);
                                 if (base_name != NULL)
                                 {
                                     ListNode_t *matches = FindAllIdents(symtab, base_name);
+                                    HashNode_t *unit_match = NULL;
                                     for (ListNode_t *mcur = matches; mcur != NULL; mcur = mcur->next)
                                     {
                                         HashNode_t *candidate = (HashNode_t *)mcur->cur;
                                         if (candidate != NULL &&
-                                            candidate->hash_type == HASHTYPE_TYPE &&
-                                            candidate->defined_in_unit)
+                                            candidate->hash_type == HASHTYPE_TYPE)
                                         {
-                                            target_node = candidate;
-                                            break;
+                                            if (unit_name != NULL)
+                                            {
+                                                const char *candidate_unit =
+                                                    unit_registry_get(candidate->source_unit_index);
+                                                if (candidate_unit != NULL &&
+                                                    pascal_identifier_equals(candidate_unit, unit_name))
+                                                {
+                                                    unit_match = candidate;
+                                                    break;
+                                                }
+                                            }
+                                            if (unit_match == NULL && candidate->defined_in_unit)
+                                                unit_match = candidate;
                                         }
                                     }
+                                    if (unit_match != NULL)
+                                        target_node = unit_match;
                                     if (matches != NULL)
                                         DestroyList(matches);
                                 }
@@ -10841,6 +10966,20 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         (void *)existing_type->type);
                 }
             }
+            else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                     kgpc_type != NULL &&
+                     existing_type->type != NULL &&
+                     existing_type->type->kind == TYPE_KIND_PRIMITIVE &&
+                     existing_type->type->info.primitive_type_tag == UNKNOWN_TYPE &&
+                     !(kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                       kgpc_type->info.primitive_type_tag == UNKNOWN_TYPE))
+            {
+                /* Replace predeclared UNKNOWN placeholders for simple aliases once the
+                 * real target type becomes available (e.g. SysUtils.TEndian -> ObjPas.TEndian). */
+                kgpc_type_retain(kgpc_type);
+                kgpc_type_release(existing_type->type);
+                existing_type->type = kgpc_type;
+            }
 
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && alias_info != NULL && 
                 existing_type->type != NULL)
@@ -10850,8 +10989,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (existing_alias != NULL && existing_alias != alias_info &&
                     alias_info->target_type_id != NULL)
                 {
-                    /* Avoid overwriting alias metadata when reusing another type. */
-                    can_override_alias = 0;
+                    int existing_is_unknown_placeholder =
+                        (existing_type->type->kind == TYPE_KIND_PRIMITIVE &&
+                         existing_type->type->info.primitive_type_tag == UNKNOWN_TYPE);
+                    if (!existing_is_unknown_placeholder &&
+                        !semcheck_alias_targets_match(existing_alias, alias_info))
+                    {
+                        /* Avoid overwriting unrelated alias metadata when reusing another type. */
+                        can_override_alias = 0;
+                    }
                 }
                 if (existing_alias != NULL)
                 {
@@ -10918,8 +11064,11 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (existing_alias != NULL && existing_alias != alias_info &&
                     alias_info->target_type_id != NULL)
                 {
-                    /* Avoid overwriting alias metadata when reusing another type. */
-                    can_override_alias = 0;
+                    if (!semcheck_alias_targets_match(existing_alias, alias_info))
+                    {
+                        /* Avoid overwriting unrelated alias metadata when reusing another type. */
+                        can_override_alias = 0;
+                    }
                 }
                 if (existing_alias != NULL)
                 {
@@ -12466,16 +12615,27 @@ void semcheck_add_builtins(SymTab_t *symtab)
         }
     }
 
-    /* StringOfChar: function StringOfChar(c: Char/WideChar; l: SizeInt): string */
+    /* StringOfChar: function StringOfChar(c: Char; l: SizeInt): string
+     *                       StringOfChar(c: WideChar; l: SizeInt): UnicodeString */
     {
         const char *func_name = "StringOfChar";
-        KgpcType *return_type = create_primitive_type(STRING_TYPE);
+        KgpcType *ansi_return_type = create_primitive_type(STRING_TYPE);
+        KgpcType *wide_return_type = create_primitive_type(STRING_TYPE);
+        struct TypeAlias *wide_return_alias = calloc(1, sizeof(struct TypeAlias));
+        if (wide_return_type != NULL && wide_return_alias != NULL)
+        {
+            wide_return_alias->alias_name = strdup("UnicodeString");
+            wide_return_alias->target_type_id = strdup("UnicodeString");
+            wide_return_alias->base_type = STRING_TYPE;
+            wide_return_alias->is_wide_string = 1;
+            kgpc_type_set_type_alias(wide_return_type, wide_return_alias);
+        }
 
         /* Char + LongInt */
         ListNode_t *param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
         ListNode_t *param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
         ListNode_t *params = ConcatList(param_c, param_l);
-        KgpcType *func_type = create_procedure_type(params, return_type);
+        KgpcType *func_type = create_procedure_type(params, ansi_return_type);
         if (func_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
@@ -12488,7 +12648,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         param_c = semcheck_create_builtin_param("c", CHAR_TYPE);
         param_l = semcheck_create_builtin_param("l", INT64_TYPE);
         params = ConcatList(param_c, param_l);
-        func_type = create_procedure_type(params, return_type);
+        func_type = create_procedure_type(params, ansi_return_type);
         if (func_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
@@ -12501,7 +12661,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         param_c = semcheck_create_builtin_param("c", WORD_TYPE);
         param_l = semcheck_create_builtin_param("l", LONGINT_TYPE);
         params = ConcatList(param_c, param_l);
-        func_type = create_procedure_type(params, return_type);
+        func_type = create_procedure_type(params, wide_return_type);
         if (func_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
@@ -12514,7 +12674,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         param_c = semcheck_create_builtin_param("c", WORD_TYPE);
         param_l = semcheck_create_builtin_param("l", INT64_TYPE);
         params = ConcatList(param_c, param_l);
-        func_type = create_procedure_type(params, return_type);
+        func_type = create_procedure_type(params, wide_return_type);
         if (func_type != NULL)
         {
             AddBuiltinFunction_Typed(symtab, (char *)func_name, func_type);
@@ -12523,7 +12683,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
         if (params != NULL)
             DestroyList(params);
 
-        destroy_kgpc_type(return_type);
+        destroy_kgpc_type(ansi_return_type);
+        destroy_kgpc_type(wide_return_type);
     }
 
     /* BinStr: function BinStr(Val: int64; cnt: byte): shortstring */
@@ -14487,7 +14648,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         int builtin_type = semcheck_map_builtin_type_name_local(type_id);
                         if (builtin_type != UNKNOWN_TYPE)
                         {
-                            element_type = create_primitive_type(builtin_type);
+                            if (builtin_type == CHAR_TYPE && type_id != NULL &&
+                                (pascal_identifier_equals(type_id, "WideChar") ||
+                                 pascal_identifier_equals(type_id, "UnicodeChar")))
+                            {
+                                element_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                            }
+                            else
+                            {
+                                element_type = create_primitive_type(builtin_type);
+                            }
                         }
                         else
                         {
@@ -15048,6 +15218,25 @@ next_identifier:
                         }
 
                     int expr_tag = expr_type != NULL ? semcheck_tag_from_kgpc(expr_type) : UNKNOWN_TYPE;
+                    if (expr_tag == UNKNOWN_TYPE &&
+                        tree->tree_data.var_decl_data.is_typed_const &&
+                        init_expr != NULL &&
+                        init_expr->type == EXPR_ADDR &&
+                        var_node != NULL &&
+                        var_node->type != NULL)
+                    {
+                        int declared_tag = semcheck_tag_from_kgpc(var_node->type);
+                        if (declared_tag == POINTER_TYPE || declared_tag == PROCEDURE)
+                        {
+                            expr_type = var_node->type;
+                            kgpc_type_retain(expr_type);
+                            expr_tag = declared_tag;
+                            if (init_expr->resolved_kgpc_type != NULL)
+                                destroy_kgpc_type(init_expr->resolved_kgpc_type);
+                            init_expr->resolved_kgpc_type = var_node->type;
+                            kgpc_type_retain(init_expr->resolved_kgpc_type);
+                        }
+                    }
                     if (expr_tag == UNKNOWN_TYPE)
                     {
                         if (!is_default_param)
@@ -15209,6 +15398,16 @@ next_identifier:
                             if (!compatible && current_var_type == HASHVAR_PCHAR && expr_tag == CHAR_TYPE)
                             {
                                 compatible = 1;
+                            }
+                            if (!compatible &&
+                                (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE) &&
+                                init_expr != NULL && init_expr->type == EXPR_STRING &&
+                                init_expr->expr_data.string != NULL &&
+                                strlen(init_expr->expr_data.string) == 1 &&
+                                var_node != NULL && semcheck_kgpc_type_is_char_like(var_node->type))
+                            {
+                                compatible = 1;
+                                semcheck_expr_set_resolved_type(init_expr, CHAR_TYPE);
                             }
                             /* Allow string literal initializer for array of char or shortstring-like arrays */
                             if (!compatible && current_var_type == HASHVAR_ARRAY &&

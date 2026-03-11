@@ -18,6 +18,46 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
+static int semcheck_expr_is_explicit_char_typecast_for_call_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_TYPECAST)
+        return 0;
+    const char *target_id = expr->expr_data.typecast_data.target_type_id;
+    if (target_id == NULL)
+        return 0;
+    return pascal_identifier_equals(target_id, "Char") ||
+        pascal_identifier_equals(target_id, "AnsiChar") ||
+        pascal_identifier_equals(target_id, "WideChar") ||
+        pascal_identifier_equals(target_id, "UnicodeChar");
+}
+
+static int semcheck_kgpc_type_is_char_like_for_call_local(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_char((KgpcType *)type))
+        return 1;
+    if (type->type_alias != NULL && type->type_alias->is_char_alias)
+        return 1;
+    return 0;
+}
+
+static int semcheck_expr_is_char_typecast_call_for_call_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+    if (expr->expr_data.function_call_data.args_expr == NULL ||
+        expr->expr_data.function_call_data.args_expr->next != NULL)
+        return 0;
+    const char *target_id = expr->expr_data.function_call_data.id;
+    if (target_id == NULL)
+        return 0;
+    return pascal_identifier_equals(target_id, "Char") ||
+        pascal_identifier_equals(target_id, "AnsiChar") ||
+        pascal_identifier_equals(target_id, "WideChar") ||
+        pascal_identifier_equals(target_id, "UnicodeChar");
+}
+
 static void semcheck_set_pointer_info_from_kgpc_type(struct Expression *expr, SymTab_t *symtab, KgpcType *type)
 {
     if (expr == NULL || type == NULL || !kgpc_type_is_pointer(type))
@@ -536,6 +576,12 @@ int semcheck_arrayaccess(int *type_return,
                 expr->array_element_type_id = strdup("WideChar");
             expr->array_element_size = 2;
         }
+        else
+        {
+            if (expr->array_element_type_id == NULL)
+                expr->array_element_type_id = strdup("AnsiChar");
+            expr->array_element_size = 1;
+        }
     }
     else if (base_is_pointer)
     {
@@ -557,7 +603,30 @@ int semcheck_arrayaccess(int *type_return,
         {
             KgpcType *points_to = base_kgpc_type->info.points_to;
             if (kgpc_type_is_char(points_to))
+            {
                 element_type = CHAR_TYPE;
+                if (expr->array_element_type_id == NULL)
+                {
+                    const char *char_type_id = "AnsiChar";
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(points_to);
+                    if (alias != NULL)
+                    {
+                        if ((alias->alias_name != NULL &&
+                             (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+                              pascal_identifier_equals(alias->alias_name, "UnicodeChar"))) ||
+                            (alias->target_type_id != NULL &&
+                             (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+                              pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))))
+                            char_type_id = "WideChar";
+                    }
+                    else if (kgpc_type_sizeof(points_to) == 2)
+                    {
+                        char_type_id = "WideChar";
+                    }
+                    expr->array_element_type_id = strdup(char_type_id);
+                }
+                expr->array_element_size = (kgpc_type_sizeof(points_to) == 2) ? 2 : 1;
+            }
             else if (kgpc_type_is_integer(points_to))
                 element_type = kgpc_type_get_primitive_tag(points_to);
             else if (kgpc_type_is_pointer(points_to))
@@ -661,17 +730,28 @@ int semcheck_arrayaccess(int *type_return,
                 }
             }
 
-            if (pointer_subtype_id == NULL && array_expr->array_element_type_id != NULL &&
+            if (pointer_subtype == UNKNOWN_TYPE && pointer_subtype_id == NULL &&
+                array_expr->array_element_type_id != NULL &&
                 (array_expr->array_element_type_id[0] == 'P' ||
                  array_expr->array_element_type_id[0] == 'p') &&
                 array_expr->array_element_type_id[1] != '\0')
             {
-                pointer_subtype_id = array_expr->array_element_type_id + 1;
+                const char *candidate_type_id = array_expr->array_element_type_id + 1;
+                HashNode_t *candidate_node = NULL;
+                if (FindIdent(&candidate_node, symtab, candidate_type_id) >= 0 &&
+                    candidate_node != NULL)
+                {
+                    pointer_subtype_id = candidate_type_id;
+                    set_type_from_hashtype(&pointer_subtype, candidate_node);
+                }
                 if (pointer_subtype == UNKNOWN_TYPE)
                 {
-                    int mapped = semcheck_map_builtin_type_name(symtab, pointer_subtype_id);
+                    int mapped = semcheck_map_builtin_type_name(symtab, candidate_type_id);
                     if (mapped != UNKNOWN_TYPE)
+                    {
+                        pointer_subtype_id = candidate_type_id;
                         pointer_subtype = mapped;
+                    }
                 }
             }
 
@@ -2954,9 +3034,17 @@ int semcheck_funccall(int *type_return,
             struct Expression *arg_expr = (struct Expression *)args->cur;
             int arg_type = UNKNOWN_TYPE;
             KgpcType *arg_kgpc_type_uc = NULL;
+            int arg_cast_type = UNKNOWN_TYPE;
+            if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL &&
+                semcheck_expr_is_char_typecast_call_for_call_local(arg_expr))
+                semcheck_try_reinterpret_as_typecast(&arg_cast_type, symtab, arg_expr, max_scope_lev);
             int error_count = semcheck_expr_with_type(&arg_kgpc_type_uc, symtab, arg_expr, max_scope_lev, NO_MUTATE);
             arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_uc);
-            if (error_count == 0 && arg_type == CHAR_TYPE)
+            if (error_count == 0 &&
+                (arg_type == CHAR_TYPE ||
+                 semcheck_expr_is_char_like(arg_expr) ||
+                 semcheck_kgpc_type_is_char_like_for_call_local(arg_kgpc_type_uc) ||
+                 semcheck_expr_is_explicit_char_typecast_for_call_local(arg_expr)))
             {
                 if (expr->expr_data.function_call_data.mangled_id != NULL)
                 {
@@ -2990,6 +3078,58 @@ int semcheck_funccall(int *type_return,
         }
     }
 
+    if (id != NULL && pascal_identifier_equals(id, "LowerCase"))
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args != NULL && args->next == NULL)
+        {
+            struct Expression *arg_expr = (struct Expression *)args->cur;
+            int arg_type = UNKNOWN_TYPE;
+            KgpcType *arg_kgpc_type_lc = NULL;
+            int arg_cast_type = UNKNOWN_TYPE;
+            if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL &&
+                semcheck_expr_is_char_typecast_call_for_call_local(arg_expr))
+                semcheck_try_reinterpret_as_typecast(&arg_cast_type, symtab, arg_expr, max_scope_lev);
+            int error_count = semcheck_expr_with_type(&arg_kgpc_type_lc, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+            arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_lc);
+            if (error_count == 0 &&
+                (arg_type == CHAR_TYPE ||
+                 semcheck_expr_is_char_like(arg_expr) ||
+                 semcheck_kgpc_type_is_char_like_for_call_local(arg_kgpc_type_lc) ||
+                 semcheck_expr_is_explicit_char_typecast_for_call_local(arg_expr)))
+            {
+                if (expr->expr_data.function_call_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                }
+                if (expr->expr_data.function_call_data.id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = NULL;
+                }
+                expr->expr_data.function_call_data.id = strdup("kgpc_lowercase_char");
+                expr->expr_data.function_call_data.mangled_id = strdup("kgpc_lowercase_char");
+                if (expr->expr_data.function_call_data.mangled_id == NULL)
+                {
+                    fprintf(stderr, "Error: failed to allocate mangled name for LowerCase.\n");
+                    *type_return = UNKNOWN_TYPE;
+                    return 1;
+                }
+                semcheck_reset_function_call_cache(expr);
+                if (expr->resolved_kgpc_type != NULL)
+                {
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                    expr->resolved_kgpc_type = NULL;
+                }
+                expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+                semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
+                *type_return = CHAR_TYPE;
+                return 0;
+            }
+        }
+    }
+
 
     /* UpCase(char) is always handled as a builtin (not gated by allow_builtins)
      * to avoid selecting the UnicodeChar overload which calls through
@@ -3002,9 +3142,17 @@ int semcheck_funccall(int *type_return,
             struct Expression *arg_expr = (struct Expression *)args->cur;
             int arg_type = UNKNOWN_TYPE;
             KgpcType *arg_kgpc_type_upcase = NULL;
+            int arg_cast_type = UNKNOWN_TYPE;
+            if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL &&
+                semcheck_expr_is_char_typecast_call_for_call_local(arg_expr))
+                semcheck_try_reinterpret_as_typecast(&arg_cast_type, symtab, arg_expr, max_scope_lev);
             int error_count = semcheck_expr_with_type(&arg_kgpc_type_upcase, symtab, arg_expr, max_scope_lev, NO_MUTATE);
             arg_type = semcheck_tag_from_kgpc(arg_kgpc_type_upcase);
-            if (error_count == 0 && arg_type == CHAR_TYPE)
+            if (error_count == 0 &&
+                (arg_type == CHAR_TYPE ||
+                 semcheck_expr_is_char_like(arg_expr) ||
+                 semcheck_kgpc_type_is_char_like_for_call_local(arg_kgpc_type_upcase) ||
+                 semcheck_expr_is_explicit_char_typecast_for_call_local(arg_expr)))
                 return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
             if (error_count == 0 && arg_type == STRING_TYPE &&
                 arg_expr != NULL && arg_expr->type == EXPR_STRING &&

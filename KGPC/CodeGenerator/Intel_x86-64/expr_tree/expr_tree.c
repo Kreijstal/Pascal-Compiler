@@ -664,6 +664,8 @@ static ListNode_t *emit_alu_op_with_large_imm(
         {
             Register_t *imm_reg = get_free_reg(get_reg_stack(), &inst_list);
             if (imm_reg == NULL)
+                imm_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (imm_reg == NULL)
             {
                 codegen_report_error(ctx,
                     "ERROR: Unable to allocate temporary for 64-bit immediate in %s.", mnemonic);
@@ -1570,6 +1572,33 @@ static ListNode_t *promote_wide_operand_to_string(expr_node_t *node, ListNode_t 
     return inst_list;
 }
 
+static ListNode_t *promote_operand_to_unicodestring(expr_node_t *node, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *value_reg)
+{
+    if (node == NULL || ctx == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (!expr_tree_node_is_wide_string(node))
+    {
+        inst_list = promote_char_operand_to_string(node, inst_list, ctx, value_reg);
+        inst_list = promote_shortstring_operand_to_string(node, inst_list, ctx, value_reg);
+
+        const char *arg_reg64 = current_arg_reg64(0);
+        if (arg_reg64 != NULL)
+        {
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg_reg64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_from_string");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            free_arg_regs();
+        }
+    }
+    return inst_list;
+}
+
 static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGenContext *ctx,
     const char *value_operand, const Register_t *value_reg)
 {
@@ -1668,6 +1697,7 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
         return inst_list;
 
     char buffer[128];
+    int result_is_wide = expr_tree_node_is_wide_string(node);
 
     Register_t *rhs_reg = get_free_reg(get_reg_stack(), &inst_list);
 
@@ -1677,16 +1707,26 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
 
         StackNode_t *spill_loc = add_l_t("str_concat_rhs");
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, target_reg);
-        inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
-        inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
-        inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+        if (result_is_wide)
+            inst_list = promote_operand_to_unicodestring(node->right_expr, inst_list, ctx, target_reg);
+        else
+        {
+            inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+            inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+            inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, target_reg);
+        }
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, spill_loc->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        if (result_is_wide)
+            inst_list = promote_operand_to_unicodestring(node->left_expr, inst_list, ctx, target_reg);
+        else
+        {
+            inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        }
 
         if (codegen_target_is_windows())
         {
@@ -1707,16 +1747,26 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     {
         StackNode_t *lhs_spill = add_l_t("str_concat_lhs");
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
-        inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        if (result_is_wide)
+            inst_list = promote_operand_to_unicodestring(node->left_expr, inst_list, ctx, target_reg);
+        else
+        {
+            inst_list = promote_char_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = promote_shortstring_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+            inst_list = promote_wide_operand_to_string(node->left_expr, inst_list, ctx, target_reg);
+        }
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", target_reg->bit_64, lhs_spill->offset);
         inst_list = add_inst(inst_list, buffer);
 
         inst_list = gencode_expr_tree(node->right_expr, inst_list, ctx, rhs_reg);
-        inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
-        inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
-        inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+        if (result_is_wide)
+            inst_list = promote_operand_to_unicodestring(node->right_expr, inst_list, ctx, rhs_reg);
+        else
+        {
+            inst_list = promote_char_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+            inst_list = promote_shortstring_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+            inst_list = promote_wide_operand_to_string(node->right_expr, inst_list, ctx, rhs_reg);
+        }
 
         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", lhs_spill->offset, target_reg->bit_64);
         inst_list = add_inst(inst_list, buffer);
@@ -1741,7 +1791,8 @@ static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_lis
     }
 
     inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_concat");
+    inst_list = codegen_call_with_shadow_space(inst_list,
+        result_is_wide ? "kgpc_unicodestring_concat" : "kgpc_string_concat");
     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
 
@@ -4025,11 +4076,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 {
                     int lookup_type = left_expr->pointer_subtype;
                     const char *lookup_id = left_expr->pointer_subtype_id;
-                    
+
+                    if (lookup_type == POINTER_TYPE && lookup_id == NULL)
+                        lookup_type = UNKNOWN_TYPE;
+
                     /* If we have a type name, prioritize it over the type tag */
                     if (lookup_id != NULL)
                         lookup_type = UNKNOWN_TYPE;
-                    
+
                     if (lookup_type != UNKNOWN_TYPE || lookup_id != NULL)
                     {
                         if (codegen_sizeof_type_reference(ctx, lookup_type, lookup_id,
@@ -4044,7 +4098,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 {
                     int lookup_type = expr->pointer_subtype;
                     const char *lookup_id = expr->pointer_subtype_id;
-                    
+
+                    if (lookup_type == POINTER_TYPE && lookup_id == NULL)
+                        lookup_type = UNKNOWN_TYPE;
+
                     /* If we have a type name, prioritize it over the type tag */
                     if (lookup_id != NULL)
                         lookup_type = UNKNOWN_TYPE;
@@ -4117,7 +4174,11 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 
                 /* Get element size */
                 long long element_size = 1;
-                if (ptr_expr != NULL && ptr_expr->pointer_subtype != UNKNOWN_TYPE)
+                if (ptr_expr != NULL &&
+                    ptr_expr->resolved_kgpc_type != NULL &&
+                    ptr_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER &&
+                    ptr_expr->resolved_kgpc_type->info.points_to != NULL &&
+                    ptr_expr->pointer_subtype != UNKNOWN_TYPE)
                 {
                     int dummy_type = ptr_expr->pointer_subtype;
                     if (codegen_sizeof_type_reference(ctx, dummy_type, ptr_expr->pointer_subtype_id,

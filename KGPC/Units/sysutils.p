@@ -906,9 +906,9 @@ begin
         Result := '';
         exit;
     end;
-    SetLength(Result, Count);
+    Result := '';
     for i := 1 to Count do
-        Result[i] := C;
+        Result := Result + WideString(C);
 end;
 
 function IntToHex(Value: LongInt): AnsiString;

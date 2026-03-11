@@ -9301,6 +9301,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
                 is_var_param, 0, default_init, NULL, inline_alias, NULL);
+            if (param_decl != NULL)
+                param_decl->tree_data.var_decl_data.is_const_param = is_const_param;
             if (param_decl != NULL && (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC))
                 param_decl->tree_data.var_decl_data.is_untyped_param = 1;
             if (param_decl != NULL)
@@ -10428,7 +10430,20 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
             struct Expression *index_expr = mk_inum(const_decl_node->line, index);
             struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
+            if (is_widechar_array_target) {
+                base_expr->is_array_expr = 1;
+                base_expr->array_element_type = CHAR_TYPE;
+                base_expr->array_element_size = 2;
+                base_expr->array_element_type_id = strdup("WideChar");
+            }
             struct Expression *lhs = mk_arrayaccess(const_decl_node->line, base_expr, index_expr);
+            if (is_widechar_array_target) {
+                lhs->array_element_type = CHAR_TYPE;
+                lhs->array_element_size = 2;
+                lhs->array_element_type_id = strdup("WideChar");
+                lhs->array_lower_bound = start;
+                lhs->array_upper_bound = end;
+            }
             struct Statement *assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, rhs);
             list_builder_append(&stmt_builder, assign, LIST_STMT);
             ++index;
@@ -10536,7 +10551,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                                     struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
                                     struct Expression *dim4_index_expr = mk_inum(element->line, dim4_index);
                                     struct Expression *lhs;
-                                    if (type_info->array_dimensions != NULL) {
+                                    if (is_multidim) {
                                         /* True multi-dim: arr[d1, d2, d3, d4] */
                                         lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
                                         ListNode_t *extra3 = CreateListNode(dim4_index_expr, LIST_EXPR);
@@ -10572,7 +10587,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
                             struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
                             struct Expression *lhs;
-                            if (type_info->array_dimensions != NULL) {
+                            if (is_multidim) {
                                 /* True multi-dim: arr[outer, inner, innermost] */
                                 lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
                                 ListNode_t *extra2 = CreateListNode(innermost_index_expr, LIST_EXPR);
@@ -10603,7 +10618,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
                         struct Expression *lhs;
                         struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                        if (type_info->array_dimensions != NULL) {
+                        if (is_multidim) {
                             /* True multi-dim: arr[outer, inner] */
                             lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
                             lhs->expr_data.array_access_data.extra_indices =
@@ -10732,11 +10747,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (type_info->array_dimensions != NULL && type_info->array_dimensions->cur != NULL) {
         range_str = strdup((char *)type_info->array_dimensions->cur);
     }
+    int decl_element_type = type_info->element_type;
+    char *decl_element_type_id = type_info->element_type_id != NULL ?
+        strdup(type_info->element_type_id) : NULL;
     struct RecordType *inline_record = type_info->record_type;
     if (inline_record != NULL)
         type_info->record_type = NULL;
-    Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
-                                      type_info->element_type_id, start, end, range_str, initializer,
+    Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, decl_element_type,
+                                      decl_element_type_id, start, end, range_str, initializer,
                                       inline_record);
     array_decl->tree_data.arr_decl_data.type_ref =
         type_ref_from_element_info(type_info, type_info->element_type_id);

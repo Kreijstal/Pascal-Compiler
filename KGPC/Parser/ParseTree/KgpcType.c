@@ -56,6 +56,7 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit);
+static long long kgpc_type_get_array_scalar_element_size(KgpcType *type);
 
 static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
 {
@@ -2762,12 +2763,12 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
             dim_node = dim_node->next;
         }
 
-        info->element_size = kgpc_type_get_array_element_size(type);
+        info->element_size = kgpc_type_get_array_scalar_element_size(type);
         if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
             if (node != NULL && node->type != NULL)
-                info->element_size = kgpc_type_sizeof(node->type);
+                info->element_size = kgpc_type_get_array_scalar_element_size(node->type);
         }
     }
     else
@@ -2900,6 +2901,16 @@ static int var_type_to_primitive_tag(enum VarType var_type)
         default:
             return UNKNOWN_TYPE;
     }
+}
+
+static long long kgpc_type_get_array_scalar_element_size(KgpcType *type)
+{
+    KgpcType *curr = type;
+    while (curr != NULL && curr->kind == TYPE_KIND_ARRAY)
+        curr = curr->info.array_info.element_type;
+    if (curr == NULL)
+        return -1;
+    return kgpc_type_sizeof(curr);
 }
 
 long long kgpc_type_get_array_of_const_element_size(KgpcType *type)

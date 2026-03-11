@@ -186,6 +186,8 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     Register_t **out_reg, const char *message);
 static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_setstring(struct Statement *stmt,
@@ -2253,9 +2255,19 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
         return 0;
     if (expr->type != EXPR_ARRAY_ACCESS)
         return 0;
+    if (expr->array_element_size == 2 ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
     
     struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
     if (base_expr == NULL)
+        return 0;
+    if (base_expr->array_element_size == 2 ||
+        (base_expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(base_expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(base_expr->array_element_type_id, "UnicodeChar"))))
         return 0;
     
     /* If the array access expression itself has shortstring type info, use that */
@@ -2307,6 +2319,11 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
+    if ((expr->array_element_size == 2) ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
         return 1;
     if (expr->resolved_kgpc_type != NULL)
@@ -2327,6 +2344,10 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
     /* Also check by type bounds: string[N] is char array with bounds 0..N */
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
+        expr->array_element_size != 2 &&
+        (expr->array_element_type_id == NULL ||
+         (!pascal_identifier_equals(expr->array_element_type_id, "WideChar") &&
+          !pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))) &&
         expr_get_array_lower_bound(expr) == 0)
     {
         /* Any char array starting at 0 and sized up to 256 is treated as shortstring */
@@ -2337,9 +2358,26 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
     return 0;
 }
 
+static int codegen_expr_has_widechar_array_metadata_local(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->array_element_size == 2)
+        return 1;
+    if (expr->array_element_type_id != NULL &&
+        (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+         pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")))
+    {
+        return 1;
+    }
+    return 0;
+}
+
 static int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
 {
     if (expr == NULL)
+        return 0;
+    if (codegen_expr_has_widechar_array_metadata_local(expr))
         return 0;
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
         return 1;
@@ -5025,6 +5063,8 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     const char *mangled = stmt->stmt_data.procedure_call_data.mangled_id;
     if (mangled != NULL && strcmp(mangled, "__kgpc_setlength_string") == 0)
         return codegen_builtin_setlength_string(stmt, inst_list, ctx);
+    if (mangled != NULL && strcmp(mangled, "__kgpc_setlength_unicodestring") == 0)
+        return codegen_builtin_setlength_unicodestring(stmt, inst_list, ctx);
     if (mangled != NULL && strcmp(mangled, "__kgpc_setlength_shortstring") == 0)
         return codegen_builtin_setlength_shortstring(stmt, inst_list, ctx);
 
@@ -5428,6 +5468,107 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_setlength");
+
+    free_reg(get_reg_stack(), addr_reg);
+    free_reg(get_reg_stack(), length_reg);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    assert(stmt != NULL);
+    if (ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args_expr == NULL || args_expr->next == NULL)
+    {
+        fprintf(stderr, "ERROR: SetLength expects two arguments.\n");
+        return inst_list;
+    }
+
+    struct Expression *target_expr = (struct Expression *)args_expr->cur;
+    struct Expression *len_expr = (struct Expression *)args_expr->next->cur;
+    if (target_expr == NULL || len_expr == NULL)
+        return inst_list;
+
+    if (!codegen_expr_is_addressable(target_expr))
+    {
+        fprintf(stderr, "ERROR: SetLength UnicodeString target must be addressable.\n");
+        return inst_list;
+    }
+
+    int len_has_function_call = expr_contains_function_call(len_expr);
+    StackNode_t *addr_spill_slot = NULL;
+    char buffer[128];
+
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    if (len_has_function_call)
+    {
+        addr_spill_slot = add_l_t("setlength_unicode_addr_spill");
+        if (addr_spill_slot != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                addr_reg->bit_64, addr_spill_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    Register_t *length_reg = NULL;
+    inst_list = codegen_expr_with_result(len_expr, inst_list, ctx, &length_reg);
+    if (codegen_had_error(ctx) || length_reg == NULL)
+    {
+        if (length_reg != NULL)
+            free_reg(get_reg_stack(), length_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
+    if (addr_spill_slot != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            addr_spill_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    if (!expr_uses_qword_kgpctype(len_expr))
+        inst_list = codegen_sign_extend32_to64(inst_list, length_reg->bit_32, length_reg->bit_64);
+
+    const char *arg0 = current_arg_reg64(0);
+    const char *arg1 = current_arg_reg64(1);
+    RegisterId_t arg0_id = codegen_arg_reg_id_num(0);
+    RegisterId_t arg1_id = codegen_arg_reg_id_num(1);
+
+    if (length_reg->reg_id == arg0_id)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (addr_reg->reg_id == arg1_id)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", length_reg->bit_64, arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_setlength");
 
     free_reg(get_reg_stack(), addr_reg);
     free_reg(get_reg_stack(), length_reg);
@@ -7070,6 +7211,8 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (file_reg == NULL)
+                file_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
             if (file_reg != NULL)
             {
                 Register_t *addr_reg = NULL;
@@ -7140,8 +7283,11 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
          * codegen (expr trees, storage sizing) can make the right width choice. */
         (void)expr;
         
-        /* Treat char arrays as strings for printing */
-        int treat_as_string = (expr_type == STRING_TYPE || expr_type == SHORTSTRING_TYPE);
+        int expr_is_wide_string = codegen_expr_is_wide_string_value(expr);
+
+        /* Treat char arrays and all managed string forms as strings for printing */
+        int treat_as_string = (expr_type == STRING_TYPE || expr_type == SHORTSTRING_TYPE ||
+            expr_is_wide_string);
         /* If type info is missing but the literal is a string (and not typed as CHAR),
          * still treat it as a string for write/writeln. This fixes string literals that
          * lost their resolved_type during parsing/semantics. */
@@ -7152,26 +7298,6 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
             treat_as_string = 1;
         }
 
-        int expr_is_wide_string = 0;
-        if (expr != NULL && expr->resolved_kgpc_type != NULL)
-        {
-            expr_is_wide_string = kgpc_type_is_wide_string(expr->resolved_kgpc_type);
-            if (!expr_is_wide_string && expr->resolved_kgpc_type->type_alias != NULL)
-            {
-                const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
-                const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
-                if ((alias_name != NULL &&
-                     (pascal_identifier_equals(alias_name, "UnicodeString") ||
-                      pascal_identifier_equals(alias_name, "WideString"))) ||
-                    (target_name != NULL &&
-                     (pascal_identifier_equals(target_name, "UnicodeString") ||
-                      pascal_identifier_equals(target_name, "WideString"))))
-                {
-                    expr_is_wide_string = 1;
-                }
-            }
-        }
-        
         /* Also treat PAnsiChar (pointer to char) as string */
         if (expr != NULL && expr->resolved_kgpc_type != NULL && 
             kgpc_type_is_pointer(expr->resolved_kgpc_type))
@@ -8157,6 +8283,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
 
+
     /* Handle string typecast on LHS: e.g., RawByteString(ptr) := 'value'
      * The typecast means this pointer should be treated as a string variable.
      * Generate a string assignment (kgpc_string_assign) instead of direct store. */
@@ -8422,6 +8549,19 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             int assign_type = expr_get_type_tag(assign_expr);
             int target_is_wide_string = codegen_expr_is_wide_string_value(var_expr);
             int source_is_wide_string = codegen_expr_is_wide_string_value(assign_expr);
+            int source_needs_wide_promotion = (!source_is_wide_string);
+            if (!source_needs_wide_promotion &&
+                assign_expr != NULL &&
+                assign_expr->type == EXPR_TYPECAST &&
+                assign_expr->expr_data.typecast_data.expr != NULL &&
+                codegen_expr_is_wide_string_value(assign_expr) &&
+                !codegen_expr_is_wide_string_value(assign_expr->expr_data.typecast_data.expr) &&
+                (expr_has_type_tag(assign_expr->expr_data.typecast_data.expr, STRING_TYPE) ||
+                 expr_has_type_tag(assign_expr->expr_data.typecast_data.expr, SHORTSTRING_TYPE) ||
+                 assign_expr->expr_data.typecast_data.expr->type == EXPR_STRING))
+            {
+                source_needs_wide_promotion = 1;
+            }
             if (assign_type == CHAR_TYPE)
             {
                 inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
@@ -8488,6 +8628,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (inner_is_shortstring)
                 inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
                     "kgpc_string_assign_from_shortstring");
+            else if (target_is_wide_string && source_is_wide_string)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
+                    "kgpc_unicodestring_assign");
+            else if (target_is_wide_string && source_needs_wide_promotion)
+                inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
+                    "kgpc_unicodestring_assign_from_string");
             else if (!target_is_wide_string && source_is_wide_string)
                 inst_list = codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg,
                     "kgpc_string_assign_from_unicodestring");
@@ -9048,8 +9194,23 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Get element size from the base array expression, not the access expression */
         struct Expression *array_expr = var_expr->expr_data.array_access_data.array_expr;
         long long element_size = array_expr != NULL ? expr_get_array_element_size(array_expr, ctx) : -1;
+        if (var_expr->array_element_size > element_size)
+            element_size = var_expr->array_element_size;
+        if (element_size < 2 &&
+            var_expr->array_element_type_id != NULL &&
+            (pascal_identifier_equals(var_expr->array_element_type_id, "WideChar") ||
+             pascal_identifier_equals(var_expr->array_element_type_id, "UnicodeChar")))
+        {
+            element_size = 2;
+        }
         if (element_size <= 0)
             element_size = expr_effective_size_bytes(var_expr);
+        if (var_expr->array_element_type_id != NULL &&
+            (pascal_identifier_equals(var_expr->array_element_type_id, "WideChar") ||
+             pascal_identifier_equals(var_expr->array_element_type_id, "UnicodeChar")))
+        {
+            element_size = 2;
+        }
         int use_word = (!use_qword && element_size == 2);
         
         /* Check if target is a shortstring element (e.g., array[...] of string[10]) */
@@ -9123,21 +9284,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_type == CHAR_TYPE || element_size == 1)
-            {
-                const char *value_reg8 = register_name8(value_reg);
-                if (value_reg8 == NULL)
-                {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to select 8-bit register for byte assignment.");
-                }
-                else
-                {
-                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-            }
-            else if (use_word)
+            if (use_word)
             {
                 const char *value_reg16 = codegen_register_name16(value_reg);
                 if (value_reg16 == NULL)
@@ -9148,6 +9295,20 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 else
                 {
                     snprintf(buffer, 50, "\tmovw\t%s, (%s)\n", value_reg16, addr_reload->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            else if (var_type == CHAR_TYPE || element_size == 1)
+            {
+                const char *value_reg8 = register_name8(value_reg);
+                if (value_reg8 == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to select 8-bit register for byte assignment.");
+                }
+                else
+                {
+                    snprintf(buffer, 50, "\tmovb\t%s, (%s)\n", value_reg8, addr_reload->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
@@ -9396,6 +9557,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
         {
             if (getenv("KGPC_DEBUG_CG_ERR"))
             {
@@ -9424,10 +9587,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
         Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (value_reg == NULL)
+            value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for pointer value.");
 
         Register_t *addr_reload = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reload == NULL)
+            addr_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (addr_reload == NULL)
         {
             free_reg(get_reg_stack(), value_reg);

@@ -286,8 +286,15 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
                  * open-array string contexts (e.g. array of RawByteString). */
                 compatible = 1;
             }
-            else if (expected_type == STRING_TYPE && element_type == CHAR_TYPE)
+            else if (is_string_type(expected_type) && element_type == CHAR_TYPE &&
+                     element_expr != NULL &&
+                     (element_expr->type == EXPR_CHAR_CODE ||
+                      (element_expr->type == EXPR_STRING &&
+                       element_expr->expr_data.string != NULL &&
+                       strlen(element_expr->expr_data.string) == 1)))
             {
+                /* Allow literal char elements like ['A', 'B'] in string arrays
+                 * without accepting arbitrary char expressions as strings. */
                 compatible = 1;
             }
 

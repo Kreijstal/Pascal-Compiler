@@ -1844,10 +1844,13 @@ int semcheck_recordaccess(int *type_return,
     {
         char *unit_id = record_expr->expr_data.id;
         HashNode_t *unit_check = NULL;
+        HashNode_t *preferred_type = NULL;
         int unit_is_qualifier = semcheck_is_unit_name(unit_id);
         
         /* Check if the "unit name" identifier exists in symbol table */
         int find_result = FindIdent(&unit_check, symtab, unit_id);
+        if (!unit_is_qualifier)
+            preferred_type = semcheck_find_preferred_type_node(symtab, unit_id);
         if (!unit_is_qualifier && find_result == -1 && unit_registry_contains(unit_id))
         {
             unit_is_qualifier = 1;
@@ -1995,10 +1998,10 @@ int semcheck_recordaccess(int *type_return,
         /* Scoped enum support: TEnumType.EnumValue
          * When unit_check is found and it's a type with an enum, look up the field_id
          * as an enum literal and transform to its ordinal constant. */
-        else if (unit_check != NULL && unit_check->hash_type == HASHTYPE_TYPE)
+        else if (preferred_type != NULL && preferred_type->hash_type == HASHTYPE_TYPE)
         {
             /* Check if the type has an enum type alias - look up field_id as enum literal */
-            struct TypeAlias *type_alias = hashnode_get_type_alias(unit_check);
+            struct TypeAlias *type_alias = hashnode_get_type_alias(preferred_type);
             if (type_alias != NULL && type_alias->is_enum && type_alias->enum_literals != NULL)
             {
                 /* Search for field_id in enum_literals */

@@ -9,6 +9,51 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static int semcheck_expr_is_explicit_char_typecast_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_TYPECAST)
+        return 0;
+    const char *target_id = expr->expr_data.typecast_data.target_type_id;
+    if (target_id == NULL)
+        return 0;
+    return pascal_identifier_equals(target_id, "Char") ||
+        pascal_identifier_equals(target_id, "AnsiChar") ||
+        pascal_identifier_equals(target_id, "WideChar") ||
+        pascal_identifier_equals(target_id, "UnicodeChar");
+}
+
+static int semcheck_expr_is_char_typecast_call_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+    if (expr->expr_data.function_call_data.args_expr == NULL ||
+        expr->expr_data.function_call_data.args_expr->next != NULL)
+        return 0;
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return 0;
+    return pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar") ||
+        pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "UnicodeChar");
+}
+
+static KgpcType *semcheck_create_char_type_from_explicit_typecast_local(const struct Expression *expr)
+{
+    const char *target_id = NULL;
+    if (semcheck_expr_is_explicit_char_typecast_local(expr))
+        target_id = expr->expr_data.typecast_data.target_type_id;
+    else if (semcheck_expr_is_char_typecast_call_local(expr))
+        target_id = expr->expr_data.function_call_data.id;
+    else
+        return NULL;
+    if (target_id != NULL &&
+        (pascal_identifier_equals(target_id, "WideChar") ||
+         pascal_identifier_equals(target_id, "UnicodeChar")))
+        return create_primitive_type_with_size(CHAR_TYPE, 2);
+    return create_primitive_type(CHAR_TYPE);
+}
+
 static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
 {
     if (expr == NULL)
@@ -551,6 +596,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
 
     /* Check for ShortString (array[0..N] of char) like Length does */
     int is_shortstring = semcheck_expr_is_shortstring(source_expr);
+    int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
     if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring)
     {
@@ -597,7 +643,8 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
         /* Use ShortString-specific copy if source is a ShortString */
-        const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" : "kgpc_string_copy";
+        const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" :
+            (is_wide_string ? "kgpc_unicodestring_copy" : "kgpc_string_copy");
         expr->expr_data.function_call_data.mangled_id = strdup(copy_func);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
@@ -606,8 +653,18 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        semcheck_expr_set_resolved_type(expr, STRING_TYPE);
-        *type_return = STRING_TYPE;
+        if (is_wide_string)
+        {
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+            if (source_expr->resolved_kgpc_type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, source_expr->resolved_kgpc_type);
+            *type_return = STRING_TYPE;
+        }
+        else
+        {
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+            *type_return = STRING_TYPE;
+        }
         return 0;
     }
 
@@ -1709,7 +1766,26 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     KgpcType *arg_kgpc_type = NULL;
+    int arg_cast_type = UNKNOWN_TYPE;
+    if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL &&
+        semcheck_expr_is_char_typecast_call_local(arg_expr))
+        semcheck_try_reinterpret_as_typecast(&arg_cast_type, symtab, arg_expr, max_scope_lev);
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
+    {
+        KgpcType *cast_char_type = semcheck_create_char_type_from_explicit_typecast_local(arg_expr);
+        if (cast_char_type != NULL)
+        {
+            if (arg_kgpc_type != NULL)
+                destroy_kgpc_type(arg_kgpc_type);
+            arg_kgpc_type = cast_char_type;
+            if (arg_expr->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(arg_expr->resolved_kgpc_type);
+            arg_expr->resolved_kgpc_type = cast_char_type;
+            semcheck_expr_set_resolved_type(arg_expr, CHAR_TYPE);
+        }
+    }
 
     if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
     {

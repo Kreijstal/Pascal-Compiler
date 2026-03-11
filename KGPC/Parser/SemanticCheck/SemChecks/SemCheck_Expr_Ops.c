@@ -2941,8 +2941,20 @@ resolved:;
                 (alias->alias_name[0] == 'P' || alias->alias_name[0] == 'p') &&
                 alias->alias_name[1] != '\0')
             {
-                type_id = alias->alias_name + 1;
-                subtype = semcheck_map_builtin_type_name(symtab, type_id);
+                const char *candidate_type_id = alias->alias_name + 1;
+                HashNode_t *candidate_node = NULL;
+                if (FindIdent(&candidate_node, symtab, (char *)candidate_type_id) >= 0 &&
+                    candidate_node != NULL)
+                {
+                    type_id = candidate_type_id;
+                    set_type_from_hashtype(&subtype, candidate_node);
+                }
+                if (subtype == UNKNOWN_TYPE)
+                {
+                    subtype = semcheck_map_builtin_type_name(symtab, candidate_type_id);
+                    if (subtype != UNKNOWN_TYPE)
+                        type_id = candidate_type_id;
+                }
                 if (subtype == UNKNOWN_TYPE)
                     subtype = POINTER_TYPE;
             }

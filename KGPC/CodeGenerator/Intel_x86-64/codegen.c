@@ -4508,9 +4508,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     int find_result = FindIdent(&var_node, symtab, var_name);
                     if (find_result >= 0 && var_node != NULL && var_node->type != NULL) {
                         KgpcArrayDimensionInfo dim_info;
-                        if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0 &&
-                            dim_info.total_size > total_size) {
-                            total_size = (int)dim_info.total_size;
+                        if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0) {
+                            if (dim_info.strides[0] > element_size &&
+                                dim_info.strides[0] <= INT_MAX)
+                            {
+                                element_size = (int)dim_info.strides[0];
+                            }
+                            if (dim_info.total_size > total_size)
+                                total_size = (int)dim_info.total_size;
                         } else {
                             long long kgpc_size = kgpc_type_sizeof(var_node->type);
                             if (kgpc_size > total_size)
@@ -6684,6 +6689,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         Register_t *src_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
                         Register_t *dst_addr_reg = NULL;
                         if (src_addr_reg == NULL)
+                            src_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (src_addr_reg == NULL)
                         {
                             codegen_report_error(ctx,
                                 "ERROR: Unable to allocate register for Extended parameter %s.",
@@ -6692,6 +6699,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
 
                         dst_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                            dst_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                         if (dst_addr_reg == NULL)
                         {
                             free_reg(get_reg_stack(), src_addr_reg);
@@ -6787,6 +6796,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         {
                             /* Load from presaved slot since register may be clobbered */
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg == NULL)
+                                stack_value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (stack_value_reg != NULL)
                             {
                                 if (use_64bit)
@@ -6813,6 +6824,8 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         if (value_source == NULL)
                         {
                             stack_value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (stack_value_reg == NULL)
+                                stack_value_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
                             if (stack_value_reg == NULL)
                             {
                                 codegen_report_error(ctx,

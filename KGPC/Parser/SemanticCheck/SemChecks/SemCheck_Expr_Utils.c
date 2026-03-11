@@ -279,6 +279,16 @@ int semcheck_expr_is_char_like(struct Expression *expr)
     if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
         strlen(expr->expr_data.string) == 1)
         return 1;
+    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type == CHAR_TYPE)
+        return 1;
+    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type_id != NULL)
+    {
+        const char *normalized = semcheck_normalize_char_type_id(expr->array_element_type_id);
+        if (normalized != NULL &&
+            (pascal_identifier_equals(normalized, "AnsiChar") ||
+             pascal_identifier_equals(normalized, "WideChar")))
+            return 1;
+    }
     if (expr->resolved_kgpc_type != NULL)
     {
         if (kgpc_type_is_char(expr->resolved_kgpc_type))

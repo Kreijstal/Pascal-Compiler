@@ -56,6 +56,8 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
 int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
 int semcheck_try_reinterpret_as_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
+void semcheck_reset_function_call_cache(struct Expression *expr);
+int semcheck_expr_is_char_like(struct Expression *expr);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -1391,6 +1393,63 @@ static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
     return 0;
 }
 
+static int semcheck_type_is_char_like(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_char(type))
+        return 1;
+    if (type->type_alias != NULL && type->type_alias->is_char_alias)
+        return 1;
+    return 0;
+}
+
+static int semcheck_force_char_case_builtin_in_assignment(struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return 0;
+
+    const char *mangled = NULL;
+    if (pascal_identifier_equals(id, "UpCase") ||
+        pascal_identifier_equals(id, "UpperCase"))
+        mangled = "kgpc_upcase_char";
+    else if (pascal_identifier_equals(id, "LowerCase"))
+        mangled = "kgpc_lowercase_char";
+    else
+        return 0;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL)
+        return 0;
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (!semcheck_expr_is_char_like(arg_expr))
+        return 0;
+
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = NULL;
+    }
+    free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = strdup(mangled);
+    expr->expr_data.function_call_data.mangled_id = strdup(mangled);
+    semcheck_reset_function_call_cache(expr);
+    expr->expr_data.function_call_data.is_call_info_valid = 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+    semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
+    return 1;
+}
+
 /* Check if expression is an integer constant representable as single-byte Char (0..255). */
 static int semcheck_expr_is_char_ordinal_const(SymTab_t *symtab, struct Expression *expr)
 {
@@ -1638,6 +1697,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(array_expr);
+    int target_is_wide_string = 0;
 
     int target_is_string = (target_type == STRING_TYPE);
     /* Fallback: check KgpcType for string (e.g. function result vars with overloads) */
@@ -1645,6 +1705,12 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
         kgpc_type_is_string(array_expr->resolved_kgpc_type))
     {
+        target_is_string = 1;
+    }
+    if (array_expr != NULL && array_expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_wide_string(array_expr->resolved_kgpc_type))
+    {
+        target_is_wide_string = 1;
         target_is_string = 1;
     }
     if (target_is_string)
@@ -1678,6 +1744,8 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         }
         if (target_is_shortstring)
             stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_shortstring");
+        else if (target_is_wide_string)
+            stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_unicodestring");
         else
             stmt->stmt_data.procedure_call_data.mangled_id = strdup("__kgpc_setlength_string");
         if (stmt->stmt_data.procedure_call_data.mangled_id == NULL)
@@ -4305,8 +4373,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
 
             int allow_char_literal = 0;
-            if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
-                lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE &&
+            if (semcheck_type_is_char_like(lhs_kgpctype) &&
+                semcheck_force_char_case_builtin_in_assignment(expr))
+                goto assignment_types_ok;
+            if (semcheck_type_is_char_like(lhs_kgpctype) &&
                 rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
                 rhs_kgpctype->info.primitive_type_tag == STRING_TYPE &&
                 expr != NULL && expr->type == EXPR_STRING &&
@@ -4320,8 +4390,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 goto assignment_types_ok;
 
             /* Allow assigning Char ordinal constants to Char targets (FPC-compatible). */
-            if (lhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
-                lhs_kgpctype->info.primitive_type_tag == CHAR_TYPE &&
+            if (semcheck_type_is_char_like(lhs_kgpctype) &&
                 rhs_kgpctype->kind == TYPE_KIND_PRIMITIVE &&
                 is_integer_type(rhs_kgpctype->info.primitive_type_tag) &&
                 semcheck_expr_is_char_ordinal_const(symtab, expr))

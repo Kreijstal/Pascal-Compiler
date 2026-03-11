@@ -32,6 +32,7 @@ static uint32_t kgpc_xsr_state[4] = {
 static int kgpc_env_flag(const char *name);
 char *kgpc_float_to_string(double value, int precision);
 static char *kgpc_apply_field_width(char *value, int64_t width);
+uint16_t *kgpc_unicodestring_from_string(const char *value);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -4167,6 +4168,66 @@ char *kgpc_string_concat(const char *lhs, const char *rhs)
     return result;
 }
 
+uint16_t *kgpc_unicodestring_concat(const uint16_t *lhs, const uint16_t *rhs)
+{
+    uint16_t *lhs_owned = NULL;
+    uint16_t *rhs_owned = NULL;
+
+    if (lhs == NULL)
+        lhs = kgpc_alloc_empty_unicodestring();
+    if (rhs == NULL)
+        rhs = kgpc_alloc_empty_unicodestring();
+
+    {
+        KgpcStringHeader *hdr = kgpc_string_header((const char *)lhs);
+        if (hdr != NULL && hdr->elementsize == 1)
+        {
+            lhs_owned = kgpc_unicodestring_from_string((const char *)lhs);
+            lhs = lhs_owned;
+        }
+    }
+    {
+        KgpcStringHeader *hdr = kgpc_string_header((const char *)rhs);
+        if (hdr != NULL && hdr->elementsize == 1)
+        {
+            rhs_owned = kgpc_unicodestring_from_string((const char *)rhs);
+            rhs = rhs_owned;
+        }
+    }
+
+    int64_t lhs_len = kgpc_unicode_known_length(lhs);
+    int64_t rhs_len = kgpc_unicode_known_length(rhs);
+    int64_t total_len = lhs_len + rhs_len;
+
+    uint16_t *result = kgpc_alloc_empty_unicodestring();
+    if (total_len > 0)
+    {
+        size_t data_bytes = (size_t)total_len * sizeof(uint16_t) + sizeof(uint16_t);
+        KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+        if (hdr != NULL)
+        {
+            hdr->codepage = 1200;
+            hdr->elementsize = 2;
+            hdr->refcount = 1;
+            hdr->length = total_len;
+            result = (uint16_t *)(hdr + 1);
+            if (lhs_len > 0)
+                memcpy(result, lhs, (size_t)lhs_len * sizeof(uint16_t));
+            if (rhs_len > 0)
+                memcpy(result + lhs_len, rhs, (size_t)rhs_len * sizeof(uint16_t));
+            result[total_len] = 0;
+            kgpc_string_set_insert((char *)result);
+        }
+    }
+
+    if (lhs_owned != NULL)
+        kgpc_string_release((char *)lhs_owned);
+    if (rhs_owned != NULL)
+        kgpc_string_release((char *)rhs_owned);
+
+    return result;
+}
+
 int64_t kgpc_string_length(const char *value)
 {
     return (int64_t)kgpc_string_known_length(value);
@@ -4206,6 +4267,44 @@ char *kgpc_string_copy(const char *value, int64_t index, int64_t count)
 
     if (to_copy > 0)
         memcpy(result, value + start, to_copy);
+    return result;
+}
+
+uint16_t *kgpc_unicodestring_copy(const uint16_t *value, int64_t index, int64_t count)
+{
+    if (value == NULL)
+        return kgpc_alloc_empty_unicodestring();
+
+    int64_t len = kgpc_unicode_known_length(value);
+    if (index < 1 || index > len)
+        return kgpc_alloc_empty_unicodestring();
+
+    if (count < 0)
+        count = 0;
+
+    int64_t start = index - 1;
+    int64_t available = len - start;
+    int64_t to_copy = count;
+    if (to_copy > available)
+        to_copy = available;
+
+    if (to_copy <= 0)
+        return kgpc_alloc_empty_unicodestring();
+
+    uint16_t *result = kgpc_alloc_empty_unicodestring();
+    size_t data_bytes = (size_t)to_copy * sizeof(uint16_t) + sizeof(uint16_t);
+    KgpcStringHeader *hdr = (KgpcStringHeader *)malloc(sizeof(KgpcStringHeader) + data_bytes);
+    if (hdr == NULL)
+        return result;
+
+    hdr->codepage = 1200;
+    hdr->elementsize = 2;
+    hdr->refcount = 1;
+    hdr->length = to_copy;
+    result = (uint16_t *)(hdr + 1);
+    memcpy(result, value + start, (size_t)to_copy * sizeof(uint16_t));
+    result[to_copy] = 0;
+    kgpc_string_set_insert((char *)result);
     return result;
 }
 
@@ -4468,6 +4567,48 @@ uint16_t *kgpc_unicodestring_from_string(const char *value)
     if (result == NULL)
         return kgpc_alloc_empty_unicodestring();
     return result;
+}
+
+void kgpc_unicodestring_assign_from_string(uint16_t **target, const char *value)
+{
+    if (target == NULL)
+        return;
+
+    uint16_t *converted = kgpc_unicodestring_from_string(value);
+    uint16_t *current = *target;
+    if (current != NULL)
+        kgpc_string_release((char *)current);
+    *target = converted;
+}
+
+void kgpc_unicodestring_assign(uint16_t **target, const uint16_t *value)
+{
+    if (target == NULL)
+        return;
+
+    uint16_t *current = *target;
+    if (current == value)
+        return;
+
+    if (value == NULL)
+    {
+        if (current != NULL)
+            kgpc_string_release((char *)current);
+        *target = kgpc_alloc_empty_unicodestring();
+        return;
+    }
+
+    KgpcStringHeader *hdr = kgpc_string_header((const char *)value);
+    if (hdr == NULL || hdr->elementsize == 1)
+    {
+        kgpc_unicodestring_assign_from_string(target, (const char *)value);
+        return;
+    }
+
+    kgpc_string_retain((const char *)value);
+    if (current != NULL)
+        kgpc_string_release((char *)current);
+    *target = (uint16_t *)value;
 }
 
 char *kgpc_strpas(const char *p)
@@ -5289,6 +5430,14 @@ int64_t kgpc_upcase_char(int64_t value)
     unsigned char ch = (unsigned char)(value & 0xFF);
     if (ch >= 'a' && ch <= 'z')
         ch = (unsigned char)(ch - ('a' - 'A'));
+    return (int64_t)ch;
+}
+
+int64_t kgpc_lowercase_char(int64_t value)
+{
+    unsigned char ch = (unsigned char)(value & 0xFF);
+    if (ch >= 'A' && ch <= 'Z')
+        ch = (unsigned char)(ch + ('a' - 'A'));
     return (int64_t)ch;
 }
 
