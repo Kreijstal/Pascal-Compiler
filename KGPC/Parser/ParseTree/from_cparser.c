@@ -408,6 +408,7 @@ typedef struct {
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     int enum_is_scoped;
+    int enum_has_explicit_values;
     ListNode_t *enum_literals;
     int is_file;
     int file_type;
@@ -4506,8 +4507,12 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
                 int ordinal = 0;
                 ast_t *literal = spec->child;
                 while (literal != NULL) {
-                    if (literal->typ == PASCAL_T_IDENTIFIER && literal->sym != NULL) {
-                        if (strcmp(literal->sym->name, identifier) == 0) {
+                    ast_t *literal_id = literal;
+                    if (literal_id != NULL && literal_id->typ == PASCAL_T_ASSIGNMENT)
+                        literal_id = literal_id->child;
+                    if (literal_id != NULL && literal_id->typ == PASCAL_T_IDENTIFIER &&
+                        literal_id->sym != NULL) {
+                        if (strcmp(literal_id->sym->name, identifier) == 0) {
                             return ordinal; /* Found it! Return the ordinal value */
                         }
                     }
@@ -4547,9 +4552,13 @@ static int resolve_enum_literal_in_type(const char *type_name, const char *liter
                 if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
                     int ordinal = 0;
                     for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
-                        if (lit->typ == PASCAL_T_IDENTIFIER && lit->sym != NULL &&
-                            lit->sym->name != NULL &&
-                            strcasecmp(lit->sym->name, literal) == 0) {
+                        ast_t *lit_id = lit;
+                        if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT)
+                            lit_id = lit_id->child;
+                        if (lit_id != NULL && lit_id->typ == PASCAL_T_IDENTIFIER &&
+                            lit_id->sym != NULL &&
+                            lit_id->sym->name != NULL &&
+                            strcasecmp(lit_id->sym->name, literal) == 0) {
                             return ordinal;
                         }
                         ordinal++;
@@ -4602,7 +4611,8 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
                         int count = 0;
                         ast_t *literal = spec->child;
                         while (literal != NULL) {
-                            if (literal->typ == PASCAL_T_IDENTIFIER)
+                            if (literal->typ == PASCAL_T_IDENTIFIER ||
+                                literal->typ == PASCAL_T_ASSIGNMENT)
                                 count++;
                             literal = literal->next;
                         }
@@ -4713,6 +4723,174 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
 
 static int resolve_const_string_in_node(const char *identifier, ast_t *node,
                                         ast_t *const_section, const char **out_value, int depth);
+static int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
+                                                  const char **out_value, int depth);
+
+typedef struct AstStringValue {
+    char *data;
+    size_t len;
+} AstStringValue;
+
+static void ast_string_value_reset(AstStringValue *value)
+{
+    if (value == NULL)
+        return;
+    free(value->data);
+    value->data = NULL;
+    value->len = 0;
+}
+
+static int ast_string_value_assign_bytes(AstStringValue *value, const char *data, size_t len)
+{
+    char *copy = NULL;
+    if (value == NULL)
+        return -1;
+    if (len > 0)
+    {
+        copy = (char *)malloc(len);
+        if (copy == NULL)
+            return -1;
+        memcpy(copy, data, len);
+    }
+    ast_string_value_reset(value);
+    value->data = copy;
+    value->len = len;
+    return 0;
+}
+
+static int ast_string_value_append(AstStringValue *dst, const AstStringValue *src)
+{
+    char *combined = NULL;
+    if (dst == NULL || src == NULL)
+        return -1;
+    if (src->len == 0)
+        return 0;
+    combined = (char *)malloc(dst->len + src->len);
+    if (combined == NULL)
+        return -1;
+    if (dst->len > 0 && dst->data != NULL)
+        memcpy(combined, dst->data, dst->len);
+    memcpy(combined + dst->len, src->data, src->len);
+    free(dst->data);
+    dst->data = combined;
+    dst->len += src->len;
+    return 0;
+}
+
+static int parse_ast_char_code(ast_t *node, unsigned int *out_value)
+{
+    const char *literal;
+    const char *digits;
+    int base = 10;
+
+    if (node == NULL || out_value == NULL)
+        return -1;
+
+    node = unwrap_pascal_node(node);
+    if (node == NULL || node->typ != PASCAL_T_CHAR_CODE)
+        return -1;
+
+    literal = (node->sym != NULL) ? node->sym->name : NULL;
+    if (literal == NULL)
+        return -1;
+
+    digits = literal;
+    if (*digits == '#')
+        ++digits;
+    if (*digits == '$')
+    {
+        base = 16;
+        ++digits;
+    }
+    if (*digits == '\0')
+        return -1;
+
+    {
+        char *endptr = NULL;
+        long parsed = strtol(digits, &endptr, base);
+        if (endptr == NULL || *endptr != '\0' || parsed < 0)
+            return -1;
+        *out_value = (unsigned int)parsed;
+    }
+    return 0;
+}
+
+static int evaluate_const_string_ast(ast_t *node, ast_t *const_section,
+                                     AstStringValue *out_value, int depth)
+{
+    ast_t *unwrapped;
+    if (node == NULL || out_value == NULL || depth > 32)
+        return -1;
+
+    unwrapped = unwrap_pascal_node(node);
+    if (unwrapped == NULL)
+        return -1;
+
+    switch (unwrapped->typ)
+    {
+        case PASCAL_T_STRING:
+        case PASCAL_T_CHAR:
+        {
+            const char *value = (unwrapped->sym != NULL) ? unwrapped->sym->name : NULL;
+            if (value == NULL)
+                return -1;
+            return ast_string_value_assign_bytes(out_value, value, strlen(value));
+        }
+
+        case PASCAL_T_CHAR_CODE:
+        {
+            unsigned int ch = 0;
+            unsigned char byte;
+            if (parse_ast_char_code(unwrapped, &ch) != 0)
+                return -1;
+            byte = (unsigned char)(ch & 0xffu);
+            return ast_string_value_assign_bytes(out_value, (const char *)&byte, 1);
+        }
+
+        case PASCAL_T_IDENTIFIER:
+        {
+            const char *resolved = NULL;
+            if (unwrapped->sym != NULL && unwrapped->sym->name != NULL &&
+                resolve_const_string_from_ast_internal(unwrapped->sym->name, const_section,
+                                                       &resolved, depth + 1) == 0 &&
+                resolved != NULL)
+            {
+                return ast_string_value_assign_bytes(out_value, resolved, strlen(resolved));
+            }
+            return -1;
+        }
+
+        case PASCAL_T_ADD:
+        {
+            AstStringValue left = {0};
+            AstStringValue right = {0};
+            ast_t *lhs = unwrapped->child;
+            ast_t *rhs = (lhs != NULL) ? lhs->next : NULL;
+            int result = -1;
+
+            if (evaluate_const_string_ast(lhs, const_section, &left, depth + 1) != 0)
+                goto concat_cleanup;
+            if (evaluate_const_string_ast(rhs, const_section, &right, depth + 1) != 0)
+                goto concat_cleanup;
+            if (ast_string_value_assign_bytes(out_value, left.data, left.len) != 0)
+                goto concat_cleanup;
+            if (ast_string_value_append(out_value, &right) != 0)
+            {
+                ast_string_value_reset(out_value);
+                goto concat_cleanup;
+            }
+            result = 0;
+
+concat_cleanup:
+            ast_string_value_reset(&left);
+            ast_string_value_reset(&right);
+            return result;
+        }
+
+        default:
+            return -1;
+    }
+}
 
 static int resolve_const_string_in_section(const char *identifier, ast_t *const_section,
                                            const char **out_value, int depth) {
@@ -5821,6 +5999,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->set_element_type_id = NULL;
         type_info->set_element_type_ref = NULL;
         type_info->is_enum = 0;
+        type_info->enum_has_explicit_values = 0;
         type_info->enum_literals = NULL;
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
@@ -6463,6 +6642,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (value != NULL) {
                 if (value->typ == PASCAL_T_IDENTIFIER)
                     list_builder_append(&enum_builder, dup_symbol(value), LIST_STRING);
+                else if (value->typ == PASCAL_T_ASSIGNMENT &&
+                         value->child != NULL && value->child->typ == PASCAL_T_IDENTIFIER) {
+                    list_builder_append(&enum_builder, dup_symbol(value->child), LIST_STRING);
+                    type_info->enum_has_explicit_values = 1;
+                }
                 value = value->next;
             }
             type_info->enum_literals = list_builder_finish(&enum_builder);
@@ -9969,6 +10153,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     ast_t *tuple_node = value_node;
     int is_string_initializer = 0;
     const char *string_initializer = NULL;
+    AstStringValue owned_string_initializer = {0};
     if (tuple_node != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(tuple_node);
         if (unwrapped != NULL &&
@@ -9989,11 +10174,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 *id_ptr);
         return -1;
     }
+    int single_record_element = 0;
+    int is_char_array_target = (type_info->element_type == CHAR_TYPE);
+    int is_widechar_array_target = (type_info->element_type_id != NULL &&
+                                    strcasecmp(type_info->element_type_id, "widechar") == 0);
+    if (!is_char_array_target && type_info->element_type_id != NULL &&
+        (strcasecmp(type_info->element_type_id, "char") == 0 ||
+         strcasecmp(type_info->element_type_id, "ansichar") == 0))
+    {
+        is_char_array_target = 1;
+    }
     if (tuple_node->typ == PASCAL_T_STRING) {
-        int is_char_array = (type_info->element_type == CHAR_TYPE);
-        int is_widechar_array = (type_info->element_type_id != NULL &&
-                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
-        if (is_char_array || is_widechar_array) {
+        if (is_char_array_target || is_widechar_array_target) {
             is_string_initializer = 1;
             if (tuple_node->sym != NULL && tuple_node->sym->name != NULL)
                 string_initializer = tuple_node->sym->name;
@@ -10003,10 +10195,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             return -1;
         }
     } else if (tuple_node->typ == PASCAL_T_IDENTIFIER) {
-        int is_char_array = (type_info->element_type == CHAR_TYPE);
-        int is_widechar_array = (type_info->element_type_id != NULL &&
-                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
-        if (!is_char_array && !is_widechar_array) {
+        if (!is_char_array_target && !is_widechar_array_target) {
             fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
                     *id_ptr);
             return -1;
@@ -10026,6 +10215,17 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     *id_ptr);
             return -1;
         }
+    } else if (tuple_node->typ == PASCAL_T_RECORD_CONSTRUCTOR) {
+        single_record_element = 1;
+    } else if (is_char_array_target || is_widechar_array_target) {
+        if (evaluate_const_string_ast(tuple_node, const_section, &owned_string_initializer, 0) == 0) {
+            is_string_initializer = 1;
+        } else if (tuple_node->typ != PASCAL_T_TUPLE) {
+            fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
+                    *id_ptr);
+            ast_string_value_reset(&owned_string_initializer);
+            return -1;
+        }
     } else if (tuple_node->typ != PASCAL_T_TUPLE) {
         fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                 *id_ptr);
@@ -10043,10 +10243,29 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (end >= start)
         expected_count = end - start + 1;
 
+    while (!single_record_element &&
+           expected_count != 1 &&
+           tuple_node != NULL &&
+           tuple_node->typ == PASCAL_T_TUPLE &&
+           tuple_node->child != NULL &&
+           tuple_node->child->next == NULL) {
+        ast_t *nested_tuple = unwrap_pascal_node(tuple_node->child);
+        if (nested_tuple == NULL ||
+            nested_tuple->typ != PASCAL_T_TUPLE ||
+            tuple_is_record_constructor(nested_tuple)) {
+            break;
+        }
+        tuple_node = nested_tuple;
+    }
+
     int actual_count = 0;
     if (is_string_initializer) {
-        if (string_initializer != NULL)
+        if (owned_string_initializer.data != NULL || owned_string_initializer.len > 0)
+            actual_count = (int)owned_string_initializer.len;
+        else if (string_initializer != NULL)
             actual_count = (int)strlen(string_initializer);
+    } else if (single_record_element) {
+        actual_count = 1;
     } else {
         for (ast_t *elem = tuple_node->child; elem != NULL; elem = elem->next)
             ++actual_count;
@@ -10071,6 +10290,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (expected_count >= 0 && actual_count != expected_count) {
+        ast_string_value_reset(&owned_string_initializer);
         fprintf(stderr,
                 "ERROR: Const array %s initializer count %d does not match declared range %d..%d.\n",
                 *id_ptr, actual_count, start, end);
@@ -10198,11 +10418,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (is_string_initializer) {
-        const char *str = string_initializer;
-        if (str == NULL)
-            str = "";
+        const unsigned char *str = NULL;
+        if (owned_string_initializer.data != NULL)
+            str = (const unsigned char *)owned_string_initializer.data;
+        else if (string_initializer != NULL)
+            str = (const unsigned char *)string_initializer;
         for (int i = 0; i < actual_count; ++i) {
-            struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)(unsigned char)str[i]);
+            unsigned char byte = (str != NULL) ? str[i] : 0;
+            struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
             struct Expression *index_expr = mk_inum(const_decl_node->line, index);
             struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
             struct Expression *lhs = mk_arrayaccess(const_decl_node->line, base_expr, index_expr);
@@ -10211,7 +10434,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             ++index;
         }
     } else {
-        ast_t *element = tuple_node->child;
+        ast_t *element = single_record_element ? tuple_node : tuple_node->child;
         while (element != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(element);
 
@@ -10397,7 +10620,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 }
 
                 ++index;
-                element = element->next;
+                element = single_record_element ? NULL : element->next;
                 continue;
             }
 
@@ -10490,13 +10713,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             }
 
             ++index;
-            element = element->next;
+            element = single_record_element ? NULL : element->next;
         }
     }
 
     destroy_type_info_contents(&element_array_info);
     destroy_type_info_contents(&element_2d_inner_info);
     destroy_type_info_contents(&element_3d_inner_info);
+    ast_string_value_reset(&owned_string_initializer);
 
     ListNode_t *assignments = list_builder_finish(&stmt_builder);
     struct Statement *initializer = NULL;
@@ -11471,6 +11695,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         }
         alias->is_enum = type_info.is_enum;
         alias->enum_is_scoped = type_info.enum_is_scoped;
+        alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
         if (type_info.enum_literals != NULL) {
             alias->enum_literals = type_info.enum_literals;
             type_info.enum_literals = NULL;
