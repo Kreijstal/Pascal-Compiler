@@ -2375,7 +2375,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             int have_bounds = 0;
             int result_type = INT_TYPE;
 
-            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
             {
                 int count = ListLength(alias->enum_literals);
                 if (count > 0)

@@ -59,6 +59,7 @@ struct TypeAlias
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     int enum_is_scoped;        /* 1 if declared under {$SCOPEDENUMS ON} */
+    int enum_has_explicit_values; /* 1 if any literal had an explicit assigned value */
     ListNode_t *enum_literals;
     int is_file;
     int file_type;

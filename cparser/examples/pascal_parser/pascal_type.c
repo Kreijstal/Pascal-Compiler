@@ -2723,7 +2723,6 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
 
     // Parse enumerated values: identifier [:= expression], identifier [:= expression], ...
     // FPC supports explicit ordinal values like (ms_on := 1, ms_off := 2)
-    // We parse the := expression but only keep the identifier for now
     ast_t* values_ast = NULL;
     ast_t** values_tail = &values_ast;
     int first = 1;
@@ -2767,13 +2766,21 @@ static ParseResult enumerated_type_fn(input_t* in, void* args, char* parser_name
         }
         if (assign_res.is_success) {
             free_ast(assign_res.value.ast);
-            // Parse the value expression and discard it
+            // Parse and preserve the value expression so later stages can
+            // distinguish explicit-valued enums from plain 0..n-1 enums.
             combinator_t* val_expr = new_combinator();
             init_pascal_type_expression_parser(&val_expr);
             ParseResult val_res = parse(in, val_expr);
             free_combinator(val_expr);
             if (val_res.is_success) {
-                free_ast(val_res.value.ast); // Discard the value for now
+                ast_t* assign_ast = new_ast();
+                assign_ast->typ = PASCAL_T_ASSIGNMENT;
+                assign_ast->sym = NULL;
+                assign_ast->child = ident_res.value.ast;
+                ident_res.value.ast->next = val_res.value.ast;
+                assign_ast->next = NULL;
+                set_ast_position(assign_ast, in);
+                ident_res.value.ast = assign_ast;
             } else {
                 discard_failure(val_res);
                 free_ast(ident_res.value.ast);

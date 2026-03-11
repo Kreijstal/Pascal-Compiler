@@ -4955,7 +4955,8 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
     if (alias != NULL)
     {
-        if (alias->is_enum && alias->enum_literals != NULL)
+        if (alias->is_enum && alias->enum_literals != NULL &&
+            !alias->enum_has_explicit_values)
         {
             int count = ListLength(alias->enum_literals);
             if (count > 0)
@@ -5133,7 +5134,8 @@ static int evaluate_const_expr_ordinal_bounds(SymTab_t *symtab, struct Expressio
         struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
         if (alias != NULL)
         {
-            if (alias->is_enum && alias->enum_literals != NULL)
+            if (alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
             {
                 int count = ListLength(alias->enum_literals);
                 if (count > 0)
@@ -5397,6 +5399,19 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 }
                 case BOOL:
                     *out_value = (inner_value != 0);
+                    return 0;
+                case ENUM_TYPE:
+                    if (const_typecast_target_is_ordinal(symtab, expr, &ordinal_low, &ordinal_high))
+                    {
+                        if (inner_value < ordinal_low || inner_value > ordinal_high)
+                        {
+                            fprintf(stderr,
+                                "Error: typecast value %lld out of range for ordinal target.\n",
+                                inner_value);
+                            return 1;
+                        }
+                    }
+                    *out_value = inner_value;
                     return 0;
                 case INT_TYPE:
                 case LONGINT_TYPE:
