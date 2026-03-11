@@ -2,6 +2,7 @@
 import argparse
 import concurrent.futures
 import json
+import locale
 import os
 import shutil
 import shlex
@@ -30,10 +31,15 @@ WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
 IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS)
 
-# Detect if we're running under Wine (Windows Python on Linux)
-# This happens during cross-compilation testing
-# Check for Wine-specific environment variables
-IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
+# Detect if we're running under Wine (Windows Python on Linux).
+# In CI this may be signaled either by WINE* environment variables or by
+# Meson's exe wrapper path when the Windows Python interpreter is launched
+# through `/usr/bin/wine`.
+_meson_exe_wrapper = os.environ.get("MESON_EXE_WRAPPER", "")
+IS_WINE = IS_WINDOWS_ABI and (
+    any(k.startswith("WINE") for k in os.environ)
+    or "wine" in _meson_exe_wrapper.lower()
+)
 EXE_EXT = ".exe" if IS_WINDOWS_ABI else ""
 
 _original_subprocess_run = subprocess.run
@@ -60,6 +66,35 @@ if IS_WINE:
         except OSError:
             pass
     _winapi.CloseHandle = _safe_CloseHandle
+
+    if hasattr(subprocess, "Handle"):
+        def _safe_handle_close(self):
+            if not self.closed:
+                self.closed = True
+                _safe_CloseHandle(self)
+
+        subprocess.Handle.Close = _safe_handle_close
+        subprocess.Handle.__del__ = _safe_handle_close
+
+    _original_popen_internal_poll = subprocess.Popen._internal_poll
+
+    def _safe_popen_internal_poll(self, *args, **kwargs):
+        try:
+            return _original_popen_internal_poll(self, *args, **kwargs)
+        except OSError:
+            return self.returncode
+
+    subprocess.Popen._internal_poll = _safe_popen_internal_poll
+
+    _original_popen_del = subprocess.Popen.__del__
+
+    def _safe_popen_del(self, *args, **kwargs):
+        try:
+            _original_popen_del(self, *args, **kwargs)
+        except OSError:
+            pass
+
+    subprocess.Popen.__del__ = _safe_popen_del
 
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
@@ -372,6 +407,67 @@ def run_executable_with_valgrind(executable_args, **kwargs):
             kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
+    if IS_WINE:
+        text_mode = bool(kwargs.get("text"))
+        input_data = kwargs.get("input")
+        check = bool(kwargs.get("check"))
+        capture_output = bool(kwargs.get("capture_output"))
+        timeout = kwargs.get("timeout", EXEC_TIMEOUT)
+
+        if timeout is not None:
+            # Wine's Windows-Python subprocess waits can fail with WinError 6
+            # for short-lived child processes. Use shell redirection instead.
+            timeout = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout_path = os.path.join(tmpdir, "stdout.txt")
+            stderr_path = os.path.join(tmpdir, "stderr.txt")
+            stdin_path = os.path.join(tmpdir, "stdin.txt")
+
+            if input_data is not None:
+                mode = "w" if text_mode else "wb"
+                with open(stdin_path, mode) as handle:
+                    handle.write(input_data)
+
+            command_line = subprocess.list2cmdline(command)
+            redirect_bits = []
+            if input_data is not None:
+                redirect_bits.append(f'< "{stdin_path}"')
+            redirect_bits.append(f'> "{stdout_path}"')
+            redirect_bits.append(f'2> "{stderr_path}"')
+            shell_command = f"{command_line} {' '.join(redirect_bits)}"
+
+            returncode = os.system(shell_command)
+
+            stdout_data = None
+            stderr_data = None
+            if capture_output:
+                read_mode = "r" if text_mode else "rb"
+                read_kwargs = (
+                    {
+                        "encoding": locale.getpreferredencoding(False) or "cp1252",
+                        "errors": "replace",
+                    }
+                    if text_mode
+                    else {}
+                )
+                with open(stdout_path, read_mode, **read_kwargs) as handle:
+                    stdout_data = handle.read()
+                with open(stderr_path, read_mode, **read_kwargs) as handle:
+                    stderr_data = handle.read()
+
+            completed = subprocess.CompletedProcess(
+                args=command,
+                returncode=returncode,
+                stdout=stdout_data,
+                stderr=stderr_data,
+            )
+            if check and returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode, command, output=completed.stdout, stderr=completed.stderr
+                )
+            return completed
+
     # PTY capture is opt-in. Most tests, and validation against real FPC invoked via
     # subprocess pipes, should observe redirected-output behaviour rather than a fake TTY.
     # Enable KGPC_USE_PTY_CAPTURE=1 when a test genuinely needs terminal semantics.
@@ -609,7 +705,12 @@ class TAPTestResult(unittest.TestResult):
         self._test_start_times = {}
 
     def _emit(self, line):
-        self.stream.write(f"{line}\n")
+        text = f"{line}\n"
+        encoding = getattr(self.stream, "encoding", None) or "utf-8"
+        safe_text = text.encode(
+            encoding, errors="backslashreplace"
+        ).decode(encoding, errors="replace")
+        self.stream.write(safe_text)
         self.stream.flush()
 
     def _emit_diagnostic(self, text):
@@ -1791,7 +1892,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -1914,7 +2015,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -2533,7 +2634,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2683,7 +2784,7 @@ sys.exit(3)
         expected_output = (
             read_file_content(expected_output_file).strip().splitlines()
         )
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -2748,7 +2849,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2857,7 +2958,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2888,7 +2989,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2915,7 +3016,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2943,7 +3044,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
