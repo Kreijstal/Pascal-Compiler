@@ -182,7 +182,7 @@ int semcheck_relop(int *type_return,
             }
             return return_val;
         }
-        if (is_integer_type(type_first))
+        if (is_integer_type(type_first) || type_first == ENUM_TYPE)
         {
             struct Expression *operand = expr->expr_data.relop_data.left;
             struct Expression *neg_one = mk_inum(expr->line_num, -1);
@@ -479,8 +479,10 @@ relop_fallback:
                         }
                     }
                 }
-                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
-                
+                int enum_ok = ((type_first == ENUM_TYPE || is_integer_type(type_first)) &&
+                               (type_second == ENUM_TYPE || is_integer_type(type_second)) &&
+                               (type_first == ENUM_TYPE || type_second == ENUM_TYPE));
+
                 /* Check for string/PChar comparison.
                  * In Pascal, comparing AnsiString with PAnsiChar is valid.
                  * Use type tags first (string vs pointer), then refine with KgpcType if available. */
@@ -835,8 +837,10 @@ relop_fallback:
                         }
                     }
                 }
-                int enum_ok = (type_first == ENUM_TYPE && type_second == ENUM_TYPE);
-                
+                int enum_ok = ((type_first == ENUM_TYPE || is_integer_type(type_first)) &&
+                               (type_second == ENUM_TYPE || is_integer_type(type_second)) &&
+                               (type_first == ENUM_TYPE || type_second == ENUM_TYPE));
+
                 /* Check for string/PChar comparison.
                  * Use type tags first, then refine with KgpcType if available. */
                 int string_pchar_ok = 0;
@@ -981,7 +985,8 @@ int semcheck_addop(int *type_return,
             *type_return = BOOL;
             return return_val;
         }
-        if (is_integer_type(type_first) && is_integer_type(type_second))
+        if ((is_integer_type(type_first) || type_first == ENUM_TYPE) &&
+            (is_integer_type(type_second) || type_second == ENUM_TYPE))
         {
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
@@ -989,6 +994,8 @@ int semcheck_addop(int *type_return,
                 *type_return = QWORD_TYPE;
             else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
                 *type_return = LONGINT_TYPE;
+            else if (type_first == ENUM_TYPE && type_second == ENUM_TYPE)
+                *type_return = ENUM_TYPE;
             else
                 *type_return = INT_TYPE;
             return return_val;
@@ -1339,10 +1346,11 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
         
-        /* Integer bitwise operations */
-        if (is_integer_type(type_first) && is_integer_type(type_second))
+        /* Integer/enum bitwise operations (enums are ordinal types in Pascal) */
+        if ((is_integer_type(type_first) || type_first == ENUM_TYPE) &&
+            (is_integer_type(type_second) || type_second == ENUM_TYPE))
         {
-            /* Both operands are integers - bitwise operation */
+            /* Both operands are integers/enums - bitwise operation */
             /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
@@ -1350,6 +1358,8 @@ int semcheck_mulop(int *type_return,
                 *type_return = QWORD_TYPE;
             else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
                 *type_return = LONGINT_TYPE;
+            else if (type_first == ENUM_TYPE && type_second == ENUM_TYPE)
+                *type_return = ENUM_TYPE;
             else
                 *type_return = INT_TYPE;
             return return_val;

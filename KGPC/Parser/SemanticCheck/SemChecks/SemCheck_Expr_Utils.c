@@ -183,19 +183,23 @@ char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *fi
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (is_integer_type(*type) || *type == REAL_TYPE || *type == EXTENDED_TYPE);
+    return (is_integer_type(*type) || *type == REAL_TYPE || *type == EXTENDED_TYPE ||
+            *type == ENUM_TYPE);
 }
 
 int types_numeric_compatible(int lhs, int rhs)
 {
     if (lhs == rhs)
         return 1;
-    /* All integer types are compatible with each other */
-    if (is_integer_type(lhs) && is_integer_type(rhs))
+    /* Treat enum as integer-compatible (Pascal enums are ordinal types) */
+    int lhs_int = (is_integer_type(lhs) || lhs == ENUM_TYPE);
+    int rhs_int = (is_integer_type(rhs) || rhs == ENUM_TYPE);
+    /* All integer/enum types are compatible with each other */
+    if (lhs_int && rhs_int)
         return 1;
-    /* Real is compatible with any integer type */
-    if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && is_integer_type(rhs)) ||
-        ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && is_integer_type(lhs)))
+    /* Real is compatible with any integer/enum type */
+    if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && rhs_int) ||
+        ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && lhs_int))
         return 1;
     if ((lhs == REAL_TYPE && rhs == EXTENDED_TYPE) ||
         (lhs == EXTENDED_TYPE && rhs == REAL_TYPE))
