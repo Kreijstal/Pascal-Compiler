@@ -12,6 +12,7 @@
 
 #include "runtime_internal.h"
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <limits.h>
 #include "format_arg.h"
 
@@ -599,6 +600,65 @@ KGPCFPCHeapStatus kgpc_get_fpc_heap_status(void)
     status.CurrHeapUsed = 0;
     status.CurrHeapFree = 0;
     return status;
+}
+
+/* GetLocalTime — fills a TSystemTime record with the current local time.
+   TSystemTime layout: Year, Month, Day, DayOfWeek, Hour, Minute, Second, Millisecond (all uint16). */
+typedef struct {
+    uint16_t Year, Month, Day, DayOfWeek;
+    uint16_t Hour, Minute, Second, Millisecond;
+} KGPCSystemTime;
+
+void kgpc_getlocaltime(KGPCSystemTime *st)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    struct tm *tm = localtime(&tv.tv_sec);
+    if (tm == NULL || st == NULL) return;
+    st->Year = (uint16_t)(tm->tm_year + 1900);
+    st->Month = (uint16_t)(tm->tm_mon + 1);
+    st->Day = (uint16_t)tm->tm_mday;
+    st->DayOfWeek = (uint16_t)tm->tm_wday;
+    st->Hour = (uint16_t)tm->tm_hour;
+    st->Minute = (uint16_t)tm->tm_min;
+    st->Second = (uint16_t)tm->tm_sec;
+    st->Millisecond = (uint16_t)(tv.tv_usec / 1000);
+}
+
+/* DecodeTime — extracts time components from a TDateTime value.
+   TDateTime is a double: integer part = days since 1899-12-30, fractional = time of day. */
+void kgpc_decodetime(double dt, uint16_t *hour, uint16_t *min, uint16_t *sec, uint16_t *msec)
+{
+    double frac = dt - (int64_t)dt;
+    if (frac < 0) frac = -frac;
+    double total_ms = frac * 86400000.0;
+    int64_t ms = (int64_t)(total_ms + 0.5);
+    if (hour) *hour = (uint16_t)((ms / 3600000) % 24);
+    if (min) *min = (uint16_t)((ms / 60000) % 60);
+    if (sec) *sec = (uint16_t)((ms / 1000) % 60);
+    if (msec) *msec = (uint16_t)(ms % 1000);
+}
+
+/* DecodeDate — extracts date components from a TDateTime value. */
+void kgpc_decodedate(double dt, uint16_t *year, uint16_t *month, uint16_t *day)
+{
+    /* Convert TDateTime to Unix-like: TDateTime epoch is 1899-12-30 */
+    int64_t days = (int64_t)dt;
+    /* Use a simple algorithm: convert to calendar date */
+    /* TDateTime day 1 = 1899-12-31, day 2 = 1900-01-01 */
+    /* We use the time.h approach: convert to seconds since epoch */
+    /* TDateTime 25569 = 1970-01-01 (Unix epoch) */
+    time_t t = (time_t)((days - 25569) * 86400);
+    struct tm *tm = gmtime(&t);
+    if (tm == NULL) {
+        if (year) *year = 0;
+        if (month) *month = 0;
+        if (day) *day = 0;
+        return;
+    }
+    if (year) *year = (uint16_t)(tm->tm_year + 1900);
+    if (month) *month = (uint16_t)(tm->tm_mon + 1);
+    if (day) *day = (uint16_t)tm->tm_mday;
 }
 
 static FILE *kgpc_text_input_stream(KGPCTextRec *file)

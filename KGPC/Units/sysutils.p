@@ -200,6 +200,9 @@ function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString):
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
+procedure GetLocalTime(var SystemTime: TSystemTime); cdecl; external name 'kgpc_getlocaltime';
+procedure DecodeTime(Time: TDateTime; out Hour, Min, Sec, MSec: Word); cdecl; external name 'kgpc_decodetime';
+procedure DecodeDate(Date: TDateTime; out Year, Month, Day: Word); cdecl; external name 'kgpc_decodedate';
 function StringToGUID(const S: AnsiString): TGUID;
 procedure FillWord(var X; Count: SizeInt; Value: Word);
 
