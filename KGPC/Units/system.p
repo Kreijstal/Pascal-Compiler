@@ -31,6 +31,8 @@ type
   SizeUInt = NativeUInt;
   PtrInt = NativeInt;
   PtrUInt = NativeUInt;
+  ALUSInt = NativeInt;
+  ALUUInt = NativeUInt;
   
   { Pointer types }
   AnsiChar = Char;
@@ -317,6 +319,10 @@ type
   UInt16 = Word;                 { 16-bit unsigned }
   Int32 = LongInt;               { 32-bit signed }
   UInt32 = Cardinal;             { 32-bit unsigned }
+  PInt8 = ^Int8;
+  PUInt8 = ^UInt8;
+  PInt16 = ^Int16;
+  PUInt16 = ^UInt16;
   PInt32 = ^Int32;
   PUInt32 = ^UInt32;
 
