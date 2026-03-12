@@ -253,6 +253,26 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
     /* Try KgpcType first if available */
     if (hash_node->type != NULL)
     {
+        /* Check actual kind FIRST for record/pointer/procedure types.
+         * type_alias overrides are only safe for primitive types; for records
+         * and pointers the type_alias may carry stale base_type (e.g. STRING_TYPE
+         * on a class-typed variable's pointer KgpcType). */
+        if (hash_node->type->kind == TYPE_KIND_POINTER)
+        {
+            *type = POINTER_TYPE;
+            return 0;
+        }
+        if (hash_node->type->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *rec = kgpc_type_get_record(hash_node->type);
+            if (rec != NULL && rec->is_interface)
+            {
+                *type = POINTER_TYPE;
+                return 0;
+            }
+            *type = RECORD_TYPE;
+            return 0;
+        }
         if (hash_node->type->type_alias != NULL)
         {
             int base = hash_node->type->type_alias->base_type;
@@ -285,16 +305,6 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         if (hash_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
             *type = kgpc_type_get_primitive_tag(hash_node->type);
-            return 0;
-        }
-        else if (hash_node->type->kind == TYPE_KIND_POINTER)
-        {
-            *type = POINTER_TYPE;
-            return 0;
-        }
-        else if (hash_node->type->kind == TYPE_KIND_RECORD)
-        {
-            *type = RECORD_TYPE;
             return 0;
         }
         else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)

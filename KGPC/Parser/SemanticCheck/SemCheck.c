@@ -1724,6 +1724,21 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
         return UNKNOWN_TYPE;
+    /* Check actual kind FIRST for record/pointer types.
+     * type_alias overrides are only valid for primitive types; for records
+     * and pointers the type_alias may carry a stale base_type (e.g. STRING_TYPE
+     * on a class variable's pointer-to-record KgpcType). */
+    if (kgpc_type_is_record((KgpcType *)type))
+    {
+        struct RecordType *rec = kgpc_type_get_record((KgpcType *)type);
+        if (rec != NULL && rec->is_interface)
+            return POINTER_TYPE;
+        return RECORD_TYPE;
+    }
+    if (kgpc_type_is_pointer((KgpcType *)type))
+        return POINTER_TYPE;
+    if (kgpc_type_is_procedure((KgpcType *)type))
+        return PROCEDURE;
     /* Check type_alias overrides before primitive tag — a PByte (^Byte) alias
      * may have kind=TYPE_KIND_PRIMITIVE with tag=BYTE_TYPE in unit contexts,
      * but the type_alias correctly records is_pointer=1. */
@@ -1764,17 +1779,6 @@ int semcheck_tag_from_kgpc(const KgpcType *type)
             }
         }
     }
-    if (kgpc_type_is_record((KgpcType *)type))
-    {
-        struct RecordType *rec = kgpc_type_get_record((KgpcType *)type);
-        if (rec != NULL && rec->is_interface)
-            return POINTER_TYPE;
-        return RECORD_TYPE;
-    }
-    if (kgpc_type_is_pointer((KgpcType *)type))
-        return POINTER_TYPE;
-    if (kgpc_type_is_procedure((KgpcType *)type))
-        return PROCEDURE;
     return UNKNOWN_TYPE;
 }
 
