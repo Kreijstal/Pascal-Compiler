@@ -2348,16 +2348,21 @@ static int semcheck_builtin_exclude(SymTab_t *symtab, struct Statement *stmt, in
 
 /* Initialize(var v) / Finalize(var v) - accept any managed type */
 static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Statement *stmt,
-    int max_scope_lev, const char *display_name)
+    int max_scope_lev, const char *display_name, int allow_count_arg)
 {
     if (stmt == NULL)
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (arg_count < 1 || arg_count > (allow_count_arg ? 2 : 1))
     {
-        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
-            stmt->line_num, display_name);
+        if (allow_count_arg)
+            semcheck_error_with_context("Error on line %d, %s expects one or two arguments.\n",
+                stmt->line_num, display_name);
+        else
+            semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+                stmt->line_num, display_name);
         return 1;
     }
 
@@ -2366,17 +2371,29 @@ static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Stateme
     int arg_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&arg_type, symtab, arg_expr, max_scope_lev, MUTATE);
     /* Accept any type - Initialize/Finalize work with all managed types */
+    if (allow_count_arg && args->next != NULL)
+    {
+        struct Expression *count_expr = (struct Expression *)args->next->cur;
+        int count_type = UNKNOWN_TYPE;
+        error_count += semcheck_stmt_expr_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
+        if (!is_integer_type(count_type))
+        {
+            semcheck_error_with_context("Error on line %d, %s count argument must be an integer.\n",
+                stmt->line_num, display_name);
+            ++error_count;
+        }
+    }
     return error_count;
 }
 
 static int semcheck_builtin_initialize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Initialize");
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Initialize", 0);
 }
 
 static int semcheck_builtin_finalize(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
-    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Finalize");
+    return semcheck_builtin_initialize_finalize(symtab, stmt, max_scope_lev, "Finalize", 1);
 }
 
 static int semcheck_builtin_assert(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
@@ -5263,6 +5280,12 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 {
                     const char *method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
+                    int is_static_method = from_cparser_is_method_static(record_info->type_id,
+                        method_name);
+                    int is_nonstatic_class_method =
+                        (!is_static_method &&
+                         from_cparser_is_method_class_method(record_info->type_id,
+                             method_name));
                     size_t class_len = strlen(record_info->type_id);
                     size_t method_len = strlen(method_name);
                     char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
@@ -5272,14 +5295,26 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         free(proc_id);
                         proc_id = new_proc_id;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
-                        ListNode_t *remaining_args = args_given->next;
-                        destroy_expr(first_arg);
-                        args_given->cur = NULL;
-                        free(args_given);
-                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                        args_given = remaining_args;
                         stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
-                        static_arg_already_removed = 1;
+                        if (is_nonstatic_class_method)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                            {
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(record_info->type_id);
+                            }
+                        }
+                        else
+                        {
+                            ListNode_t *remaining_args = args_given->next;
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                            args_given = remaining_args;
+                            static_arg_already_removed = 1;
+                        }
                     }
                 }
             }
@@ -5508,16 +5543,20 @@ skip_type_receiver_rewrite:
 
         if (self_record != NULL)
         {
-            HashNode_t *method_node = semcheck_find_class_method(symtab, self_record, proc_id, NULL);
+            const char *cur_owner = semcheck_get_current_method_owner();
+            struct RecordType *owner_record = NULL;
+            if (cur_owner != NULL)
+                owner_record = semcheck_lookup_record_type(symtab, cur_owner);
+
+            struct RecordType *lookup_record = (owner_record != NULL) ? owner_record : self_record;
+            HashNode_t *method_node = semcheck_find_class_method(symtab, lookup_record, proc_id, NULL);
             /* If not found and self_record->type_id differs from the current
              * method owner (e.g. record has "timezone" but owner is "TTimeZone"),
              * retry with the owner's record. */
             if (method_node == NULL && self_record->type_id != NULL)
             {
-                const char *cur_owner = semcheck_get_current_method_owner();
                 if (cur_owner != NULL && !pascal_identifier_equals(cur_owner, self_record->type_id))
                 {
-                    struct RecordType *owner_record = semcheck_lookup_record_type(symtab, cur_owner);
                     if (owner_record != NULL)
                     {
                         method_node = semcheck_find_class_method(symtab, owner_record, proc_id, NULL);
@@ -5525,6 +5564,10 @@ skip_type_receiver_rewrite:
                             self_record = owner_record;
                     }
                 }
+            }
+            else if (method_node != NULL && owner_record != NULL)
+            {
+                self_record = owner_record;
             }
             if (method_node != NULL &&
                 (method_node->hash_type == HASHTYPE_PROCEDURE ||
@@ -5535,15 +5578,35 @@ skip_type_receiver_rewrite:
 
                 /* Prepend Self to arguments only for non-static methods.
                  * Static class methods have no Self parameter. */
-                int method_is_static = (self_record->type_id != NULL && bare_method_name != NULL) ?
-                    from_cparser_is_method_static(self_record->type_id, bare_method_name) : 0;
+                const char *receiver_class_name =
+                    (method_node->owner_class != NULL) ? method_node->owner_class :
+                    self_record->type_id;
+                int method_is_static = (receiver_class_name != NULL && bare_method_name != NULL) ?
+                    from_cparser_is_method_static(receiver_class_name, bare_method_name) : 0;
+                int method_is_class =
+                    (receiver_class_name != NULL && bare_method_name != NULL && !method_is_static) ?
+                    from_cparser_is_method_class_method(receiver_class_name, bare_method_name) : 0;
                 if (!method_is_static)
                 {
-                    struct Expression *self_expr = mk_varid(stmt->line_num, strdup("Self"));
-                    ListNode_t *self_arg = CreateListNode(self_expr, LIST_EXPR);
-                    self_arg->next = args_given;
-                    stmt->stmt_data.procedure_call_data.expr_args = self_arg;
-                    args_given = self_arg;
+                    struct Expression *receiver_expr = mk_varid(stmt->line_num, strdup("Self"));
+                    ListNode_t *receiver_arg = (receiver_expr != NULL) ?
+                        CreateListNode(receiver_expr, LIST_EXPR) : NULL;
+                    if (receiver_arg != NULL)
+                    {
+                        receiver_arg->next = args_given;
+                        stmt->stmt_data.procedure_call_data.expr_args = receiver_arg;
+                        args_given = receiver_arg;
+                    }
+                    if (method_is_class)
+                    {
+                        stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                        if (stmt->stmt_data.procedure_call_data.self_class_name == NULL &&
+                            receiver_class_name != NULL)
+                        {
+                            stmt->stmt_data.procedure_call_data.self_class_name =
+                                strdup(receiver_class_name);
+                        }
+                    }
                 }
                 else
                 {
@@ -6180,14 +6243,15 @@ skip_type_receiver_rewrite:
                 ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
 
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
-            if (static_method_receiver)
-                is_static = 1;
+            int is_nonstatic_class_method =
+                (!is_static &&
+                 from_cparser_is_method_class_method(record_info->type_id, method_name));
             HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
 
             if (method_node != NULL) {
                 /* Keep class-prefixed id for static/class calls (e.g. ClassName.Create),
                  * but canonicalize instance calls to the resolved owner id. */
-                if (static_method_receiver)
+                if (static_method_receiver || is_nonstatic_class_method)
                 {
                     size_t class_len = strlen(record_info->type_id);
                     size_t method_len = strlen(method_name);
@@ -6246,7 +6310,16 @@ skip_type_receiver_rewrite:
                     }
                 }
 
-                if (is_static && receiver_is_type_ident) {
+                if (is_nonstatic_class_method && receiver_is_type_ident)
+                {
+                    stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                    if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                    {
+                        stmt->stmt_data.procedure_call_data.self_class_name =
+                            strdup(record_info->type_id);
+                    }
+                }
+                else if (is_static && receiver_is_type_ident) {
                     /* For static methods, remove the first argument (the instance/type identifier) */
                     ListNode_t *old_head = args_given;
                     stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
@@ -6490,6 +6563,9 @@ skip_type_receiver_rewrite:
         
         if (class_name != NULL && method_name != NULL) {
             int is_static = from_cparser_is_method_static(class_name, method_name);
+            int is_nonstatic_class_method =
+                (!is_static &&
+                 from_cparser_is_method_class_method(class_name, method_name));
             HashNode_t *resolved_method = NULL;
             HashNode_t *class_node = NULL;
             if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL)
@@ -6531,17 +6607,27 @@ skip_type_receiver_rewrite:
             }
             
             int receiver_is_type_ident = 0;
+            int receiver_is_self = 0;
             if (args_given != NULL && args_given->cur != NULL)
             {
                 struct Expression *receiver_expr = (struct Expression *)args_given->cur;
                 if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
                     receiver_expr->expr_data.id != NULL)
                 {
+                    if (pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                        receiver_is_self = 1;
                     HashNode_t *receiver_node = NULL;
                     if (FindIdent(&receiver_node, symtab, receiver_expr->expr_data.id) >= 0 &&
                         receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                         receiver_is_type_ident = 1;
                 }
+            }
+
+            if (is_nonstatic_class_method && !receiver_is_type_ident && !receiver_is_self)
+            {
+                stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                    stmt->stmt_data.procedure_call_data.self_class_name = strdup(class_name);
             }
 
             if (is_static && receiver_is_type_ident) {
@@ -6960,6 +7046,89 @@ proccall_parent_resolve_done:
             {
                 free(mangled_name);
                 mangled_name = strdup(wildcard_proc->mangled_id);
+            }
+        }
+    }
+
+    /* Explicit type-qualified class method calls can arrive here without the
+     * synthetic Self/class receiver in statement context (e.g. TClass.Proc()).
+     * Reinsert the class receiver before overload resolution so arity matches
+     * the hidden Self parameter used by non-static class methods. */
+    if (!static_arg_already_removed && overload_candidates != NULL &&
+        stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        int receiver_is_type_ident = 0;
+        int receiver_is_self = 0;
+        if (args_given != NULL && args_given->cur != NULL)
+        {
+            struct Expression *receiver_expr = (struct Expression *)args_given->cur;
+            if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
+                receiver_expr->expr_data.id != NULL)
+            {
+                if (pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
+                    receiver_is_self = 1;
+                else
+                {
+                    HashNode_t *receiver_node = NULL;
+                    if (FindIdent(&receiver_node, symtab, receiver_expr->expr_data.id) >= 0 &&
+                        receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
+                        receiver_is_type_ident = 1;
+                }
+            }
+        }
+
+        if (!receiver_is_type_ident && !receiver_is_self)
+        {
+            const char *missing_class_self = NULL;
+            int given_count = ListLength(args_given);
+            for (ListNode_t *cur = overload_candidates; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->owner_class == NULL ||
+                    candidate->method_name == NULL || candidate->type == NULL ||
+                    candidate->type->kind != TYPE_KIND_PROCEDURE)
+                    continue;
+                if (!from_cparser_is_method_class_method(candidate->owner_class,
+                        candidate->method_name) ||
+                    from_cparser_is_method_static(candidate->owner_class,
+                        candidate->method_name))
+                    continue;
+
+                ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+                if (params == NULL)
+                    continue;
+                Tree_t *first_param = (Tree_t *)params->cur;
+                if (first_param == NULL || first_param->type != TREE_VAR_DECL ||
+                    first_param->tree_data.var_decl_data.ids == NULL)
+                    continue;
+                const char *first_name =
+                    (const char *)first_param->tree_data.var_decl_data.ids->cur;
+                if (first_name == NULL || !pascal_identifier_equals(first_name, "Self"))
+                    continue;
+
+                if (ListLength(params) == given_count + 1)
+                {
+                    missing_class_self = candidate->owner_class;
+                    break;
+                }
+            }
+
+            if (missing_class_self != NULL)
+            {
+                struct Expression *class_expr = mk_varid(stmt->line_num,
+                    strdup(missing_class_self));
+                ListNode_t *class_arg = (class_expr != NULL) ?
+                    CreateListNode(class_expr, LIST_EXPR) : NULL;
+                if (class_arg != NULL)
+                {
+                    class_arg->next = args_given;
+                    args_given = class_arg;
+                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
+                }
+                stmt->stmt_data.procedure_call_data.is_class_method_call = 1;
+                if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                    stmt->stmt_data.procedure_call_data.self_class_name =
+                        strdup(missing_class_self);
             }
         }
     }

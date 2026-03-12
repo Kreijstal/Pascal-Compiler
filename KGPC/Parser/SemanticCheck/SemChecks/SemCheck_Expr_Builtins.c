@@ -1260,9 +1260,11 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
 
-    /* Assigned accepts pointers (TYPE_KIND_POINTER or POINTER_TYPE primitive) and procedure types */
+    /* Assigned accepts pointers, procedure variables, and dynamic arrays
+     * (FPC uses Assigned(arr) as a nil-check on the descriptor pointer). */
     int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 
                         kgpc_type_is_procedure(arg_kgpc_type) ||
+                        kgpc_type_is_dynamic_array(arg_kgpc_type) ||
                         kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
     if (error_count == 0 && !is_valid_type)
     {

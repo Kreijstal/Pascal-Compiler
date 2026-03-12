@@ -1206,10 +1206,14 @@ static void print_error_context(int line_num, int col_num, int source_index, con
                 col_num,
                 source_index);
         }
-        /* Use offset-based context if available, otherwise fall back to line-based from directive_file */
-        int printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
-        if (!printed && directive_file != NULL && directive_file[0] != '\0')
+        /* When the source file is known from a {#line} directive, read context
+         * from the original file — the preprocessed buffer has different line
+         * numbers due to inlined includes and stripped ifdef blocks. */
+        int printed = 0;
+        if (directive_file[0] != '\0')
             printed = semcheck_print_context_from_file(directive_file, line_num, col_num, 2);
+        if (!printed)
+            printed = print_source_context_at_offset(context_buf, context_buf_len, source_index, line_num, col_num, 2);
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, line_num, col_num, 2);
         if (!printed && file_path != NULL)
@@ -1975,7 +1979,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     else if (source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
-            source_index, directive_file, sizeof(directive_file), 0);
+            source_index, directive_file, sizeof(directive_file), 1);
         if (resolved_line > 0)
             line_num = resolved_line;
         if (directive_file[0] != '\0')

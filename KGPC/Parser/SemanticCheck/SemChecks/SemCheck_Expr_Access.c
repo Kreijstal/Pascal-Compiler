@@ -4302,6 +4302,7 @@ int semcheck_funccall(int *type_return,
      * Also check for static method calls like TCounter.GetDefaultValue where the
      * first arg is a type identifier and the method is declared as static */
     int is_potential_static_method_call = 0;
+    int is_potential_class_method_call = 0;
     if (id != NULL && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
@@ -4316,8 +4317,11 @@ int semcheck_funccall(int *type_return,
                     /* Check if the method exists and is static */
                     if (from_cparser_is_method_static(record_info->type_id, id)) {
                         is_potential_static_method_call = 1;
+                    } else if (from_cparser_is_method_class_method(
+                                   record_info->type_id, id)) {
+                        is_potential_class_method_call = 1;
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                            fprintf(stderr, "[SemCheck] semcheck_funccall: detected static method call %s.%s\n",
+                            fprintf(stderr, "[SemCheck] semcheck_funccall: detected class/static method call %s.%s\n",
                                 record_info->type_id, id);
                         }
                     }
@@ -4328,7 +4332,7 @@ int semcheck_funccall(int *type_return,
     
     if (id != NULL &&
         (strncasecmp(id, "Create", 6) == 0 || strcasecmp(id, "Destroy") == 0 ||
-         is_potential_static_method_call) &&
+         is_potential_static_method_call || is_potential_class_method_call) &&
         args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         int first_arg_type_tag;
@@ -4594,36 +4598,49 @@ int semcheck_funccall(int *type_return,
                         is_static_method, method_owner->type_id, id);
                 }
 
-                /* Remove the first argument (the class reference) from the argument list
-                 * since it's not a real argument to the constructor */
-                ListNode_t *old_head = args_given;
-                expr->expr_data.function_call_data.args_expr = old_head->next;
-                old_head->next = NULL;  /* Detach to prevent dangling reference */
-                ListNode_t *user_args = expr->expr_data.function_call_data.args_expr;
-                args_given = user_args;  /* Update args_given to reflect removed type arg */
+                int is_nonstatic_class_method =
+                    (!is_static_method &&
+                     from_cparser_is_method_class_method(method_owner->type_id, id));
+                if (is_nonstatic_class_method)
+                {
+                    expr->expr_data.function_call_data.is_class_method_call = 1;
+                    if (expr->expr_data.function_call_data.self_class_name == NULL)
+                        expr->expr_data.function_call_data.self_class_name =
+                            strdup(method_owner->type_id);
+                }
+                else
+                {
+                    /* Remove the first argument (the class reference) from the argument list
+                     * since it's not a real argument to a static method or constructor. */
+                    ListNode_t *old_head = args_given;
+                    expr->expr_data.function_call_data.args_expr = old_head->next;
+                    old_head->next = NULL;  /* Detach to prevent dangling reference */
+                    ListNode_t *user_args = expr->expr_data.function_call_data.args_expr;
+                    args_given = user_args;  /* Update args_given to reflect removed type arg */
 
-                /* For non-static constructors, add a placeholder Self argument at the front.
-                 * Constructors have Self as first parameter, but from user's perspective
-                 * they don't pass Self - it's implicitly created.
-                 * Static factory methods (class function Create: T; static;) do NOT have Self.
-                 * We use EXPR_NIL as the placeholder - codegen will allocate memory. */
-                if (!is_static_method) {
-                    struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
-                    if (self_placeholder != NULL) {
-                        /* Use nil as the placeholder - codegen will handle actual allocation */
-                        self_placeholder->type = EXPR_NIL;
-                        semcheck_expr_set_resolved_type(self_placeholder, POINTER_TYPE);
-                        self_placeholder->line_num = expr->line_num;
-                        /* Set the resolved_kgpc_type to match the class type for proper type matching */
-                        if (owner_type != NULL) {
-                            kgpc_type_retain(owner_type);
-                            self_placeholder->resolved_kgpc_type = owner_type;
-                        }
-                        ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
-                        if (self_node != NULL) {
-                            self_node->next = user_args;
-                            expr->expr_data.function_call_data.args_expr = self_node;
-                            args_given = self_node;
+                    /* For non-static constructors, add a placeholder Self argument at the front.
+                     * Constructors have Self as first parameter, but from user's perspective
+                     * they don't pass Self - it's implicitly created.
+                     * Static factory methods (class function Create: T; static;) do NOT have Self.
+                     * We use EXPR_NIL as the placeholder - codegen will allocate memory. */
+                    if (!is_static_method) {
+                        struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
+                        if (self_placeholder != NULL) {
+                            /* Use nil as the placeholder - codegen will handle actual allocation */
+                            self_placeholder->type = EXPR_NIL;
+                            semcheck_expr_set_resolved_type(self_placeholder, POINTER_TYPE);
+                            self_placeholder->line_num = expr->line_num;
+                            /* Set the resolved_kgpc_type to match the class type for proper type matching */
+                            if (owner_type != NULL) {
+                                kgpc_type_retain(owner_type);
+                                self_placeholder->resolved_kgpc_type = owner_type;
+                            }
+                            ListNode_t *self_node = CreateListNode(self_placeholder, LIST_EXPR);
+                            if (self_node != NULL) {
+                                self_node->next = user_args;
+                                expr->expr_data.function_call_data.args_expr = self_node;
+                                args_given = self_node;
+                            }
                         }
                     }
                 }

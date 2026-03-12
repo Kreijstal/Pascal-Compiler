@@ -13,6 +13,46 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static void semcheck_set_result_expr_metadata(struct Expression *expr, SymTab_t *symtab,
+    KgpcType *type)
+{
+    if (expr == NULL)
+        return;
+
+    if (type != NULL && kgpc_type_is_array(type))
+        semcheck_set_array_info_from_kgpctype(expr, symtab, type, expr->line_num);
+    else
+        semcheck_clear_array_info(expr);
+
+    if (type != NULL && kgpc_type_is_pointer(type))
+    {
+        KgpcType *points_to = type->info.points_to;
+        if (points_to == NULL)
+        {
+            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+        }
+        else if (points_to->kind == TYPE_KIND_RECORD &&
+            points_to->info.record_info != NULL &&
+            points_to->info.record_info->type_id != NULL)
+        {
+            semcheck_set_pointer_info(expr, RECORD_TYPE,
+                points_to->info.record_info->type_id);
+        }
+        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+        {
+            semcheck_set_pointer_info(expr, points_to->info.primitive_type_tag, NULL);
+        }
+        else
+        {
+            semcheck_set_pointer_info(expr, UNKNOWN_TYPE, NULL);
+        }
+    }
+    else
+    {
+        semcheck_clear_pointer_info(expr);
+    }
+}
+
 static int semcheck_hashnode_is_callable(const HashNode_t *node)
 {
     if (node == NULL)
@@ -2090,6 +2130,30 @@ int semcheck_varid(int *type_return,
         }
 resolved:;
     }
+    if (mutating != NO_MUTATE && id != NULL)
+    {
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        const char *result_var = semcheck_get_current_subprogram_result_var_name();
+        const char *method_name = semcheck_get_current_subprogram_method_name();
+        int is_result_name =
+            (cur_sub_id != NULL && pascal_identifier_equals(id, cur_sub_id)) ||
+            (result_var != NULL && pascal_identifier_equals(id, result_var)) ||
+            (method_name != NULL && pascal_identifier_equals(id, method_name));
+        if (is_result_name)
+        {
+            int owns_ret = 0;
+            KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &owns_ret);
+            if (ret_type != NULL)
+            {
+                *type_return = semcheck_tag_from_kgpc(ret_type);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                semcheck_set_result_expr_metadata(expr, symtab, ret_type);
+                if (owns_ret)
+                    destroy_kgpc_type(ret_type);
+                return return_val;
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
     {
@@ -2469,6 +2533,18 @@ resolved:;
     }
     else
     {
+        if (mutating != NO_MUTATE && id != NULL &&
+            pascal_identifier_equals(id, "Result") &&
+            hash_return != NULL && hash_return->type != NULL &&
+            hash_return->hash_type != HASHTYPE_FUNCTION &&
+            hash_return->hash_type != HASHTYPE_PROCEDURE)
+        {
+            set_hash_meta(hash_return, mutating);
+            set_type_from_hashtype(type_return, hash_return);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, hash_return->type);
+            semcheck_set_result_expr_metadata(expr, symtab, hash_return->type);
+            return return_val;
+        }
         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL &&
             id != NULL && strcmp(id, "DefaultComparer") == 0)
         {

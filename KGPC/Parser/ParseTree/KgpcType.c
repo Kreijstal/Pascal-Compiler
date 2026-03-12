@@ -1354,6 +1354,80 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
     return 0;
 }
 
+static struct RecordField *get_first_visible_record_field(struct RecordType *record)
+{
+    if (record == NULL)
+        return NULL;
+
+    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_RECORD_FIELD)
+            continue;
+        struct RecordField *field = (struct RecordField *)node->cur;
+        if (field == NULL || record_field_is_hidden(field))
+            continue;
+        return field;
+    }
+
+    return NULL;
+}
+
+static struct RecordType *resolve_record_field_record_type(struct RecordField *field,
+    struct SymTab *symtab)
+{
+    if (field == NULL)
+        return NULL;
+    if (field->nested_record != NULL)
+        return field->nested_record;
+    if (field->type_ref != NULL)
+    {
+        HashNode_t *type_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+            field->type_ref, 0);
+        struct RecordType *record = get_record_type_from_hashnode(type_node);
+        if (record != NULL)
+            return record;
+    }
+    if (field->type_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, field->type_id) >= 0)
+        {
+            struct RecordType *record = get_record_type_from_hashnode(type_node);
+            if (record != NULL)
+                return record;
+        }
+    }
+    return NULL;
+}
+
+static int record_has_prefix_field_type(struct RecordType *record, struct RecordType *prefix,
+    struct SymTab *symtab)
+{
+    if (record == NULL || prefix == NULL)
+        return 0;
+
+    struct RecordField *first_field = get_first_visible_record_field(record);
+    struct RecordType *first_field_record = resolve_record_field_record_type(first_field, symtab);
+    if (first_field_record == NULL)
+        return 0;
+
+    return records_same_type(first_field_record, prefix);
+}
+
+static int record_prefix_pointer_compatible(struct RecordType *lhs_record,
+    struct RecordType *rhs_record, struct SymTab *symtab)
+{
+    if (records_same_type(lhs_record, rhs_record))
+        return 1;
+
+    if (record_has_prefix_field_type(lhs_record, rhs_record, symtab))
+        return 1;
+    if (record_has_prefix_field_type(rhs_record, lhs_record, symtab))
+        return 1;
+
+    return 0;
+}
+
 int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, struct SymTab *symtab) {
     /* NULL types are incompatible */
     if (lhs_type == NULL || rhs_type == NULL)
@@ -1994,6 +2068,14 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         if (is_record_subclass(rhs_record->info.record_info, lhs_record->info.record_info, symtab))
                             return 1;
                     }
+                }
+
+                if (lhs_inner != NULL && lhs_inner->kind == TYPE_KIND_RECORD &&
+                    rhs_inner != NULL && rhs_inner->kind == TYPE_KIND_RECORD &&
+                    record_prefix_pointer_compatible(lhs_inner->info.record_info,
+                        rhs_inner->info.record_info, symtab))
+                {
+                    return 1;
                 }
             }
             

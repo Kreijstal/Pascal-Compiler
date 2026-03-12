@@ -611,6 +611,20 @@ typedef struct {
 
 void kgpc_getlocaltime(KGPCSystemTime *st)
 {
+#ifdef _WIN32
+    SYSTEMTIME sys_time;
+    if (st == NULL)
+        return;
+    GetLocalTime(&sys_time);
+    st->Year = (uint16_t)sys_time.wYear;
+    st->Month = (uint16_t)sys_time.wMonth;
+    st->Day = (uint16_t)sys_time.wDay;
+    st->DayOfWeek = (uint16_t)sys_time.wDayOfWeek;
+    st->Hour = (uint16_t)sys_time.wHour;
+    st->Minute = (uint16_t)sys_time.wMinute;
+    st->Second = (uint16_t)sys_time.wSecond;
+    st->Millisecond = (uint16_t)sys_time.wMilliseconds;
+#else
     struct timeval tv;
     gettimeofday(&tv, NULL);
     struct tm *tm = localtime(&tv.tv_sec);
@@ -623,6 +637,7 @@ void kgpc_getlocaltime(KGPCSystemTime *st)
     st->Minute = (uint16_t)tm->tm_min;
     st->Second = (uint16_t)tm->tm_sec;
     st->Millisecond = (uint16_t)(tv.tv_usec / 1000);
+#endif
 }
 
 /* DecodeTime — extracts time components from a TDateTime value.
