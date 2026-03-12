@@ -125,6 +125,10 @@ void DestroySymTab(SymTab_t *symtab);
 /* Prints the table for debugging */
 void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent);
 
+/* Find an identifier in the current (top) scope only, bypassing unit-aware resolution.
+ * Use after pushing an entry to get the just-added node reliably. */
+HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id);
+
 /* Move a hash node to the back of its bucket list in the nearest scope */
 void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 

@@ -67,7 +67,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         return 1;
 
     int hash = hashpjw(canonical_id);
-    
+
     HashNode_t *node = FindIdentInTable(table, params->id);
     if (node != NULL)
     {
@@ -254,7 +254,10 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
             else if (hash_node->source_unit_index == 0)
                 priority = 2; /* program-local fallback */
 
-            if (priority > best_priority)
+            if (priority > best_priority ||
+                (priority == best_priority && best != NULL &&
+                 best->hash_type == HASHTYPE_CONST &&
+                 hash_node->hash_type != HASHTYPE_CONST))
             {
                 best = hash_node;
                 best_priority = priority;
@@ -670,6 +673,18 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
      * semcheck's duplicate-declaration check before reaching here. */
     if ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+
+    /* Allow constants and variables to coexist across units.
+     * FPC units sometimes intentionally shadow an imported variable with a
+     * const (e.g. `const current_procinfo = 'error';` in pdecobj.pas shadows
+     * `var current_procinfo : tprocinfo;` from procinfo.pas).
+     * Unit-aware FindIdentInTableForUnit resolves which one is visible. */
+    if ((existing_node->hash_type == HASHTYPE_CONST &&
+         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) ||
+        ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
+         new_hash_type == HASHTYPE_CONST)) {
         return 1;
     }
 

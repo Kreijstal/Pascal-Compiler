@@ -13881,8 +13881,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, cached);
                         if (func_return == 0)
                         {
-                            HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                            HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                            if (var_node != NULL)
                             {
                                 var_node->is_var_parameter =
                                     (tree->tree_data.var_decl_data.is_var_param ||
@@ -13890,11 +13890,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(var_node,
+                                    tree->tree_data.var_decl_data.source_unit_index);
                             }
                         }
                         goto next_identifier;
                     }
-                    
+
                     if (declared_type == SET_TYPE)
                     {
                         KgpcType *set_type = create_primitive_type(SET_TYPE);
@@ -13917,8 +13919,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, set_type);
                         if (func_return == 0)
                         {
-                            HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                            HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                            if (var_node != NULL)
                             {
                                 var_node->is_var_parameter =
                                     (tree->tree_data.var_decl_data.is_var_param ||
@@ -13926,6 +13928,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(var_node,
+                                    tree->tree_data.var_decl_data.source_unit_index);
                             }
                         }
                         goto next_identifier;
@@ -13963,8 +13967,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
                         if (func_return == 0)
                         {
-                            HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                            HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                            if (var_node != NULL)
                             {
                                 var_node->is_var_parameter =
                                     (tree->tree_data.var_decl_data.is_var_param ||
@@ -13972,11 +13976,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(var_node,
+                                    tree->tree_data.var_decl_data.source_unit_index);
                             }
                         }
                         goto next_identifier;
                     }
-                    
+
                     /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
                     {
@@ -14018,8 +14024,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, builtin_type);
                                 if (func_return == 0)
                                 {
-                                    HashNode_t *var_node = NULL;
-                                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                    HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                                    if (var_node != NULL)
                                     {
                                         var_node->is_var_parameter =
                                             (tree->tree_data.var_decl_data.is_var_param ||
@@ -14027,6 +14033,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                         mark_hashnode_unit_info(symtab, var_node,
                                             tree->tree_data.var_decl_data.defined_in_unit,
                                             tree->tree_data.var_decl_data.unit_is_public);
+                                        mark_hashnode_source_unit(var_node,
+                                            tree->tree_data.var_decl_data.source_unit_index);
                                     }
                                 }
                                 goto next_identifier;
@@ -14039,8 +14047,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, type_node->type);
                             if (func_return == 0)
                             {
-                                HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                                if (var_node != NULL)
                                 {
                                     var_node->is_var_parameter =
                                         (tree->tree_data.var_decl_data.is_var_param ||
@@ -14048,6 +14056,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(var_node,
+                                        tree->tree_data.var_decl_data.source_unit_index);
                                 }
                             }
                             goto next_identifier;
@@ -14085,8 +14095,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, pointer_type);
                             if (func_return == 0)
                             {
-                                HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                                if (var_node != NULL)
                                 {
                                     var_node->is_var_parameter =
                                         (tree->tree_data.var_decl_data.is_var_param ||
@@ -14094,6 +14104,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(var_node,
+                                        tree->tree_data.var_decl_data.source_unit_index);
                                 }
                             }
                             goto next_identifier;
@@ -14123,12 +14135,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 kgpc_type_release(type_node->type);  /* Release caller's ref */
                                 if (func_return == 0)
                                 {
-                                    HashNode_t *var_node = NULL;
-                                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                    HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                                    if (var_node != NULL)
                                     {
                                         mark_hashnode_unit_info(symtab, var_node,
                                             tree->tree_data.var_decl_data.defined_in_unit,
                                             tree->tree_data.var_decl_data.unit_is_public);
+                                        mark_hashnode_source_unit(var_node,
+                                            tree->tree_data.var_decl_data.source_unit_index);
                                     }
                                 }
 
@@ -14184,30 +14198,26 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             destroy_kgpc_type(array_type);  /* Release creator's ref */
                             if (func_return == 0)
                             {
-                                HashNode_t *var_node = NULL;
-                                if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                                HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                                if (var_node != NULL)
                                 {
                                     mark_hashnode_unit_info(symtab, var_node,
                                         tree->tree_data.var_decl_data.defined_in_unit,
                                         tree->tree_data.var_decl_data.unit_is_public);
+                                    mark_hashnode_source_unit(var_node,
+                                        tree->tree_data.var_decl_data.source_unit_index);
                                 }
                             }
 
                             goto next_identifier;
                         }
-                        
+
                         /* For non-array type references (e.g., enum, set, file, record), create KgpcType from type_node */
                         KgpcType *var_kgpc_type = NULL;
                         if (type_node->type != NULL)
                         {
                             /* Type node already has a KgpcType - reference it (don't clone) */
                             var_kgpc_type = type_node->type;
-                            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
-                                pascal_identifier_equals((char*)ids->cur, "Self"))
-                            {
-                                fprintf(stderr, "[KGPC] semcheck_decls: Pushing Self with type_node->type kind=%d\n",
-                                    var_kgpc_type ? var_kgpc_type->kind : -1);
-                            }
                             if (var_kgpc_type != NULL)
                                 kgpc_type_retain(var_kgpc_type);
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
@@ -14290,8 +14300,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                         if (func_return == 0)
                         {
-                            HashNode_t *var_node = NULL;
-                            if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                            HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                            if (var_node != NULL)
                             {
                                 var_node->is_var_parameter =
                                     (tree->tree_data.var_decl_data.is_var_param ||
@@ -14299,6 +14309,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 mark_hashnode_unit_info(symtab, var_node,
                                     tree->tree_data.var_decl_data.defined_in_unit,
                                     tree->tree_data.var_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(var_node,
+                                    tree->tree_data.var_decl_data.source_unit_index);
                             }
                         }
                         goto next_identifier;
@@ -14543,8 +14555,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 if (func_return == 0)
                 {
-                    HashNode_t *var_node = NULL;
-                    if (FindIdent(&var_node, symtab, ids->cur) != -1 && var_node != NULL)
+                    HashNode_t *var_node = FindIdentInCurrentScope(symtab, ids->cur);
+                    if (var_node != NULL)
                     {
                         var_node->is_var_parameter =
                             (tree->tree_data.var_decl_data.is_var_param ||
@@ -14552,6 +14564,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         mark_hashnode_unit_info(symtab, var_node,
                             tree->tree_data.var_decl_data.defined_in_unit,
                             tree->tree_data.var_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(var_node,
+                            tree->tree_data.var_decl_data.source_unit_index);
                     }
                 }
             }

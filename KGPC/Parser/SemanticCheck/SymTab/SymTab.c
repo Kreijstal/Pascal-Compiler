@@ -318,6 +318,15 @@ int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, 
     return -1;
 }
 
+HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
+{
+    assert(symtab != NULL);
+    assert(id != NULL);
+    if (symtab->stack_head == NULL)
+        return NULL;
+    return FindIdentInTable((HashTable_t *)symtab->stack_head->cur, id);
+}
+
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
 {
     int return_val = 0;
