@@ -6492,6 +6492,13 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                             type_info->element_type_id = strdup("ShortString");
                         if (nested_id != NULL)
                             free(nested_id);
+                    } else if (nested_info.is_range && mapped == UNKNOWN_TYPE) {
+                        /* Subrange element type (e.g., array[0..15] of 0..15).
+                         * The element is a range type wrapped in TYPE_SPEC —
+                         * treat as integer. */
+                        type_info->element_type = INT_TYPE;
+                        if (nested_id != NULL)
+                            free(nested_id);
                     } else {
                         type_info->element_type = mapped;
                         if (type_info->element_type_id == NULL)

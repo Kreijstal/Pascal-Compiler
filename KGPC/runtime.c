@@ -5489,6 +5489,50 @@ char *kgpc_int_to_str(int64_t value)
     return result;
 }
 
+char *kgpc_octstr(int64_t value, int64_t digits)
+{
+    if (digits < 1)
+        digits = 1;
+    if (digits > 22)
+        digits = 22;
+    char buffer[32];
+    int written = snprintf(buffer, sizeof(buffer), "%0*llo", (int)digits,
+                           (unsigned long long)value);
+    if (written < 0)
+        return kgpc_alloc_empty_string();
+
+    char *result = kgpc_string_alloc_with_length((size_t)written);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)written + 1);
+    return result;
+}
+
+char *kgpc_binstr(int64_t value, int64_t digits)
+{
+    if (digits < 1)
+        digits = 1;
+    if (digits > 64)
+        digits = 64;
+    char buffer[72];
+    uint64_t uval = (uint64_t)value;
+    int len = (int)digits;
+    buffer[len] = '\0';
+    for (int i = len - 1; i >= 0; i--)
+    {
+        buffer[i] = '0' + (char)(uval & 1);
+        uval >>= 1;
+    }
+
+    char *result = kgpc_string_alloc_with_length((size_t)len);
+    if (result == NULL)
+        return kgpc_alloc_empty_string();
+
+    memcpy(result, buffer, (size_t)len + 1);
+    return result;
+}
+
 char *kgpc_hexstr(int64_t value, int64_t digits)
 {
     if (digits < 1)
