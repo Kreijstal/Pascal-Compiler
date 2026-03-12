@@ -7516,10 +7516,18 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         continue;
                     }
 
-                    if (alias->target_type_id != NULL)
-                        apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
-                    else if (type_id != NULL)
-                        apply_builtin_integer_alias_metadata(alias, type_id);
+                    /* Do NOT apply integer alias metadata to pointer types.
+                     * For PWord = ^Word, target_type_id is "Word" (the pointee),
+                     * and applying Word's metadata (is_range, storage_size=2) would
+                     * corrupt the pointer alias, causing it to be treated as a
+                     * 2-byte range type instead of an 8-byte pointer. */
+                    if (!alias->is_pointer)
+                    {
+                        if (alias->target_type_id != NULL)
+                            apply_builtin_integer_alias_metadata(alias, alias->target_type_id);
+                        else if (type_id != NULL)
+                            apply_builtin_integer_alias_metadata(alias, type_id);
+                    }
 
                     /* Predeclare range aliases early so Low/High on subranges work in consts. */
                     if (alias->is_range || alias->range_known)
