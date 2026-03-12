@@ -2673,6 +2673,22 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
 
     if (expr->type == EXPR_ARRAY_ACCESS && expr->resolved_kgpc_type != NULL)
     {
+        /* If the result of this array access is itself an array, return that
+         * array's element size (not the total sizeof the result array).
+         * This ensures nested array stores use the correct write width. */
+        if (kgpc_type_is_array(expr->resolved_kgpc_type))
+        {
+            long long elem_size = kgpc_type_get_array_element_size(expr->resolved_kgpc_type);
+            if (elem_size <= 0 && ctx != NULL && ctx->symtab != NULL)
+            {
+                KgpcType *et = kgpc_type_get_array_element_type_resolved(
+                    expr->resolved_kgpc_type, ctx->symtab);
+                if (et != NULL)
+                    elem_size = kgpc_type_sizeof(et);
+            }
+            if (elem_size > 0)
+                return elem_size;
+        }
         long long result_size = kgpc_type_sizeof(expr->resolved_kgpc_type);
         if (result_size > 0)
             return result_size;
@@ -6555,11 +6571,22 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     long long first_lower_bound = 0;
     int shortstring_index = 0;
     long long indexed_elem_size = expr_get_array_element_size(expr, ctx);
-    int wide_char_index = (indexed_elem_size == 2) ||
-        (expr->array_element_size == 2) ||
+    /* WideChar/UnicodeChar arrays need stride 2 for character indexing.
+     * Only trigger on actual WideChar element types — not on Word arrays
+     * which also have element size 2 but use a different stride when
+     * the array is an element of a larger nested array. */
+    int wide_char_index =
         (expr->array_element_type_id != NULL &&
          (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
           pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")));
+    /* Fall back to size-2 heuristic only when no array dimension info
+     * is available and the result type is not itself an array. */
+    if (!wide_char_index &&
+        (indexed_elem_size == 2 || expr->array_element_size == 2) &&
+        (expr->resolved_kgpc_type == NULL || !kgpc_type_is_array(expr->resolved_kgpc_type)))
+    {
+        wide_char_index = 1;
+    }
     if (!wide_char_index && array_expr != NULL)
     {
         KgpcType *indexable_type = array_expr->resolved_kgpc_type;

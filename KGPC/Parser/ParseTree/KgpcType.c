@@ -2763,7 +2763,20 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
             dim_node = dim_node->next;
         }
 
-        info->element_size = kgpc_type_get_array_scalar_element_size(type);
+        /* Determine element size. If the element type (from a type alias) is itself
+         * an array, use its sizeof rather than drilling to the scalar element type,
+         * since array_dimensions only covers this declaration's dimensions. */
+        info->element_size = -1;
+        if (alias->array_element_type_id != NULL && symtab != NULL)
+        {
+            HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
+            if (node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
+                info->element_size = kgpc_type_sizeof(node->type);
+            else if (node != NULL && node->type != NULL)
+                info->element_size = kgpc_type_sizeof(node->type);
+        }
+        if (info->element_size <= 0)
+            info->element_size = kgpc_type_get_array_scalar_element_size(type);
         if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
