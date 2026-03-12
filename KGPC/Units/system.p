@@ -511,6 +511,12 @@ var
     Layout matches FPC's TMemoryManager (96 bytes on x86-64). }
   MemoryManager: array[0..95] of Byte;
   StdErrorHandle: THandle;
+  { Standard I/O Text file variables }
+  Input: Text;
+  Output: Text;
+  StdOut: Text;
+  StdErr: Text;
+  ErrOutput: Text;
 
   { Thread manager globals — defined here so both KGPC stdlib and FPC RTL
     provide them from Pascal; the C runtime references them as extern. }
@@ -623,6 +629,12 @@ function OctStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'k
 function OctStr(value: LongInt; digits: Byte): AnsiString; cdecl; external name 'kgpc_octstr';
 function BinStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'kgpc_binstr';
 function BinStr(value: LongInt; digits: Byte): AnsiString; cdecl; external name 'kgpc_binstr';
+
+{ Flush - flushes a Text file's output buffer }
+procedure Flush(var f: Text); cdecl; external name 'kgpc_flush';
+
+{ GetFPCHeapStatus - returns heap usage information }
+function GetFPCHeapStatus: TFPCHeapStatus; cdecl; external name 'kgpc_get_fpc_heap_status';
 
 { RandomRange(low, high) - Returns a random integer in [low, high)
   Overloaded for integer and longint types.

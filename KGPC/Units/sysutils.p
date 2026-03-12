@@ -185,6 +185,7 @@ function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FindFirst(const Path: AnsiString; Attr: Longint; var F: TSearchRec): Longint;
 procedure FindClose(var F: TSearchRec);
 function FileExists(const FileName: AnsiString): Boolean;
+function FileAge(const FileName: AnsiString): LongInt;
 function DeleteFile(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
 function RenameFile(const OldName, NewName: AnsiString): Boolean;
@@ -248,6 +249,7 @@ function kgpc_format(fmt: AnsiString; args: Pointer; count: NativeUInt): AnsiStr
 function kgpc_string_to_int(text: PChar; out value: Integer): Integer; external;
 function kgpc_string_to_real(text: PChar; out value: Double): Integer; external;
 function kgpc_file_exists(path: PChar): Integer; external;
+function kgpc_fileage(path: PChar): Int64; external;
 function kgpc_directory_exists(path: PChar): Integer; external;
 procedure kgpc_sleep_ms(milliseconds: integer); external;
 function kgpc_get_tick_count64: NativeUInt; external;
@@ -1584,6 +1586,11 @@ end;
 function FileExists(const FileName: AnsiString): Boolean;
 begin
   Result := kgpc_file_exists(ToPChar(FileName)) <> 0;
+end;
+
+function FileAge(const FileName: AnsiString): LongInt;
+begin
+  Result := LongInt(kgpc_fileage(ToPChar(FileName)));
 end;
 
 function DeleteFile(const FileName: AnsiString): Boolean;

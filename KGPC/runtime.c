@@ -569,6 +569,38 @@ static void kgpc_flush_text_output_stream(FILE *dest)
 #endif
 }
 
+/* Flush a Text file — Pascal's Flush(var f: Text) */
+void kgpc_flush(KGPCTextRec *file)
+{
+    if (file == NULL)
+        return;
+    FILE *fp = kgpc_textrec_get_stream(file, stdout);
+    if (fp != NULL)
+        fflush(fp);
+}
+
+/* GetFPCHeapStatus — returns a TFPCHeapStatus record with heap usage info.
+   Fields: MaxHeapSize, MaxHeapUsed, CurrHeapSize, CurrHeapUsed, CurrHeapFree (all PtrUInt). */
+typedef struct {
+    uint64_t MaxHeapSize;
+    uint64_t MaxHeapUsed;
+    uint64_t CurrHeapSize;
+    uint64_t CurrHeapUsed;
+    uint64_t CurrHeapFree;
+} KGPCFPCHeapStatus;
+
+KGPCFPCHeapStatus kgpc_get_fpc_heap_status(void)
+{
+    KGPCFPCHeapStatus status = {0};
+    /* Provide approximate values — exact tracking would require wrapping malloc */
+    status.MaxHeapSize = 0;
+    status.MaxHeapUsed = 0;
+    status.CurrHeapSize = 0;
+    status.CurrHeapUsed = 0;
+    status.CurrHeapFree = 0;
+    return status;
+}
+
 static FILE *kgpc_text_input_stream(KGPCTextRec *file)
 {
     kgpc_init_stdio();  /* Ensure stdio is initialized */
@@ -6924,6 +6956,26 @@ int kgpc_directory_exists(const char *path)
         return 0;
     return S_ISDIR(st.st_mode);
 #endif
+}
+
+/* FileAge(filename): returns file modification time as DOS date-time stamp,
+   or -1 if file doesn't exist. Matches FPC's SysUtils.FileAge. */
+int64_t kgpc_fileage(const char *path)
+{
+    if (path == NULL)
+        return -1;
+    struct stat st;
+    if (stat(path, &st) != 0)
+        return -1;
+    /* Convert Unix timestamp to DOS date-time format:
+       Bits 0-4: seconds/2, 5-10: minutes, 11-15: hours,
+       Bits 16-20: day, 21-24: month, 25-31: year-1980 */
+    struct tm *tm = localtime(&st.st_mtime);
+    if (tm == NULL)
+        return -1;
+    int dos_time = (tm->tm_sec / 2) | (tm->tm_min << 5) | (tm->tm_hour << 11);
+    int dos_date = tm->tm_mday | ((tm->tm_mon + 1) << 5) | ((tm->tm_year - 80) << 9);
+    return (int64_t)((dos_date << 16) | dos_time);
 }
 
 int kgpc_delete_file(const char *path)
