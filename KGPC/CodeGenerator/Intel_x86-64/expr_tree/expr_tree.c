@@ -2620,13 +2620,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             int vmt_index = expr->expr_data.function_call_data.vmt_index;
             int self_arg_index = has_record_return ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
-            /* For class method calls, Self is already the VMT pointer.
-             * Dereference instance to get VMT, then replace Self with VMT. */
-            if (expr->expr_data.function_call_data.is_class_method_call)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            /* Self has already been lowered to the correct calling form during
+             * argument passing: instance pointer for normal methods, VMT pointer
+             * for non-static class methods. Do not dereference again here. */
             /* Copy Self (or VMT for class methods) to r11 */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
@@ -2769,15 +2765,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             
             if (call_target != NULL)
             {
-                /* For class method calls on instances (non-virtual path),
-                 * dereference Self to get VMT pointer before the call. */
-                if (expr->expr_data.function_call_data.is_class_method_call)
-                {
-                    int self_arg_index = has_record_return ? 1 : 0;
-                    const char *self_reg = current_arg_reg64(self_arg_index);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
-                    inst_list = add_inst(inst_list, buffer);
-                }
                 CallerSaveState caller_state;
                 regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
                 snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);

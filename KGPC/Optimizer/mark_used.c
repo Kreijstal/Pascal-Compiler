@@ -245,6 +245,10 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 }
                 args = args->next;
             }
+            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
+            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             break;
         }
         

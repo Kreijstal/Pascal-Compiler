@@ -26,6 +26,7 @@
 #include "../../Parser/ParseTree/type_tags.h"
 #include "../../identifier_utils.h"
 #include "../../Parser/ParseTree/KgpcType.h"
+#include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
@@ -230,6 +231,158 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
     }
 
     return NULL;
+}
+
+static int codegen_expr_is_type_identifier(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *node = NULL;
+    if (FindIdent(&node, ctx->symtab, expr->expr_data.id) < 0 || node == NULL)
+        return 0;
+    return node->hash_type == HASHTYPE_TYPE;
+}
+
+static struct RecordType *codegen_lookup_named_record_type(CodeGenContext *ctx, const char *type_name)
+{
+    HashNode_t *node = NULL;
+
+    if (ctx == NULL || ctx->symtab == NULL || type_name == NULL)
+        return NULL;
+    if (FindIdent(&node, ctx->symtab, (char *)type_name) < 0 || node == NULL)
+        return NULL;
+    if (node->type == NULL)
+        return NULL;
+
+    if (node->type->kind == TYPE_KIND_RECORD)
+        return node->type->info.record_info;
+    {
+        struct TypeAlias *alias = hashnode_get_type_alias(node);
+        if (alias != NULL && alias->inline_record_type != NULL)
+            return alias->inline_record_type;
+    }
+    return NULL;
+}
+
+static int codegen_expr_needs_class_method_vmt_self(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    struct RecordType *record = NULL;
+
+    if (expr == NULL || ctx == NULL)
+        return 0;
+    if (codegen_expr_is_type_identifier(expr, ctx))
+        return 0;
+
+    record = codegen_expr_record_type(expr, ctx->symtab);
+    return (record != NULL && record_type_is_class(record));
+}
+
+static int codegen_call_requires_class_method_vmt_self(const struct Expression *call_expr,
+    CodeGenContext *ctx)
+{
+    HashNode_t *resolved = NULL;
+    const char *lookup_name = NULL;
+    const char *method_name = NULL;
+    const char *sep = NULL;
+    const char *owner_class_name = NULL;
+    char parsed_class[128];
+    char parsed_method[128];
+    size_t class_len = 0;
+    size_t method_len = 0;
+    struct RecordType *owner_record = NULL;
+    struct RecordType *check_record = NULL;
+    const char *check_class = NULL;
+
+    if (call_expr == NULL || call_expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    resolved = call_expr->expr_data.function_call_data.resolved_func;
+    if (resolved != NULL && resolved->owner_class != NULL && resolved->method_name != NULL)
+    {
+        owner_class_name = resolved->owner_class;
+        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
+        if (owner_record == NULL || !record_type_is_class(owner_record))
+            return 0;
+        return from_cparser_is_method_nonstatic_class_method(
+            resolved->owner_class, resolved->method_name);
+    }
+
+    lookup_name = call_expr->expr_data.function_call_data.mangled_id;
+    if (lookup_name == NULL)
+        lookup_name = call_expr->expr_data.function_call_data.id;
+    method_name = call_expr->expr_data.function_call_data.id;
+    if (lookup_name == NULL)
+        lookup_name = method_name;
+
+    if (lookup_name != NULL)
+    {
+        sep = strstr(lookup_name, "__");
+        if (sep != NULL && sep != lookup_name)
+        {
+            class_len = (size_t)(sep - lookup_name);
+            if (class_len >= sizeof(parsed_class))
+                class_len = sizeof(parsed_class) - 1;
+            memcpy(parsed_class, lookup_name, class_len);
+            parsed_class[class_len] = '\0';
+            owner_class_name = parsed_class;
+
+            sep += 2;
+            while (sep[method_len] != '\0' && sep[method_len] != '_' &&
+                   method_len + 1 < sizeof(parsed_method))
+            {
+                parsed_method[method_len] = sep[method_len];
+                method_len++;
+            }
+            parsed_method[method_len] = '\0';
+            if (parsed_method[0] != '\0')
+                method_name = parsed_method;
+        }
+    }
+
+    if (owner_class_name != NULL && method_name != NULL)
+    {
+        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
+        if (from_cparser_is_method_nonstatic_class_method(owner_class_name, method_name) &&
+            (owner_record == NULL || record_type_is_class(owner_record)))
+            return 1;
+    }
+
+    check_class = call_expr->expr_data.function_call_data.self_class_name;
+    check_record = codegen_lookup_named_record_type(ctx, check_class);
+    while (check_class != NULL && method_name != NULL)
+    {
+        if (from_cparser_is_method_nonstatic_class_method(check_class, method_name) &&
+            (check_record == NULL || record_type_is_class(check_record)))
+            return 1;
+        if (check_record == NULL || check_record->parent_class_name == NULL)
+            break;
+        check_class = check_record->parent_class_name;
+        check_record = codegen_lookup_named_record_type(ctx, check_class);
+    }
+
+    if (call_expr->expr_data.function_call_data.is_class_method_call &&
+        owner_class_name != NULL)
+    {
+        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
+        if (owner_record != NULL && record_type_is_class(owner_record))
+            return 1;
+    }
+
+    if (call_expr->expr_data.function_call_data.is_class_method_call &&
+        call_expr->expr_data.function_call_data.self_class_name != NULL)
+    {
+        owner_record = codegen_lookup_named_record_type(ctx,
+            call_expr->expr_data.function_call_data.self_class_name);
+        if (owner_record != NULL && record_type_is_class(owner_record))
+            return 1;
+    }
+
+    if (method_name == NULL)
+        return 0;
+    return 0;
 }
 
 static int codegen_expr_is_shortstring_array_local(const struct Expression *expr)
@@ -9050,8 +9203,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         /* For class method calls on instances, Self must be the VMT pointer,
                          * not the instance pointer. After the dereference above, addr_reg holds
                          * the instance pointer. Dereference again to get VMT from offset 0. */
-                        if (should_dereference && arg_num == 0 && call_expr != NULL &&
-                            call_expr->expr_data.function_call_data.is_class_method_call)
+                        if (should_dereference && arg_num == 0 &&
+                            codegen_call_requires_class_method_vmt_self(call_expr, ctx))
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                                 addr_reg->bit_64, addr_reg->bit_64);
@@ -9594,6 +9747,15 @@ pass_value_arg:
                     inst_list = add_inst(inst_list, buffer);
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_unicodestring_from_string");
                     snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                if (arg_num == 0 &&
+                    codegen_call_requires_class_method_vmt_self(call_expr, ctx) &&
+                    codegen_expr_needs_class_method_vmt_self(arg_expr, ctx))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        top_reg->bit_64, top_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                 }
 
