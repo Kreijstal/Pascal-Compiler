@@ -4896,6 +4896,52 @@ concat_cleanup:
     }
 }
 
+static int type_info_targets_char_array(const TypeInfo *type_info, int *is_widechar_out)
+{
+    int is_char_array_target = 0;
+    int is_widechar_array_target = 0;
+
+    if (is_widechar_out != NULL)
+        *is_widechar_out = 0;
+    if (type_info == NULL)
+        return 0;
+
+    is_char_array_target = (type_info->element_type == CHAR_TYPE);
+    is_widechar_array_target = (type_info->element_type_id != NULL &&
+                                strcasecmp(type_info->element_type_id, "widechar") == 0);
+    if (!is_char_array_target && type_info->element_type_id != NULL &&
+        (strcasecmp(type_info->element_type_id, "char") == 0 ||
+         strcasecmp(type_info->element_type_id, "ansichar") == 0))
+    {
+        is_char_array_target = 1;
+    }
+
+    if (is_widechar_out != NULL)
+        *is_widechar_out = is_widechar_array_target;
+    return is_char_array_target || is_widechar_array_target;
+}
+
+static struct Expression *mk_const_array_element_lhs(int line_num, const char *array_name,
+    int outer_index, int inner_index, int is_multidim)
+{
+    struct Expression *base_expr = mk_varid(line_num, strdup(array_name));
+    struct Expression *outer_index_expr = mk_inum(line_num, outer_index);
+    struct Expression *inner_index_expr = mk_inum(line_num, inner_index);
+
+    if (is_multidim)
+    {
+        struct Expression *lhs = mk_arrayaccess(line_num, base_expr, outer_index_expr);
+        lhs->expr_data.array_access_data.extra_indices =
+            CreateListNode(inner_index_expr, LIST_EXPR);
+        return lhs;
+    }
+
+    {
+        struct Expression *outer_access = mk_arrayaccess(line_num, base_expr, outer_index_expr);
+        return mk_arrayaccess(line_num, outer_access, inner_index_expr);
+    }
+}
+
 static int resolve_const_string_in_section(const char *identifier, ast_t *const_section,
                                            const char **out_value, int depth) {
     if (identifier == NULL || const_section == NULL || out_value == NULL)
@@ -10221,15 +10267,8 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         return -1;
     }
     int single_record_element = 0;
-    int is_char_array_target = (type_info->element_type == CHAR_TYPE);
-    int is_widechar_array_target = (type_info->element_type_id != NULL &&
-                                    strcasecmp(type_info->element_type_id, "widechar") == 0);
-    if (!is_char_array_target && type_info->element_type_id != NULL &&
-        (strcasecmp(type_info->element_type_id, "char") == 0 ||
-         strcasecmp(type_info->element_type_id, "ansichar") == 0))
-    {
-        is_char_array_target = 1;
-    }
+    int is_widechar_array_target = 0;
+    int is_char_array_target = type_info_targets_char_array(type_info, &is_widechar_array_target);
     if (tuple_node->typ == PASCAL_T_STRING) {
         if (is_char_array_target || is_widechar_array_target) {
             is_string_initializer = 1;
@@ -10498,11 +10537,27 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             ast_t *unwrapped = unwrap_pascal_node(element);
 
             if (element_is_array) {
-                if (unwrapped == NULL || unwrapped->typ != PASCAL_T_TUPLE) {
+                AstStringValue row_string_initializer = {0};
+                int row_is_string_initializer = 0;
+                int row_is_widechar_target = 0;
+                int row_is_char_array_target =
+                    (!element_is_2d_array && !element_is_3d_array &&
+                     type_info_targets_char_array(&element_array_info, &row_is_widechar_target));
+
+                if (row_is_char_array_target && unwrapped != NULL &&
+                    evaluate_const_string_ast(unwrapped, const_section,
+                        &row_string_initializer, 0) == 0)
+                {
+                    row_is_string_initializer = 1;
+                }
+
+                if (!row_is_string_initializer &&
+                    (unwrapped == NULL || unwrapped->typ != PASCAL_T_TUPLE)) {
                     fprintf(stderr, "ERROR: Const array %s expects tuple initializer for element %d.\n",
                             *id_ptr, index);
                     destroy_list(stmt_builder.head);
                     destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
                     return -1;
                 }
 
@@ -10513,10 +10568,15 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     inner_expected = inner_end - inner_start + 1;
 
                 int inner_actual = 0;
-                for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next)
-                    ++inner_actual;
+                if (row_is_string_initializer) {
+                    inner_actual = (int)row_string_initializer.len;
+                } else {
+                    for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next)
+                        ++inner_actual;
+                }
 
-                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                if (!row_is_string_initializer &&
+                    inner_expected >= 0 && inner_actual != inner_expected) {
                     if (inner_start == 0 && inner_end == 0 &&
                         element_array_info.array_dimensions != NULL &&
                         element_array_info.array_dimensions->cur != NULL) {
@@ -10535,13 +10595,58 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     }
                 }
 
-                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                if (row_is_string_initializer && inner_expected >= 0 && inner_actual > inner_expected) {
+                    fprintf(stderr,
+                            "ERROR: Const array %s element %d string initializer length %d exceeds declared range %d..%d.\n",
+                            *id_ptr, index, inner_actual, inner_start, inner_end);
+                    destroy_list(stmt_builder.head);
+                    destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
+                    return -1;
+                }
+
+                if (!row_is_string_initializer &&
+                    inner_expected >= 0 && inner_actual != inner_expected) {
                     fprintf(stderr,
                             "ERROR: Const array %s element %d initializer count %d does not match declared range %d..%d.\n",
                             *id_ptr, index, inner_actual, inner_start, inner_end);
                     destroy_list(stmt_builder.head);
                     destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
                     return -1;
+                }
+
+                if (row_is_string_initializer) {
+                    int fill_count = (inner_expected >= 0) ? inner_expected : inner_actual;
+                    int inner_index = inner_start;
+                    for (int byte_index = 0; byte_index < fill_count; ++byte_index) {
+                        unsigned char byte = 0;
+                        struct Expression *rhs;
+                        struct Expression *lhs;
+
+                        if ((size_t)byte_index < row_string_initializer.len &&
+                            row_string_initializer.data != NULL)
+                            byte = (unsigned char)row_string_initializer.data[byte_index];
+                        rhs = mk_charcode(element->line, (unsigned int)byte);
+                        lhs = mk_const_array_element_lhs(element->line, *id_ptr, index,
+                            inner_index, is_multidim);
+                        if (row_is_widechar_target) {
+                            lhs->array_element_type = CHAR_TYPE;
+                            lhs->array_element_size = 2;
+                            lhs->array_element_type_id = strdup("WideChar");
+                            lhs->array_lower_bound = inner_start;
+                            lhs->array_upper_bound = (inner_expected >= 0) ? inner_end :
+                                (inner_start + fill_count - 1);
+                        }
+                        list_builder_append(&stmt_builder,
+                            mk_varassign(element->line, element->col, lhs, rhs), LIST_STMT);
+                        ++inner_index;
+                    }
+
+                    ast_string_value_reset(&row_string_initializer);
+                    ++index;
+                    element = single_record_element ? NULL : element->next;
+                    continue;
                 }
 
                 int inner_index = inner_start;
@@ -10655,22 +10760,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             fprintf(stderr, "ERROR: Unsupported const array element in %s[%d].\n", *id_ptr, index);
                             destroy_list(stmt_builder.head);
                             destroy_type_info_contents(&element_array_info);
+                            ast_string_value_reset(&row_string_initializer);
                             return -1;
                         }
 
-                        struct Expression *outer_index_expr = mk_inum(element->line, index);
-                        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                        struct Expression *lhs;
-                        struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                        if (is_multidim) {
-                            /* True multi-dim: arr[outer, inner] */
-                            lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
-                            lhs->expr_data.array_access_data.extra_indices =
-                                CreateListNode(inner_index_expr, LIST_EXPR);
-                        } else {
-                            /* Array-of-array: arr[outer][inner] */
-                            struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
-                            lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                        struct Expression *lhs = mk_const_array_element_lhs(
+                            element->line, *id_ptr, index, inner_index, is_multidim);
+                        if (row_is_widechar_target) {
+                            lhs->array_element_type = CHAR_TYPE;
+                            lhs->array_element_size = 2;
+                            lhs->array_element_type_id = strdup("WideChar");
+                            lhs->array_lower_bound = inner_start;
+                            lhs->array_upper_bound = inner_end;
                         }
                         struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
                         list_builder_append(&stmt_builder, assign, LIST_STMT);
@@ -10678,6 +10779,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     ++inner_index;
                 }
 
+                ast_string_value_reset(&row_string_initializer);
                 ++index;
                 element = single_record_element ? NULL : element->next;
                 continue;
