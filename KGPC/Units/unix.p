@@ -89,6 +89,7 @@ type
 function GetHostName: string;
 function GetDomainName: string;
 function WaitProcess(Pid: cint): cint;
+function fpSystem(const Command: RawByteString): cint;
 function W_EXITCODE(ReturnCode: integer; Signal: integer): integer;
 function W_STOPCODE(Signal: integer): integer;
 function WIFSTOPPED(Status: integer): boolean;
@@ -112,6 +113,7 @@ function kgpc_unix_w_stopcode(signal_code: integer): integer; external;
 function kgpc_unix_wifstopped(status: integer): cint; external;
 function kgpc_unix_sigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint; external;
 function c_execv(path: PAnsiChar; argv: PPAnsiChar): cint; cdecl; external name 'execv';
+function c_system(cmd: PAnsiChar): cint; cdecl; external name 'system';
 
 function build_exec_argv(path: PAnsiChar; const S: array of RawByteString): PPAnsiChar;
 var
@@ -146,6 +148,11 @@ end;
 function WaitProcess(Pid: cint): cint;
 begin
     WaitProcess := kgpc_unix_wait_process(Pid);
+end;
+
+function fpSystem(const Command: RawByteString): cint;
+begin
+    fpSystem := c_system(PAnsiChar(Command));
 end;
 
 function W_EXITCODE(ReturnCode: integer; Signal: integer): integer;

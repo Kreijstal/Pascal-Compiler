@@ -493,6 +493,7 @@ var
   IsMultiThread: Boolean = False;
   IsLibrary: Boolean = False;
   InOutRes: Word;
+  FileMode: Byte = 2;
   ExitProc: CodePointer = nil;
   ErrorAddr: CodePointer = nil;
   ExitCode: LongInt = 0;
@@ -732,6 +733,38 @@ begin
     IndexByte := -1;
 end;
 
+function IndexQWord(const buf; len: SizeInt; b: QWord): SizeInt;
+var
+    p: PQWord;
+    i: SizeInt;
+begin
+    p := PQWord(@buf);
+    i := 0;
+    if len < 0 then
+    begin
+        while p^ <> b do
+        begin
+            Inc(p);
+            Inc(i);
+        end;
+        IndexQWord := i;
+        Exit;
+    end;
+
+    while i < len do
+    begin
+        if p^ = b then
+        begin
+            IndexQWord := i;
+            Exit;
+        end;
+        Inc(p);
+        Inc(i);
+    end;
+
+    IndexQWord := -1;
+end;
+
 procedure interlocked_exchange_add_i32_impl(var target: longint; value: longint; var result: longint);
 begin
     assembler;
@@ -793,6 +826,7 @@ procedure kgpc_tfile_write_real(var f: file; value: real); cdecl; external name 
 procedure kgpc_tfile_blockread(var f: file; var buffer; count: longint; result_ptr: pointer); cdecl; external name 'kgpc_tfile_blockread';
 procedure kgpc_tfile_blockwrite(var f: file; var buffer; count: longint; result_ptr: pointer); cdecl; external name 'kgpc_tfile_blockwrite';
 procedure kgpc_tfile_filepos(var f: file; var position: int64); cdecl; external name 'kgpc_tfile_filepos';
+procedure kgpc_tfile_filesize(var f: file; var size: int64); cdecl; external name 'kgpc_tfile_filesize';
 procedure kgpc_tfile_seek(var f: file; index: longint); cdecl; external name 'kgpc_tfile_seek';
 procedure kgpc_tfile_truncate_current(var f: file); cdecl; external name 'kgpc_tfile_truncate_current';
 procedure kgpc_tfile_truncate(var f: file; length: longint); cdecl; external name 'kgpc_tfile_truncate';
@@ -1319,6 +1353,15 @@ begin
     pos64 := 0;
     filepos_impl(f, pos64);
     FilePos := longint(pos64);
+end;
+
+function FileSize(var f: file): longint; overload;
+var
+    size64: int64;
+begin
+    size64 := 0;
+    kgpc_tfile_filesize(f, size64);
+    FileSize := longint(size64);
 end;
 
 procedure Truncate(var f: file); overload;

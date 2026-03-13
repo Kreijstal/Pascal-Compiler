@@ -42,6 +42,8 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
 #include "../../List/List.h"
 
 HashNode_t *semcheck_find_preferred_type_node(SymTab_t *symtab, const char *type_id);
+static int semcheck_param_types_compatible(Tree_t *param_decl, KgpcType *expected,
+    KgpcType *actual, SymTab_t *symtab);
 
 /* Forward declaration from SemCheck_Expr_Resolve.c */
 const char *semcheck_type_tag_name(int type_tag);
@@ -480,7 +482,7 @@ static int semcheck_record_assign_operator_score(SymTab_t *symtab, HashNode_t *c
         return 0;
 
     int arg_rank = kgpc_type_conversion_rank(source_type, param_type);
-    if (arg_rank < 0 && are_types_compatible_for_assignment(param_type, source_type, symtab))
+    if (arg_rank < 0 && semcheck_param_types_compatible(param_decl, param_type, source_type, symtab))
         arg_rank = 4;
 
     KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
@@ -3302,13 +3304,24 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         result_node->mutated = MUTATE;
                         if (result_node->type != NULL && return_expr->resolved_kgpc_type != NULL)
                         {
+                            int return_owned = 0;
+                            struct Expression *result_expr = mk_varid(stmt->line_num, strdup("Result"));
                             if (!are_types_compatible_for_assignment(result_node->type,
                                                                     return_expr->resolved_kgpc_type, symtab))
                             {
-                                semcheck_error_with_context("Error on line %d, incompatible return type in exit().\n",
-                                    stmt->line_num);
-                                ++return_val;
+                                if (!semcheck_try_record_conversion_expression(symtab,
+                                        &stmt->stmt_data.exit_data.return_expr,
+                                        result_expr,
+                                        result_node->type,
+                                        &return_expr->resolved_kgpc_type,
+                                        &return_owned))
+                                {
+                                    semcheck_error_with_context("Error on line %d, incompatible return type in exit().\n",
+                                        stmt->line_num);
+                                    ++return_val;
+                                }
                             }
+                            destroy_expr(result_expr);
                         }
                     }
                 }

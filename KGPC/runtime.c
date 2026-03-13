@@ -1179,6 +1179,51 @@ int kgpc_tfile_filepos(KGPCFileRec *file, long long *position)
     return 0;
 }
 
+int kgpc_tfile_filesize(KGPCFileRec *file, long long *size_out)
+{
+    if (file == NULL || size_out == NULL)
+    {
+        kgpc_ioresult_set(EINVAL);
+        return 1;
+    }
+
+    KGPCFilePrivate priv = kgpc_file_private_get(file);
+    if (priv.handle == NULL)
+    {
+        kgpc_ioresult_set(EBADF);
+        return 1;
+    }
+
+    size_t elem_size = kgpc_tfile_element_size(file, &priv);
+    off_t current = ftello(priv.handle);
+    if (current == (off_t)-1)
+    {
+        kgpc_ioresult_set(errno);
+        return 1;
+    }
+    if (fseeko(priv.handle, 0, SEEK_END) != 0)
+    {
+        kgpc_ioresult_set(errno);
+        return 1;
+    }
+
+    off_t end_offset = ftello(priv.handle);
+    if (end_offset == (off_t)-1)
+    {
+        kgpc_ioresult_set(errno);
+        return 1;
+    }
+    if (fseeko(priv.handle, current, SEEK_SET) != 0)
+    {
+        kgpc_ioresult_set(errno);
+        return 1;
+    }
+
+    *size_out = (long long)(end_offset / (off_t)elem_size);
+    kgpc_ioresult_set(0);
+    return 0;
+}
+
 int kgpc_tfile_truncate(KGPCFileRec *file, long long length)
 {
     if (file == NULL)

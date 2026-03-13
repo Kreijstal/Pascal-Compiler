@@ -183,7 +183,9 @@ function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FindFirst(const Path: AnsiString; Attr: Longint; var F: TSearchRec): Longint;
+function FindNext(var F: TSearchRec): Longint;
 procedure FindClose(var F: TSearchRec);
+function ExpandFileName(const FileName: AnsiString): AnsiString;
 function FileExists(const FileName: AnsiString): Boolean;
 function FileAge(const FileName: AnsiString): LongInt;
 function DeleteFile(const FileName: AnsiString): Boolean;
@@ -198,6 +200,8 @@ function GetProcessID: Longint;
 function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
+function ExecuteProcess(const Path, ComLine: AnsiString; Flags: TExecuteFlags): LongInt; overload;
+function ExecuteProcess(const Path: AnsiString; const ComLine: array of AnsiString; Flags: TExecuteFlags): LongInt; overload;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
 procedure GetLocalTime(var SystemTime: TSystemTime); cdecl; external name 'kgpc_getlocaltime';
@@ -278,6 +282,7 @@ function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; e
 function kgpc_free_library(handle: NativeUInt): Integer; external;
 function kgpc_strpas(p: PAnsiChar): AnsiString; external;
 function kgpc_strpas_len(p: PAnsiChar; Len: SizeInt): AnsiString; external;
+function c_system(cmd: PAnsiChar): LongInt; cdecl; external name 'system';
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -1479,9 +1484,26 @@ begin
     FindFirst := 1;
 end;
 
+function FindNext(var F: TSearchRec): Longint;
+begin
+    F.Name := '';
+    FindNext := 1;
+end;
+
 procedure FindClose(var F: TSearchRec);
 begin
     F.Name := '';
+end;
+
+function ExpandFileName(const FileName: AnsiString): AnsiString;
+begin
+    if FileName = '' then
+        ExpandFileName := GetCurrentDir
+    else if (Length(FileName) > 0) and
+            ((FileName[1] = PathDelim) or (FileName[1] = AltPathDelim)) then
+        ExpandFileName := FileName
+    else
+        ExpandFileName := IncludeTrailingPathDelimiter(GetCurrentDir) + FileName;
 end;
 
 function FloatToStr(Value: Real): AnsiString;
@@ -1654,6 +1676,27 @@ end;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 begin
     FreeLibrary := kgpc_free_library(LibHandle) <> 0;
+end;
+
+function ExecuteProcess(const Path, ComLine: AnsiString; Flags: TExecuteFlags): LongInt;
+var
+    Command: AnsiString;
+begin
+    Command := Path;
+    if ComLine <> '' then
+        Command := Command + ' ' + ComLine;
+    ExecuteProcess := c_system(PAnsiChar(Command));
+end;
+
+function ExecuteProcess(const Path: AnsiString; const ComLine: array of AnsiString; Flags: TExecuteFlags): LongInt;
+var
+    Command: AnsiString;
+    I: Integer;
+begin
+    Command := Path;
+    for I := Low(ComLine) to High(ComLine) do
+        Command := Command + ' ' + ComLine[I];
+    ExecuteProcess := c_system(PAnsiChar(Command));
 end;
 
 procedure FreeAndNil(var Obj: Pointer);
