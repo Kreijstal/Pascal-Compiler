@@ -1164,7 +1164,7 @@ int resolve_record_field(SymTab_t *symtab, struct RecordType *record,
             HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, current->parent_class_name);
             if (parent_node != NULL)
             {
-                struct RecordType *parent_record = hashnode_get_record_type(parent_node);
+                struct RecordType *parent_record = get_record_type_from_node(parent_node);
                 if (parent_record != NULL)
                 {
                     current = parent_record;
