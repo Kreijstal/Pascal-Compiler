@@ -237,6 +237,13 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 if (called_sub != NULL)
                     mark_subprogram_recursive(called_sub, map);
             }
+            /* Also check constructor receiver and procedural var expressions */
+            if (is_valid_pointer(expr->expr_data.function_call_data.constructor_receiver_expr) &&
+                    expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
+            if (is_valid_pointer(expr->expr_data.function_call_data.procedural_var_expr) &&
+                    expr->expr_data.function_call_data.procedural_var_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             /* Also check arguments */
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
             while (args != NULL) {
