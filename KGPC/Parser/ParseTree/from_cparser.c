@@ -10913,8 +10913,11 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                 free(type_name);
                 cur = cur->next;
             } else {
-                /* Not a known type — don't consume, let later handlers deal with it */
-                free(type_name);
+                /* Unknown type name — treat as type annotation for typed consts
+                 * like: cnodeutils: tnodeutilsclass = tnodeutils
+                 * where 'tnodeutilsclass' is not a builtin type. */
+                type_id = type_name;
+                cur = cur->next;
             }
         }
     } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
