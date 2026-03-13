@@ -1404,6 +1404,50 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
     return 0;
 }
 
+static struct RecordType *kgpc_resolve_class_record_from_alias(struct SymTab *symtab,
+    const struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    if (alias->pointer_type_ref != NULL)
+        type_node = kgpc_find_type_node_ref_with_unit_flag(symtab, alias->pointer_type_ref, 0);
+    if (type_node == NULL && alias->pointer_type_id != NULL)
+        type_node = kgpc_find_type_node(symtab, alias->pointer_type_id);
+    if (type_node == NULL && alias->target_type_ref != NULL)
+        type_node = kgpc_find_type_node_ref_with_unit_flag(symtab, alias->target_type_ref, 0);
+    if (type_node == NULL && alias->target_type_id != NULL)
+        type_node = kgpc_find_type_node(symtab, alias->target_type_id);
+
+    return get_record_type_from_hashnode(type_node);
+}
+
+static struct RecordType *kgpc_resolve_class_record_type(struct SymTab *symtab,
+    KgpcType *type)
+{
+    if (type == NULL)
+        return NULL;
+
+    if (type->kind == TYPE_KIND_RECORD)
+        return type->info.record_info;
+
+    if (type->kind != TYPE_KIND_POINTER)
+        return NULL;
+
+    KgpcType *inner = type->info.points_to;
+    if (inner != NULL && inner->kind == TYPE_KIND_RECORD)
+        return inner->info.record_info;
+
+    if (type->type_alias != NULL)
+        return kgpc_resolve_class_record_from_alias(symtab, type->type_alias);
+
+    if (inner != NULL && inner->type_alias != NULL)
+        return kgpc_resolve_class_record_from_alias(symtab, inner->type_alias);
+
+    return NULL;
+}
+
 static struct RecordField *get_first_visible_record_field(struct RecordType *record)
 {
     if (record == NULL)
@@ -1558,6 +1602,32 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
      * This supports idioms like: pchar := @char_array; */
     if (lhs_type->kind == TYPE_KIND_POINTER && rhs_type->kind == TYPE_KIND_POINTER)
     {
+        struct RecordType *lhs_class_record =
+            kgpc_resolve_class_record_type(symtab, lhs_type);
+        struct RecordType *rhs_class_record =
+            kgpc_resolve_class_record_type(symtab, rhs_type);
+        int lhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(lhs_type);
+        int rhs_ptr_sub = kgpc_type_get_pointer_subtype_tag(rhs_type);
+        if (lhs_class_record != NULL && rhs_class_record != NULL &&
+            (record_type_is_class(lhs_class_record) || lhs_class_record->is_interface) &&
+            (record_type_is_class(rhs_class_record) || rhs_class_record->is_interface))
+        {
+            if (records_same_type(lhs_class_record, rhs_class_record))
+                return 1;
+            if (is_record_subclass(rhs_class_record, lhs_class_record, symtab))
+                return 1;
+            if (lhs_class_record->is_interface && rhs_class_record->is_class)
+                return 1;
+        }
+        else if (lhs_ptr_sub == RECORD_TYPE && rhs_ptr_sub == RECORD_TYPE)
+        {
+            /* Keep unresolved class placeholders assignment-compatible.
+             * The bootstrap still carries many class values as ^primitive(RECORD_TYPE)
+             * without fully linked record nodes; reject only when we have concrete
+             * class records above and can prove incompatibility. */
+            return 1;
+        }
+
         KgpcType *lhs_points_to = lhs_type->info.points_to;
         KgpcType *rhs_points_to = rhs_type->info.points_to;
         if (lhs_points_to == NULL || rhs_points_to == NULL)

@@ -110,6 +110,24 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
+        if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+            (pascal_identifier_equals(property_name, "is_registered") ||
+             pascal_identifier_equals(property_name, "forwarddef") ||
+             pascal_identifier_equals(property_name, "realname")))
+        {
+            int debug_prop_count = 0;
+            for (ListNode_t *tmp = current->properties; tmp != NULL; tmp = tmp->next)
+            {
+                if (tmp->type == LIST_CLASS_PROPERTY && tmp->cur != NULL)
+                    debug_prop_count++;
+            }
+            fprintf(stderr,
+                "[KGPC_DEBUG_SYMCREAT_PROPS] lookup property=%s on class=%s parent=%s prop_count=%d\n",
+                property_name,
+                current->type_id != NULL ? current->type_id : "<null>",
+                current->parent_class_name != NULL ? current->parent_class_name : "<null>",
+                debug_prop_count);
+        }
         /* Search both class properties and record_properties (plain advanced records) */
         for (int pass = 0; pass < 2; pass++)
         {
@@ -121,6 +139,18 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                 if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
                 {
                     struct ClassProperty *property = (struct ClassProperty *)node->cur;
+                    if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+                        (pascal_identifier_equals(property_name, "is_registered") ||
+                         pascal_identifier_equals(property_name, "forwarddef") ||
+                         pascal_identifier_equals(property_name, "realname")))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_SYMCREAT_PROPS] candidate property=%s owner=%s read=%s write=%s\n",
+                            property->name != NULL ? property->name : "<null>",
+                            current->type_id != NULL ? current->type_id : "<null>",
+                            property->read_accessor != NULL ? property->read_accessor : "<null>",
+                            property->write_accessor != NULL ? property->write_accessor : "<null>");
+                    }
 
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
@@ -130,6 +160,18 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                     if (property->name != NULL &&
                         pascal_identifier_equals(property->name, property_name))
                     {
+                        if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+                            (pascal_identifier_equals(property_name, "is_registered") ||
+                             pascal_identifier_equals(property_name, "forwarddef") ||
+                             pascal_identifier_equals(property_name, "realname")))
+                        {
+                            fprintf(stderr,
+                                "[KGPC_DEBUG_SYMCREAT_PROPS] found property=%s owner=%s read=%s write=%s\n",
+                                property_name,
+                                current->type_id != NULL ? current->type_id : "<null>",
+                                property->read_accessor != NULL ? property->read_accessor : "<null>",
+                                property->write_accessor != NULL ? property->write_accessor : "<null>");
+                        }
 
                         if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
@@ -165,10 +207,35 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
+        if (getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
+            field_name != NULL &&
+            (pascal_identifier_equals(field_name, "deflist") ||
+             pascal_identifier_equals(field_name, "forwarddef") ||
+             pascal_identifier_equals(field_name, "parentfpstruct") ||
+             pascal_identifier_equals(field_name, "realname")))
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SYMCREAT_FIELDS] lookup field=%s on class=%s parent=%s\n",
+                field_name,
+                current->type_id != NULL ? current->type_id : "<null>",
+                current->parent_class_name != NULL ? current->parent_class_name : "<null>");
+        }
         struct RecordField *field = NULL;
         field = semcheck_find_field_in_members(current->fields, field_name, include_hidden);
         if (field != NULL)
         {
+            if (getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
+                field_name != NULL &&
+                (pascal_identifier_equals(field_name, "deflist") ||
+                 pascal_identifier_equals(field_name, "forwarddef") ||
+                 pascal_identifier_equals(field_name, "parentfpstruct") ||
+                 pascal_identifier_equals(field_name, "realname")))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SYMCREAT_FIELDS] found field=%s owner=%s\n",
+                    field_name,
+                    current->type_id != NULL ? current->type_id : "<null>");
+            }
             if (owner_out != NULL)
                 *owner_out = current;
             return field;

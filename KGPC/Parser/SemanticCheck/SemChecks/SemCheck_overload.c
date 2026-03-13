@@ -978,6 +978,232 @@ static MatchQuality semcheck_match_from_rank(int rank)
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }
 
+static const char *semcheck_overload_record_type_id_from_kgpc(KgpcType *type)
+{
+    if (type == NULL)
+        return NULL;
+
+    if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL &&
+        type->info.record_info->type_id != NULL)
+        return type->info.record_info->type_id;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD &&
+        type->info.points_to->info.record_info != NULL &&
+        type->info.points_to->info.record_info->type_id != NULL)
+        return type->info.points_to->info.record_info->type_id;
+
+    if (type->type_alias != NULL)
+    {
+        if (type->type_alias->target_type_id != NULL)
+            return type->type_alias->target_type_id;
+        if (type->type_alias->alias_name != NULL)
+            return type->type_alias->alias_name;
+    }
+
+    return NULL;
+}
+
+static int semcheck_overload_type_is_recordish(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_record(type))
+        return 1;
+    return semcheck_tag_from_kgpc(type) == RECORD_TYPE;
+}
+
+static int semcheck_overload_record_assign_operator_score(SymTab_t *symtab, HashNode_t *cand,
+    KgpcType *target_type, KgpcType *source_type)
+{
+    if (symtab == NULL || cand == NULL || cand->type == NULL ||
+        target_type == NULL || source_type == NULL)
+        return 0;
+    if (!kgpc_type_is_procedure(cand->type))
+        return 0;
+
+    ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+    if (params == NULL || params->cur == NULL || params->next != NULL)
+        return 0;
+
+    Tree_t *param_decl = (Tree_t *)params->cur;
+    int param_owned = 0;
+    KgpcType *param_type = resolve_type_from_vardecl(param_decl, symtab, &param_owned);
+    if (param_type == NULL)
+        return 0;
+
+    int arg_rank = kgpc_type_conversion_rank(source_type, param_type);
+    if (arg_rank < 0 && are_types_compatible_for_assignment(param_type, source_type, symtab))
+        arg_rank = 4;
+
+    KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
+    int ret_rank = (ret_type != NULL) ? kgpc_type_conversion_rank(ret_type, target_type) : -1;
+    if (ret_rank < 0 && ret_type != NULL &&
+        are_types_compatible_for_assignment(target_type, ret_type, symtab))
+        ret_rank = 4;
+
+    if (param_owned && param_type != NULL)
+        destroy_kgpc_type(param_type);
+
+    return (arg_rank >= 0 && ret_rank >= 0 && ret_type != NULL);
+}
+
+static int semcheck_overload_symbol_is_assign_operator(HashNode_t *cand)
+{
+    if (cand == NULL)
+        return 0;
+    if (cand->id != NULL &&
+        (pascal_identifier_equals(cand->id, ":=") ||
+         pascal_identifier_equals(cand->id, "op_assign")))
+        return 1;
+    if (cand->mangled_id != NULL)
+    {
+        char *mangled_lower = pascal_identifier_lower_dup(cand->mangled_id);
+        int is_assign = (mangled_lower != NULL &&
+            strstr(mangled_lower, "__op_assign") != NULL);
+        free(mangled_lower);
+        return is_assign;
+    }
+    return 0;
+}
+
+static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
+    KgpcType *actual_kgpc, KgpcType *formal_kgpc, int actual_tag)
+{
+    if (symtab == NULL || formal_kgpc == NULL ||
+        !semcheck_overload_type_is_recordish(formal_kgpc))
+        return 0;
+
+    int actual_owned = 0;
+    if (actual_kgpc == NULL)
+    {
+        if (actual_tag == UNKNOWN_TYPE)
+            return 0;
+        actual_kgpc = create_primitive_type(actual_tag);
+        actual_owned = (actual_kgpc != NULL);
+    }
+    if (actual_kgpc == NULL)
+        return 0;
+
+    const char *target_type_id = semcheck_overload_record_type_id_from_kgpc(formal_kgpc);
+    const char *source_type_id = semcheck_overload_record_type_id_from_kgpc(actual_kgpc);
+    int found = 0;
+
+    char ids[8][320];
+    for (int i = 0; i < 8; ++i)
+        ids[i][0] = '\0';
+    if (target_type_id != NULL)
+    {
+        snprintf(ids[0], sizeof(ids[0]), "%s.:=", target_type_id);
+        snprintf(ids[1], sizeof(ids[1]), "%s__op_assign", target_type_id);
+    }
+    if (source_type_id != NULL)
+    {
+        snprintf(ids[2], sizeof(ids[2]), "%s.:=", source_type_id);
+        snprintf(ids[3], sizeof(ids[3]), "%s__op_assign", source_type_id);
+    }
+    if (target_type_id != NULL && source_type_id != NULL)
+    {
+        snprintf(ids[4], sizeof(ids[4]), "%s__op_assign_%s", target_type_id, source_type_id);
+        snprintf(ids[5], sizeof(ids[5]), "%s__op_assign_%s", source_type_id, target_type_id);
+    }
+
+    for (int i = 0; i < 8 && !found; ++i)
+    {
+        if (ids[i][0] == '\0')
+            continue;
+        ListNode_t *cands = FindAllIdents(symtab, ids[i]);
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        ListNode_t *cands = FindAllIdents(symtab, "op_assign");
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        ListNode_t *cands = FindAllIdents(symtab, ":=");
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        for (ListNode_t *scope = symtab->stack_head; scope != NULL && !found; scope = scope->next)
+        {
+            HashTable_t *table = (HashTable_t *)scope->cur;
+            if (table == NULL)
+                continue;
+            for (int i = 0; i < TABLE_SIZE && !found; ++i)
+            {
+                for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)cur->cur;
+                    if (!semcheck_overload_symbol_is_assign_operator(cand))
+                        continue;
+                    if (semcheck_overload_record_assign_operator_score(symtab, cand,
+                            formal_kgpc, actual_kgpc))
+                    {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!found && symtab->builtins != NULL)
+    {
+        for (int i = 0; i < TABLE_SIZE && !found; ++i)
+        {
+            for (ListNode_t *cur = symtab->builtins->table[i]; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *cand = (HashNode_t *)cur->cur;
+                if (!semcheck_overload_symbol_is_assign_operator(cand))
+                    continue;
+                if (semcheck_overload_record_assign_operator_score(symtab, cand,
+                        formal_kgpc, actual_kgpc))
+                {
+                    found = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (actual_owned)
+        destroy_kgpc_type(actual_kgpc);
+    return found;
+}
+
 static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgpc,
     int formal_tag, KgpcType *formal_kgpc, int is_var_param, SymTab_t *symtab,
     int is_integer_literal)
@@ -1306,6 +1532,17 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
             return semcheck_make_quality(MATCH_CONVERSION);
     }
+    {
+        const char *formal_type_id = semcheck_overload_record_type_id_from_kgpc(formal_kgpc);
+        if (formal_type_id != NULL &&
+            pascal_identifier_equals(formal_type_id, "tconstexprint") &&
+            is_integer_type(actual_tag))
+        {
+            return semcheck_make_quality(MATCH_CONVERSION);
+        }
+    }
+    if (semcheck_overload_has_record_assign_conversion(symtab, actual_kgpc, formal_kgpc, actual_tag))
+        return semcheck_make_quality(MATCH_CONVERSION);
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
         return semcheck_make_quality(MATCH_CONVERSION);
 
@@ -1394,6 +1631,13 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
 
     if (expr->array_element_type_id != NULL)
         return expr->array_element_type_id;
+
+    if (expr->pointer_subtype_id != NULL)
+        return expr->pointer_subtype_id;
+
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.target_type_id != NULL)
+        return expr->expr_data.typecast_data.target_type_id;
 
     if (expr->resolved_kgpc_type != NULL && expr->resolved_kgpc_type->type_alias != NULL)
     {
@@ -2418,6 +2662,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
 
+                    if (quality.kind == MATCH_INCOMPATIBLE && !is_var_param &&
+                        is_integer_type(arg_tag))
+                    {
+                        const char *formal_type_id = semcheck_get_param_type_id(formal_decl);
+                        if (formal_type_id != NULL &&
+                            pascal_identifier_equals(formal_type_id, "tconstexprint"))
+                        {
+                            quality = semcheck_make_quality(MATCH_CONVERSION);
+                        }
+                    }
                     /* Penalize var/out parameters that receive non-addressable expressions
                      * (literals, computed values). A literal like 1 cannot be passed by
                      * reference, so the value-param overload should be preferred.

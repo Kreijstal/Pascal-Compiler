@@ -2176,14 +2176,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             struct RecordType *class_record = NULL;
             int ctor_type_receiver = 0;
+            int ctor_runtime_vmt_receiver = 0;
+            struct Expression *constructor_receiver_expr =
+                expr->expr_data.function_call_data.constructor_receiver_expr;
 
             /* Allocate constructor instances for constructor-call forms where the
              * first argument is either a type receiver (TClass.Create) or a
              * semcheck-injected Self placeholder with resolved class pointer type. */
             ListNode_t *first_arg = expr->expr_data.function_call_data.args_expr;
+            struct Expression *class_expr =
+                (constructor_receiver_expr != NULL) ? constructor_receiver_expr :
+                ((first_arg != NULL && first_arg->cur != NULL) ?
+                    (struct Expression *)first_arg->cur : NULL);
             if (first_arg != NULL && first_arg->cur != NULL)
             {
-                struct Expression *class_expr = (struct Expression *)first_arg->cur;
                 if (class_expr != NULL && class_expr->resolved_kgpc_type != NULL)
                 {
                     KgpcType *class_type = class_expr->resolved_kgpc_type;
@@ -2198,6 +2204,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     {
                         class_record = class_type->info.record_info;
                         ctor_type_receiver = (class_record != NULL);
+                    }
+                    else if (kgpc_type_is_pointer(class_type) &&
+                             class_type->info.points_to != NULL &&
+                             kgpc_type_is_pointer(class_type->info.points_to) &&
+                             class_type->info.points_to->info.points_to != NULL &&
+                             kgpc_type_is_record(class_type->info.points_to->info.points_to))
+                    {
+                        class_record =
+                            class_type->info.points_to->info.points_to->info.record_info;
+                        ctor_type_receiver = (class_record != NULL);
+                        ctor_runtime_vmt_receiver = (constructor_receiver_expr != NULL);
                     }
                 }
 
@@ -2307,23 +2324,43 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         inst_list = add_inst(inst_list, buffer);
                     }
                     
-                    /* Initialize VMT pointer using the class' static VMT label */
-                    const char *vmt_label = NULL;
-                    if (class_record->type_id != NULL) {
-                        static char vmt_buf[256];
-                        snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", class_record->type_id);
-                        vmt_label = vmt_buf;
-                    }
-                    if (vmt_label != NULL) {
+                    if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
+                    {
                         Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
-                        if (vmt_reg != NULL) {
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                                vmt_label, vmt_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-                                vmt_reg->bit_64, constructor_instance_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
+                        if (vmt_reg != NULL)
+                        {
+                            expr_node_t *receiver_tree = build_expr_tree(constructor_receiver_expr);
+                            if (receiver_tree != NULL)
+                            {
+                                inst_list = gencode_expr_tree(receiver_tree, inst_list, ctx, vmt_reg);
+                                free_expr_tree(receiver_tree);
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                    vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
                             free_reg(get_reg_stack(), vmt_reg);
+                        }
+                    }
+                    else
+                    {
+                        /* Initialize VMT pointer using the class' static VMT label */
+                        const char *vmt_label = NULL;
+                        if (class_record->type_id != NULL) {
+                            static char vmt_buf[256];
+                            snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", class_record->type_id);
+                            vmt_label = vmt_buf;
+                        }
+                        if (vmt_label != NULL) {
+                            Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (vmt_reg != NULL) {
+                                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                                    vmt_label, vmt_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                    vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                free_reg(get_reg_stack(), vmt_reg);
+                            }
                         }
                     }
                 }

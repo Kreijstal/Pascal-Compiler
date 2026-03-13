@@ -621,6 +621,28 @@ relop_fallback:
                 
                 int record_ok = (type_first == RECORD_TYPE && type_second == RECORD_TYPE);
                 int set_ok = (type_first == SET_TYPE && type_second == SET_TYPE);
+                if (!set_ok && expr1 != NULL && expr2 != NULL)
+                {
+                    KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                    KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                    struct TypeAlias *alias1 = kgpc1 != NULL ? kgpc_type_get_type_alias(kgpc1) : NULL;
+                    struct TypeAlias *alias2 = kgpc2 != NULL ? kgpc_type_get_type_alias(kgpc2) : NULL;
+                    if ((alias1 != NULL && alias1->is_set) ||
+                        (alias2 != NULL && alias2->is_set) ||
+                        (kgpc1 != NULL && kgpc1->kind == TYPE_KIND_PRIMITIVE &&
+                         kgpc1->info.primitive_type_tag == SET_TYPE) ||
+                        (kgpc2 != NULL && kgpc2->kind == TYPE_KIND_PRIMITIVE &&
+                         kgpc2->info.primitive_type_tag == SET_TYPE))
+                    {
+                        if ((alias1 != NULL && alias1->is_set) || kgpc1 == NULL ||
+                            (alias2 != NULL && alias2->is_set) || kgpc2 == NULL ||
+                            relop_type == EQ || relop_type == NE ||
+                            relop_type == LE || relop_type == GE)
+                        {
+                            set_ok = 1;
+                        }
+                    }
+                }
                 int class_record_ok = 0;
                 if (!record_ok && expr1 != NULL && expr2 != NULL)
                 {
@@ -947,9 +969,30 @@ relop_fallback:
                 }
 
                 int record_ok = (type_first == RECORD_TYPE && type_second == RECORD_TYPE);
+                int set_ok = 0;
+                if (relop_type == LE || relop_type == GE)
+                {
+                    set_ok = (type_first == SET_TYPE && type_second == SET_TYPE);
+                    if (!set_ok && expr1 != NULL && expr2 != NULL)
+                    {
+                        KgpcType *kgpc1 = expr1->resolved_kgpc_type;
+                        KgpcType *kgpc2 = expr2->resolved_kgpc_type;
+                        struct TypeAlias *alias1 = kgpc1 != NULL ? kgpc_type_get_type_alias(kgpc1) : NULL;
+                        struct TypeAlias *alias2 = kgpc2 != NULL ? kgpc_type_get_type_alias(kgpc2) : NULL;
+                        if ((alias1 != NULL && alias1->is_set) ||
+                            (alias2 != NULL && alias2->is_set) ||
+                            (kgpc1 != NULL && kgpc1->kind == TYPE_KIND_PRIMITIVE &&
+                             kgpc1->info.primitive_type_tag == SET_TYPE) ||
+                            (kgpc2 != NULL && kgpc2->kind == TYPE_KIND_PRIMITIVE &&
+                             kgpc2->info.primitive_type_tag == SET_TYPE))
+                        {
+                            set_ok = 1;
+                        }
+                    }
+                }
 
                 if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
-                    && !record_ok
+                    && !record_ok && !set_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))

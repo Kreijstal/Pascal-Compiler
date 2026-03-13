@@ -58,6 +58,8 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
 void semcheck_reset_function_call_cache(struct Expression *expr);
 int semcheck_expr_is_char_like(struct Expression *expr);
+int semcheck_class_type_ids_compatible(SymTab_t *symtab,
+    const char *formal_id, const char *actual_id);
 
 #define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
@@ -4384,6 +4386,14 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         if (!are_types_compatible_for_assignment(lhs_kgpctype, rhs_kgpctype, symtab))
         {
+            if (var != NULL && expr != NULL &&
+                var->pointer_subtype_id != NULL &&
+                expr->pointer_subtype_id != NULL &&
+                semcheck_class_type_ids_compatible(symtab,
+                    var->pointer_subtype_id, expr->pointer_subtype_id))
+            {
+                goto assignment_types_ok;
+            }
             if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
                     &rhs_kgpctype, &rhs_owned))
             {
@@ -8008,6 +8018,19 @@ proccall_parent_resolve_done:
                 /* Save type strings before cleanup for error message */
                 char expected_type_str[256] = "<unknown>";
                 char given_type_str[256] = "<unknown>";
+                const char *formal_id_dbg = NULL;
+                if (arg_decl != NULL && arg_decl->type == TREE_VAR_DECL)
+                    formal_id_dbg = arg_decl->tree_data.var_decl_data.type_id;
+                else if (arg_decl != NULL && arg_decl->type == TREE_ARR_DECL)
+                    formal_id_dbg = arg_decl->tree_data.arr_decl_data.type_id;
+                if (!types_match && arg_expr != NULL &&
+                    formal_id_dbg != NULL &&
+                    arg_expr->pointer_subtype_id != NULL &&
+                    semcheck_class_type_ids_compatible(symtab, formal_id_dbg,
+                        arg_expr->pointer_subtype_id))
+                {
+                    types_match = 1;
+                }
                 if (expected_kgpc_type != NULL)
                     snprintf(expected_type_str, sizeof(expected_type_str), "%s", kgpc_type_to_string(expected_kgpc_type));
                 if (arg_kgpc_type != NULL)
@@ -8021,6 +8044,21 @@ proccall_parent_resolve_done:
 
                 if (!types_match)
                 {
+                    if (getenv("KGPC_DEBUG_SYMCREAT_INSERTSYM") != NULL &&
+                        proc_id != NULL &&
+                        pascal_identifier_equals(proc_id, "TSymtable__insertsym"))
+                    {
+                        fprintf(stderr,
+                            "[KGPC_DEBUG_SYMCREAT_INSERTSYM] arg=%d formal_id=%s expected=%s actual=%s expr_type=%d ptr_sub=%d ptr_id=%s\n",
+                            cur_arg,
+                            formal_id_dbg != NULL ? formal_id_dbg : "<null>",
+                            expected_type_str,
+                            given_type_str,
+                            arg_expr != NULL ? arg_expr->type : -1,
+                            arg_expr != NULL ? arg_expr->pointer_subtype : -1,
+                            (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
+                                ? arg_expr->pointer_subtype_id : "<null>");
+                    }
                     if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
                         fprintf(stderr,

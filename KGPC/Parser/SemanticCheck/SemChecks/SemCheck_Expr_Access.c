@@ -4453,40 +4453,22 @@ int semcheck_funccall(int *type_return,
         }
         
         if (record_info != NULL && record_info->type_id != NULL) {
-            /* Ensure owner_type represents the class instance pointer for constructors. */
+            /* Ensure owner_type represents the class instance pointer for constructors.
+             * Explicit receivers like `cordconstnode.create(...)` may arrive as metaclass
+             * values (`class of T`) rather than the instance pointer expected by the
+             * hidden Self parameter. */
             if (record_type_is_class(record_info) && !record_info->is_type_helper)
             {
-                if (owner_type != NULL && owner_type->kind == TYPE_KIND_RECORD)
-                {
-                    kgpc_type_retain(owner_type);
-                    KgpcType *ptr_type = create_pointer_type(owner_type);
-                    if (ptr_type != NULL)
-                    {
-                        owner_type = ptr_type;
-                    }
-                }
-                else if (owner_type != NULL && owner_type->kind == TYPE_KIND_POINTER &&
+                int owner_is_instance_ptr = 0;
+                if (owner_type != NULL && owner_type->kind == TYPE_KIND_POINTER &&
                     owner_type->info.points_to != NULL &&
-                    owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE &&
-                    owner_type->info.points_to->info.primitive_type_tag == RECORD_TYPE)
+                    owner_type->info.points_to->kind == TYPE_KIND_RECORD &&
+                    kgpc_type_get_record(owner_type->info.points_to) == record_info)
                 {
-                    /* "class of T" is represented as pointer-to-primitive(record).
-                     * Constructors return an instance pointer (^record), not a class ref. */
-                    KgpcType *rec_type = create_record_type(record_info);
-                    if (rec_type != NULL)
-                    {
-                        KgpcType *ptr_type = create_pointer_type(rec_type);
-                        if (ptr_type != NULL)
-                        {
-                            owner_type = ptr_type;
-                        }
-                        else
-                        {
-                            destroy_kgpc_type(rec_type);
-                        }
-                    }
+                    owner_is_instance_ptr = 1;
                 }
-                else if (owner_type == NULL)
+
+                if (!owner_is_instance_ptr)
                 {
                     KgpcType *rec_type = create_record_type(record_info);
                     if (rec_type != NULL)
@@ -4610,6 +4592,13 @@ int semcheck_funccall(int *type_return,
                 }
                 else
                 {
+                    if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                    {
+                        destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+                        expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+                    }
+                    expr->expr_data.function_call_data.constructor_receiver_expr =
+                        clone_expression(first_arg);
                     /* Remove the first argument (the class reference) from the argument list
                      * since it's not a real argument to a static method or constructor. */
                     ListNode_t *old_head = args_given;
@@ -6670,6 +6659,19 @@ skip_overload_resolution:
                     {
                         type_compatible = 1;
                     }
+                    if (!type_compatible && is_integer_type(arg_type))
+                    {
+                        const char *formal_id = NULL;
+                        if (arg_decl->type == TREE_VAR_DECL)
+                            formal_id = arg_decl->tree_data.var_decl_data.type_id;
+                        else if (arg_decl->type == TREE_ARR_DECL)
+                            formal_id = arg_decl->tree_data.arr_decl_data.type_id;
+                        if (formal_id != NULL &&
+                            pascal_identifier_equals(formal_id, "tconstexprint"))
+                        {
+                            type_compatible = 1;
+                        }
+                    }
                     /* For array of const: accept any array literal - elements are converted to TVarRec */
                     if (!type_compatible &&
                         expected_type == ARRAY_OF_CONST_TYPE &&
@@ -6688,6 +6690,22 @@ skip_overload_resolution:
                         KGPC_SEMCHECK_HARD_ASSERT(0,
                             "missing expected KgpcType in argument compatibility: call=%s arg=%d expected_tag=%d",
                             id != NULL ? id : "<unknown>", cur_arg, expected_type);
+                    }
+
+                    if (!type_compatible && current_arg_expr != NULL &&
+                        current_arg_expr->pointer_subtype_id != NULL)
+                    {
+                        const char *formal_id = NULL;
+                        if (arg_decl->type == TREE_VAR_DECL)
+                            formal_id = arg_decl->tree_data.var_decl_data.type_id;
+                        else if (arg_decl->type == TREE_ARR_DECL)
+                            formal_id = arg_decl->tree_data.arr_decl_data.type_id;
+                        if (formal_id != NULL &&
+                            semcheck_class_type_ids_compatible(symtab, formal_id,
+                                current_arg_expr->pointer_subtype_id))
+                        {
+                            type_compatible = 1;
+                        }
                     }
 
                     /* Allow string literals to be passed as PAnsiChar/PChar parameters.

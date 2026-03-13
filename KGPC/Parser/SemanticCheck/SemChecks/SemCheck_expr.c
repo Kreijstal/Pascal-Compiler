@@ -444,6 +444,15 @@ struct Expression *clone_expression(const struct Expression *expr)
                 destroy_expr(clone);
                 return NULL;
             }
+            clone->expr_data.function_call_data.constructor_receiver_expr =
+                expr->expr_data.function_call_data.constructor_receiver_expr != NULL ?
+                    clone_expression(expr->expr_data.function_call_data.constructor_receiver_expr) : NULL;
+            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL &&
+                clone->expr_data.function_call_data.constructor_receiver_expr == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             clone->expr_data.function_call_data.arg0_is_dynarray_descriptor =
                 expr->expr_data.function_call_data.arg0_is_dynarray_descriptor;
             clone->expr_data.function_call_data.call_qualifier =
@@ -520,6 +529,9 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         {
             if (mutating == NO_MUTATE && expr->resolved_kgpc_type != NULL)
             {
+                KgpcType *effective_type = semcheck_expr_effective_kgpc_type(symtab, expr, owns_type);
+                if (effective_type != NULL)
+                    return effective_type;
                 if (owns_type != NULL)
                     *owns_type = 0;
                 return expr->resolved_kgpc_type;

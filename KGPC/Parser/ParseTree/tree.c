@@ -1643,6 +1643,11 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
               expr->expr_data.function_call_data.procedural_var_expr = NULL;
           }
+          if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+          {
+              destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+              expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+          }
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
               destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
@@ -2937,6 +2942,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.function_call_data.call_qualifier = NULL;
     expr->expr_data.typecast_data.target_type_ref = NULL;

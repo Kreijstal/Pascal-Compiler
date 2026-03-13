@@ -50,6 +50,10 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
     const struct TypeRef *type_ref, const char *type_id);
 HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
     const char *type_id, const char *owner_full, const char *owner_outer);
+KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
+    struct Expression *expr, int *owned_out);
+int semcheck_class_type_ids_compatible(SymTab_t *symtab,
+    const char *formal_id, const char *actual_id);
 
 /*===========================================================================
  * Type Definitions (internal)

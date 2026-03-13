@@ -527,6 +527,7 @@ struct Expression
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
+            struct Expression *constructor_receiver_expr; /* Original explicit constructor receiver for codegen */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
             int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */

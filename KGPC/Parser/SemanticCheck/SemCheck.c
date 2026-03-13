@@ -356,6 +356,70 @@ static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
     return NULL;
 }
 
+static int semcheck_record_candidate_is_forward_stub(struct RecordType *record)
+{
+    if (record == NULL)
+        return 0;
+    if (!record->is_class && !record->is_interface)
+        return 0;
+
+    int has_non_hidden_field = 0;
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (!record_field_is_hidden(field))
+        {
+            has_non_hidden_field = 1;
+            break;
+        }
+    }
+
+    if (has_non_hidden_field)
+        return 0;
+    int has_meaningful_property = 0;
+    for (ListNode_t *cur = record->properties; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_CLASS_PROPERTY || cur->cur == NULL)
+            continue;
+        struct ClassProperty *prop = (struct ClassProperty *)cur->cur;
+        if (prop->name == NULL)
+            continue;
+        if (!pascal_identifier_equals(prop->name, "Disposed"))
+        {
+            has_meaningful_property = 1;
+            break;
+        }
+    }
+    if (has_meaningful_property)
+        return 0;
+    if (record->method_templates != NULL)
+        return 0;
+    if (record->parent_class_name != NULL &&
+        !pascal_identifier_equals(record->parent_class_name, "TObject"))
+        return 0;
+
+    return 1;
+}
+
+static int semcheck_type_candidate_is_forward_stub(HashNode_t *node)
+{
+    if (node == NULL)
+        return 0;
+
+    struct RecordType *record = hashnode_get_record_type(node);
+    if (record == NULL && node->type != NULL &&
+        node->type->kind == TYPE_KIND_POINTER &&
+        node->type->info.points_to != NULL &&
+        node->type->info.points_to->kind == TYPE_KIND_RECORD)
+    {
+        record = node->type->info.points_to->info.record_info;
+    }
+
+    return semcheck_record_candidate_is_forward_stub(record);
+}
+
 int semcheck_is_unit_name(const char *name)
 {
     if (name == NULL || name[0] == '\0')
@@ -3192,6 +3256,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     int best_unit_rank = INT_MAX / 2;
     int best_scope_level = INT_MAX / 2;
     int best_same_unit = 0;
+    int best_is_forward_stub = 1;
     int debug_tsize = (getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
                        pascal_identifier_equals(rendered, "TSize"));
     ListNode_t *cur = matches;
@@ -3234,6 +3299,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 }
             }
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
+            int is_forward_stub = semcheck_type_candidate_is_forward_stub(node);
 
             int same_unit = 0;
             int effective_unit_index = override_unit_index;
@@ -3260,10 +3326,10 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             {
                 const char *uname = unit_registry_get(node->source_unit_index);
                 fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
-                    "unit_rank=%d scope_level=%d same_unit=%d effective_unit=%d unit_context=%d type=%p kind=%d\n",
+                    "unit_rank=%d scope_level=%d same_unit=%d forward_stub=%d effective_unit=%d unit_context=%d type=%p kind=%d\n",
                     node->id ? node->id : "<null>", node->defined_in_unit,
                     node->source_unit_index, uname ? uname : "?",
-                    unit_rank, scope_level, same_unit, effective_unit_index,
+                    unit_rank, scope_level, same_unit, is_forward_stub, effective_unit_index,
                     symtab->unit_context,
                     (void *)node->type, node->type ? node->type->kind : -1);
             }
@@ -3285,11 +3351,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 take = 1;
             }
             else if (same_unit == best_same_unit &&
-                     (scope_level < best_scope_level ||
+                     (is_forward_stub < best_is_forward_stub) ||
+                      (is_forward_stub == best_is_forward_stub &&
+                       (scope_level < best_scope_level ||
                       (scope_level == best_scope_level && unit_rank < best_unit_rank) ||
                       (scope_level == best_scope_level && unit_rank == best_unit_rank &&
                        node->source_unit_index > 0 && best->source_unit_index > 0 &&
-                       node->source_unit_index > best->source_unit_index)))
+                       node->source_unit_index > best->source_unit_index))))
             {
                 take = 1;
             }
@@ -3303,6 +3371,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 best_unit_rank = unit_rank;
                 best_scope_level = scope_level;
                 best_same_unit = same_unit;
+                best_is_forward_stub = is_forward_stub;
             }
         }
         cur = cur->next;
@@ -4108,10 +4177,14 @@ static int expression_is_string(SymTab_t *symtab, struct Expression *expr)
     return 0;
 }
 
+static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr,
+    long long *out_value, int emit_diagnostics);
+static int const_fold_real_expr_mode(SymTab_t *symtab, struct Expression *expr,
+    double *out_value, int emit_diagnostics);
+static int const_fold_int_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
+static int const_fold_real_expr(SymTab_t *symtab, struct Expression *expr, double *out_value);
 static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
-static int evaluate_const_expr_silent(SymTab_t *symtab, struct Expression *expr, long long *out_value);
-static int evaluate_real_const_expr_silent(SymTab_t *symtab, struct Expression *expr, double *out_value);
-static int g_const_eval_silent = 0;
+static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value);
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
@@ -4670,7 +4743,8 @@ static int get_builtin_type_bounds(const char *base_name,
     return 0;
 }
 
-static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
+static int const_fold_real_expr_mode(SymTab_t *symtab, struct Expression *expr, double *out_value,
+    int emit_diagnostics)
 {
     if (expr == NULL || out_value == NULL)
         return 1;
@@ -4683,9 +4757,10 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             int target_type = expr->expr_data.typecast_data.target_type;
             if (is_real_family_type(target_type) || is_real_type_name(symtab, target_id))
             {
-                return evaluate_real_const_expr(symtab, expr->expr_data.typecast_data.expr, out_value);
+                return const_fold_real_expr_mode(symtab, expr->expr_data.typecast_data.expr,
+                    out_value, emit_diagnostics);
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: unsupported real const typecast target.\n");
             return 1;
         }
@@ -4710,14 +4785,15 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                 *out_value = (double)node->const_int_value;
                 return 0;
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
             return 1;
         }
         case EXPR_SIGN_TERM:
         {
             double value;
-            if (evaluate_real_const_expr(symtab, expr->expr_data.sign_term, &value) != 0)
+            if (const_fold_real_expr_mode(symtab, expr->expr_data.sign_term, &value,
+                    emit_diagnostics) != 0)
                 return 1;
             *out_value = -value;
             return 0;
@@ -4725,9 +4801,11 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
         case EXPR_ADDOP:
         {
             double left, right;
-            if (evaluate_real_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
+            if (const_fold_real_expr_mode(symtab, expr->expr_data.addop_data.left_expr, &left,
+                    emit_diagnostics) != 0)
                 return 1;
-            if (evaluate_real_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
+            if (const_fold_real_expr_mode(symtab, expr->expr_data.addop_data.right_term, &right,
+                    emit_diagnostics) != 0)
                 return 1;
             switch (expr->expr_data.addop_data.addop_type)
             {
@@ -4745,9 +4823,11 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
         case EXPR_MULOP:
         {
             double left, right;
-            if (evaluate_real_const_expr(symtab, expr->expr_data.mulop_data.left_term, &left) != 0)
+            if (const_fold_real_expr_mode(symtab, expr->expr_data.mulop_data.left_term, &left,
+                    emit_diagnostics) != 0)
                 return 1;
-            if (evaluate_real_const_expr(symtab, expr->expr_data.mulop_data.right_factor, &right) != 0)
+            if (const_fold_real_expr_mode(symtab, expr->expr_data.mulop_data.right_factor, &right,
+                    emit_diagnostics) != 0)
                 return 1;
             switch (expr->expr_data.mulop_data.mulop_type)
             {
@@ -4773,7 +4853,7 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                 struct Expression *arg = extract_single_const_arg(args, id);
                 if (arg == NULL)
                     return 1;
-                return evaluate_real_const_expr(symtab, arg, out_value);
+                return const_fold_real_expr_mode(symtab, arg, out_value, emit_diagnostics);
             }
             if (id != NULL && pascal_identifier_equals(id, "Ln"))
             {
@@ -4781,11 +4861,11 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
                 if (arg == NULL)
                     return 1;
                 double value = 0.0;
-                if (evaluate_real_const_expr(symtab, arg, &value) != 0)
+                if (const_fold_real_expr_mode(symtab, arg, &value, emit_diagnostics) != 0)
                     return 1;
                 if (value <= 0.0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Ln argument must be > 0 in const expression.\n");
                     return 1;
                 }
@@ -4798,7 +4878,7 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
             break;
     }
 
-    if (!g_const_eval_silent)
+    if (emit_diagnostics)
         fprintf(stderr, "Error: unsupported real const expression.\n");
     return 1;
 }
@@ -5405,7 +5485,8 @@ static int const_typecast_target_is_ordinal(SymTab_t *symtab, struct Expression 
     return 0;
 }
 
-static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
+static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, long long *out_value,
+    int emit_diagnostics)
 {
     if (expr == NULL || out_value == NULL)
         return 1;
@@ -5414,7 +5495,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
     {
         case EXPR_RNUM:
             /* Real numbers in integer context - truncate or error */
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: real number constant in integer context.\n");
             return 1;
         case EXPR_INUM:
@@ -5437,7 +5518,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 *out_value = (unsigned char)expr->expr_data.string[0];
                 return 0;
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: string literal in const expression must be a single character.\n");
             return 1;
         case EXPR_CHAR_CODE:
@@ -5465,14 +5546,15 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 *out_value = node->const_int_value;
                 return 0;
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
             return 1;
         }
         case EXPR_SIGN_TERM:
         {
             long long value;
-            if (evaluate_const_expr(symtab, expr->expr_data.sign_term, &value) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.sign_term, &value,
+                    emit_diagnostics) != 0)
                 return 1;
             *out_value = -value;
             return 0;
@@ -5482,10 +5564,12 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
             long long inner_value = 0;
             long long ordinal_low = 0;
             long long ordinal_high = 0;
-            if (evaluate_const_expr(symtab, expr->expr_data.typecast_data.expr, &inner_value) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.typecast_data.expr, &inner_value,
+                    emit_diagnostics) != 0)
             {
                 double real_value = 0.0;
-                if (evaluate_real_const_expr(symtab, expr->expr_data.typecast_data.expr, &real_value) != 0)
+                if (const_fold_real_expr_mode(symtab, expr->expr_data.typecast_data.expr, &real_value,
+                        emit_diagnostics) != 0)
                     return 1;
                 inner_value = (long long)real_value;
             }
@@ -5552,7 +5636,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     long long max_char_value = is_wide_char ? 65535LL : 255LL;
                     if (inner_value < 0 || inner_value > max_char_value)
                     {
-                        fprintf(stderr, "Error: typecast value %lld out of range for %s.\n",
+                            if (emit_diagnostics)
+                                fprintf(stderr, "Error: typecast value %lld out of range for %s.\n",
                             inner_value, is_wide_char ? "WideChar" : "Char");
                         return 1;
                     }
@@ -5570,7 +5655,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     {
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
-                            fprintf(stderr,
+                            if (emit_diagnostics)
+                                fprintf(stderr,
                                 "Error: typecast value %lld out of range for ordinal target.\n",
                                 inner_value);
                             return 1;
@@ -5626,7 +5712,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     {
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
-                            fprintf(stderr,
+                            if (emit_diagnostics)
+                                fprintf(stderr,
                                 "Error: typecast value %lld out of range for ordinal target.\n",
                                 inner_value);
                             return 1;
@@ -5640,7 +5727,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     {
                         if (inner_value < ordinal_low || inner_value > ordinal_high)
                         {
-                            fprintf(stderr,
+                            if (emit_diagnostics)
+                                fprintf(stderr,
                                 "Error: typecast value %lld out of range for ordinal target.\n",
                                 inner_value);
                             return 1;
@@ -5648,7 +5736,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         *out_value = inner_value;
                         return 0;
                     }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: unsupported const typecast target.\n");
             return 1;
             }
@@ -5656,9 +5744,11 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         case EXPR_ADDOP:
         {
             long long left, right;
-            if (evaluate_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.addop_data.left_expr, &left,
+                    emit_diagnostics) != 0)
                 return 1;
-            if (evaluate_const_expr(symtab, expr->expr_data.addop_data.right_term, &right) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.addop_data.right_term, &right,
+                    emit_diagnostics) != 0)
                 return 1;
             switch (expr->expr_data.addop_data.addop_type)
             {
@@ -5680,9 +5770,11 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
         case EXPR_MULOP:
         {
             long long left, right;
-            if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.left_term, &left) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.mulop_data.left_term, &left,
+                    emit_diagnostics) != 0)
                 return 1;
-            if (evaluate_const_expr(symtab, expr->expr_data.mulop_data.right_factor, &right) != 0)
+            if (const_fold_int_expr_mode(symtab, expr->expr_data.mulop_data.right_factor, &right,
+                    emit_diagnostics) != 0)
                 return 1;
             switch (expr->expr_data.mulop_data.mulop_type)
             {
@@ -5692,7 +5784,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case DIV:
                     if (right == 0)
                     {
-                        fprintf(stderr, "Error: division by zero in const expression.\n");
+                        if (emit_diagnostics)
+                            fprintf(stderr, "Error: division by zero in const expression.\n");
                         return 1;
                     }
                     *out_value = left / right;
@@ -5700,7 +5793,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 case MOD:
                     if (right == 0)
                     {
-                        fprintf(stderr, "Error: modulo by zero in const expression.\n");
+                        if (emit_diagnostics)
+                            fprintf(stderr, "Error: modulo by zero in const expression.\n");
                         return 1;
                     }
                     *out_value = left % right;
@@ -5735,7 +5829,8 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 return 1;
             if (used > 8)
             {
-                fprintf(stderr, "Error: set literal requires 32-byte storage and cannot be reduced to integer const.\n");
+                if (emit_diagnostics)
+                    fprintf(stderr, "Error: set literal requires 32-byte storage and cannot be reduced to integer const.\n");
                 return 1;
             }
             *out_value = mask;
@@ -5804,7 +5899,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     }
                 }
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: qualified constant '%s' is undefined or not a const.\n",
                         field_id ? field_id : "(null)");
             return 1;
@@ -5827,11 +5922,11 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
 
                 if (arg == NULL)
                     return 1;
-                if (evaluate_const_expr(symtab, arg, &arg_value) != 0)
+                if (const_fold_int_expr_mode(symtab, arg, &arg_value, emit_diagnostics) != 0)
                     return 1;
                 if (!evaluate_const_expr_ordinal_bounds(symtab, arg, &low, &high))
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: %s expects an ordinal constant argument.\n", id);
                     return 1;
                 }
@@ -5839,7 +5934,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 result = is_succ ? (arg_value + 1) : (arg_value - 1);
                 if (result < low || result > high)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: %s result out of range for ordinal type.\n", id);
                     return 1;
                 }
@@ -5864,10 +5959,11 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 {
                     struct Expression *arg = (struct Expression *)args->cur;
                     long long inner_value = 0;
-                    if (evaluate_const_expr(symtab, arg, &inner_value) != 0)
+                    if (const_fold_int_expr_mode(symtab, arg, &inner_value, emit_diagnostics) != 0)
                     {
                         double real_value = 0.0;
-                        if (evaluate_real_const_expr(symtab, arg, &real_value) != 0)
+                        if (const_fold_real_expr_mode(symtab, arg, &real_value,
+                                emit_diagnostics) != 0)
                             return 1;
                         inner_value = (long long)real_value;
                     }
@@ -5888,12 +5984,14 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                     char *literal = arg->expr_data.string;
                     if (literal == NULL || literal[0] == '\0')
                     {
-                        fprintf(stderr, "Error: Ord expects a non-empty character literal.\n");
+                        if (emit_diagnostics)
+                            fprintf(stderr, "Error: Ord expects a non-empty character literal.\n");
                         return 1;
                     }
                     if (literal[1] != '\0')
                     {
-                        fprintf(stderr, "Error: Ord expects a single character literal.\n");
+                        if (emit_diagnostics)
+                            fprintf(stderr, "Error: Ord expects a single character literal.\n");
                         return 1;
                     }
                     *out_value = (unsigned char)literal[0];
@@ -5936,7 +6034,7 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                         *out_value = node->const_int_value;
                         return 0;
                     }
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Ord argument %s is not a constant.\n", arg->expr_data.id);
                     return 1;
                 }
@@ -5944,12 +6042,12 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                 else
                 {
                     long long arg_value;
-                    if (evaluate_const_expr(symtab, arg, &arg_value) == 0)
+                    if (const_fold_int_expr_mode(symtab, arg, &arg_value, emit_diagnostics) == 0)
                     {
                         *out_value = arg_value;
                         return 0;
                     }
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Ord argument is not a valid const expression.\n");
                     return 1;
                 }
@@ -6005,8 +6103,9 @@ static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long l
                             goto high_cleanup;
                         }
                     }
-                    fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n",
-                        qualified_name != NULL ? qualified_name : arg->expr_data.id);
+                    if (emit_diagnostics)
+                        fprintf(stderr, "Error: High(%s) - unsupported type in const expression.\n",
+                            qualified_name != NULL ? qualified_name : arg->expr_data.id);
                     status = 1;
 high_cleanup:
                     if (qualified_name != NULL)
@@ -6014,7 +6113,8 @@ high_cleanup:
                     qualified_ident_free(type_id_ref);
                     return status;
                 }
-                fprintf(stderr, "Error: High expects a type identifier as argument.\n");
+                if (emit_diagnostics)
+                    fprintf(stderr, "Error: High expects a type identifier as argument.\n");
                 return 1;
             }
             
@@ -6068,7 +6168,7 @@ high_cleanup:
                             goto low_cleanup;
                         }
                     }
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Low(%s) - unsupported type in const expression.\n",
                             qualified_name != NULL ? qualified_name : arg->expr_data.id);
                     status = 1;
@@ -6078,7 +6178,7 @@ low_cleanup:
                     qualified_ident_free(type_id_ref);
                     return status;
                 }
-                if (!g_const_eval_silent)
+                if (emit_diagnostics)
                     fprintf(stderr, "Error: Low expects a type identifier as argument.\n");
                 return 1;
             }
@@ -6175,12 +6275,12 @@ low_cleanup:
                         qualified_ident_free(type_id_ref);
                         return 0;
                     }
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: SizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
                     qualified_ident_free(type_id_ref);
                     return 1;
                 }
-                if (!g_const_eval_silent)
+                if (emit_diagnostics)
                     fprintf(stderr, "Error: SizeOf expects a type identifier as argument.\n");
                 return 1;
             }
@@ -6277,12 +6377,12 @@ low_cleanup:
                         qualified_ident_free(type_id_ref);
                         return 0;
                     }
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: BitSizeOf(%s) - unsupported type in const expression.\n", arg->expr_data.id);
                     qualified_ident_free(type_id_ref);
                     return 1;
                 }
-                if (!g_const_eval_silent)
+                if (emit_diagnostics)
                     fprintf(stderr, "Error: BitSizeOf expects a type identifier as argument.\n");
                 return 1;
             }
@@ -6296,9 +6396,9 @@ low_cleanup:
                 
                 /* Evaluate the argument as a const expression */
                 long long char_code;
-                if (evaluate_const_expr(symtab, arg, &char_code) != 0)
+                if (const_fold_int_expr_mode(symtab, arg, &char_code, emit_diagnostics) != 0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Chr argument must be a const expression.\n");
                     return 1;
                 }
@@ -6306,7 +6406,7 @@ low_cleanup:
                 /* Validate the character code is in valid range (0..255) */
                 if (char_code < 0 || char_code > 255)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Chr argument %lld is out of valid range (0..255).\n", char_code);
                     return 1;
                 }
@@ -6324,9 +6424,9 @@ low_cleanup:
                 
                 /* Evaluate the argument as a const expression */
                 long long ptr_value;
-                if (evaluate_const_expr(symtab, arg, &ptr_value) != 0)
+                if (const_fold_int_expr_mode(symtab, arg, &ptr_value, emit_diagnostics) != 0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: Pointer argument must be a const expression.\n");
                     return 1;
                 }
@@ -6344,9 +6444,9 @@ low_cleanup:
                 
                 /* Evaluate the argument as a const expression */
                 long long int_value;
-                if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                if (const_fold_int_expr_mode(symtab, arg, &int_value, emit_diagnostics) != 0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
                     return 1;
                 }
@@ -6362,18 +6462,18 @@ low_cleanup:
                 if (arg == NULL)
                     return 1;
                 double real_value = 0.0;
-                if (evaluate_real_const_expr(symtab, arg, &real_value) == 0)
+                if (const_fold_real_expr_mode(symtab, arg, &real_value, emit_diagnostics) == 0)
                 {
                     *out_value = (long long)real_value;
                     return 0;
                 }
                 long long int_value = 0;
-                if (evaluate_const_expr(symtab, arg, &int_value) == 0)
+                if (const_fold_int_expr_mode(symtab, arg, &int_value, emit_diagnostics) == 0)
                 {
                     *out_value = int_value;
                     return 0;
                 }
-                if (!g_const_eval_silent)
+                if (emit_diagnostics)
                     fprintf(stderr, "Error: Trunc argument must be a const expression.\n");
                 return 1;
             }
@@ -6401,9 +6501,9 @@ low_cleanup:
                 
                 /* Evaluate the argument as a const expression */
                 long long int_value;
-                if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                if (const_fold_int_expr_mode(symtab, arg, &int_value, emit_diagnostics) != 0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
                     return 1;
                 }
@@ -6451,13 +6551,13 @@ low_cleanup:
                         long long int_value;
                         if (arg == NULL)
                         {
-                            if (!g_const_eval_silent)
+                            if (emit_diagnostics)
                                 fprintf(stderr, "Error: %s argument is NULL.\n", id);
                             return 1;
                         }
-                        if (evaluate_const_expr(symtab, arg, &int_value) != 0)
+                        if (const_fold_int_expr_mode(symtab, arg, &int_value, emit_diagnostics) != 0)
                         {
-                            if (!g_const_eval_silent)
+                            if (emit_diagnostics)
                                 fprintf(stderr, "Error: %s argument must be a const expression.\n", id);
                             return 1;
                         }
@@ -6476,7 +6576,7 @@ low_cleanup:
                 }
             }
 
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
             {
                 if (id != NULL)
                     fprintf(stderr, "Error: const expression uses unsupported function %s on line %d.\n", id, expr->line_num);
@@ -6494,15 +6594,15 @@ low_cleanup:
                 struct Expression *operand = expr->expr_data.relop_data.left;
                 if (operand == NULL)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: NOT operator requires an operand.\n");
                     return 1;
                 }
                 
                 long long operand_value;
-                if (evaluate_const_expr(symtab, operand, &operand_value) != 0)
+                if (const_fold_int_expr_mode(symtab, operand, &operand_value, emit_diagnostics) != 0)
                 {
-                    if (!g_const_eval_silent)
+                    if (emit_diagnostics)
                         fprintf(stderr, "Error: NOT operand must be a const expression.\n");
                     return 1;
                 }
@@ -6515,9 +6615,11 @@ low_cleanup:
             if (expr->expr_data.relop_data.left != NULL && expr->expr_data.relop_data.right != NULL)
             {
                 long long left_val, right_val;
-                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.left, &left_val) != 0)
+                if (const_fold_int_expr_mode(symtab, expr->expr_data.relop_data.left, &left_val,
+                        emit_diagnostics) != 0)
                     return 1;
-                if (evaluate_const_expr(symtab, expr->expr_data.relop_data.right, &right_val) != 0)
+                if (const_fold_int_expr_mode(symtab, expr->expr_data.relop_data.right, &right_val,
+                        emit_diagnostics) != 0)
                     return 1;
                 
                 switch (expr->expr_data.relop_data.type)
@@ -6532,7 +6634,7 @@ low_cleanup:
                         break;
                 }
             }
-            if (!g_const_eval_silent)
+            if (emit_diagnostics)
                 fprintf(stderr, "Error: unsupported relational operator in const expression.\n");
             return 1;
         }
@@ -6540,27 +6642,29 @@ low_cleanup:
             break;
     }
 
-    if (!g_const_eval_silent)
+    if (emit_diagnostics)
         fprintf(stderr, "Error: unsupported const expression.\n");
     return 1;
 }
 
-static int evaluate_const_expr_silent(SymTab_t *symtab, struct Expression *expr, long long *out_value)
+static int const_fold_int_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
-    int saved = g_const_eval_silent;
-    g_const_eval_silent = 1;
-    int result = evaluate_const_expr(symtab, expr, out_value);
-    g_const_eval_silent = saved;
-    return result;
+    return const_fold_int_expr_mode(symtab, expr, out_value, 0);
 }
 
-static int evaluate_real_const_expr_silent(SymTab_t *symtab, struct Expression *expr, double *out_value)
+static int const_fold_real_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
 {
-    int saved = g_const_eval_silent;
-    g_const_eval_silent = 1;
-    int result = evaluate_real_const_expr(symtab, expr, out_value);
-    g_const_eval_silent = saved;
-    return result;
+    return const_fold_real_expr_mode(symtab, expr, out_value, 0);
+}
+
+static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
+{
+    return const_fold_int_expr_mode(symtab, expr, out_value, 1);
+}
+
+static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
+{
+    return const_fold_real_expr_mode(symtab, expr, out_value, 1);
 }
 
 /* The main function for checking a tree */
@@ -12134,7 +12238,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
         {
             /* Try full const evaluation silently for expressions like Low()/High(). */
             long long val = 0;
-            int ok = evaluate_const_expr_silent(symtab, value_expr, &val);
+            int ok = const_fold_int_expr(symtab, value_expr, &val);
             if (ok == 0)
             {
                 PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
@@ -12150,7 +12254,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             {
                 /* Also try real const evaluation */
                 double rval = 0.0;
-                ok = evaluate_real_const_expr_silent(symtab, value_expr, &rval);
+                ok = const_fold_real_expr(symtab, value_expr, &rval);
                 if (ok == 0)
                 {
                     PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, rval);
@@ -15251,7 +15355,7 @@ next_identifier:
                             semcheck_is_currency_type_id(tree->tree_data.var_decl_data.type_id))
                         {
                             double real_value = 0.0;
-                            if (evaluate_real_const_expr(symtab, init_expr, &real_value) == 0)
+                            if (const_fold_real_expr(symtab, init_expr, &real_value) == 0)
                             {
                                 long long scaled = llround(real_value * 10000.0);
                                 destroy_expr(init_expr);
@@ -15405,7 +15509,7 @@ next_identifier:
                             else if (expression_contains_real_literal_impl(symtab, init_expr))
                             {
                                 double real_value = 0.0;
-                                if (evaluate_real_const_expr(symtab, init_expr, &real_value) == 0)
+                                if (const_fold_real_expr(symtab, init_expr, &real_value) == 0)
                                     var_node->const_real_value = real_value;
                             }
                             else if (expression_is_set_const_expr(symtab, init_expr))
@@ -15431,7 +15535,7 @@ next_identifier:
                             else
                             {
                                 long long value = 0;
-                                if (evaluate_const_expr_silent(symtab, init_expr, &value) == 0)
+                                if (const_fold_int_expr(symtab, init_expr, &value) == 0)
                                     var_node->const_int_value = value;
                             }
                         }
