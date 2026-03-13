@@ -445,6 +445,8 @@ static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id);
+static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
+    const QualifiedIdent *type_ref);
 
 static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab,
     const char *owner_full, const char *owner_outer,
@@ -2272,7 +2274,14 @@ static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
         return;
 
     HashNode_t *target_node = NULL;
-    if (alias->target_type_ref != NULL || alias->target_type_id != NULL)
+    if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL &&
+        alias->target_type_ref->name->count > 1)
+    {
+        target_node = semcheck_find_exact_type_node_for_qid(symtab,
+            alias->target_type_ref->name);
+    }
+    if (target_node == NULL &&
+        (alias->target_type_ref != NULL || alias->target_type_id != NULL))
     {
         target_node = semcheck_find_preferred_type_node_with_ref(symtab,
             alias->target_type_ref, alias->target_type_id);
@@ -3227,12 +3236,14 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             int scope_level = semcheck_scope_level_for_type_candidate(symtab, node);
 
             int same_unit = 0;
-            int effective_unit_index = (override_unit_index != 0)
-                ? override_unit_index : g_semcheck_current_unit_index;
-            /* Also consider symtab->unit_context — set when processing unit
-             * subprogram bodies during program-level semcheck */
+            int effective_unit_index = override_unit_index;
+            /* Prefer the active semantic unit context when available. Imported
+             * declarations and unit subprogram bodies run under symtab->unit_context,
+             * while g_semcheck_current_unit_index remains the root unit being loaded. */
             if (effective_unit_index == 0 && symtab->unit_context > 0)
                 effective_unit_index = symtab->unit_context;
+            if (effective_unit_index == 0)
+                effective_unit_index = g_semcheck_current_unit_index;
             int unit_rank = 0;
             if (prefer_unit_defined || effective_unit_index > 0)
                 /* In unit context, prefer unit-defined types over local program types */
@@ -3973,6 +3984,8 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
 /* Forward declarations for type resolution helpers used in const evaluation. */
 static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
     const char *base_name, const struct TypeAlias *exclude_alias);
+static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
+    const QualifiedIdent *type_ref);
 static const char *resolve_type_to_base_name(SymTab_t *symtab,
     const QualifiedIdent *type_id,
     const char *type_name);
@@ -5126,32 +5139,88 @@ static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
     return best;
 }
 
+static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
+    const QualifiedIdent *type_ref)
+{
+    if (symtab == NULL || type_ref == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    char *qualified = qualified_ident_join(type_ref, ".");
+    if (qualified != NULL)
+    {
+        if (FindIdent(&type_node, symtab, qualified) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        type_node = semcheck_find_preferred_type_node(symtab, qualified);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        free(qualified);
+    }
+
+    if (type_ref->count > 1 && type_ref->segments != NULL && type_ref->segments[0] != NULL)
+    {
+        const char *unit_name = type_ref->segments[0];
+        const char *base_name = qualified_ident_last(type_ref);
+        if (base_name != NULL)
+        {
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                    continue;
+                const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                if (candidate_unit != NULL &&
+                    pascal_identifier_equals(candidate_unit, unit_name))
+                {
+                    type_node = candidate;
+                    if (candidate->defined_in_unit)
+                        break;
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if (type_node != NULL)
+                return type_node;
+        }
+    }
+
+    TypeRef temp_ref = {0};
+    temp_ref.name = (QualifiedIdent *)type_ref;
+    return semcheck_find_preferred_type_node_with_ref(symtab, &temp_ref, NULL);
+}
+
 static int resolve_range_bounds_for_type_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
     long long *out_low, long long *out_high)
 {
     if (symtab == NULL || type_ref == NULL || out_low == NULL || out_high == NULL)
         return 0;
 
-    HashNode_t *type_node = NULL;
-    if (type_ref->count > 1)
-    {
-        const char *unit_name = type_ref->segments != NULL ? type_ref->segments[0] : NULL;
-        const char *base_name = qualified_ident_last(type_ref);
-        if (unit_name != NULL && base_name != NULL && semcheck_is_unit_name(unit_name))
-        {
-            type_node = semcheck_find_type_node_with_unit_flag(symtab, base_name, 1);
-        }
-    }
+    HashNode_t *type_node = semcheck_find_exact_type_node_for_qid(symtab, type_ref);
     if (type_node == NULL)
-    {
-        if (semcheck_find_ident_with_qualified_fallback_ref(&type_node, symtab, type_ref) < 0 ||
-            type_node == NULL)
-            return 0;
-    }
+        return 0;
     if (type_node->hash_type != HASHTYPE_TYPE)
         return 0;
 
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
+    if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+        !alias->enum_has_explicit_values)
+    {
+        int count = ListLength(alias->enum_literals);
+        if (count > 0)
+        {
+            *out_low = 0;
+            *out_high = (long long)count - 1;
+            return 1;
+        }
+    }
     if (alias != NULL && alias->target_type_id != NULL)
     {
         char *qualified = qualified_ident_join(type_ref, ".");
@@ -7040,9 +7109,17 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                      * The ranking logic picks the right one based on same-unit preference. */
                     int existing_is_record = (existing->type != NULL &&
                         existing->type->kind == TYPE_KIND_RECORD);
+                    struct TypeAlias *existing_alias = get_type_alias_from_node(existing);
+                    int current_is_enum_alias = (
+                        tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                        tree->tree_data.type_decl_data.info.alias.is_enum);
+                    int existing_is_enum_alias = (
+                        existing_alias != NULL &&
+                        existing_alias->is_enum);
                     int cross_unit_coexist = (
                         (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD ||
-                         (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && existing_is_record)) &&
+                         (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                            (existing_is_record || current_is_enum_alias || existing_is_enum_alias))) &&
                         existing->source_unit_index != 0 &&
                         tree->tree_data.type_decl_data.source_unit_index != 0 &&
                         existing->source_unit_index != tree->tree_data.type_decl_data.source_unit_index);
@@ -7767,7 +7844,41 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
-                                errors += result;
+                            {
+                                HashNode_t *existing_type = NULL;
+                                if (FindIdent(&existing_type, symtab, type_id) >= 0 &&
+                                    existing_type != NULL &&
+                                    existing_type->hash_type == HASHTYPE_TYPE &&
+                                    existing_type->type != NULL)
+                                {
+                                    struct TypeAlias *existing_alias =
+                                        kgpc_type_get_type_alias(existing_type->type);
+                                    int can_overlay_existing =
+                                        (existing_alias != NULL) &&
+                                        (alias->target_type_ref != NULL ||
+                                         alias->target_type_id != NULL) &&
+                                        !alias->is_pointer &&
+                                        !alias->is_array &&
+                                        !alias->is_set &&
+                                        !alias->is_file &&
+                                        existing_type->source_unit_index == 0 &&
+                                        !existing_type->defined_in_unit;
+                                    if (can_overlay_existing)
+                                    {
+                                        inherit_alias_metadata(symtab, alias);
+                                        kgpc_type_set_type_alias(existing_type->type, alias);
+                                        if (existing_type->type->type_alias != NULL &&
+                                            alias->storage_size > 0)
+                                        {
+                                            existing_type->type->type_alias->storage_size =
+                                                alias->storage_size;
+                                        }
+                                        result = 0;
+                                    }
+                                }
+                                if (result > 0)
+                                    errors += result;
+                            }
                             else
                             {
                                 mark_latest_type_node_unit_info(symtab, type_id,
@@ -9279,6 +9390,16 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
     if (symtab == NULL || type_name == NULL || literal_name == NULL || out_value == NULL)
         return 0;
 
+    QualifiedIdent *qualified_ref = qualified_ident_from_dotted(type_name);
+    if (qualified_ref != NULL && qualified_ref->count > 1)
+    {
+        int resolved = semcheck_resolve_scoped_enum_literal_ref(symtab, qualified_ref,
+            literal_name, out_value);
+        qualified_ident_free(qualified_ref);
+        if (resolved)
+            return 1;
+    }
+
     const char *current_type = type_name;
     char *owned_type = NULL;
     for (int depth = 0; depth < 8; ++depth)
@@ -9417,53 +9538,9 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
     QualifiedIdent *owned_ref = NULL;
     for (int depth = 0; depth < 8; ++depth)
     {
-        HashNode_t *type_node = NULL;
-        if (current_ref->count > 1)
-        {
-            const char *unit_name = (current_ref->segments != NULL) ? current_ref->segments[0] : NULL;
-            const char *base_name = qualified_ident_last(current_ref);
-
-            if (unit_name != NULL && base_name != NULL)
-            {
-                ListNode_t *matches = FindAllIdents(symtab, base_name);
-                for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-                {
-                    HashNode_t *candidate = (HashNode_t *)cur->cur;
-                    if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
-                        continue;
-                    const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
-                    if (candidate_unit != NULL &&
-                        pascal_identifier_equals(candidate_unit, unit_name))
-                    {
-                        type_node = candidate;
-                        break;
-                    }
-                }
-                if (matches != NULL)
-                    DestroyList(matches);
-            }
-
-            /* Prefer the fully-qualified reference first. Falling back directly to the
-             * base name can loop back to a local alias (e.g. SysUtils.TEndian) instead
-             * of the intended target (ObjPas.TEndian). */
-            if (type_node == NULL)
-            {
-                char *qualified = qualified_ident_join(current_ref, ".");
-                if (qualified != NULL)
-                {
-                    type_node = semcheck_find_type_node_with_unit_flag(symtab, qualified, 1);
-                    free(qualified);
-                }
-            }
-        }
-        if (type_node == NULL)
-        {
-            if (semcheck_find_ident_with_qualified_fallback_ref(&type_node, symtab, current_ref) < 0 ||
-                type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
-            {
-                break;
-            }
-        }
+        HashNode_t *type_node = semcheck_find_exact_type_node_for_qid(symtab, current_ref);
+        if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            break;
 
         if (type_node->type == NULL)
             return 0;
@@ -9517,6 +9594,17 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
 
         if (alias == NULL || alias->target_type_id == NULL)
             break;
+        if (alias->target_type_ref != NULL && alias->target_type_ref->name != NULL)
+        {
+            char *current_name = qualified_ident_join(current_ref, ".");
+            if (current_name != NULL)
+            {
+                int same_target = pascal_identifier_equals(alias->target_type_id, current_name);
+                free(current_name);
+                if (same_target)
+                    break;
+            }
+        }
         /* Fall back to string-based resolution for non-structured aliases. */
         if (owned_ref != NULL)
         {
@@ -10956,8 +11044,15 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                  * it's a stale/builtin entry and should be skipped. */
                 int existing_is_record = (existing_type->type != NULL &&
                     existing_type->type->kind == TYPE_KIND_RECORD);
+                struct TypeAlias *existing_alias = get_type_alias_from_node(existing_type);
+                int current_is_enum_alias = (
+                    tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                    tree->tree_data.type_decl_data.info.alias.is_enum);
+                int existing_is_enum_alias = (
+                    existing_alias != NULL &&
+                    existing_alias->is_enum);
                 if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
-                    existing_is_record &&
+                    (existing_is_record || current_is_enum_alias || existing_is_enum_alias) &&
                     existing_type->defined_in_unit &&
                     existing_type->source_unit_index != 0 &&
                     tree->tree_data.type_decl_data.source_unit_index != 0)
@@ -11076,12 +11171,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
-                inherit_alias_metadata(symtab, alias_info);
                 if (can_override_alias)
                 {
+                    inherit_alias_metadata(symtab, alias_info);
                     kgpc_type_set_type_alias(existing_type->type, alias_info);
                     if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
                         existing_type->type->type_alias->storage_size = alias_info->storage_size;
+                }
+                else
+                {
+                    inherit_alias_metadata(symtab, alias_info);
                 }
 
                 /* Resolve array bounds from constant identifiers now that constants are in scope */
@@ -11146,17 +11245,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         alias_info->range_end = existing_alias->range_end;
                     }
                 }
-                if (can_override_alias)
-                {
-                    kgpc_type_set_type_alias(kgpc_type, alias_info);
-                }
-                
                 /* IMPORTANT: Inherit storage_size from target type for type aliases.
                  * This is critical for types like WideChar (2 bytes) that are represented
                  * as INT_TYPE (4 bytes) in the primitive type system but have a custom
                  * storage_size defined. Without this, SizeOf(TMyChar) where TMyChar = WideChar
                  * would return 4 instead of the correct 2 bytes. */
                 inherit_alias_metadata(symtab, alias_info);
+                if (can_override_alias)
+                {
+                    kgpc_type_set_type_alias(kgpc_type, alias_info);
+                }
                 if (can_override_alias &&
                     kgpc_type_get_type_alias(kgpc_type) != NULL &&
                     alias_info->storage_size > 0)

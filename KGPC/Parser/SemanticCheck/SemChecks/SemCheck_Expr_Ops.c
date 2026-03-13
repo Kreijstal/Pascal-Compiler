@@ -2878,11 +2878,13 @@ resolved:;
                 node_is_array = hashnode_is_array(hash_return);
             }
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-                fprintf(stderr, "[SemCheck] semcheck_varid: id=%s hash_type=%d node_type=%p kind=%d node_is_array=%d\n",
+                fprintf(stderr, "[SemCheck] semcheck_varid: id=%s hash_type=%d node_type=%p kind=%d node_is_array=%d defined_in_unit=%d source_unit=%d\n",
                     id ? id : "<null>", hash_return->hash_type,
                     (void*)hash_return->type,
                     hash_return->type ? hash_return->type->kind : -1,
-                    node_is_array);
+                    node_is_array,
+                    hash_return->defined_in_unit,
+                    hash_return->source_unit_index);
         }
 
         if(hash_return->hash_type != HASHTYPE_VAR &&

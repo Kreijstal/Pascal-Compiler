@@ -1255,6 +1255,49 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
 
+static int source_file_mentions_objpas_qualified(const char *path)
+{
+    if (path == NULL)
+        return 0;
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+        return 0;
+
+    int found = 0;
+    char buf[8192 + 1];
+    size_t carry = 0;
+    while (!found)
+    {
+        size_t n = fread(buf + carry, 1, sizeof(buf) - 1 - carry, f);
+        if (n == 0 && carry == 0)
+            break;
+        n += carry;
+        buf[n] = '\0';
+        for (size_t i = 0; i + 6 < n; ++i)
+        {
+            if ((buf[i] == 'O' || buf[i] == 'o') &&
+                (buf[i + 1] == 'B' || buf[i + 1] == 'b') &&
+                (buf[i + 2] == 'J' || buf[i + 2] == 'j') &&
+                (buf[i + 3] == 'P' || buf[i + 3] == 'p') &&
+                (buf[i + 4] == 'A' || buf[i + 4] == 'a') &&
+                (buf[i + 5] == 'S' || buf[i + 5] == 's') &&
+                buf[i + 6] == '.')
+            {
+                found = 1;
+                break;
+            }
+        }
+        if (found || feof(f))
+            break;
+        carry = (n >= 6) ? 6 : n;
+        memmove(buf, buf + n - carry, carry);
+    }
+
+    fclose(f);
+    return found;
+}
+
 static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
 {
     if (prelude == NULL || visited == NULL)
@@ -1291,6 +1334,7 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
+    int wants_objpas = source_file_mentions_objpas_qualified(path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
@@ -1333,6 +1377,35 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
 
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+
+    /* Imported units that explicitly reference ObjPas-qualified names need
+     * ObjPas loaded before merge/semcheck, otherwise aliases like
+     * ObjPas.TEndian can bind to unrelated visible types. Keep this narrow. */
+    if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id, "objpas") &&
+        wants_objpas)
+    {
+        load_unit(program, "objpas", visited);
+        int has_objpas = 0;
+        for (ListNode_t *cur = unit_tree->tree_data.unit_data.interface_uses;
+             cur != NULL; cur = cur->next)
+        {
+            if (cur->type == LIST_STRING && cur->cur != NULL &&
+                pascal_identifier_equals((const char *)cur->cur, "ObjPas"))
+            {
+                has_objpas = 1;
+                break;
+            }
+        }
+        if (!has_objpas)
+        {
+            ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
+            if (objpas_node != NULL)
+            {
+                objpas_node->next = unit_tree->tree_data.unit_data.interface_uses;
+                unit_tree->tree_data.unit_data.interface_uses = objpas_node;
+            }
+        }
+    }
 
     /* Record dependency edges: this unit depends on each unit it uses */
     {

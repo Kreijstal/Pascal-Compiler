@@ -122,6 +122,274 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
     return 0;
 }
 
+static int semcheck_type_alias_has_enum_literal(const struct TypeAlias *alias,
+    const char *field_id)
+{
+    if (alias == NULL || field_id == NULL || !alias->is_enum || alias->enum_literals == NULL)
+        return 0;
+    for (ListNode_t *literal_node = alias->enum_literals;
+         literal_node != NULL; literal_node = literal_node->next)
+    {
+        const char *literal_name = (const char *)literal_node->cur;
+        if (literal_name != NULL && pascal_identifier_equals(literal_name, field_id))
+            return 1;
+    }
+    return 0;
+}
+
+static int g_semcheck_alias_target_probe_depth = 0;
+
+static HashNode_t *semcheck_find_exact_qualified_type_node(SymTab_t *symtab,
+    const QualifiedIdent *type_ref)
+{
+    if (symtab == NULL || type_ref == NULL || type_ref->count <= 0)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    char *qualified = qualified_ident_join(type_ref, ".");
+    if (qualified != NULL)
+    {
+        if (FindIdent(&type_node, symtab, qualified) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        type_node = semcheck_find_preferred_type_node(symtab, qualified);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        free(qualified);
+    }
+
+    if (type_ref->count > 1 && type_ref->segments != NULL && type_ref->segments[0] != NULL)
+    {
+        const char *unit_name = type_ref->segments[0];
+        const char *base_name = qualified_ident_last(type_ref);
+        if (base_name != NULL)
+        {
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            HashNode_t *best = NULL;
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                    continue;
+                const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                if (candidate_unit != NULL &&
+                    pascal_identifier_equals(candidate_unit, unit_name))
+                {
+                    best = candidate;
+                    if (candidate->defined_in_unit)
+                        break;
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if (best != NULL)
+                return best;
+        }
+    }
+
+    TypeRef temp_ref = {0};
+    temp_ref.name = (QualifiedIdent *)type_ref;
+    return semcheck_find_preferred_type_node_with_ref(symtab, &temp_ref, NULL);
+}
+
+static HashNode_t *semcheck_find_exact_type_node_for_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id, const char *field_id)
+{
+    if (symtab == NULL)
+        return NULL;
+
+    if (type_ref != NULL && type_ref->name != NULL &&
+        type_ref->name->count > 1 &&
+        type_ref->name->segments != NULL && type_ref->name->segments[0] != NULL)
+    {
+        HashNode_t *qualified_node = semcheck_find_exact_qualified_type_node(symtab,
+            type_ref->name);
+        if (qualified_node != NULL)
+            return qualified_node;
+
+        const char *unit_name = type_ref->name->segments[0];
+        const char *base_name = qualified_ident_last(type_ref->name);
+        if (base_name != NULL)
+        {
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            HashNode_t *best = NULL;
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                    continue;
+                const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                if (candidate_unit != NULL &&
+                    pascal_identifier_equals(candidate_unit, unit_name))
+                {
+                    best = candidate;
+                    if (candidate->defined_in_unit)
+                        break;
+                }
+                else if (candidate->defined_in_unit)
+                {
+                    struct TypeAlias *candidate_alias = hashnode_get_type_alias(candidate);
+                    if (semcheck_type_alias_has_enum_literal(candidate_alias, field_id))
+                    {
+                        best = candidate;
+                        break;
+                    }
+                    if (best == NULL)
+                    {
+                        /* Qualified refs should never prefer a local shadow alias
+                         * over a unit-defined type when source-unit metadata is
+                         * missing on the imported node. */
+                        best = candidate;
+                    }
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if (best != NULL)
+                return best;
+        }
+    }
+
+    return semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
+}
+
+static int semcheck_try_resolve_enum_literal_from_type_alias_depth(SymTab_t *symtab,
+    const struct TypeAlias *type_alias, const char *field_id, long long *out_value,
+    int depth)
+{
+    if (symtab == NULL || type_alias == NULL || field_id == NULL || out_value == NULL)
+        return 0;
+    if (depth > 8)
+        return 0;
+
+    if (type_alias->is_enum && type_alias->enum_literals != NULL)
+    {
+        int ordinal = 0;
+        for (ListNode_t *literal_node = type_alias->enum_literals;
+             literal_node != NULL; literal_node = literal_node->next, ++ordinal)
+        {
+            const char *literal_name = (const char *)literal_node->cur;
+            if (literal_name != NULL && pascal_identifier_equals(literal_name, field_id))
+            {
+                *out_value = ordinal;
+                return 1;
+            }
+        }
+    }
+
+    HashNode_t *target_node = NULL;
+    if (type_alias->target_type_ref != NULL && type_alias->target_type_ref->name != NULL)
+    {
+        char *qualified_target = type_ref_render_source(type_alias->target_type_ref);
+        if (qualified_target != NULL)
+        {
+            if (semcheck_resolve_scoped_enum_literal(symtab, qualified_target, field_id, out_value))
+            {
+                free(qualified_target);
+                return 1;
+            }
+            free(qualified_target);
+        }
+        target_node = semcheck_find_exact_type_node_for_ref(symtab,
+            type_alias->target_type_ref, type_alias->target_type_id, field_id);
+    }
+    else if (type_alias->target_type_id != NULL)
+    {
+        target_node = semcheck_find_preferred_type_node(symtab, type_alias->target_type_id);
+    }
+
+    if (target_node != NULL && target_node->type != NULL)
+    {
+        struct TypeAlias *target_alias = hashnode_get_type_alias(target_node);
+        if (target_alias != NULL &&
+            semcheck_try_resolve_enum_literal_from_type_alias_depth(symtab, target_alias,
+                field_id, out_value, depth + 1))
+        {
+            return 1;
+        }
+    }
+
+    if (type_alias->target_type_ref != NULL &&
+        type_alias->target_type_ref->name != NULL &&
+        semcheck_resolve_scoped_enum_literal_ref(symtab, type_alias->target_type_ref->name,
+            field_id, out_value))
+    {
+        return 1;
+    }
+
+    if (type_alias->target_type_id != NULL &&
+        semcheck_resolve_scoped_enum_literal(symtab, type_alias->target_type_id,
+            field_id, out_value))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int semcheck_try_resolve_enum_literal_from_type_alias(SymTab_t *symtab,
+    const struct TypeAlias *type_alias, const char *field_id, long long *out_value)
+{
+    return semcheck_try_resolve_enum_literal_from_type_alias_depth(symtab, type_alias,
+        field_id, out_value, 0);
+}
+
+static HashNode_t *semcheck_find_visible_enum_type_candidate_with_literal(SymTab_t *symtab,
+    const char *type_name, const char *field_id, long long *out_value)
+{
+    if (symtab == NULL || type_name == NULL || field_id == NULL || out_value == NULL)
+        return NULL;
+    if (g_semcheck_alias_target_probe_depth > 0)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, type_name);
+    HashNode_t *best = NULL;
+    long long best_value = 0;
+    int best_score = INT_MAX;
+
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        long long candidate_value = 0;
+        struct TypeAlias *candidate_alias = NULL;
+        int score = 0;
+
+        if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+            continue;
+        candidate_alias = hashnode_get_type_alias(candidate);
+        if (!semcheck_try_resolve_enum_literal_from_type_alias(symtab, candidate_alias,
+                field_id, &candidate_value))
+            continue;
+
+        if (symtab->unit_context > 0 && candidate->source_unit_index == symtab->unit_context)
+            score -= 4;
+        if (candidate->defined_in_unit)
+            score -= 2;
+        if (candidate->source_unit_index == 0)
+            score += 1;
+
+        if (best == NULL || score < best_score)
+        {
+            best = candidate;
+            best_value = candidate_value;
+            best_score = score;
+        }
+    }
+
+    if (matches != NULL)
+        DestroyList(matches);
+
+    if (best != NULL)
+        *out_value = best_value;
+    return best;
+}
+
 static HashNode_t *semcheck_find_any_proc_symbol(SymTab_t *symtab, const char *id)
 {
     if (symtab == NULL || id == NULL)
@@ -1591,9 +1859,31 @@ int semcheck_recordaccess(int *type_return,
      */
     if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
     {
-        HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, record_expr->expr_data.id) >= 0 && type_node != NULL &&
-            type_node->hash_type == HASHTYPE_TYPE)
+        long long enum_value = 0;
+        HashNode_t *enum_type_node = semcheck_find_visible_enum_type_candidate_with_literal(
+            symtab, record_expr->expr_data.id, field_id, &enum_value);
+        if (enum_type_node != NULL)
+        {
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = enum_value;
+            semcheck_expr_set_resolved_type(expr, ENUM_TYPE);
+            if (enum_type_node->type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, enum_type_node->type);
+            *type_return = ENUM_TYPE;
+            return 0;
+        }
+
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+            record_expr->expr_data.id);
+        if ((type_node == NULL || type_node->hash_type != HASHTYPE_TYPE) &&
+            FindIdent(&type_node, symtab, record_expr->expr_data.id) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            /* fall back to the raw symbol-table order only if the preferred lookup
+             * found nothing; full bootstrap has many visible aliases with the same
+             * base name, so raw FindIdent() can pick the wrong owner. */
+        }
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
             if (type_alias != NULL)
@@ -1940,18 +2230,62 @@ int semcheck_recordaccess(int *type_return,
                 }
                 else if (field_node->hash_type == HASHTYPE_TYPE)
                 {
-                    /* Unit.TypeName - transform to simple type reference */
-                    char *field_copy = strdup(field_id);
-                    if (field_copy == NULL)
+                    char *qualified_name = NULL;
+                    HashNode_t *qualified_type = NULL;
+                    size_t qualified_len = strlen(unit_id) + 1 + strlen(field_id) + 1;
+                    qualified_name = (char *)malloc(qualified_len);
+                    if (qualified_name != NULL)
+                        snprintf(qualified_name, qualified_len, "%s.%s", unit_id, field_id);
+
+                    if (qualified_name != NULL)
+                    {
+                        if (FindIdent(&qualified_type, symtab, qualified_name) < 0 ||
+                            qualified_type == NULL || qualified_type->hash_type != HASHTYPE_TYPE)
+                        {
+                            QualifiedIdent *qid = qualified_ident_from_dotted(qualified_name);
+                            if (qid != NULL)
+                            {
+                                qualified_type = semcheck_find_exact_qualified_type_node(symtab, qid);
+                                qualified_ident_free(qid);
+                            }
+                        }
+                    }
+
+                    if (qualified_name == NULL)
                     {
                         semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified type.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return 1;
                     }
+                    if (qualified_type == NULL)
+                    {
+                        semcheck_error_with_context(
+                            "Error on line %d: unable to resolve unit-qualified type %s.\n",
+                            expr->line_num, qualified_name);
+                        free(qualified_name);
+                        *type_return = UNKNOWN_TYPE;
+                        return 1;
+                    }
+
+                    if (record_expr != NULL)
+                    {
+                        destroy_expr(record_expr);
+                        expr->expr_data.record_access_data.record_expr = NULL;
+                    }
+                    if (expr->expr_data.record_access_data.field_id != NULL)
+                    {
+                        free(expr->expr_data.record_access_data.field_id);
+                        expr->expr_data.record_access_data.field_id = NULL;
+                    }
                     expr->type = EXPR_VAR_ID;
-                    expr->expr_data.id = field_copy;
-                    return semcheck_varid(type_return, symtab, expr, max_scope_lev, mutating);
+                    expr->expr_data.id = qualified_name;
+                    semcheck_expr_set_resolved_type(expr,
+                        semcheck_tag_from_kgpc(qualified_type->type));
+                    if (qualified_type->type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, qualified_type->type);
+                    *type_return = semcheck_tag_from_kgpc(qualified_type->type);
+                    return 0;
                 }
                 else if (field_node->hash_type == HASHTYPE_FUNCTION ||
                          field_node->hash_type == HASHTYPE_PROCEDURE)
@@ -2041,6 +2375,38 @@ int semcheck_recordaccess(int *type_return,
                 {
                     resolved_via_target = semcheck_resolve_scoped_enum_literal_ref(symtab,
                         type_alias->target_type_ref->name, field_id, &alias_target_value);
+                    HashNode_t *target_type_node = semcheck_find_exact_type_node_for_ref(symtab,
+                        type_alias->target_type_ref, type_alias->target_type_id, field_id);
+                    struct TypeAlias *target_alias =
+                        (target_type_node != NULL) ? hashnode_get_type_alias(target_type_node) : NULL;
+                    if (!resolved_via_target && semcheck_type_alias_has_enum_literal(target_alias, field_id))
+                    {
+                        int ordinal = 0;
+                        for (ListNode_t *literal_node = target_alias->enum_literals;
+                             literal_node != NULL; literal_node = literal_node->next, ++ordinal)
+                        {
+                            const char *literal_name = (const char *)literal_node->cur;
+                            if (literal_name != NULL &&
+                                pascal_identifier_equals(literal_name, field_id))
+                            {
+                                alias_target_value = ordinal;
+                                resolved_via_target = 1;
+                                break;
+                            }
+                        }
+                    }
+                    char *qualified_target = type_ref_render_source(type_alias->target_type_ref);
+                    if (!resolved_via_target && qualified_target != NULL)
+                    {
+                        resolved_via_target = semcheck_resolve_scoped_enum_literal(symtab,
+                            qualified_target, field_id, &alias_target_value);
+                        free(qualified_target);
+                    }
+                    if (!resolved_via_target)
+                    {
+                        resolved_via_target = semcheck_resolve_scoped_enum_literal_ref(symtab,
+                            type_alias->target_type_ref->name, field_id, &alias_target_value);
+                    }
                 }
                 else if (type_alias->target_type_id != NULL)
                 {
@@ -2071,6 +2437,38 @@ int semcheck_recordaccess(int *type_return,
                 {
                     resolved = semcheck_resolve_scoped_enum_literal_ref(symtab,
                         type_alias->target_type_ref->name, field_id, &enum_value);
+                    HashNode_t *target_type_node = semcheck_find_exact_type_node_for_ref(symtab,
+                        type_alias->target_type_ref, type_alias->target_type_id, field_id);
+                    struct TypeAlias *target_alias =
+                        (target_type_node != NULL) ? hashnode_get_type_alias(target_type_node) : NULL;
+                    if (!resolved && semcheck_type_alias_has_enum_literal(target_alias, field_id))
+                    {
+                        int ordinal = 0;
+                        for (ListNode_t *literal_node = target_alias->enum_literals;
+                             literal_node != NULL; literal_node = literal_node->next, ++ordinal)
+                        {
+                            const char *literal_name = (const char *)literal_node->cur;
+                            if (literal_name != NULL &&
+                                pascal_identifier_equals(literal_name, field_id))
+                            {
+                                enum_value = ordinal;
+                                resolved = 1;
+                                break;
+                            }
+                        }
+                    }
+                    char *qualified_target = type_ref_render_source(type_alias->target_type_ref);
+                    if (!resolved && qualified_target != NULL)
+                    {
+                        resolved = semcheck_resolve_scoped_enum_literal(symtab,
+                            qualified_target, field_id, &enum_value);
+                        free(qualified_target);
+                    }
+                    if (!resolved)
+                    {
+                        resolved = semcheck_resolve_scoped_enum_literal_ref(symtab,
+                            type_alias->target_type_ref->name, field_id, &enum_value);
+                    }
                 }
                 else if (type_alias->target_type_id != NULL)
                 {
@@ -2602,17 +3000,37 @@ SKIP_SELF_FIELD_REWRITE:
             /* Scoped enum through nested type: TClass.TEnum.Value
              * The inner access resolved to an enum type; look up field_id as a literal. */
             const char *enum_type_name = expr_type_name;
-            if (enum_type_name == NULL && record_expr->resolved_kgpc_type != NULL &&
-                record_expr->resolved_kgpc_type->type_alias != NULL)
+            struct TypeAlias *resolved_alias =
+                (record_expr->resolved_kgpc_type != NULL)
+                    ? record_expr->resolved_kgpc_type->type_alias : NULL;
+            if (enum_type_name == NULL && resolved_alias != NULL)
             {
-                enum_type_name = record_expr->resolved_kgpc_type->type_alias->alias_name;
+                enum_type_name = resolved_alias->alias_name;
                 if (enum_type_name == NULL)
-                    enum_type_name = record_expr->resolved_kgpc_type->type_alias->target_type_id;
+                    enum_type_name = resolved_alias->target_type_id;
             }
             long long enum_value = 0;
             int resolved = 0;
+            if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
+            {
+                HashNode_t *enum_type_node = semcheck_find_visible_enum_type_candidate_with_literal(
+                    symtab, record_expr->expr_data.id, field_id, &enum_value);
+                if (enum_type_node != NULL)
+                {
+                    resolved = 1;
+                    if (record_expr->resolved_kgpc_type == NULL && enum_type_node->type != NULL)
+                        semcheck_expr_set_resolved_kgpc_type_shared(record_expr,
+                            enum_type_node->type);
+                }
+            }
+            if (resolved_alias != NULL)
+            {
+                resolved = resolved || semcheck_try_resolve_enum_literal_from_type_alias(
+                    symtab, resolved_alias, field_id, &enum_value);
+            }
             if (enum_type_name != NULL)
-                resolved = semcheck_resolve_scoped_enum_literal(symtab, enum_type_name, field_id, &enum_value);
+                resolved = resolved || semcheck_resolve_scoped_enum_literal(symtab,
+                    enum_type_name, field_id, &enum_value);
             if (!resolved)
             {
                 /* Try looking up the field_id directly as a global enum constant */

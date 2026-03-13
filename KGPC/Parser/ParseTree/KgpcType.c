@@ -26,6 +26,7 @@
 #include "ident_ref.h"
 #include "../../format_arg.h"
 #include "../../identifier_utils.h"
+#include "../../unit_registry.h"
 
 /* Include symbol table headers for type resolution */
 #include "../SemanticCheck/HashTable/HashTable.h"
@@ -373,8 +374,59 @@ static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
             return node;
     }
 
-    return kgpc_find_type_node_with_unit_flag(symtab,
-        type_ref_base_name(type_ref), defined_in_unit);
+    const char *unit_name = type_ref->name->segments != NULL ?
+        type_ref->name->segments[0] : NULL;
+    const char *base_name = qualified_ident_last(type_ref->name);
+    if (unit_name == NULL || base_name == NULL)
+        return NULL;
+
+    HashNode_t *best = NULL;
+    ListNode_t *matches = FindAllIdents(symtab, base_name);
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+            continue;
+        const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+        if (candidate_unit == NULL ||
+            !pascal_identifier_equals(candidate_unit, unit_name))
+            continue;
+        if (best == NULL ||
+            (candidate->defined_in_unit == defined_in_unit &&
+             best->defined_in_unit != defined_in_unit) ||
+            (candidate->defined_in_unit && !best->defined_in_unit))
+        {
+            best = candidate;
+            if (candidate->defined_in_unit == defined_in_unit)
+                break;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    if (best != NULL)
+        return best;
+
+    /* Some imported alias types (for example ctypes.cint) collapse to a
+     * single visible underlying type node rather than keeping a distinct
+     * unit-owned entry. Preserve qualified lookup only when it is still
+     * unambiguous. */
+    HashNode_t *single = NULL;
+    matches = FindAllIdents(symtab, base_name);
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+            continue;
+        if (single != NULL && single != candidate)
+        {
+            single = NULL;
+            break;
+        }
+        single = candidate;
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return single;
 }
 
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
@@ -427,7 +479,6 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 /* Forward declarations for TypeAlias copy functions */
 static struct TypeAlias* copy_type_alias(const struct TypeAlias *src);
 static void free_copied_type_alias(struct TypeAlias *alias);
-
 int kgpc_type_is_real_family_tag(int primitive_tag)
 {
     return is_real_family_type(primitive_tag);
@@ -767,7 +818,6 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
             target_node = kgpc_find_type_node_with_unit_flag(symtab,
                 alias->target_type_id, defined_in_unit);
         if (target_node != NULL && target_node->type != NULL) {
-            /* Return the target's KgpcType (reference, not clone) */
             kgpc_type_retain(target_node->type);
             return target_node->type;
         }

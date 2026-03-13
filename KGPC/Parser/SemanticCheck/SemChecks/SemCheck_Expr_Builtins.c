@@ -114,6 +114,73 @@ static QualifiedIdent *build_qualified_ident_from_expr_local(struct Expression *
     return out;
 }
 
+static HashNode_t *semcheck_find_exact_qualified_type_node_local(SymTab_t *symtab,
+    const QualifiedIdent *type_ref)
+{
+    if (symtab == NULL || type_ref == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    char *qualified = qualified_ident_join(type_ref, ".");
+    if (qualified != NULL)
+    {
+        if (FindIdent(&type_node, symtab, qualified) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        type_node = semcheck_find_preferred_type_node(symtab, qualified);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        free(qualified);
+    }
+
+    if (type_ref->count > 1 && type_ref->segments != NULL && type_ref->segments[0] != NULL)
+    {
+        const char *unit_name = type_ref->segments[0];
+        const char *base_name = qualified_ident_last(type_ref);
+        if (base_name != NULL)
+        {
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            HashNode_t *best = NULL;
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                    continue;
+                const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                if (candidate_unit != NULL &&
+                    pascal_identifier_equals(candidate_unit, unit_name))
+                {
+                    best = candidate;
+                    if (candidate->defined_in_unit)
+                        break;
+                }
+                else if (candidate->defined_in_unit && best == NULL)
+                {
+                    /* Some imported unit-defined types are visible before their
+                     * source-unit metadata is stable enough for an exact match.
+                     * Keep the unit-defined candidate as a fallback instead of
+                     * failing the qualified lookup outright. */
+                    best = candidate;
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if (best != NULL)
+                return best;
+        }
+    }
+
+    TypeRef temp_ref = {0};
+    temp_ref.name = (QualifiedIdent *)type_ref;
+    return semcheck_find_preferred_type_node_with_ref(symtab, &temp_ref, NULL);
+}
+
 /*===========================================================================
  * String/Character Builtins
  *===========================================================================*/
@@ -2436,6 +2503,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             type_id_ref = qualified_ident_clone(arg_expr->id_ref);
         if (type_id_ref == NULL)
             type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+            type_id_ref = qualified_ident_from_dotted(qualified_name);
         if (type_id_ref != NULL && qualified_name == NULL)
             qualified_name = qualified_ident_join(type_id_ref, ".");
         if (type_id_ref != NULL)
@@ -2445,7 +2514,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                                                    : semcheck_base_type_name(raw_name);
         HashNode_t *type_node = NULL;
         if (type_ref != NULL)
-            type_node = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, raw_name);
+            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
         if (type_node == NULL)
             type_node = semcheck_find_preferred_type_node(symtab, raw_name);
         if (type_node == NULL && base_name != NULL && base_name != raw_name)
@@ -2653,6 +2722,83 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     {
         *type_return = UNKNOWN_TYPE;
         return error_count;
+    }
+
+    if (arg_kgpc_type == NULL &&
+        arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
+    {
+        char *qualified_name = NULL;
+        QualifiedIdent *type_id_ref = NULL;
+        TypeRef *type_ref = NULL;
+        if (arg_expr->type == EXPR_VAR_ID)
+            qualified_name = arg_expr->expr_data.id != NULL ? strdup(arg_expr->expr_data.id) : NULL;
+        else
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+        if (arg_expr->id_ref != NULL)
+            type_id_ref = qualified_ident_clone(arg_expr->id_ref);
+        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+            type_id_ref = qualified_ident_from_dotted(qualified_name);
+        if (type_id_ref == NULL && arg_expr->type == EXPR_RECORD_ACCESS)
+            type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+        if (type_id_ref != NULL)
+            type_ref = type_ref_create(type_id_ref, NULL, 0);
+
+        const char *raw_name = qualified_name;
+        const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
+                                                   : semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = NULL;
+        if (type_ref != NULL)
+            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
+        if (type_node == NULL && raw_name != NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        if (type_node == NULL && base_name != NULL && base_name != raw_name)
+            type_node = semcheck_find_preferred_type_node(symtab, base_name);
+
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = INT_TYPE;
+
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && alias != NULL && alias->range_known)
+            {
+                low = alias->range_start;
+                high = alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                semcheck_expr_set_resolved_type(expr, result_type);
+                if (qualified_name != NULL)
+                    free(qualified_name);
+                if (type_ref != NULL)
+                    type_ref_free(type_ref);
+                *type_return = result_type;
+                return 0;
+            }
+        }
+
+        if (qualified_name != NULL)
+            free(qualified_name);
+        if (type_ref != NULL)
+            type_ref_free(type_ref);
     }
 
     if (arg_expr->is_array_expr)

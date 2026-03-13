@@ -518,7 +518,11 @@ static TypeRef *type_ref_from_name_and_args(const char *base_name, ListNode_t *t
 {
     if (base_name == NULL)
         return NULL;
-    QualifiedIdent *qid = qualified_ident_from_single(base_name);
+    QualifiedIdent *qid = NULL;
+    if (strchr(base_name, '.') != NULL)
+        qid = qualified_ident_from_dotted(base_name);
+    else
+        qid = qualified_ident_from_single(base_name);
     if (qid == NULL)
         return NULL;
     int arg_count = ListLength(type_args);

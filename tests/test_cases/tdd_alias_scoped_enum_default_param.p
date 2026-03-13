@@ -1,35 +1,24 @@
-{$mode objfpc}
-{$modeswitch typehelpers}
 program tdd_alias_scoped_enum_default_param;
 
+{$mode objfpc}
+
+uses objpas;
+
 type
-  TEndianAlias = ObjPas.TEndian;
-  TBytes = array of Byte;
-  TGuidLike = record
-    D1: LongWord;
-  end;
+  TLocalEndian = ObjPas.TEndian;
 
 const
-  CPUEndian = TEndianAlias.Little;
+  CLocalEndian = TLocalEndian.Little;
 
-type
-  TGuidLikeHelper = type helper for TGuidLike
-    class function Create(const B: TBytes; DataEndian: TEndianAlias = CPUEndian): TGuidLike; static;
-  end;
-
-class function TGuidLikeHelper.Create(const B: TBytes; DataEndian: TEndianAlias): TGuidLike;
+function EndianName(E: TLocalEndian = CLocalEndian): string;
 begin
-  if DataEndian = TEndianAlias.Big then
-    Result.D1 := 1
+  if E = TLocalEndian.Little then
+    EndianName := 'little'
   else
-    Result.D1 := 0;
+    EndianName := 'big';
 end;
 
-var
-  B: TBytes;
-  G: TGuidLike;
 begin
-  SetLength(B, 1);
-  G := TGuidLike.Create(B);
-  Writeln(G.D1);
+  writeln(EndianName);
+  writeln(EndianName(TLocalEndian.Big));
 end.
