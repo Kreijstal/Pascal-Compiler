@@ -17,6 +17,7 @@ GenericTypeDecl* generic_registry_add_decl(const char* name, char** type_params,
     generic->num_type_params = num_params;
     generic->original_decl = decl;
     generic->record_template = NULL;
+    generic->nested_type_decls = NULL;
     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
         decl->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC) {
         generic->record_template = decl->tree_data.type_decl_data.info.generic.record_template;

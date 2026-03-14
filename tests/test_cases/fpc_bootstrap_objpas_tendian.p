@@ -9,9 +9,9 @@ var
   e: TEndian;
 
 begin
-  e := Little;
+  e := TEndian.Little;
   writeln('unit: ', EndianToString(e));
-  if e = Little then
+  if e = TEndian.Little then
     writeln('little')
   else
     writeln('big');

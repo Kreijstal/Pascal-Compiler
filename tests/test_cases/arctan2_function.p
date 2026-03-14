@@ -1,4 +1,5 @@
 program arctan2_function;
+uses Math;
 var
   r: real;
 begin

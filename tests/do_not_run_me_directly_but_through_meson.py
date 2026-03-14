@@ -2,6 +2,7 @@
 import argparse
 import concurrent.futures
 import json
+import locale
 import os
 import shutil
 import shlex
@@ -30,10 +31,70 @@ WINDOWS_ABI_PLATFORMS = ("win", "cygwin", "msys", "mingw")
 PLATFORM_ID = sys.platform.lower()
 IS_WINDOWS_ABI = os.name == "nt" or PLATFORM_ID.startswith(WINDOWS_ABI_PLATFORMS)
 
-# Detect if we're running under Wine (Windows Python on Linux)
-# This happens during cross-compilation testing
-# Check for Wine-specific environment variables
-IS_WINE = IS_WINDOWS_ABI and any(k.startswith("WINE") for k in os.environ)
+# Detect if we're running under Wine (Windows Python on Linux).
+# In CI this may be signaled either by WINE* environment variables or by
+# Meson's exe wrapper path when the Windows Python interpreter is launched
+# through `/usr/bin/wine`.
+_meson_exe_wrapper = os.environ.get("MESON_EXE_WRAPPER", "")
+IS_WINE = IS_WINDOWS_ABI and (
+    any(k.startswith("WINE") for k in os.environ)
+    or "wine" in _meson_exe_wrapper.lower()
+)
+EXE_EXT = ".exe" if IS_WINDOWS_ABI else ""
+
+_original_subprocess_run = subprocess.run
+
+def _patched_subprocess_run(args, **kwargs):
+    """Wrapper that resolves executable to absolute path on Wine."""
+    if IS_WINE and args and isinstance(args, (list, tuple)):
+        args = list(args)
+        if os.path.exists(args[0]):
+            args[0] = os.path.abspath(args[0])
+    return _original_subprocess_run(args, **kwargs)
+
+subprocess.run = _patched_subprocess_run
+
+# Wine's CreateProcess sometimes returns invalid thread handles, causing
+# _winapi.CloseHandle(ht) to raise OSError [WinError 6].  Patch CloseHandle
+# to silently ignore "invalid handle" errors so subprocess.Popen doesn't crash.
+if IS_WINE:
+    import _winapi  # type: ignore
+    _original_CloseHandle = _winapi.CloseHandle
+    def _safe_CloseHandle(handle):
+        try:
+            _original_CloseHandle(handle)
+        except OSError:
+            pass
+    _winapi.CloseHandle = _safe_CloseHandle
+
+    if hasattr(subprocess, "Handle"):
+        def _safe_handle_close(self):
+            if not self.closed:
+                self.closed = True
+                _safe_CloseHandle(self)
+
+        subprocess.Handle.Close = _safe_handle_close
+        subprocess.Handle.__del__ = _safe_handle_close
+
+    _original_popen_internal_poll = subprocess.Popen._internal_poll
+
+    def _safe_popen_internal_poll(self, *args, **kwargs):
+        try:
+            return _original_popen_internal_poll(self, *args, **kwargs)
+        except OSError:
+            return self.returncode
+
+    subprocess.Popen._internal_poll = _safe_popen_internal_poll
+
+    _original_popen_del = subprocess.Popen.__del__
+
+    def _safe_popen_del(self, *args, **kwargs):
+        try:
+            _original_popen_del(self, *args, **kwargs)
+        except OSError:
+            pass
+
+    subprocess.Popen.__del__ = _safe_popen_del
 
 # Path to the compiler executable
 # Get the build directory from the environment variable set by Meson.
@@ -122,6 +183,60 @@ LINK_ARGS_BY_ASM = {}
 
 FAILURE_ARTIFACT_DIR_ENV = os.environ.get("KGPC_CI_FAILURE_DIR")
 FAILURE_ARTIFACT_DIR = Path(FAILURE_ARTIFACT_DIR_ENV) if FAILURE_ARTIFACT_DIR_ENV else None
+
+# FPC RTL test mode: compile test cases against the Free Pascal Compiler RTL
+# instead of KGPC's own runtime. Set KGPC_FPC_RTL=1 to enable.
+FPC_RTL_MODE = os.environ.get("KGPC_FPC_RTL", "").lower() in ("1", "true", "yes")
+FPC_RTL_DIR = os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "rtl")
+
+# AST cache directory for FPC RTL mode — avoids re-parsing system.pp + objpas.pp
+# for every test (saves ~3.5s per test).
+# The cache is automatically invalidated when the compiler binary changes.
+_FPC_RTL_AST_CACHE_DIR = None
+if FPC_RTL_MODE:
+    _FPC_RTL_AST_CACHE_DIR = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_ast_cache"
+    )
+    # Invalidate cache when the compiler binary has been rebuilt
+    _cache_sentinel = os.path.join(_FPC_RTL_AST_CACHE_DIR, ".compiler_mtime")
+    _compiler_mtime = ""
+    if os.path.exists(KGPC_PATH):
+        st = os.stat(KGPC_PATH)
+        _compiler_mtime = f"{st.st_mtime_ns}:{st.st_size}"
+    _old_mtime = ""
+    if os.path.exists(_cache_sentinel):
+        with open(_cache_sentinel) as f:
+            _old_mtime = f.read().strip()
+    if _compiler_mtime != _old_mtime and os.path.isdir(_FPC_RTL_AST_CACHE_DIR):
+        shutil.rmtree(_FPC_RTL_AST_CACHE_DIR, ignore_errors=True)
+    os.makedirs(_FPC_RTL_AST_CACHE_DIR, exist_ok=True)
+    if _compiler_mtime:
+        with open(_cache_sentinel, "w") as f:
+            f.write(_compiler_mtime)
+
+FPC_RTL_FLAGS = [
+    "--no-stdlib",
+    "-I" + os.path.join(FPC_RTL_DIR, "linux"),
+    "-I" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+    "-I" + os.path.join(FPC_RTL_DIR, "inc"),
+    "-I" + os.path.join(FPC_RTL_DIR, "unix"),
+    "-I" + os.path.join(FPC_RTL_DIR, "x86_64"),
+    "-I" + os.path.join(FPC_RTL_DIR, "objpas", "sysutils"),
+    "-I" + os.path.join(FPC_RTL_DIR, "objpas", "classes"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "objpas"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "inc"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "linux"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "linux", "x86_64"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "x86_64"),
+    "-Fu" + os.path.join(FPC_RTL_DIR, "unix"),
+    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src", "inc"),
+    "-I" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "inc"),
+    "-Fu" + os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src", "unix"),
+]
+if _FPC_RTL_AST_CACHE_DIR is not None:
+    FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
 UNIT_ONLY_TESTS = {
     "directives_and_properties_unit",
@@ -292,12 +407,75 @@ def run_executable_with_valgrind(executable_args, **kwargs):
             kwargs["timeout"] = EXEC_TIMEOUT
         return subprocess.run(command, **kwargs)
 
-    # Prefer running with stdout/stderr attached to a pseudo-terminal so Crt / ANSI
-    # output matches behaviour under a real TTY.
+    if IS_WINE:
+        text_mode = bool(kwargs.get("text"))
+        input_data = kwargs.get("input")
+        check = bool(kwargs.get("check"))
+        capture_output = bool(kwargs.get("capture_output"))
+        timeout = kwargs.get("timeout", EXEC_TIMEOUT)
+
+        if timeout is not None:
+            # Wine's Windows-Python subprocess waits can fail with WinError 6
+            # for short-lived child processes. Use shell redirection instead.
+            timeout = None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            stdout_path = os.path.join(tmpdir, "stdout.txt")
+            stderr_path = os.path.join(tmpdir, "stderr.txt")
+            stdin_path = os.path.join(tmpdir, "stdin.txt")
+
+            if input_data is not None:
+                mode = "w" if text_mode else "wb"
+                with open(stdin_path, mode) as handle:
+                    handle.write(input_data)
+
+            command_line = subprocess.list2cmdline(command)
+            redirect_bits = []
+            if input_data is not None:
+                redirect_bits.append(f'< "{stdin_path}"')
+            redirect_bits.append(f'> "{stdout_path}"')
+            redirect_bits.append(f'2> "{stderr_path}"')
+            shell_command = f"{command_line} {' '.join(redirect_bits)}"
+
+            returncode = os.system(shell_command)
+
+            stdout_data = None
+            stderr_data = None
+            if capture_output:
+                read_mode = "r" if text_mode else "rb"
+                read_kwargs = (
+                    {
+                        "encoding": locale.getpreferredencoding(False) or "cp1252",
+                        "errors": "replace",
+                    }
+                    if text_mode
+                    else {}
+                )
+                with open(stdout_path, read_mode, **read_kwargs) as handle:
+                    stdout_data = handle.read()
+                with open(stderr_path, read_mode, **read_kwargs) as handle:
+                    stderr_data = handle.read()
+
+            completed = subprocess.CompletedProcess(
+                args=command,
+                returncode=returncode,
+                stdout=stdout_data,
+                stderr=stderr_data,
+            )
+            if check and returncode != 0:
+                raise subprocess.CalledProcessError(
+                    returncode, command, output=completed.stdout, stderr=completed.stderr
+                )
+            return completed
+
+    # PTY capture is opt-in. Most tests, and validation against real FPC invoked via
+    # subprocess pipes, should observe redirected-output behaviour rather than a fake TTY.
+    # Enable KGPC_USE_PTY_CAPTURE=1 when a test genuinely needs terminal semantics.
     #
     # Important: keep stdin as a pipe when input=... is provided, so test input is
     # not echoed by terminal line discipline.
-    if HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
+    use_pty_capture = os.environ.get("KGPC_USE_PTY_CAPTURE", "").lower() in ("1", "true", "yes")
+    if use_pty_capture and HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
         text_mode = bool(kwargs.get("text"))
         timeout = kwargs.get("timeout", EXEC_TIMEOUT)
         input_data = kwargs.get("input")
@@ -527,7 +705,12 @@ class TAPTestResult(unittest.TestResult):
         self._test_start_times = {}
 
     def _emit(self, line):
-        self.stream.write(f"{line}\n")
+        text = f"{line}\n"
+        encoding = getattr(self.stream, "encoding", None) or "utf-8"
+        safe_text = text.encode(
+            encoding, errors="backslashreplace"
+        ).decode(encoding, errors="replace")
+        self.stream.write(safe_text)
         self.stream.flush()
 
     def _emit_diagnostic(self, text):
@@ -1003,6 +1186,38 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
+        # Warm the AST cache for FPC RTL mode: compile a minimal dummy program
+        # so system.pp + objpas.pp are cached before individual tests run.
+        if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
+            dummy_src = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.p")
+            dummy_asm = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.s")
+            try:
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup; begin end.\n")
+                print("--- Warming FPC RTL AST cache ---", file=sys.stderr)
+                sys.stderr.flush()
+                run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
+                sys.stderr.flush()
+                # Also try to warm SysUtils/Classes/Math caches (may fail
+                # due to unsupported constructs, but AST caches are still
+                # written for successfully parsed units).
+                with open(dummy_src, "w") as f:
+                    f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
+                try:
+                    run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
+                    print("--- FPC RTL extended cache warmed ---", file=sys.stderr)
+                except Exception:
+                    print("--- FPC RTL extended cache partially warmed ---", file=sys.stderr)
+                sys.stderr.flush()
+            except Exception as e:
+                print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
+                sys.stderr.flush()
+            finally:
+                for tmp in (dummy_src, dummy_asm):
+                    if os.path.exists(tmp):
+                        os.unlink(tmp)
+
         cc_raw = os.environ.get("CC")
         if not cc_raw:
             # Attempt to infer CC from Meson build directory for local pytest runs.
@@ -1105,10 +1320,13 @@ class TestCompiler(unittest.TestCase):
         if cls.ctypes_helper_library is not None and not os.path.exists(
             cls.ctypes_helper_library
         ):
-            raise RuntimeError(
-                "ctypes helper shared library provided by Meson does not exist: "
-                f"{cls.ctypes_helper_library}"
-            )
+            if FPC_RTL_MODE:
+                cls.ctypes_helper_library = None  # Not needed for FPC RTL tests
+            else:
+                raise RuntimeError(
+                    "ctypes helper shared library provided by Meson does not exist: "
+                    f"{cls.ctypes_helper_library}"
+                )
 
         raw_ctypes_helper_link = os.environ.get("KGPC_CTYPES_HELPER_LINK")
         if raw_ctypes_helper_link is None and cls.ctypes_helper_library is not None:
@@ -1261,12 +1479,10 @@ class TestCompiler(unittest.TestCase):
         try:
             command = list(self.c_compiler_cmd)
             command.append("-O2")
-            if not IS_WINDOWS_ABI:
-                command.append("-no-pie")
+            if IS_WINDOWS_ABI:
+                command.append("-static")
             else:
-                # Allow user-provided shims (e.g., LoadLibrary_s) to override runtime
-                # fallbacks without duplicate-definition errors under MinGW.
-                command.append("-Wl,--allow-multiple-definition")
+                command.append("-no-pie")
             if is_coverage_enabled():
                 command.append("--coverage")
             command.extend([
@@ -1290,7 +1506,7 @@ class TestCompiler(unittest.TestCase):
     def _get_test_paths(self, name, extension="p"):
         input_file = os.path.join(TEST_CASES_DIR, f"{name}.{extension}")
         asm_file = os.path.join(TEST_OUTPUT_DIR, f"{name}.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, name)
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"{name}{EXE_EXT}")
         return input_file, asm_file, executable_file
 
     @classmethod
@@ -1413,7 +1629,7 @@ class TestCompiler(unittest.TestCase):
         """Tests DateUtils with custom regex verification."""
         input_file = os.path.join(TEST_CASES_DIR, "missing_dateutils.p")
         output_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "missing_dateutils")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"missing_dateutils{EXE_EXT}")
 
         # Compile
         run_compiler(input_file, output_file)
@@ -1676,7 +1892,7 @@ class TestCompiler(unittest.TestCase):
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -1754,7 +1970,7 @@ class TestCompiler(unittest.TestCase):
 
         run_compiler(input_file, asm_file)
 
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_dll_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_dll_demo{EXE_EXT}")
         if self.ctypes_helper_link is None:
             self.fail(
                 "Unable to locate ctypes helper import library; ensure Meson exposed it"
@@ -1794,12 +2010,12 @@ class TestCompiler(unittest.TestCase):
         """Ensures pointer helper aliases in ctypes behave like regular Pascal pointers."""
         input_file = os.path.join(TEST_CASES_DIR, "ctypes_pointer_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_pointer_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_pointer_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -1813,7 +2029,7 @@ class TestCompiler(unittest.TestCase):
         """Compiling pointer operators program should produce the expected output."""
         input_file = os.path.join(TEST_CASES_DIR, "pointer_operators.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_operators")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"pointer_operators{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -1832,7 +2048,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and runs a program that assigns NIL to a typed pointer."""
         input_file = os.path.join(TEST_CASES_DIR, "pointer_simple.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "pointer_simple")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"pointer_simple{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.assertTrue(os.path.exists(asm_file))
@@ -1855,7 +2071,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and runs a program that dereferences a typed pointer to a record."""
         input_file = os.path.join(TEST_CASES_DIR, "test_dereference_minimal.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "test_dereference_minimal")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"test_dereference_minimal{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.assertTrue(os.path.exists(asm_file))
@@ -1902,7 +2118,7 @@ class TestCompiler(unittest.TestCase):
         """Verifies string helpers, Inc, and dynamic arrays on NativeUInt values."""
         input_file = os.path.join(TEST_CASES_DIR, "runtime_features.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "runtime_features")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"runtime_features{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -1921,7 +2137,7 @@ class TestCompiler(unittest.TestCase):
         """Tests the sign function with positive, negative, and zero inputs."""
         input_file = "KGPC/TestPrograms/sign_test.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sign_test.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "sign_test")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"sign_test{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -1956,7 +2172,7 @@ class TestCompiler(unittest.TestCase):
         """Tests that the helloworld program prints 'Hello, World!'."""
         input_file = os.path.join(TEST_CASES_DIR, "helloworld.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "helloworld.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "helloworld")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"helloworld{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -1978,7 +2194,7 @@ class TestCompiler(unittest.TestCase):
         """Ensure extended statements parse, compile, and execute."""
         input_file = os.path.join(TEST_CASES_DIR, "statement_extensions.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "statement_extensions")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"statement_extensions{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -1997,7 +2213,7 @@ class TestCompiler(unittest.TestCase):
         """Exercise raise statements with try/except/finally control flow."""
         input_file = os.path.join(TEST_CASES_DIR, "exception_flow.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "exception_flow")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"exception_flow{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2028,7 +2244,7 @@ class TestCompiler(unittest.TestCase):
         """Compiles and executes a program exercising REAL arithmetic and IO."""
         input_file = os.path.join(TEST_CASES_DIR, "real_arithmetic.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "real_arithmetic")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"real_arithmetic{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.record_failure_context(
@@ -2052,7 +2268,7 @@ class TestCompiler(unittest.TestCase):
 
         input_file = os.path.join(TEST_CASES_DIR, "text_file_roundtrip.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "text_file_roundtrip")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"text_file_roundtrip{EXE_EXT}")
         output_path = os.path.join(TEST_OUTPUT_DIR, "text_roundtrip.txt")
 
         run_compiler(input_file, asm_file)
@@ -2109,7 +2325,6 @@ class TestCompiler(unittest.TestCase):
         )
 
         expected_prompt = (
-            "\033[H\033[m\033[H\033[2J"
             "Enter name 1 out of 3\n"
             "Enter that person's email.\n"
             "Enter name 2 out of 3\n"
@@ -2175,7 +2390,7 @@ class TestCompiler(unittest.TestCase):
 
         source = os.path.join(TEST_CASES_DIR, "keyboard_arrow.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow.s")
-        exe_file = os.path.join(TEST_OUTPUT_DIR, "keyboard_arrow")
+        exe_file = os.path.join(TEST_OUTPUT_DIR, f"keyboard_arrow{EXE_EXT}")
 
         run_compiler(source, asm_file)
         self.compile_executable(asm_file, exe_file)
@@ -2190,7 +2405,7 @@ class TestCompiler(unittest.TestCase):
             timeout=EXEC_TIMEOUT,
             check=True,
         )
-        expected_output = "\x1b[H\x1b[m\x1b[H\x1b[2J0\n72\n10\n3\n"
+        expected_output = "0\n72\n10\n3\n"
         self.assertEqual(kgpc_run.stdout, expected_output)
 
     def test_run_executable_with_valgrind_pty_crlf_and_echo(self):
@@ -2198,6 +2413,17 @@ class TestCompiler(unittest.TestCase):
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_crlf_and_echo_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_crlf_and_echo_impl(self):
         helper_body = r"""
 sys.stdout.write("line1\n")
 sys.stdout.write("line2\r\n")
@@ -2235,6 +2461,17 @@ sys.stdout.flush()
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_timeout_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_timeout_impl(self):
         helper_body = r"""
 time.sleep(10.0)
 sys.stdout.write("should-not-see-this\n")
@@ -2258,6 +2495,17 @@ sys.stdout.flush()
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
 
+        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
+        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
+        try:
+            self._test_pty_vs_non_pty_equivalence_impl()
+        finally:
+            if old_val is None:
+                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
+            else:
+                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+
+    def _test_pty_vs_non_pty_equivalence_impl(self):
         helper_body = r"""
 sys.stdout.write("hello\n")
 sys.stderr.write("world\n")
@@ -2302,7 +2550,7 @@ sys.exit(3)
         """Tests const expressions with bitwise ops, NOT, and shifts."""
         input_file = os.path.join(TEST_CASES_DIR, "const_expr_operators.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_operators")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"const_expr_operators{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2323,7 +2571,7 @@ sys.exit(3)
         """Tests integer typecasts in const expressions."""
         input_file = os.path.join(TEST_CASES_DIR, "const_expr_typecasts.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "const_expr_typecasts")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"const_expr_typecasts{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2344,7 +2592,7 @@ sys.exit(3)
         """Tests FPC-style bracket directives and interface-level properties."""
         input_file = os.path.join(TEST_CASES_DIR, "directives_and_properties.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "directives_and_properties")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"directives_and_properties{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2362,7 +2610,7 @@ sys.exit(3)
         """Tests repeat-until loops and variable type inference."""
         input_file = os.path.join(TEST_CASES_DIR, "repeat_infer.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "repeat_infer")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"repeat_infer{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2380,13 +2628,13 @@ sys.exit(3)
         """Tests that const declarations and array indexing work together."""
         input_file = os.path.join(TEST_CASES_DIR, "array_const.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "array_const.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "array_const")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"array_const{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2402,7 +2650,7 @@ sys.exit(3)
         """Tests that a program declaring a record type compiles and runs."""
         input_file = os.path.join(TEST_CASES_DIR, "record_decl_only.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_decl_only")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"record_decl_only{EXE_EXT}")
 
         # Compile the pascal program to assembly. This exercises the record type
         # conversion logic added to the cparser import path.
@@ -2425,7 +2673,7 @@ sys.exit(3)
         """Exercises record assignment, address-of, and var parameter support."""
         input_file = os.path.join(TEST_CASES_DIR, "record_reference_features.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "record_reference_features")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"record_reference_features{EXE_EXT}")
         expected_output_file = os.path.join(
             TEST_CASES_DIR, "record_reference_features.expected"
         )
@@ -2495,7 +2743,7 @@ sys.exit(3)
         """Compiles and runs a minimal variant record example."""
         input_file = os.path.join(TEST_CASES_DIR, "variant_record_minimal.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "variant_record_minimal")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"variant_record_minimal{EXE_EXT}")
         expected_output_file = os.path.join(
             TEST_CASES_DIR, "variant_record_minimal.expected"
         )
@@ -2536,7 +2784,7 @@ sys.exit(3)
         expected_output = (
             read_file_content(expected_output_file).strip().splitlines()
         )
-        result = subprocess.run(
+        result = run_executable_with_valgrind(
             [executable_file],
             check=True,
             capture_output=True,
@@ -2553,7 +2801,7 @@ sys.exit(3)
             TEST_CASES_DIR, "with_nested_multi_context.p"
         )
         asm_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "with_nested_multi_context")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"with_nested_multi_context{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2573,7 +2821,7 @@ sys.exit(3)
         """Tests that the mod operator works correctly."""
         input_file = os.path.join(TEST_CASES_DIR, "mod_test.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "mod_test.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "mod_test")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"mod_test{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2595,13 +2843,13 @@ sys.exit(3)
         """Tests that string addition produces a concatenated result."""
         input_file = os.path.join(TEST_CASES_DIR, "string_concat_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "string_concat_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"string_concat_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2618,7 +2866,7 @@ sys.exit(3)
         """Tests that the SysUtils unit links and provides basic helpers."""
         input_file = os.path.join(TEST_CASES_DIR, "sysutils_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "sysutils_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"sysutils_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2654,7 +2902,7 @@ sys.exit(3)
         """Ensures inline asm constants are emitted from Pascal const declarations."""
         input_file = os.path.join(TEST_CASES_DIR, "asm_const_equ.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "asm_const_equ")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"asm_const_equ{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
 
@@ -2681,7 +2929,7 @@ sys.exit(3)
         """Ensures the Unix unit exposes GetHostName with actual hostname output."""
         input_file = os.path.join(TEST_CASES_DIR, "unix_gethostname_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "unix_gethostname_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"unix_gethostname_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2710,7 +2958,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2735,13 +2983,13 @@ sys.exit(3)
         """Ensures the Ord builtin converts characters to their ordinal values."""
         input_file = os.path.join(TEST_CASES_DIR, "ord_builtin.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ord_builtin")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ord_builtin{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2762,13 +3010,13 @@ sys.exit(3)
         """Ensures typed constant arrays are lowered into runtime initializers."""
         input_file = os.path.join(TEST_CASES_DIR, "typed_const_array_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "typed_const_array_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"typed_const_array_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2796,7 +3044,7 @@ sys.exit(3)
         self.compile_executable(asm_file, executable_file)
 
         try:
-            process = subprocess.run(
+            process = run_executable_with_valgrind(
                 [executable_file],
                 capture_output=True,
                 text=True,
@@ -2828,7 +3076,7 @@ sys.exit(3)
         """Ensures the ctypes unit exposes C compatible aliases."""
         input_file = os.path.join(TEST_CASES_DIR, "ctypes_demo.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "ctypes_demo")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"ctypes_demo{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2869,7 +3117,7 @@ sys.exit(3)
         """Ensures the zahlen classification demo compiles and executes with dynamic arrays."""
         input_file = os.path.join(TEST_CASES_DIR, "zahlen.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "zahlen_run")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"zahlen_run{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -2909,7 +3157,7 @@ sys.exit(3)
         """Tests the for program, including edge cases."""
         input_file = "KGPC/TestPrograms/CodeGeneration/for.p"
         asm_file = os.path.join(TEST_OUTPUT_DIR, "for.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "for")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"for{EXE_EXT}")
 
         # Compile the pascal program to assembly
         run_compiler(input_file, asm_file)
@@ -2951,7 +3199,7 @@ sys.exit(3)
         """Assert(False, 'msg') must print the message to stderr and exit with code 227."""
         input_file = os.path.join(TEST_CASES_DIR, "assert_fail.p")
         asm_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail.s")
-        executable_file = os.path.join(TEST_OUTPUT_DIR, "assert_fail")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, f"assert_fail{EXE_EXT}")
 
         run_compiler(input_file, asm_file)
         self.compile_executable(asm_file, executable_file)
@@ -3022,7 +3270,7 @@ def _discover_and_add_auto_tests():
                 
                 input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
-                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto{EXE_EXT}")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
@@ -3121,11 +3369,120 @@ def _discover_and_add_auto_tests():
         setattr(TestCompiler, method_name, make_test_method(base_name))
 
 
+
+# Tests that use KGPC-only extensions not available in FPC RTL mode.
+KGPC_ONLY_TESTS = {
+    'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+
+def _discover_and_add_fpc_rtl_tests():
+    """
+    When KGPC_FPC_RTL=1, replace auto-discovered tests with FPC RTL variants.
+    Each test compiles with --no-stdlib and FPC RTL include/unit paths.
+    Tests that fail to compile are skipped (not failed).
+    Tests in KGPC_ONLY_TESTS are skipped entirely.
+    """
+    if not FPC_RTL_MODE:
+        return
+    if not os.path.isdir(FPC_RTL_DIR):
+        return
+
+    if not os.path.isdir(TEST_CASES_DIR):
+        return
+
+    expected_files = []
+    for filename in os.listdir(TEST_CASES_DIR):
+        if filename.endswith('.expected'):
+            base_name = filename[:-9]
+            pascal_file = os.path.join(TEST_CASES_DIR, base_name + '.p')
+            if os.path.isfile(pascal_file):
+                expected_files.append(base_name)
+
+    expected_files.sort()
+
+    for base_name in expected_files:
+        if base_name in KGPC_ONLY_TESTS:
+            continue
+
+        method_name = 'test_fpcrtl_' + base_name.replace('-', '_').replace(' ', '_')
+
+        if hasattr(TestCompiler, method_name):
+            continue
+
+        def make_fpc_rtl_test(test_base_name):
+            def test_method(self):
+                """FPC RTL test case."""
+                input_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.p")
+                asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl.s")
+                executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_fpcrtl{EXE_EXT}")
+                expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
+                input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
+
+                try:
+                    compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
+                except subprocess.CalledProcessError:
+                    self.fail(f"FPC RTL compilation failed for {test_base_name}")
+                    return
+
+                try:
+                    self.compile_executable(asm_file, executable_file)
+                except Exception:
+                    self.fail(f"FPC RTL linking failed for {test_base_name}")
+                    return
+
+                stdin_input = None
+                if os.path.exists(input_data_file):
+                    stdin_input = read_file_content(input_data_file)
+
+                try:
+                    if stdin_input is not None:
+                        process = run_executable_with_valgrind(
+                            [executable_file],
+                            capture_output=True, text=True,
+                            timeout=EXEC_TIMEOUT, input=stdin_input,
+                        )
+                    else:
+                        process = run_executable_with_valgrind(
+                            [executable_file],
+                            capture_output=True, text=True,
+                            timeout=EXEC_TIMEOUT,
+                        )
+                except subprocess.TimeoutExpired:
+                    self.fail(f"FPC RTL test {test_base_name} timed out")
+                    return
+
+                expected_output = read_file_content(expected_output_file)
+                text = process.stdout or ""
+                while "\r\r\n" in text:
+                    text = text.replace("\r\r\n", "\r\n")
+                actual_output = text.replace("\r\n", "\n").replace("\r", "")
+
+                self.assertEqual(actual_output, expected_output)
+                self.assertEqual(process.returncode, 0)
+
+            test_method.__name__ = method_name
+            test_method.__doc__ = f"FPC RTL test for {test_base_name}.p"
+            return test_method
+
+        setattr(TestCompiler, method_name, make_fpc_rtl_test(base_name))
+
+
 # Auto-discover and add tests before loading the suite
-_discover_and_add_auto_tests()
+if FPC_RTL_MODE:
+    _discover_and_add_fpc_rtl_tests()
+else:
+    _discover_and_add_auto_tests()
 
 
 def _load_suite():
+    if FPC_RTL_MODE:
+        # Only load FPC RTL tests, skip manual tests
+        suite = unittest.TestSuite()
+        for name in sorted(dir(TestCompiler)):
+            if name.startswith('test_fpcrtl_'):
+                suite.addTest(TestCompiler(name))
+        return suite
     return unittest.defaultTestLoader.loadTestsFromModule(sys.modules[__name__])
 
 

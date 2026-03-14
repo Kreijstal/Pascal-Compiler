@@ -74,6 +74,7 @@ type
 
     tsignalhandler = signalhandler_t;
     tsigactionhandler = sigactionhandler_t;
+    SignalHandler = signalhandler_t;
 
     { Signal action record for Linux x86-64 }
     psigactionrec = ^sigactionrec;
@@ -88,9 +89,12 @@ type
 function GetHostName: string;
 function GetDomainName: string;
 function WaitProcess(Pid: cint): cint;
+function fpSystem(const Command: RawByteString): cint;
 function W_EXITCODE(ReturnCode: integer; Signal: integer): integer;
 function W_STOPCODE(Signal: integer): integer;
 function WIFSTOPPED(Status: integer): boolean;
+function FpExecL(const PathName: RawByteString; const S: array of RawByteString): cint;
+function FpExecl(const PathName: PAnsiChar; const S: array of RawByteString): cint;
 
 { Signal functions }
 function fpsigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint;
@@ -108,6 +112,28 @@ function kgpc_unix_w_exitcode(return_code: integer; signal_code: integer): integ
 function kgpc_unix_w_stopcode(signal_code: integer): integer; external;
 function kgpc_unix_wifstopped(status: integer): cint; external;
 function kgpc_unix_sigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint; external;
+function c_execv(path: PAnsiChar; argv: PPAnsiChar): cint; cdecl; external name 'execv';
+function c_system(cmd: PAnsiChar): cint; cdecl; external name 'system';
+
+function build_exec_argv(path: PAnsiChar; const S: array of RawByteString): PPAnsiChar;
+var
+    argc, i: integer;
+    argv: PPAnsiChar;
+begin
+    argc := high(S) + 1;
+    if argc < 0 then
+        argc := 0;
+    GetMem(argv, (argc + 2) * SizeOf(PAnsiChar));
+    argv[0] := path;
+    i := 0;
+    while i < argc do
+    begin
+        argv[i + 1] := PAnsiChar(S[i]);
+        i := i + 1;
+    end;
+    argv[argc + 1] := nil;
+    build_exec_argv := argv;
+end;
 
 function GetHostName: string;
 begin
@@ -124,6 +150,11 @@ begin
     WaitProcess := kgpc_unix_wait_process(Pid);
 end;
 
+function fpSystem(const Command: RawByteString): cint;
+begin
+    fpSystem := c_system(PAnsiChar(Command));
+end;
+
 function W_EXITCODE(ReturnCode: integer; Signal: integer): integer;
 begin
     W_EXITCODE := kgpc_unix_w_exitcode(ReturnCode, Signal);
@@ -137,6 +168,34 @@ end;
 function WIFSTOPPED(Status: integer): boolean;
 begin
     WIFSTOPPED := kgpc_unix_wifstopped(Status) <> 0;
+end;
+
+function FpExecL(const PathName: RawByteString; const S: array of RawByteString): cint;
+var
+    argv: PPAnsiChar;
+begin
+    if PathName = '' then
+    begin
+        FpExecL := -1;
+        exit;
+    end;
+    argv := build_exec_argv(PAnsiChar(PathName), S);
+    FpExecL := c_execv(PAnsiChar(PathName), argv);
+    FreeMem(argv);
+end;
+
+function FpExecl(const PathName: PAnsiChar; const S: array of RawByteString): cint;
+var
+    argv: PPAnsiChar;
+begin
+    if PathName = nil then
+    begin
+        FpExecl := -1;
+        exit;
+    end;
+    argv := build_exec_argv(PathName, S);
+    FpExecl := c_execv(PathName, argv);
+    FreeMem(argv);
 end;
 
 function fpsigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint;

@@ -16,6 +16,7 @@ struct GenericTypeDecl {
     int num_type_params;           // Number of type parameters
     Tree_t* original_decl;         // Original AST node for the generic declaration
     struct RecordType *record_template; // Cached record/class template for instantiation
+    ListNode_t *nested_type_decls; // Nested type declarations (e.g., TFPGList.PT)
     GenericTypeDecl* next;         // Linked list of generic declarations
 };
 

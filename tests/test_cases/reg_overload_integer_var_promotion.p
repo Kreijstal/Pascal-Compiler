@@ -1,7 +1,10 @@
 {$mode objfpc}
 program reg_overload_integer_var_promotion;
 
-function Which(i: Integer): Integer; overload;
+{ In FPC, Integer = LongInt (both 32-bit), so they cannot be separate overloads.
+  Use SmallInt (16-bit) as a truly distinct type instead. }
+
+function Which(i: SmallInt): Integer; overload;
 begin
   Which := 1;
 end;
@@ -17,7 +20,7 @@ begin
 end;
 
 var
-  x: Integer;
+  x: SmallInt;
   y: LongInt;
   z: Int64;
 begin

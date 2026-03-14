@@ -69,6 +69,7 @@
 
 /* Variant type – auto-coerces to/from any value type at runtime */
 #define VARIANT_TYPE        44
+#define EXTENDED_TYPE       45
 
 /*
  * Type classification utilities
@@ -117,6 +118,11 @@ static inline int is_unsigned_integer_type(int type_tag)
 {
     return (type_tag == BYTE_TYPE || type_tag == WORD_TYPE || type_tag == LONGWORD_TYPE ||
             type_tag == QWORD_TYPE);
+}
+
+static inline int is_real_family_type(int type_tag)
+{
+    return (type_tag == REAL_TYPE || type_tag == EXTENDED_TYPE);
 }
 
 /**

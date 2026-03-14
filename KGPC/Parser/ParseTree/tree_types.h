@@ -43,9 +43,11 @@ struct TypeAlias
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;
     int is_shortstring;
+    int is_wide_string;
     int is_open_array;
     ListNode_t *array_dimensions;
     int is_pointer;
+    int is_class_reference;  /* 1 if declared as "class of T" */
     int pointer_type;
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;
@@ -57,6 +59,7 @@ struct TypeAlias
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     int enum_is_scoped;        /* 1 if declared under {$SCOPEDENUMS ON} */
+    int enum_has_explicit_values; /* 1 if any literal had an explicit assigned value */
     ListNode_t *enum_literals;
     int is_file;
     int file_type;
@@ -129,6 +132,9 @@ struct MethodInfo
     int is_virtual;           /* 1 if declared virtual */
     int is_override;          /* 1 if declared override */
     int vmt_index;            /* Index in VMT (-1 if not virtual) */
+    int param_count;          /* Parameter count (excluding implicit Self) */
+    char *param_sig;          /* Optional parameter signature string */
+    char *resolved_mangled_id; /* Fully resolved mangled ID for codegen (set by semcheck) */
 };
 
 enum MethodTemplateKind
@@ -157,6 +163,7 @@ struct MethodTemplate
     struct ast_t *return_type_ast;  /* Pointer inside method_ast for return type */
     struct ast_t *directives_ast;   /* Pointer inside method_ast for directives */
     struct ast_t *method_impl_ast;  /* Cloned AST for the implementation */
+    int source_offset;              /* g_source_offset when template was created */
 };
 
 struct RecordType
@@ -168,10 +175,12 @@ struct RecordType
     ListNode_t *method_templates; /* Template methods captured from declarations */
     int is_class;             /* 1 if this record represents a class */
     int is_interface;         /* 1 if this record represents an interface */
+    int is_packed;            /* 1 if declared as packed/bitpacked record/object */
     int is_type_helper;       /* 1 if this record represents a type helper */
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
+    int parent_fields_merged; /* 1 if parent class fields have been merged into fields */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
     struct GenericTypeDecl *generic_decl; /* Owning generic declaration, if any */
@@ -191,6 +200,7 @@ struct RecordType
     uint8_t guid_d4[8];
     char **interface_names;        /* Names of interfaces this class implements */
     int num_interfaces;            /* Number of entries in interface_names */
+    int source_unit_index;         /* Unit registry index for the unit that defined this record (0 = none) */
 };
 
 static inline int record_type_is_class(const struct RecordType *record)
@@ -275,6 +285,7 @@ struct Statement
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
+            int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
         } procedure_call_data;
 
         /* Expression statement */
@@ -511,11 +522,15 @@ struct Expression
             struct Expression *procedural_var_expr;  /* Expression yielding a function pointer (for record fields, etc.) */
             int is_method_call_placeholder;          /* 1 if created from member access and needs method resolution */
             char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
+            int is_constructor_call;                 /* 1 if this call was resolved as a class constructor */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
+            int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
+            struct Expression *constructor_receiver_expr; /* Original explicit constructor receiver for codegen */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
+            int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
         } function_call_data;
 
         /* Integer number */
@@ -643,6 +658,7 @@ struct Expression
     int array_is_dynamic;
     struct RecordType *array_element_record_type;
     int is_default_initializer;
+    int is_specialize_addr_target;
 };
 
 struct SetElement

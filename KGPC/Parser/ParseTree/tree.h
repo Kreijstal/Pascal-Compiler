@@ -17,6 +17,7 @@ struct KgpcType;
 
 /* Types */
 typedef struct Tree Tree_t;
+struct HashNode;
 
 /* Enum for readability */
 enum TreeType{TREE_PROGRAM_TYPE, TREE_SUBPROGRAM, TREE_VAR_DECL, TREE_ARR_DECL,
@@ -69,6 +70,7 @@ typedef struct Tree
             char *id;
             enum TypeDeclKind kind;
             struct KgpcType *kgpc_type;
+            int suppress_codegen;
             int defined_in_unit;
             int unit_is_public;
             int source_unit_index; /* Unit registry index (0 = local/unknown) */
@@ -118,13 +120,18 @@ typedef struct Tree
             char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
             int num_generic_type_params;  /* Number of generic type parameters */
             struct ast_t *generic_template_ast; /* AST template for generic subprogram cloning */
+            int generic_template_source_offset; /* source buffer offset active when template was saved */
             char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */
             char *method_name;            /* Bare method name (NULL for non-methods) */
             char *owner_class;            /* Innermost owning class name (NULL for non-methods) */
             char *owner_class_full;       /* Full dotted class path for nested classes, e.g. "TOuter.TInner" (NULL for non-methods or non-nested) */
             char *owner_class_outer;      /* Outer class path for nested classes, e.g. "TOuter" for "TOuter.TInner" (NULL if not nested) */
+            int is_constructor;           /* 1 if declared with constructor */
+            int is_static_method;         /* 1 if method is static (no implicit Self) */
             int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
             int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
+            char *internproc_id;          /* FPC [INTERNPROC: name] identifier (e.g. "fpc_in_Rewrite_TypedFile") */
+            struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
         } subprogram_data;
 
         /* A variable declaration */
@@ -136,6 +143,7 @@ typedef struct Tree
             char *type_id;
             struct TypeRef *type_ref;
             int is_var_param;
+            int is_const_param;
             int is_untyped_param;
             int inferred_type;
             struct Statement *initializer;
@@ -146,6 +154,7 @@ typedef struct Tree
             struct KgpcType *cached_kgpc_type;   /* Retained type info for codegen fallback */
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
             char *cname_override;    /* External/public name alias (FPC bootstrap) */
             int is_external;         /* True if declared with 'external name' */
             char *absolute_target;   /* Absolute alias target name, if any */
@@ -176,6 +185,9 @@ typedef struct Tree
             char *init_guard_label;
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
+            char *unresolved_index_type;  /* Deferred enum index type name, resolved after all units load */
+            ListNode_t *array_dimensions;  /* Multi-dim range strings, e.g. ["1..3", "1..4"] */
         } arr_decl_data;
 
         /* A constant declaration */
@@ -187,6 +199,7 @@ typedef struct Tree
             struct Expression *value;
             int defined_in_unit;
             int unit_is_public;
+            int source_unit_index;   /* Unit registry index (0 = local/program) */
         } const_decl_data;
 
         /* A single statement (Can be made up of multiple statements) */

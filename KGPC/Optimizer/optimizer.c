@@ -372,7 +372,11 @@ static int remove_var_decls_set(SymTab_t *symtab, const IdSet *ids, ListNode_t *
     while (var_decls != NULL)
     {
         Tree_t *var_decl = (Tree_t *)var_decls->cur;
-        assert(var_decl->type == TREE_VAR_DECL);
+        if (var_decl->type != TREE_VAR_DECL)
+        {
+            var_decls = var_decls->next;
+            continue;
+        }
 
         ListNode_t *decl_ids = var_decl->tree_data.var_decl_data.ids;
         ListNode_t *prev = NULL;

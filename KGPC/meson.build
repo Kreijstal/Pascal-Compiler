@@ -98,7 +98,16 @@ gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 runtime_sources = ['runtime.c']
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
+  runtime_sources += 'runtime_fpc_abstract_stubs.S'
+  runtime_sources += 'runtime_fpc_rtl_compat.S'
+  runtime_sources += 'runtime_fpc_interlocked_aliases.c'
+  runtime_sources += 'runtime_widechar_assign_olevariant.c'
+  runtime_sources += 'runtime_olevariant_assign.c'
 endif
+runtime_sources += 'runtime_fpc_pchar_to_shortstr.c'
+runtime_sources += 'runtime_fpc_pchar_to_shortstr_upper.c'
+runtime_sources += 'runtime_fpc_assign.c'
+runtime_sources += 'runtime_fpc_init.c'
 runtime_deps = []
 runtime_c_args = ['-O2']
 
@@ -109,6 +118,9 @@ if gmp_dep.found()
 else
   runtime_c_args += ['-DHAVE_GMP=0']
 endif
+
+pthread_dep = dependency('threads', required: true)
+runtime_deps += [pthread_dep]
 
 if host_machine.system() != 'windows'
   runtime_deps += [compiler.find_library('dl', required: true)]
@@ -167,3 +179,29 @@ test('Compiler tests', python,
   protocol: 'tap',
   timeout: 1800,
 )
+
+if get_option('run_fpc_rtl_tests')
+  fpc_rtl_env = environment()
+  fpc_rtl_env.set('KGPC_FPC_RTL', '1')
+  fpc_rtl_env.set('MESON_BUILD_ROOT', meson.project_build_root())
+  fpc_rtl_env.set('CC', ' '.join(compiler.cmd_array()))
+  fpc_rtl_env.set('KGPC_RUNTIME_LIB', kgpc_runtime_lib.full_path())
+  fpc_rtl_env.set('KGPC_HAVE_GMP', gmp_dep.found() ? '1' : '0')
+  fpc_rtl_env.set('RUN_BUGGY_TEST', 'false')
+  fpc_rtl_env.set('RUN_VALGRIND_TESTS', 'false')
+  # FPC RTL compilation is CPU-bound (~4s per test parsing system.pp).
+  # Allow parallel compilations to utilise available cores.
+  num_cpus = run_command('python3', '-c', 'import os; print(os.cpu_count() or 2)', check: false).stdout().strip()
+  fpc_rtl_env.set('KGPC_COMPILER_PARALLEL_LIMIT', num_cpus)
+  test('FPC RTL tests', python,
+    args: [
+      meson.project_source_root() / 'tests/do_not_run_me_directly_but_through_meson.py',
+      '--tap',
+    ],
+    workdir: meson.project_source_root(),
+    depends: [kgpc_cparser_exe, kgpc_runtime_lib],
+    env: fpc_rtl_env,
+    protocol: 'tap',
+    timeout: 3600,
+  )
+endif

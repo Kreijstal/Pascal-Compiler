@@ -108,6 +108,94 @@ void semcheck_set_array_info_from_kgpctype(struct Expression *expr, SymTab_t *sy
     (void)line_num;
 }
 
+KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
+    struct Expression *expr, int *owned_out)
+{
+    if (owned_out != NULL)
+        *owned_out = 0;
+    if (expr == NULL)
+        return NULL;
+
+    KgpcType *resolved = expr->resolved_kgpc_type;
+    if (resolved != NULL &&
+        resolved->kind == TYPE_KIND_POINTER &&
+        expr->pointer_subtype_id != NULL)
+    {
+        KgpcType *inner = resolved->info.points_to;
+        if (inner == NULL ||
+            (inner->kind == TYPE_KIND_PRIMITIVE &&
+             inner->info.primitive_type_tag == RECORD_TYPE))
+        {
+            HashNode_t *type_node = NULL;
+            if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) == 0 &&
+                type_node != NULL && type_node->type != NULL)
+            {
+                kgpc_type_retain(type_node->type);
+                KgpcType *effective = create_pointer_type(type_node->type);
+                kgpc_type_release(type_node->type);
+                if (effective != NULL && owned_out != NULL)
+                    *owned_out = 1;
+                if (effective != NULL)
+                    return effective;
+            }
+        }
+    }
+
+    if (resolved == NULL &&
+        expr->pointer_subtype == POINTER_TYPE &&
+        expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) == 0 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            kgpc_type_retain(type_node->type);
+            KgpcType *effective = create_pointer_type(type_node->type);
+            kgpc_type_release(type_node->type);
+            if (effective != NULL && owned_out != NULL)
+                *owned_out = 1;
+            return effective;
+        }
+    }
+
+    return resolved;
+}
+
+int semcheck_class_type_ids_compatible(SymTab_t *symtab,
+    const char *formal_id, const char *actual_id)
+{
+    if (symtab == NULL || formal_id == NULL || actual_id == NULL)
+        return 0;
+    if (pascal_identifier_equals(formal_id, actual_id))
+        return 1;
+
+    struct RecordType *formal_record = semcheck_lookup_record_type(symtab, formal_id);
+    struct RecordType *actual_record = semcheck_lookup_record_type(symtab, actual_id);
+    if (formal_record == NULL || actual_record == NULL)
+        return 0;
+
+    if (actual_record == formal_record)
+        return 1;
+
+    const char *parent = actual_record->parent_class_name;
+    while (parent != NULL)
+    {
+        if (pascal_identifier_equals(parent, formal_id))
+            return 1;
+        struct RecordType *parent_record = semcheck_lookup_record_type(symtab, parent);
+        if (parent_record == NULL || parent_record == actual_record)
+            break;
+        if (parent_record == formal_record)
+            return 1;
+        parent = parent_record->parent_class_name;
+    }
+
+    if (formal_record->is_interface && actual_record->is_class)
+        return 1;
+
+    return 0;
+}
+
 /*===========================================================================
  * Record Type Lookup
  *===========================================================================*/

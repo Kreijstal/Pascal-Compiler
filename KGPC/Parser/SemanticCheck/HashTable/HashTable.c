@@ -8,6 +8,7 @@
 */
 
 #include "../../../identifier_utils.h"
+#include "../../../unit_registry.h"
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
 
@@ -66,7 +67,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         return 1;
 
     int hash = hashpjw(canonical_id);
-    
+
     HashNode_t *node = FindIdentInTable(table, params->id);
     if (node != NULL)
     {
@@ -205,6 +206,68 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
 
     free(canonical_id);
     return NULL;
+}
+
+HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index)
+{
+    ListNode_t *cur;
+    HashNode_t *hash_node;
+    int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
+    ListNode_t *list = table->table[hash];
+    if (list == NULL)
+    {
+        free(canonical_id);
+        return NULL;
+    }
+
+    /* Scan all matches, pick by priority:
+     * 4. Same unit as caller (exact match)
+     * 3. Symbol from a unit that caller directly uses (dependency)
+     * 2. Program-local (source_unit_index == 0) fallback
+     * 1. Any match (fallback) */
+    HashNode_t *best = NULL;
+    int best_priority = 0;
+
+    cur = list;
+    while (cur != NULL)
+    {
+        hash_node = (HashNode_t *)cur->cur;
+        if (strcmp(hash_node->canonical_id, canonical_id) == 0)
+        {
+            int priority = 1; /* any match */
+            if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
+                priority = 4; /* same unit */
+            else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
+                priority = 4; /* program-local for program code */
+            else if (caller_unit_index > 0 && hash_node->source_unit_index > 0 &&
+                     unit_registry_is_dep(caller_unit_index, hash_node->source_unit_index))
+                priority = 3; /* from a unit that caller uses */
+            else if (hash_node->source_unit_index == 0)
+                priority = 2; /* program-local fallback */
+
+            if (priority > best_priority ||
+                (priority == best_priority && best != NULL &&
+                 best->hash_type == HASHTYPE_CONST &&
+                 hash_node->hash_type != HASHTYPE_CONST))
+            {
+                best = hash_node;
+                best_priority = priority;
+            }
+        }
+        cur = cur->next;
+    }
+
+    free(canonical_id);
+    return best;
 }
 
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
@@ -360,8 +423,16 @@ void DestroyHashTable(HashTable_t *table)
                 free(hash_node->const_set_label);
             if (hash_node->mangled_id != NULL)
                 free(hash_node->mangled_id);
-            /* method_name, owner_class, owner_class_full, owner_class_outer
-             * are interned strings -- do not free individually. */
+            if (hash_node->method_name != NULL)
+                free(hash_node->method_name);
+            if (hash_node->owner_class != NULL)
+                free(hash_node->owner_class);
+            if (hash_node->owner_class_full != NULL)
+                free(hash_node->owner_class_full);
+            if (hash_node->owner_class_outer != NULL)
+                free(hash_node->owner_class_outer);
+            if (hash_node->internproc_id != NULL)
+                free(hash_node->internproc_id);
             /* Builtin procedures are handled separately - do not call DestroyBuiltin here */
             /* to avoid double-free issues */
 
@@ -456,6 +527,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
+    if (type != NULL)
+        kgpc_type_retain(type);
     if (mangled_id != NULL)
     {
         hash_node->mangled_id = strdup(mangled_id);
@@ -489,7 +562,8 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     hash_node->owner_class = NULL;
     hash_node->owner_class_full = NULL;
     hash_node->owner_class_outer = NULL;
-    
+    hash_node->internproc_id = NULL;
+
     /* Set identifier */
     hash_node->id = strdup(id);
     if (hash_node->id == NULL)
@@ -506,6 +580,18 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         assert(var_type == HASHVAR_UNTYPED && "When KgpcType provided, var_type should be HASHVAR_UNTYPED");
         assert(record_type == NULL && "When KgpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When KgpcType provided, type_alias should be NULL");
+        if (type->kind == TYPE_KIND_PROCEDURE &&
+            type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = type->info.proc_info.definition;
+            hash_node->defined_in_unit =
+                def->tree_data.subprogram_data.defined_in_unit ? 1 : 0;
+            hash_node->unit_is_public =
+                def->tree_data.subprogram_data.unit_is_public ? 1 : 0;
+            if (def->tree_data.subprogram_data.source_unit_index > 0)
+                hash_node->source_unit_index =
+                    def->tree_data.subprogram_data.source_unit_index;
+        }
     }
     /* If type is NULL, this is an UNTYPED node (valid for untyped procedure parameters) */
     /* No legacy fields to populate - they've been removed */
@@ -543,6 +629,14 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
         return 1;
     }
+
+    /* Allow callable symbol and FUNCTION_RETURN helper symbol to coexist.
+     * This is required for recursive calls and operator overload lookup inside
+     * function bodies where the return pseudo-variable shares the function name. */
+    if ((existing_node->hash_type == HASHTYPE_FUNCTION_RETURN && is_new_proc_func) ||
+        (new_hash_type == HASHTYPE_FUNCTION_RETURN && is_existing_proc_func)) {
+        return 1;
+    }
     
     /* Allow parameters (VAR) to shadow procedures/functions in the same scope.
      * This is needed when a procedure's parameter has the same name as the procedure itself.
@@ -560,6 +654,16 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+    /* Allow local constants to shadow imported unit functions/procedures.
+     * In Pascal, user declarations at program scope can shadow unit-level
+     * symbols.  E.g. user 'const min = 5' shadows system 'function min',
+     * and user 'const pi = 3.14' shadows FPC's 'function Pi [internproc]'. */
+    if (is_existing_proc_func &&
+        existing_node->defined_in_unit &&
+        new_hash_type == HASHTYPE_CONST) {
+        return 1;
+    }
+
     /* Allow local types to shadow imported unit types. */
     if (existing_node->hash_type == HASHTYPE_TYPE &&
         existing_node->defined_in_unit &&
@@ -567,12 +671,35 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+
+
     /* Allow const shadowing in the same scope (unit/system consts share the program scope). */
     if (existing_node->hash_type == HASHTYPE_CONST &&
         new_hash_type == HASHTYPE_CONST) {
         return 1;
     }
     
+    /* Allow variables/arrays to coexist when at least one is from a unit.
+     * Unit-aware FindIdentInUnit resolves which one is visible.
+     * Two program-local vars with the same name would still be caught by
+     * semcheck's duplicate-declaration check before reaching here. */
+    if ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
+        (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) {
+        return 1;
+    }
+
+    /* Allow constants and variables to coexist across units.
+     * FPC units sometimes intentionally shadow an imported variable with a
+     * const (e.g. `const current_procinfo = 'error';` in pdecobj.pas shadows
+     * `var current_procinfo : tprocinfo;` from procinfo.pas).
+     * Unit-aware FindIdentInTableForUnit resolves which one is visible. */
+    if ((existing_node->hash_type == HASHTYPE_CONST &&
+         (new_hash_type == HASHTYPE_VAR || new_hash_type == HASHTYPE_ARRAY)) ||
+        ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&
+         new_hash_type == HASHTYPE_CONST)) {
+        return 1;
+    }
+
     /* No other collisions allowed */
     return 0;
 }

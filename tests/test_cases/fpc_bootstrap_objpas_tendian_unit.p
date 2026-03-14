@@ -14,7 +14,7 @@ implementation
 
 function EndianToString(e: TEndian): string;
 begin
-  if e = Little then
+  if e = TEndian.Little then
     EndianToString := 'little'
   else
     EndianToString := 'big';

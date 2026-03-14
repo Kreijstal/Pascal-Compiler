@@ -1,8 +1,34 @@
 #include "ident_ref.h"
 #include "../../identifier_utils.h"
 
+#include <ctype.h>
 #include <stdlib.h>
 #include <string.h>
+
+static char *dup_trimmed_ident_segment(const char *segment)
+{
+    if (segment == NULL)
+        return NULL;
+
+    const unsigned char *start = (const unsigned char *)segment;
+    while (*start != '\0' && isspace(*start))
+        ++start;
+
+    const unsigned char *end = start + strlen((const char *)start);
+    while (end > start && isspace(*(end - 1)))
+        --end;
+
+    size_t len = (size_t)(end - start);
+    if (len == 0)
+        return NULL;
+
+    char *out = (char *)malloc(len + 1);
+    if (out == NULL)
+        return NULL;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
 
 QualifiedIdent *qualified_ident_from_single(const char *segment)
 {
@@ -54,11 +80,15 @@ QualifiedIdent *qualified_ident_from_dotted(const char *name)
             size_t len = (size_t)(p - seg_start);
             if (len == 0)
                 goto fail;
-            segments[idx] = (char *)malloc(len + 1);
+            char *raw = (char *)malloc(len + 1);
+            if (raw == NULL)
+                goto fail;
+            memcpy(raw, seg_start, len);
+            raw[len] = '\0';
+            segments[idx] = dup_trimmed_ident_segment(raw);
+            free(raw);
             if (segments[idx] == NULL)
                 goto fail;
-            memcpy(segments[idx], seg_start, len);
-            segments[idx][len] = '\0';
             ++idx;
             if (*p == '\0')
                 break;
@@ -87,8 +117,26 @@ QualifiedIdent *qualified_ident_from_segments(char **segments, int count, int ta
         return NULL;
     if (take_ownership)
     {
-        id->segments = segments;
+        id->segments = (char **)calloc((size_t)count, sizeof(char *));
+        if (id->segments == NULL)
+        {
+            free(id);
+            return NULL;
+        }
         id->count = count;
+        for (int i = 0; i < count; ++i)
+        {
+            id->segments[i] = dup_trimmed_ident_segment(segments[i]);
+            if (segments[i] != NULL)
+                free(segments[i]);
+            if (segments[i] != NULL && id->segments[i] == NULL)
+            {
+                qualified_ident_free(id);
+                free(segments);
+                return NULL;
+            }
+        }
+        free(segments);
         return id;
     }
     id->segments = (char **)calloc((size_t)count, sizeof(char *));
@@ -100,8 +148,12 @@ QualifiedIdent *qualified_ident_from_segments(char **segments, int count, int ta
     id->count = count;
     for (int i = 0; i < count; ++i)
     {
-        if (segments[i] != NULL)
-            id->segments[i] = strdup(segments[i]);
+        id->segments[i] = dup_trimmed_ident_segment(segments[i]);
+        if (segments[i] != NULL && id->segments[i] == NULL)
+        {
+            qualified_ident_free(id);
+            return NULL;
+        }
     }
     return id;
 }

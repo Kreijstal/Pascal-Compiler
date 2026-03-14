@@ -9,6 +9,51 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static int semcheck_expr_is_explicit_char_typecast_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_TYPECAST)
+        return 0;
+    const char *target_id = expr->expr_data.typecast_data.target_type_id;
+    if (target_id == NULL)
+        return 0;
+    return pascal_identifier_equals(target_id, "Char") ||
+        pascal_identifier_equals(target_id, "AnsiChar") ||
+        pascal_identifier_equals(target_id, "WideChar") ||
+        pascal_identifier_equals(target_id, "UnicodeChar");
+}
+
+static int semcheck_expr_is_char_typecast_call_local(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+    if (expr->expr_data.function_call_data.args_expr == NULL ||
+        expr->expr_data.function_call_data.args_expr->next != NULL)
+        return 0;
+    const char *id = expr->expr_data.function_call_data.id;
+    if (id == NULL)
+        return 0;
+    return pascal_identifier_equals(id, "Char") ||
+        pascal_identifier_equals(id, "AnsiChar") ||
+        pascal_identifier_equals(id, "WideChar") ||
+        pascal_identifier_equals(id, "UnicodeChar");
+}
+
+static KgpcType *semcheck_create_char_type_from_explicit_typecast_local(const struct Expression *expr)
+{
+    const char *target_id = NULL;
+    if (semcheck_expr_is_explicit_char_typecast_local(expr))
+        target_id = expr->expr_data.typecast_data.target_type_id;
+    else if (semcheck_expr_is_char_typecast_call_local(expr))
+        target_id = expr->expr_data.function_call_data.id;
+    else
+        return NULL;
+    if (target_id != NULL &&
+        (pascal_identifier_equals(target_id, "WideChar") ||
+         pascal_identifier_equals(target_id, "UnicodeChar")))
+        return create_primitive_type_with_size(CHAR_TYPE, 2);
+    return create_primitive_type(CHAR_TYPE);
+}
+
 static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
 {
     if (expr == NULL)
@@ -32,6 +77,108 @@ static char *build_qualified_identifier_from_expr_local(struct Expression *expr)
         snprintf(qualified, qualified_len, "%s.%s", base, field_id);
     free(base);
     return qualified;
+}
+
+static QualifiedIdent *build_qualified_ident_from_expr_local(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+        return qualified_ident_from_single(expr->expr_data.id);
+    if (expr->type != EXPR_RECORD_ACCESS)
+        return NULL;
+
+    struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+    char *field_id = expr->expr_data.record_access_data.field_id;
+    if (record_expr == NULL || field_id == NULL)
+        return NULL;
+
+    QualifiedIdent *base = build_qualified_ident_from_expr_local(record_expr);
+    if (base == NULL)
+        return NULL;
+
+    char **segments = (char **)calloc((size_t)base->count + 1, sizeof(char *));
+    if (segments == NULL)
+    {
+        qualified_ident_free(base);
+        return NULL;
+    }
+    for (int i = 0; i < base->count; ++i)
+    {
+        segments[i] = base->segments[i];
+        base->segments[i] = NULL;
+    }
+    segments[base->count] = strdup(field_id);
+    QualifiedIdent *out = qualified_ident_from_segments(segments, base->count + 1, 1);
+    qualified_ident_free(base);
+    return out;
+}
+
+static HashNode_t *semcheck_find_exact_qualified_type_node_local(SymTab_t *symtab,
+    const QualifiedIdent *type_ref)
+{
+    if (symtab == NULL || type_ref == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    char *qualified = qualified_ident_join(type_ref, ".");
+    if (qualified != NULL)
+    {
+        if (FindIdent(&type_node, symtab, qualified) >= 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        type_node = semcheck_find_preferred_type_node(symtab, qualified);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            free(qualified);
+            return type_node;
+        }
+        free(qualified);
+    }
+
+    if (type_ref->count > 1 && type_ref->segments != NULL && type_ref->segments[0] != NULL)
+    {
+        const char *unit_name = type_ref->segments[0];
+        const char *base_name = qualified_ident_last(type_ref);
+        if (base_name != NULL)
+        {
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            HashNode_t *best = NULL;
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate == NULL || candidate->hash_type != HASHTYPE_TYPE)
+                    continue;
+                const char *candidate_unit = unit_registry_get(candidate->source_unit_index);
+                if (candidate_unit != NULL &&
+                    pascal_identifier_equals(candidate_unit, unit_name))
+                {
+                    best = candidate;
+                    if (candidate->defined_in_unit)
+                        break;
+                }
+                else if (candidate->defined_in_unit && best == NULL)
+                {
+                    /* Some imported unit-defined types are visible before their
+                     * source-unit metadata is stable enough for an exact match.
+                     * Keep the unit-defined candidate as a fallback instead of
+                     * failing the qualified lookup outright. */
+                    best = candidate;
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if (best != NULL)
+                return best;
+        }
+    }
+
+    TypeRef temp_ref = {0};
+    temp_ref.name = (QualifiedIdent *)type_ref;
+    return semcheck_find_preferred_type_node_with_ref(symtab, &temp_ref, NULL);
 }
 
 /*===========================================================================
@@ -74,6 +221,32 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
     }
 
     return 0;
+}
+
+static int semcheck_type_is_ordinal(const KgpcType *type, int type_tag)
+{
+    struct TypeAlias *alias = NULL;
+
+    if (type != NULL)
+    {
+        alias = kgpc_type_get_type_alias((KgpcType *)type);
+        if (alias != NULL)
+        {
+            if (alias->is_enum || alias->range_known)
+                return 1;
+            if (alias->target_type_id != NULL)
+            {
+                const char *base = semcheck_base_type_name(alias->target_type_id);
+                int builtin_tag = semcheck_map_builtin_type_name(NULL, base);
+                if (base != NULL && builtin_tag != UNKNOWN_TYPE)
+                    return is_ordinal_type(builtin_tag);
+            }
+        }
+        if (type->kind == TYPE_KIND_PRIMITIVE)
+            return is_ordinal_type(type->info.primitive_type_tag);
+    }
+
+    return is_ordinal_type(type_tag);
 }
 
 int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
@@ -490,6 +663,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
 
     /* Check for ShortString (array[0..N] of char) like Length does */
     int is_shortstring = semcheck_expr_is_shortstring(source_expr);
+    int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
     if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring)
     {
@@ -536,7 +710,8 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
         /* Use ShortString-specific copy if source is a ShortString */
-        const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" : "kgpc_string_copy";
+        const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" :
+            (is_wide_string ? "kgpc_unicodestring_copy" : "kgpc_string_copy");
         expr->expr_data.function_call_data.mangled_id = strdup(copy_func);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
@@ -545,8 +720,18 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        semcheck_expr_set_resolved_type(expr, STRING_TYPE);
-        *type_return = STRING_TYPE;
+        if (is_wide_string)
+        {
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+            if (source_expr->resolved_kgpc_type != NULL)
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, source_expr->resolved_kgpc_type);
+            *type_return = STRING_TYPE;
+        }
+        else
+        {
+            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
+            *type_return = STRING_TYPE;
+        }
         return 0;
     }
 
@@ -613,6 +798,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
      * Copy the addop data into the original expression node. */
     expr->type = result->type;
     expr->expr_data = result->expr_data;
+    kgpc_type_retain(result->resolved_kgpc_type);
     expr->resolved_kgpc_type = result->resolved_kgpc_type;
     semcheck_expr_set_resolved_type(expr, STRING_TYPE);
 
@@ -1141,9 +1327,11 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
 
-    /* Assigned accepts pointers (TYPE_KIND_POINTER or POINTER_TYPE primitive) and procedure types */
+    /* Assigned accepts pointers, procedure variables, and dynamic arrays
+     * (FPC uses Assigned(arr) as a nil-check on the descriptor pointer). */
     int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 
                         kgpc_type_is_procedure(arg_kgpc_type) ||
+                        kgpc_type_is_dynamic_array(arg_kgpc_type) ||
                         kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
@@ -1213,15 +1401,15 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
             mangled_name = "kgpc_abs_unsigned";
             result_type = arg_type;
         }
-        else if (arg_type == INT64_TYPE || arg_type == LONGINT_TYPE)
+        else if (arg_type == INT64_TYPE)
         {
-            /* 64-bit and 32-bit signed long types use the 64-bit abs helper */
+            /* 64-bit signed type uses the 64-bit abs helper */
             mangled_name = "kgpc_abs_longint";
             result_type = arg_type;
         }
         else if (is_integer_type(arg_type))
         {
-            /* Smaller signed integer types (INT_TYPE) use 32-bit abs */
+            /* 32-bit and smaller signed integer types (INT_TYPE, LONGINT_TYPE) use 32-bit abs */
             mangled_name = "kgpc_abs_int";
             result_type = arg_type;
         }
@@ -1647,7 +1835,26 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     KgpcType *arg_kgpc_type = NULL;
+    int arg_cast_type = UNKNOWN_TYPE;
+    if (arg_expr != NULL && arg_expr->type == EXPR_FUNCTION_CALL &&
+        semcheck_expr_is_char_typecast_call_local(arg_expr))
+        semcheck_try_reinterpret_as_typecast(&arg_cast_type, symtab, arg_expr, max_scope_lev);
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
+
+    if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
+    {
+        KgpcType *cast_char_type = semcheck_create_char_type_from_explicit_typecast_local(arg_expr);
+        if (cast_char_type != NULL)
+        {
+            if (arg_kgpc_type != NULL)
+                destroy_kgpc_type(arg_kgpc_type);
+            arg_kgpc_type = cast_char_type;
+            if (arg_expr->resolved_kgpc_type != NULL)
+                destroy_kgpc_type(arg_expr->resolved_kgpc_type);
+            arg_expr->resolved_kgpc_type = cast_char_type;
+            semcheck_expr_set_resolved_type(arg_expr, CHAR_TYPE);
+        }
+    }
 
     if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
     {
@@ -1717,10 +1924,15 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
     KgpcType *arg_kgpc_type = NULL;
+    int arg_type_tag = UNKNOWN_TYPE;
+    struct TypeAlias *arg_alias = NULL;
+    struct Expression *rhs = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !kgpc_type_is_integer(arg_kgpc_type))
+    if (error_count == 0)
+        arg_type_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (error_count == 0 && !semcheck_type_is_ordinal(arg_kgpc_type, arg_type_tag))
     {
-        semcheck_error_with_context("Error on line %d, %s expects an integer argument.\n",
+        semcheck_error_with_context("Error on line %d, %s expects an ordinal argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         ++error_count;
     }
@@ -1731,8 +1943,10 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
         return error_count;
     }
 
+    arg_alias = kgpc_type_get_type_alias(arg_kgpc_type);
+
     /* Rewrite Pred/Succ to arg +/- 1 */
-    struct Expression *rhs = mk_inum(expr->line_num, 1);
+    rhs = mk_inum(expr->line_num, 1);
     if (rhs == NULL)
     {
         semcheck_error_with_context("Error on line %d, failed to build %s expression.\n",
@@ -1759,6 +1973,14 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     expr->expr_data.addop_data.left_expr = arg_expr;
     expr->expr_data.addop_data.right_term = rhs;
     semcheck_reset_function_call_cache(expr);
+    if (arg_alias != NULL && (arg_alias->is_enum || arg_alias->range_known))
+    {
+        expr->resolved_kgpc_type = create_primitive_type(arg_type_tag);
+        kgpc_type_set_type_alias(expr->resolved_kgpc_type, arg_alias);
+        semcheck_expr_set_resolved_type(expr, arg_type_tag);
+        *type_return = arg_type_tag;
+        return 0;
+    }
 
     /* Use legacy_tag here since this function's API returns int type tag via type_return.
      * The expression is rewritten to an ADDOP and needs to be re-checked. */
@@ -2015,8 +2237,10 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         semcheck_expr_set_resolved_type(expr, target_type);
         if (expr->resolved_kgpc_type != NULL)
             destroy_kgpc_type(expr->resolved_kgpc_type);
-        if (target_kgpc_type != NULL)
+        if (target_kgpc_type != NULL) {
+            kgpc_type_retain(target_kgpc_type);
             expr->resolved_kgpc_type = target_kgpc_type;
+        }
         else if (record_type != NULL)
             expr->resolved_kgpc_type = create_record_type(record_type);
         else
@@ -2084,6 +2308,16 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             expr->resolved_kgpc_type = create_primitive_type(ENUM_TYPE);
             *type_return = ENUM_TYPE;
             return 0;
+        case VARIANT_TYPE:
+            /* Variant default is Unassigned (VType=0, all bytes zero).
+             * Lower to integer 0 with Variant resolved type so codegen
+             * emits a zero-filled 16-byte slot. */
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = 0;
+            semcheck_expr_set_resolved_type(expr, VARIANT_TYPE);
+            expr->resolved_kgpc_type = create_primitive_type(VARIANT_TYPE);
+            *type_return = VARIANT_TYPE;
+            return 0;
         default:
             semcheck_error_with_context("Error on line %d, Default for this type is unsupported in this context.\n",
                 expr->line_num);
@@ -2114,6 +2348,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
     const char *type_name = NULL;
     char *qualified_name = NULL;
     char *type_name_owned = NULL;
+    int has_declared_type = 0;
 
     if (arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
     {
@@ -2134,6 +2369,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
                 type_node = semcheck_find_preferred_type_node(symtab, base_name);
             if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
+                has_declared_type = 1;
                 alias = get_type_alias_from_node(type_node);
                 if (alias == NULL && type_node->type != NULL)
                     alias = kgpc_type_get_type_alias(type_node->type);
@@ -2169,14 +2405,17 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
             return error_count;
         }
         if (resolved_type != NULL)
+        {
+            has_declared_type = 1;
             alias = kgpc_type_get_type_alias(resolved_type);
+        }
         if (alias != NULL && alias->alias_name != NULL)
             type_name = alias->alias_name;
     }
 
-    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+    if (!has_declared_type)
     {
-        semcheck_error_with_context("Error on line %d, TypeInfo currently supports enum types only.\n",
+        semcheck_error_with_context("Error on line %d, TypeInfo expects a declared type.\n",
             expr->line_num);
         if (type_name_owned != NULL)
             free(type_name_owned);
@@ -2251,6 +2490,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     {
         char *qualified_name = NULL;
         const char *type_name = NULL;
+        QualifiedIdent *type_id_ref = NULL;
+        TypeRef *type_ref = NULL;
         if (arg_expr->type == EXPR_VAR_ID)
             type_name = arg_expr->expr_data.id;
         else
@@ -2258,9 +2499,24 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
             type_name = qualified_name;
         }
+        if (arg_expr->id_ref != NULL)
+            type_id_ref = qualified_ident_clone(arg_expr->id_ref);
+        if (type_id_ref == NULL)
+            type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+            type_id_ref = qualified_ident_from_dotted(qualified_name);
+        if (type_id_ref != NULL && qualified_name == NULL)
+            qualified_name = qualified_ident_join(type_id_ref, ".");
+        if (type_id_ref != NULL)
+            type_ref = type_ref_create(type_id_ref, NULL, 0);
         const char *raw_name = type_name;
-        const char *base_name = semcheck_base_type_name(raw_name);
-        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
+                                                   : semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = NULL;
+        if (type_ref != NULL)
+            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
+        if (type_node == NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
         if (type_node == NULL && base_name != NULL && base_name != raw_name)
             type_node = semcheck_find_preferred_type_node(symtab, base_name);
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
@@ -2271,7 +2527,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             int have_bounds = 0;
             int result_type = INT_TYPE;
 
-            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL)
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
             {
                 int count = ListLength(alias->enum_literals);
                 if (count > 0)
@@ -2336,7 +2593,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                         low = 0;
                         high = (long long)0xFFFFFFFFFFFFFFFFULL;
                         have_bounds = 1;
-                        result_type = INT64_TYPE;
+                        result_type = QWORD_TYPE;
                     }
                 }
             }
@@ -2354,7 +2611,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 low = 0;
                 high = (long long)0xFFFFFFFFFFFFFFFFULL;
                 have_bounds = 1;
-                result_type = INT64_TYPE;
+                result_type = QWORD_TYPE;
             }
             else if (base_name != NULL &&
                      (pascal_identifier_equals(base_name, "NativeUInt") ||
@@ -2447,12 +2704,16 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 semcheck_expr_set_resolved_type(expr, result_type);
                 if (qualified_name != NULL)
                     free(qualified_name);
+                if (type_ref != NULL)
+                    type_ref_free(type_ref);
                 *type_return = result_type;
                 return 0;
             }
         }
         if (qualified_name != NULL)
             free(qualified_name);
+        if (type_ref != NULL)
+            type_ref_free(type_ref);
     }
 
     KgpcType *arg_kgpc_type = NULL;
@@ -2461,6 +2722,83 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     {
         *type_return = UNKNOWN_TYPE;
         return error_count;
+    }
+
+    if (arg_kgpc_type == NULL &&
+        arg_expr != NULL && (arg_expr->type == EXPR_VAR_ID || arg_expr->type == EXPR_RECORD_ACCESS))
+    {
+        char *qualified_name = NULL;
+        QualifiedIdent *type_id_ref = NULL;
+        TypeRef *type_ref = NULL;
+        if (arg_expr->type == EXPR_VAR_ID)
+            qualified_name = arg_expr->expr_data.id != NULL ? strdup(arg_expr->expr_data.id) : NULL;
+        else
+            qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+        if (arg_expr->id_ref != NULL)
+            type_id_ref = qualified_ident_clone(arg_expr->id_ref);
+        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+            type_id_ref = qualified_ident_from_dotted(qualified_name);
+        if (type_id_ref == NULL && arg_expr->type == EXPR_RECORD_ACCESS)
+            type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+        if (type_id_ref != NULL)
+            type_ref = type_ref_create(type_id_ref, NULL, 0);
+
+        const char *raw_name = qualified_name;
+        const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
+                                                   : semcheck_base_type_name(raw_name);
+        HashNode_t *type_node = NULL;
+        if (type_ref != NULL)
+            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
+        if (type_node == NULL && raw_name != NULL)
+            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+        if (type_node == NULL && base_name != NULL && base_name != raw_name)
+            type_node = semcheck_find_preferred_type_node(symtab, base_name);
+
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = INT_TYPE;
+
+            if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && alias != NULL && alias->range_known)
+            {
+                low = alias->range_start;
+                high = alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                semcheck_expr_set_resolved_type(expr, result_type);
+                if (qualified_name != NULL)
+                    free(qualified_name);
+                if (type_ref != NULL)
+                    type_ref_free(type_ref);
+                *type_return = result_type;
+                return 0;
+            }
+        }
+
+        if (qualified_name != NULL)
+            free(qualified_name);
+        if (type_ref != NULL)
+            type_ref_free(type_ref);
     }
 
     if (arg_expr->is_array_expr)
@@ -2521,8 +2859,103 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         return semcheck_builtin_length(type_return, symtab, expr, max_scope_lev);
     }
 
-    /* Ordinal overloads - use type tag for detailed matching */
     int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
+
+    /* Ordinal overloads on enum/range variables keep their declared bounds. */
+    {
+        struct TypeAlias *arg_alias = kgpc_type_get_type_alias(arg_kgpc_type);
+        if (arg_alias != NULL)
+        {
+            long long low = 0;
+            long long high = 0;
+            int have_bounds = 0;
+            int result_type = arg_type != UNKNOWN_TYPE ? arg_type : INT_TYPE;
+
+            if (arg_alias->is_enum && arg_alias->enum_literals != NULL &&
+                !arg_alias->enum_has_explicit_values)
+            {
+                int count = ListLength(arg_alias->enum_literals);
+                if (count > 0)
+                {
+                    low = 0;
+                    high = (long long)count - 1;
+                    have_bounds = 1;
+                }
+            }
+            if (!have_bounds && arg_alias->range_known)
+            {
+                low = arg_alias->range_start;
+                high = arg_alias->range_end;
+                have_bounds = 1;
+                if (low < -2147483648LL || high > 2147483647LL)
+                    result_type = INT64_TYPE;
+            }
+            if (!have_bounds && arg_alias->target_type_id != NULL)
+            {
+                const char *target_name = arg_alias->target_type_id;
+                if (pascal_identifier_equals(target_name, "SmallInt")) {
+                    low = -32768LL;
+                    high = 32767LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Word")) {
+                    low = 0;
+                    high = 65535LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "ShortInt")) {
+                    low = -128LL;
+                    high = 127LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Byte")) {
+                    low = 0;
+                    high = 255LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "LongInt") ||
+                           pascal_identifier_equals(target_name, "Integer")) {
+                    low = -2147483648LL;
+                    high = 2147483647LL;
+                    have_bounds = 1;
+                } else if (pascal_identifier_equals(target_name, "Cardinal") ||
+                           pascal_identifier_equals(target_name, "LongWord") ||
+                           pascal_identifier_equals(target_name, "DWord")) {
+                    low = 0;
+                    high = 4294967295LL;
+                    have_bounds = 1;
+                    result_type = INT64_TYPE;
+                } else if (pascal_identifier_equals(target_name, "Int64")) {
+                    low = (-9223372036854775807LL - 1);
+                    high = 9223372036854775807LL;
+                    have_bounds = 1;
+                    result_type = INT64_TYPE;
+                } else if (pascal_identifier_equals(target_name, "QWord") ||
+                           pascal_identifier_equals(target_name, "UInt64")) {
+                    low = 0;
+                    high = 9223372036854775807LL;
+                    have_bounds = 1;
+                    result_type = QWORD_TYPE;
+                } else if (pascal_identifier_equals(target_name, "Boolean")) {
+                    low = 0;
+                    high = 1;
+                    have_bounds = 1;
+                    result_type = BOOL;
+                } else if (pascal_identifier_equals(target_name, "Char") ||
+                           pascal_identifier_equals(target_name, "AnsiChar")) {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                    result_type = CHAR_TYPE;
+                }
+            }
+            if (have_bounds)
+            {
+                semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
+                semcheck_expr_set_resolved_type(expr, result_type);
+                *type_return = result_type;
+                return 0;
+            }
+        }
+    }
+
+    /* Ordinal overloads - use type tag for detailed matching */
     if (arg_type == INT_TYPE)
     {
         semcheck_replace_call_with_integer_literal(expr, is_high ? 2147483647LL : -2147483648LL);
@@ -2693,9 +3126,44 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             
             if (!is_builtin_type)
             {
-                semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
-                    expr->line_num, arg_id);
-                error_count++;
+                HashNode_t *self_node = NULL;
+                struct RecordField *self_field = NULL;
+                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                {
+                    struct RecordType *self_record = get_record_type_from_node(self_node);
+                    if (self_record != NULL)
+                    {
+                        self_field = semcheck_find_class_field_including_hidden(symtab,
+                            self_record, arg_id, NULL);
+                    }
+                }
+
+                if (self_field != NULL)
+                {
+                    KgpcType *field_type = semcheck_field_expected_kgpc_type(symtab, self_field);
+                    if (field_type != NULL)
+                    {
+                        long long field_size = kgpc_type_sizeof(field_type);
+                        destroy_kgpc_type(field_type);
+                        if (field_size >= 0)
+                        {
+                            computed_size = field_size;
+                            size_computed = 1;
+                        }
+                    }
+                    if (!size_computed)
+                    {
+                        semcheck_error_with_context("Error on line %d, unable to compute SizeOf(%s).\n",
+                            expr->line_num, arg_id);
+                        error_count++;
+                    }
+                }
+                else
+                {
+                    semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
+                        expr->line_num, arg_id);
+                    error_count++;
+                }
             }
         }
         else

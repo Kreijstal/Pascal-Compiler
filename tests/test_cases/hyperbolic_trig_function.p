@@ -1,4 +1,5 @@
 program hyperbolic_trig_function;
+uses Math;
 var
   r: real;
 begin

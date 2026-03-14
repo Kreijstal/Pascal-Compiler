@@ -603,6 +603,15 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         } else {
             /* Content is being skipped - mark that we need a line directive when we resume */
             need_line_directive = true;
+            /* Emit newlines even for skipped content to keep line numbers in sync.
+             * Without this, ifdef'd-out lines shrink the preprocessed output and
+             * cause line number drift in the main file (depth 0) where {#line}
+             * directives are not emitted. */
+            if (c == '\n') {
+                if (!string_builder_append_char(output, '\n')) {
+                    return set_error(error_message, "out of memory");
+                }
+            }
         }
         
         // Track line numbers for ALL newlines
@@ -670,6 +679,7 @@ static bool handle_directive(PascalPreprocessor *pp,
     bool branch_active = current_branch_active(conditions);
     bool handled = false;
     bool is_io_check_directive = false;
+    bool skip_trailing_newline = false;
 
     if (strcmp(keyword, "I") == 0) {
         const char *cursor = rest;
@@ -833,7 +843,15 @@ static bool handle_directive(PascalPreprocessor *pp,
             free(path_token);
             free(keyword);
             free(content);
+            skip_trailing_newline = true;
             *index = directive_end;
+            if (skip_trailing_newline && *index + 1 < length && input[*index + 1] == '\n')
+                (*index)++;
+            else if (skip_trailing_newline && *index + 1 < length && input[*index + 1] == '\r') {
+                (*index)++;
+                if (*index + 1 < length && input[*index + 1] == '\n')
+                    (*index)++;
+            }
             return ok;
         }
 
@@ -937,6 +955,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                     free(path_token);
                     free(keyword);
                     free(content);
+                    *index = paren_style ? end + 1 : end;
                     return true;
                 }
                 // If not recognized, fall through to try as a file
@@ -994,6 +1013,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             /* Emit line directive returning to parent file */
             if (ok) {
                 emit_line_directive(output, current_line + 1, filename);
+                skip_trailing_newline = true;
             }
 
             free(include_buffer);
@@ -1339,6 +1359,20 @@ static bool handle_directive(PascalPreprocessor *pp,
         *index = end + 1; // Skip the closing '*'
     } else {
         *index = end;
+    }
+
+    /* After an include with a {#line} directive, skip the trailing newline
+     * of the include directive line. The {#line} directive already accounts
+     * for the line transition, so emitting this newline would cause an
+     * off-by-one in line tracking. */
+    if (skip_trailing_newline) {
+        if (*index + 1 < length && input[*index + 1] == '\n')
+            (*index)++;
+        else if (*index + 1 < length && input[*index + 1] == '\r') {
+            (*index)++;
+            if (*index + 1 < length && input[*index + 1] == '\n')
+                (*index)++;
+        }
     }
 
     return true;

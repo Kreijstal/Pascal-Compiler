@@ -1,4 +1,5 @@
 program ceil_floor_function;
+uses Math;
 begin
   writeln('CeilPos=', Ceil(2.1));
   writeln('CeilNeg=', Ceil(-1.2));

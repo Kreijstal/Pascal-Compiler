@@ -10,6 +10,22 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static const char *semcheck_type_alias_name(KgpcType *type)
+{
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias == NULL)
+        return NULL;
+    if (alias->alias_name != NULL)
+        return alias->alias_name;
+    if (alias->target_type_id != NULL)
+        return alias->target_type_id;
+    if (alias->is_shortstring)
+        return "ShortString";
+    if (alias->is_wide_string)
+        return "WideString";
+    return NULL;
+}
+
 int semcheck_is_currency_kgpc_type(KgpcType *type)
 {
     if (type == NULL)
@@ -114,11 +130,17 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
         return NULL;
     
     /* Try to get from resolved_kgpc_type */
-    if (expr->resolved_kgpc_type != NULL && kgpc_type_is_record(expr->resolved_kgpc_type))
+    if (expr->resolved_kgpc_type != NULL)
     {
-        struct RecordType *rec = kgpc_type_get_record(expr->resolved_kgpc_type);
-        if (rec != NULL && rec->type_id != NULL)
-            return rec->type_id;
+        const char *alias_name = semcheck_type_alias_name(expr->resolved_kgpc_type);
+        if (alias_name != NULL)
+            return alias_name;
+        if (kgpc_type_is_record(expr->resolved_kgpc_type))
+        {
+            struct RecordType *rec = kgpc_type_get_record(expr->resolved_kgpc_type);
+            if (rec != NULL && rec->type_id != NULL)
+                return rec->type_id;
+        }
     }
     
     /* For variable IDs, look up in symbol table */
@@ -127,6 +149,10 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
         HashNode_t *node = NULL;
         if (FindIdent(&node, symtab, expr->expr_data.id) == 0 && node != NULL && node->type != NULL)
         {
+            const char *alias_name = semcheck_type_alias_name(node->type);
+            if (alias_name != NULL)
+                return alias_name;
+
             /* Check if this is a record type */
             if (kgpc_type_is_record(node->type))
             {
@@ -135,10 +161,6 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
                 /* Try to get type_id from record */
                 if (rec != NULL && rec->type_id != NULL)
                     return rec->type_id;
-                
-                /* Try to get from type_alias */
-                if (node->type->type_alias != NULL && node->type->type_alias->target_type_id != NULL)
-                    return node->type->type_alias->target_type_id;
             }
         }
     }
@@ -161,19 +183,26 @@ char *semcheck_mangle_helper_const_id(const char *helper_type_id, const char *fi
 int is_type_ir(int *type)
 {
     assert(type != NULL);
-    return (is_integer_type(*type) || *type == REAL_TYPE);
+    return (is_integer_type(*type) || *type == REAL_TYPE || *type == EXTENDED_TYPE ||
+            *type == ENUM_TYPE);
 }
 
 int types_numeric_compatible(int lhs, int rhs)
 {
     if (lhs == rhs)
         return 1;
-    /* All integer types are compatible with each other */
-    if (is_integer_type(lhs) && is_integer_type(rhs))
+    /* Treat enum as integer-compatible (Pascal enums are ordinal types) */
+    int lhs_int = (is_integer_type(lhs) || lhs == ENUM_TYPE);
+    int rhs_int = (is_integer_type(rhs) || rhs == ENUM_TYPE);
+    /* All integer/enum types are compatible with each other */
+    if (lhs_int && rhs_int)
         return 1;
-    /* Real is compatible with any integer type */
-    if ((lhs == REAL_TYPE && is_integer_type(rhs)) ||
-        (rhs == REAL_TYPE && is_integer_type(lhs)))
+    /* Real is compatible with any integer/enum type */
+    if (((lhs == REAL_TYPE || lhs == EXTENDED_TYPE) && rhs_int) ||
+        ((rhs == REAL_TYPE || rhs == EXTENDED_TYPE) && lhs_int))
+        return 1;
+    if ((lhs == REAL_TYPE && rhs == EXTENDED_TYPE) ||
+        (lhs == EXTENDED_TYPE && rhs == REAL_TYPE))
         return 1;
     return 0;
 }
@@ -254,6 +283,16 @@ int semcheck_expr_is_char_like(struct Expression *expr)
     if (expr->type == EXPR_STRING && expr->expr_data.string != NULL &&
         strlen(expr->expr_data.string) == 1)
         return 1;
+    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type == CHAR_TYPE)
+        return 1;
+    if (expr->type == EXPR_ARRAY_ACCESS && expr->array_element_type_id != NULL)
+    {
+        const char *normalized = semcheck_normalize_char_type_id(expr->array_element_type_id);
+        if (normalized != NULL &&
+            (pascal_identifier_equals(normalized, "AnsiChar") ||
+             pascal_identifier_equals(normalized, "WideChar")))
+            return 1;
+    }
     if (expr->resolved_kgpc_type != NULL)
     {
         if (kgpc_type_is_char(expr->resolved_kgpc_type))
@@ -348,17 +387,17 @@ void semcheck_expr_set_resolved_kgpc_type_shared(struct Expression *expr, KgpcTy
     if (expr == NULL)
         return;
 
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
+    if (expr->resolved_kgpc_type == type)
+        return;
 
+    /* Retain new type BEFORE destroying old, in case they share sub-objects */
     if (type != NULL)
-    {
         kgpc_type_retain(type);
-        expr->resolved_kgpc_type = type;
-    }
+
+    if (expr->resolved_kgpc_type != NULL)
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+
+    expr->resolved_kgpc_type = type;
 }
 
 void semcheck_reset_function_call_cache(struct Expression *expr)

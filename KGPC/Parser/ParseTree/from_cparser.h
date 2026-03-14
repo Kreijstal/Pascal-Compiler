@@ -7,6 +7,9 @@
 #include "KgpcType.h"
 
 Tree_t *tree_from_pascal_ast(ast_t *program_ast);
+void from_cparser_cleanup(void);
+void from_cparser_resolve_deferred_arrays(Tree_t *program);
+void from_cparser_set_source_offset(int offset);
 
 /* Frontend error tracking */
 void from_cparser_reset_error_count(void);
@@ -21,7 +24,10 @@ typedef struct {
     char *method_name;
     int is_virtual;
     int is_override;
-    int is_static;   /* 1 if method is static (no Self parameter) */
+    int is_static;         /* 1 if method is static (no Self parameter) */
+    int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
+    int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
+    char *param_sig; /* Mangled signature of parameter types, or NULL if unknown */
 } ClassMethodBinding;
 
 /* Convert an AST type specification to a KgpcType object.
@@ -45,12 +51,16 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
  * Returns 1 if static, 0 otherwise.
  */
 int from_cparser_is_method_static(const char *class_name, const char *method_name);
+int from_cparser_is_method_class_method(const char *class_name, const char *method_name);
+int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name);
 int from_cparser_is_type_helper(const char *helper_id);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 if virtual or override, 0 otherwise.
  */
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name);
+int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
+    int param_count, const char *param_sig);
 
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
@@ -72,7 +82,10 @@ ListNode_t *from_cparser_convert_params_ast(ast_t *params_ast);
  * This is used by the semantic checker to ensure method templates are findable.
  */
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static);
+    int is_virtual, int is_override, int is_static, int param_count);
+
+/* Count the number of named parameters in a params AST (PARAM or PARAM_LIST). */
+int from_cparser_count_params_ast(struct ast_t *params_ast);
 
 /* Find all class names that have a method with the given name.
  * Returns a list of class names (caller must free each string and the list).

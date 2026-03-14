@@ -1,4 +1,5 @@
 program angle_conversion_function;
+uses Math;
 var
   rad: real;
 begin

@@ -12,6 +12,60 @@
 
 static const char *g_semcheck_current_method_owner = NULL;
 
+static const char *semcheck_helper_lookup_fallback_name(const char *type_name)
+{
+    if (type_name == NULL)
+        return NULL;
+    if (pascal_identifier_equals(type_name, "AnsiString") ||
+        pascal_identifier_equals(type_name, "OpenString") ||
+        pascal_identifier_equals(type_name, "RawByteString") ||
+        pascal_identifier_equals(type_name, "ShortString"))
+        return "String";
+    if (pascal_identifier_equals(type_name, "UnicodeString"))
+        return "WideString";
+    return NULL;
+}
+
+static char *semcheck_normalize_helper_base_type_id(SymTab_t *symtab,
+    const char *base_type_id)
+{
+    if (base_type_id == NULL)
+        return NULL;
+
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, base_type_id);
+    if (type_node != NULL)
+    {
+        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+        int depth = 0;
+        while (alias != NULL && alias->target_type_id != NULL && depth < 8)
+        {
+            if (pascal_identifier_equals(alias->target_type_id, base_type_id))
+                break;
+            type_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+            if (type_node == NULL)
+                return strdup(alias->target_type_id);
+            base_type_id = alias->target_type_id;
+            alias = get_type_alias_from_node(type_node);
+            depth++;
+        }
+    }
+
+    return strdup(base_type_id);
+}
+
+static int semcheck_helper_matches_base(TypeHelperEntry *entry,
+    int base_type_tag, const char *type_name)
+{
+    if (entry == NULL)
+        return 0;
+    if (type_name != NULL && entry->base_type_id != NULL &&
+        pascal_identifier_equals(entry->base_type_id, type_name))
+        return 1;
+    if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
+        return 1;
+    return 0;
+}
+
 void semcheck_set_current_method_owner(const char *owner_id)
 {
     g_semcheck_current_method_owner = owner_id;
@@ -53,7 +107,8 @@ void semcheck_register_type_helper(struct RecordType *record_info, SymTab_t *sym
     TypeHelperEntry *entry = (TypeHelperEntry *)calloc(1, sizeof(TypeHelperEntry));
     if (entry == NULL)
         return;
-    entry->base_type_id = strdup(record_info->helper_base_type_id);
+    entry->base_type_id = semcheck_normalize_helper_base_type_id(symtab,
+        record_info->helper_base_type_id);
     entry->base_type_tag = semcheck_map_builtin_type_name(symtab, record_info->helper_base_type_id);
     entry->helper_record = record_info;
     if (entry->base_type_id == NULL)
@@ -76,7 +131,24 @@ void semcheck_register_type_helper(struct RecordType *record_info, SymTab_t *sym
 struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
     int base_type_tag, const char *type_name)
 {
-    (void)symtab;
+    const char *current_owner = semcheck_get_current_method_owner();
+    if (current_owner != NULL && symtab != NULL)
+    {
+        struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+        if (owner_record != NULL && owner_record->is_type_helper &&
+            owner_record->helper_base_type_id != NULL)
+        {
+            int owner_base_tag = semcheck_map_builtin_type_name(symtab,
+                owner_record->helper_base_type_id);
+            if (type_name != NULL)
+            {
+                if (pascal_identifier_equals(owner_record->helper_base_type_id, type_name))
+                    return owner_record;
+            }
+            else if (base_type_tag != UNKNOWN_TYPE && owner_base_tag == base_type_tag)
+                return owner_record;
+        }
+    }
     if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
     {
         fprintf(stderr,
@@ -98,15 +170,49 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
                     entry->base_type_id != NULL ? entry->base_type_id : "<null>",
                     entry->helper_record && entry->helper_record->type_id ? entry->helper_record->type_id : "<null>");
             }
-            if (type_name != NULL && entry->base_type_id != NULL &&
-                pascal_identifier_equals(entry->base_type_id, type_name))
-                return entry->helper_record;
-            if (base_type_tag != UNKNOWN_TYPE && entry->base_type_tag == base_type_tag)
+            if (semcheck_helper_matches_base(entry, base_type_tag, type_name))
                 return entry->helper_record;
         }
         cur = cur->next;
     }
+    if (type_name != NULL)
+    {
+        const char *fallback_name = semcheck_helper_lookup_fallback_name(type_name);
+        if (fallback_name != NULL && !pascal_identifier_equals(fallback_name, type_name))
+            return semcheck_lookup_type_helper(symtab, UNKNOWN_TYPE, fallback_name);
+    }
     return NULL;
+}
+
+struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
+    int base_type_tag, const char *type_name, const char *member_name)
+{
+    if (member_name == NULL)
+        return semcheck_lookup_type_helper(symtab, base_type_tag, type_name);
+
+    struct RecordType *preferred = semcheck_lookup_type_helper(symtab, base_type_tag, type_name);
+    if (preferred != NULL)
+    {
+        if (semcheck_find_class_method(symtab, preferred, member_name, NULL) != NULL ||
+            semcheck_find_class_field_including_hidden(symtab, preferred, member_name, NULL) != NULL)
+            return preferred;
+    }
+
+    for (ListNode_t *cur = type_helper_entries; cur != NULL; cur = cur->next)
+    {
+        TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
+        if (!semcheck_helper_matches_base(entry, base_type_tag, type_name))
+            continue;
+        if (entry->helper_record == NULL)
+            continue;
+        if (entry->helper_record == preferred)
+            continue;
+        if (semcheck_find_class_method(symtab, entry->helper_record, member_name, NULL) != NULL ||
+            semcheck_find_class_field_including_hidden(symtab, entry->helper_record, member_name, NULL) != NULL)
+            return entry->helper_record;
+    }
+
+    return preferred;
 }
 
 /*===========================================================================

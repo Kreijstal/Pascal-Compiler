@@ -1,4 +1,5 @@
 program arccosh_function;
+uses Math;
 var
   r: real;
 begin

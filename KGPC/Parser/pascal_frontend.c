@@ -5,12 +5,15 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #ifndef _WIN32
 #include <strings.h>
 #endif
 
 #include "ErrVars.h"
+#include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
+#include "ast_cache.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -23,10 +26,40 @@ static char *g_user_defines[MAX_USER_DEFINES];
 static int g_user_define_count = 0;
 static char *g_last_parse_path = NULL;
 
+/* AST cache directory (NULL = disabled). When set, parsed ASTs for units
+ * are cached to binary files in this directory. */
+static char *g_ast_cache_dir = NULL;
+
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
 static bool g_objfpc_mode_detected = false;
 static bool g_default_shortstring = false;
+
+static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; ++i)
+    {
+        hash ^= (uint64_t)data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static bool ast_cache_is_fresh(const char *cache_path, const char *source_path)
+{
+    struct stat cache_st;
+    struct stat source_st;
+
+    if (cache_path == NULL || source_path == NULL)
+        return false;
+    if (stat(cache_path, &cache_st) != 0)
+        return false;
+    if (stat(source_path, &source_st) != 0)
+        return false;
+
+    return cache_st.st_mtime >= source_st.st_mtime;
+}
 
 /* Check if source buffer contains {$MODE objfpc} directive */
 static bool detect_objfpc_mode(const char *buffer, size_t length)
@@ -176,6 +209,13 @@ void pascal_frontend_clear_user_config(void)
         g_user_defines[i] = NULL;
     }
     g_user_define_count = 0;
+}
+
+void pascal_frontend_set_ast_cache_dir(const char *dir)
+{
+    if (g_ast_cache_dir != NULL)
+        free(g_ast_cache_dir);
+    g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
 }
 
 const char * const *pascal_frontend_get_include_paths(int *count)
@@ -517,6 +557,43 @@ void pascal_frontend_cleanup(void)
         preprocessed_path = NULL;
     }
     preprocessed_length = 0;
+    if (g_ast_cache_dir != NULL)
+    {
+        free(g_ast_cache_dir);
+        g_ast_cache_dir = NULL;
+    }
+    from_cparser_cleanup();
+}
+
+/* Compute the cache file path for a given source path.
+ * Returns a malloc'd string or NULL if caching is disabled. */
+static char *compute_ast_cache_path(const char *source_path)
+{
+    if (g_ast_cache_dir == NULL || source_path == NULL)
+        return NULL;
+
+    size_t dir_len = strlen(g_ast_cache_dir);
+    uint64_t source_hash = fnv1a64_bytes((const unsigned char *)source_path, strlen(source_path));
+    /* <dir>/<16-hex>.ast_cache\0 */
+    size_t total = dir_len + 1 + 16 + 10 + 1;
+    char *cache_path = (char *)malloc(total);
+    if (cache_path == NULL)
+        return NULL;
+    snprintf(cache_path, total, "%s/%016llx.ast_cache",
+        g_ast_cache_dir, (unsigned long long)source_hash);
+    return cache_path;
+}
+
+static bool source_path_is_unit(const char *path)
+{
+    size_t length = 0;
+    char *buffer = read_file(path, &length);
+    if (buffer == NULL)
+        return false;
+
+    bool is_unit = buffer_starts_with_unit(buffer, length);
+    free(buffer);
+    return is_unit;
 }
 
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
@@ -541,6 +618,61 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     }
     if (path != NULL)
         g_last_parse_path = strdup(path);
+
+    bool cache_units_only = source_path_is_unit(path);
+
+    /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
+    if (cache_units_only)
+    {
+        char *cache_path = compute_ast_cache_path(path);
+        if (cache_path != NULL)
+        {
+            ast_t *cached_ast = NULL;
+            char *cached_pp_buf = NULL;
+            size_t cached_pp_len = 0;
+            if (ast_cache_is_fresh(cache_path, path) &&
+                ast_cache_load(cache_path, &cached_ast, &cached_pp_buf, &cached_pp_len))
+            {
+                free(cache_path);
+                /* Set up preprocessed source context (needed for semcheck error reporting) */
+                set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
+                int src_offset = semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
+
+                /* Detect objfpc mode from cached preprocessed source */
+                if (detect_objfpc_mode(cached_pp_buf, cached_pp_len))
+                    g_objfpc_mode_detected = true;
+
+                /* Convert the cached AST to Tree_t */
+                Tree_t *tree = NULL;
+                bool success = false;
+                if (convert_to_tree)
+                {
+                    file_to_parse = (char *)path;
+                    from_cparser_set_source_offset(src_offset);
+                    tree = tree_from_pascal_ast(cached_ast);
+                    if (tree != NULL)
+                        success = true;
+                    else
+                        fprintf(stderr, "Error: Failed to convert cached AST for '%s'.\n", path);
+                }
+                else
+                {
+                    success = true;
+                }
+                free_ast(cached_ast);
+                free(cached_pp_buf);
+
+                if (out_tree != NULL)
+                    *out_tree = success ? tree : NULL;
+                else if (tree != NULL)
+                    destroy_tree(tree);
+
+                return success;
+            }
+            free(cache_path);
+            /* Cache miss — proceed with normal parsing, save at the end */
+        }
+    }
 
     size_t length = 0;
     char *buffer = read_file(path, &length);
@@ -585,7 +717,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         // FPC feature flags
         "FPC_HAS_FEATURE_SUPPORT",
         "FPC_HAS_FEATURE_DYNARRAYS", "FPC_HAS_FEATURE_ANSISTRINGS", 
-        "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_UNICODESTRING",
+        "FPC_HAS_FEATURE_WIDESTRINGS", "FPC_HAS_FEATURE_UNICODESTRINGS",
+        "FPC_HAS_UNICODESTRING",
         "FPC_HAS_FEATURE_CLASSES",
         "FPC_HAS_FEATURE_OBJECTS", "FPC_HAS_FEATURE_EXCEPTIONS",
         "FPC_HAS_FEATURE_RTTI", "FPC_HAS_FEATURE_HEAP",
@@ -596,8 +729,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_COMMANDARGS", "FPC_HAS_FEATURE_PROCESSES",
         "FPC_HAS_FEATURE_THREADING", "FPC_HAS_FEATURE_DYNLIBS",
         "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
-        // FPC floating-point type availability (x86_64 supports all three)
-        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE", "FPC_HAS_TYPE_EXTENDED"
+        // FPC floating-point type availability (KGPC maps Extended to Double)
+        "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE",
+        "FPC_WIDESTRING_EQUAL_UNICODESTRING",
+        "FPC_ANSI_TEXTFILEREC"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
@@ -654,6 +789,14 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (!pascal_preprocessor_define(preprocessor, "CPUINT64"))
     {
         report_preprocessor_error(error_out, path, "unable to define CPUINT64 symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    /* Define x86_64 — FPC compiler sources use {$if defined(x86_64)} */
+    if (!pascal_preprocessor_define(preprocessor, "x86_64"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define x86_64 symbol");
         pascal_preprocessor_free(preprocessor);
         free(buffer);
         return false;
@@ -720,6 +863,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (!pascal_preprocessor_define(preprocessor, "UNIX"))
     {
         report_preprocessor_error(error_out, path, "unable to define UNIX symbol");
+        pascal_preprocessor_free(preprocessor);
+        free(buffer);
+        return false;
+    }
+    if (!pascal_preprocessor_define(preprocessor, "HASUNIX"))
+    {
+        report_preprocessor_error(error_out, path, "unable to define HASUNIX symbol");
         pascal_preprocessor_free(preprocessor);
         free(buffer);
         return false;
@@ -812,7 +962,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
     }
     set_preprocessed_context(buffer, length, path);
-    semcheck_register_source_buffer(path, buffer, length);
+    int src_offset = semcheck_register_source_buffer(path, buffer, length);
+    from_cparser_set_source_offset(src_offset);
 
     /* Debug: dump full preprocessed buffer */
     if (getenv("KGPC_DUMP_PREPROC")) {
@@ -916,6 +1067,17 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
         if (convert_to_tree)
         {
+            /* Save unit ASTs only. Top-level programs should always reparse from source. */
+            if (cache_units_only)
+            {
+                char *save_cache_path = compute_ast_cache_path(path);
+                if (save_cache_path != NULL && result.value.ast != NULL)
+                {
+                    ast_cache_save(save_cache_path, result.value.ast, buffer, length);
+                }
+                free(save_cache_path);
+            }
+
             tree = tree_from_pascal_ast(result.value.ast);
             if (tree == NULL)
             {
