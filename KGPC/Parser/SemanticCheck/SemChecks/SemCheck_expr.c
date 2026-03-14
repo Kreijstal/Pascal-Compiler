@@ -433,6 +433,8 @@ struct Expression *clone_expression(const struct Expression *expr)
             }
             clone->expr_data.function_call_data.is_virtual_call =
                 expr->expr_data.function_call_data.is_virtual_call;
+            clone->expr_data.function_call_data.is_class_method_call =
+                expr->expr_data.function_call_data.is_class_method_call;
             clone->expr_data.function_call_data.vmt_index =
                 expr->expr_data.function_call_data.vmt_index;
             clone->expr_data.function_call_data.self_class_name =

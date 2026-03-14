@@ -232,6 +232,7 @@ typedef struct {
     const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
     const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
+    int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.

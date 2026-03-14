@@ -4806,6 +4806,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
+    int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -4838,6 +4839,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = proc->method_name;
     ctx->current_subprogram_owner_class = proc->owner_class;
     ctx->current_subprogram_owner_class_full = proc->owner_class_full;
+    ctx->current_subprogram_is_nonstatic_class_method =
+        (proc->owner_class != NULL && proc->method_name != NULL &&
+         from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
     PushScope(symtab);
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(proc->args_var, symtab, 1);
@@ -5002,6 +5006,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = prev_sub_method_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
+    ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -5049,6 +5054,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
+    int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -5081,6 +5087,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = func->method_name;
     ctx->current_subprogram_owner_class = func->owner_class;
     ctx->current_subprogram_owner_class_full = func->owner_class_full;
+    ctx->current_subprogram_is_nonstatic_class_method =
+        (func->owner_class != NULL && func->method_name != NULL &&
+         from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
     PushScope(symtab);
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(func->args_var, symtab, 1);
@@ -5801,6 +5810,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_method_name = prev_sub_method_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
+    ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;

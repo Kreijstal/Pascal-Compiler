@@ -9752,7 +9752,8 @@ pass_value_arg:
 
                 if (arg_num == 0 &&
                     codegen_call_requires_class_method_vmt_self(call_expr, ctx) &&
-                    codegen_expr_needs_class_method_vmt_self(arg_expr, ctx))
+                    codegen_expr_needs_class_method_vmt_self(arg_expr, ctx) &&
+                    !(ctx != NULL && ctx->current_subprogram_is_nonstatic_class_method))
                 {
                     snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                         top_reg->bit_64, top_reg->bit_64);
