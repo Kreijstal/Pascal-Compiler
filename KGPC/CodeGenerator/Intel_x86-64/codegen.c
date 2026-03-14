@@ -5108,6 +5108,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             ctx->current_subprogram_method_name, symtab, ctx);
 
     HashNode_t *func_node = NULL;
+
     if (symtab != NULL)
     {
         /* For overloaded functions, we need to find the correct overload by matching
@@ -5118,27 +5119,81 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             /* Try to find all identifiers with this name */
             ListNode_t *all_matches = FindAllIdents(symtab, func->id);
             ListNode_t *cur = all_matches;
+            HashNode_t *same_mangled_same_unit = NULL;
             
             /* Find the one with matching mangled name */
             while (cur != NULL && func_node == NULL)
             {
                 HashNode_t *candidate = (HashNode_t *)cur->cur;
+                if (candidate != NULL &&
+                    candidate->type != NULL &&
+                    candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                    candidate->type->info.proc_info.definition == func_tree)
+                {
+                    func_node = candidate;
+                    break;
+                }
                 if (candidate != NULL && candidate->mangled_id != NULL &&
                     strcmp(candidate->mangled_id, func->mangled_id) == 0)
                 {
-                    func_node = candidate;
+                    if (candidate->source_unit_index == func->source_unit_index)
+                    {
+                        same_mangled_same_unit = candidate;
+                    }
+                    else if (func_node == NULL)
+                    {
+                        func_node = candidate;
+                    }
                 }
                 cur = cur->next;
             }
+
+            if (same_mangled_same_unit != NULL)
+                func_node = same_mangled_same_unit;
             
             if (all_matches != NULL)
                 DestroyList(all_matches);
+        }
+
+        if (func_node != NULL &&
+            !func->defined_in_unit &&
+            func->source_unit_index == 0 &&
+            func_node->source_unit_index != 0 &&
+            func_node->type != NULL &&
+            func_node->type->kind == TYPE_KIND_PROCEDURE &&
+            func_node->type->info.proc_info.definition != func_tree)
+        {
+            func_node = NULL;
         }
         
         /* Fallback to simple lookup if no mangled name or no match found */
         if (func_node == NULL)
         {
             FindIdent(&func_node, symtab, func->id);
+            if (func_node != NULL &&
+                func_node->type != NULL &&
+                func_node->type->kind == TYPE_KIND_PROCEDURE &&
+                func_node->type->info.proc_info.definition != NULL &&
+                func_node->type->info.proc_info.definition != func_tree)
+            {
+                ListNode_t *all_matches = FindAllIdents(symtab, func->id);
+                ListNode_t *cur = all_matches;
+                while (cur != NULL)
+                {
+                    HashNode_t *candidate = (HashNode_t *)cur->cur;
+                    if (candidate != NULL &&
+                        candidate->type != NULL &&
+                        candidate->type->kind == TYPE_KIND_PROCEDURE &&
+                        candidate->type->info.proc_info.definition == func_tree)
+                    {
+                        func_node = candidate;
+                        break;
+                    }
+                    cur = cur->next;
+                }
+                if (all_matches != NULL)
+                    DestroyList(all_matches);
+            }
         }
     }
 
