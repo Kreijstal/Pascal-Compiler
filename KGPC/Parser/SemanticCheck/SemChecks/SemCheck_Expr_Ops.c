@@ -13,6 +13,111 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+int semcheck_resolve_overload(HashNode_t **best_match_out,
+    int *best_rank_out,
+    int *num_best_out,
+    ListNode_t *overload_candidates,
+    ListNode_t *args_given,
+    SymTab_t *symtab,
+    struct Expression *call_expr,
+    int max_scope_lev,
+    int prefer_non_builtin);
+
+static int semcheck_candidate_returns_bool(SymTab_t *symtab, HashNode_t *candidate)
+{
+    if (candidate == NULL || candidate->type == NULL ||
+        candidate->type->kind != TYPE_KIND_PROCEDURE)
+        return 0;
+
+    KgpcType *return_type = kgpc_type_get_return_type(candidate->type);
+    if (return_type != NULL)
+        return semcheck_tag_from_kgpc(return_type) == BOOL;
+
+    if (candidate->type->info.proc_info.return_type_id != NULL)
+    {
+        HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+            candidate->type->info.proc_info.return_type_id);
+        if (ret_node != NULL && ret_node->type != NULL)
+            return semcheck_tag_from_kgpc(ret_node->type) == BOOL;
+
+        return semcheck_map_builtin_type_name(symtab,
+            candidate->type->info.proc_info.return_type_id) == BOOL;
+    }
+
+    return 0;
+}
+
+static int semcheck_try_refine_funccall_to_bool(
+    SymTab_t *symtab,
+    struct Expression *call_expr,
+    int max_scope_lev,
+    int mutating,
+    int *type_tag_inout)
+{
+    if (symtab == NULL || call_expr == NULL || type_tag_inout == NULL ||
+        call_expr->type != EXPR_FUNCTION_CALL ||
+        call_expr->expr_data.function_call_data.id == NULL)
+        return 0;
+
+    ListNode_t *all_candidates = FindAllIdents(symtab, call_expr->expr_data.function_call_data.id);
+    if (all_candidates == NULL)
+        return 0;
+
+    ListNode_t *bool_candidates = NULL;
+    ListNode_t *tail = NULL;
+    for (ListNode_t *cur = all_candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate == NULL)
+            continue;
+        if (!semcheck_candidate_returns_bool(symtab, candidate))
+            continue;
+
+        ListNode_t *node = CreateListNode(candidate, LIST_UNSPECIFIED);
+        if (node == NULL)
+            continue;
+        if (bool_candidates == NULL)
+            bool_candidates = node;
+        else
+            tail->next = node;
+        tail = node;
+    }
+    DestroyList(all_candidates);
+
+    if (bool_candidates == NULL)
+        return 0;
+
+    HashNode_t *best_match = NULL;
+    int best_rank = 0;
+    int num_best = 0;
+    int resolve_status = semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+        bool_candidates, call_expr->expr_data.function_call_data.args_expr,
+        symtab, call_expr, max_scope_lev, 1);
+    DestroyList(bool_candidates);
+    if (resolve_status != 0 || best_match == NULL || num_best != 1)
+        return 0;
+
+    semcheck_reset_function_call_cache(call_expr);
+    semcheck_set_function_call_target(call_expr, best_match);
+    if (call_expr->expr_data.function_call_data.mangled_id != NULL)
+        free(call_expr->expr_data.function_call_data.mangled_id);
+    call_expr->expr_data.function_call_data.mangled_id =
+        best_match->mangled_id != NULL ? strdup(best_match->mangled_id) : strdup(best_match->id);
+    semcheck_expr_set_resolved_type(call_expr, BOOL);
+    {
+        KgpcType *bool_type = create_primitive_type(BOOL);
+        if (bool_type != NULL)
+        {
+            semcheck_expr_set_resolved_kgpc_type_shared(call_expr, bool_type);
+            destroy_kgpc_type(bool_type);
+        }
+    }
+    call_expr->expr_data.function_call_data.is_call_info_valid = 1;
+    *type_tag_inout = BOOL;
+    (void)mutating;
+    return 1;
+}
+
 static void semcheck_set_result_expr_metadata(struct Expression *expr, SymTab_t *symtab,
     KgpcType *type)
 {
@@ -1415,6 +1520,17 @@ int semcheck_mulop(int *type_return,
     /* Handle AND and XOR operators */
     if (op_type == AND || op_type == XOR)
     {
+        if (type_first == BOOL && type_second != BOOL && expr2 != NULL &&
+            expr2->type == EXPR_FUNCTION_CALL)
+        {
+            semcheck_try_refine_funccall_to_bool(symtab, expr2, max_scope_lev, mutating, &type_second);
+        }
+        if (type_second == BOOL && type_first != BOOL && expr1 != NULL &&
+            expr1->type == EXPR_FUNCTION_CALL)
+        {
+            semcheck_try_refine_funccall_to_bool(symtab, expr1, max_scope_lev, mutating, &type_first);
+        }
+
         /* Boolean operations */
         if (type_first == BOOL && type_second == BOOL)
         {

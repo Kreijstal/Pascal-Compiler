@@ -58,6 +58,83 @@ static int semcheck_expr_is_char_typecast_call_for_call_local(const struct Expre
         pascal_identifier_equals(target_id, "UnicodeChar");
 }
 
+static int semcheck_candidate_source_unit_index(HashNode_t *candidate)
+{
+    if (candidate == NULL)
+        return 0;
+    if (candidate->source_unit_index > 0)
+        return candidate->source_unit_index;
+    if (candidate->type != NULL &&
+        candidate->type->kind == TYPE_KIND_PROCEDURE &&
+        candidate->type->info.proc_info.definition != NULL)
+    {
+        int def_idx =
+            candidate->type->info.proc_info.definition->tree_data.subprogram_data.source_unit_index;
+        if (def_idx > 0)
+            return def_idx;
+    }
+    return 0;
+}
+
+static int semcheck_candidate_current_unit_index(SymTab_t *symtab)
+{
+    if (symtab != NULL && symtab->unit_context > 0)
+        return symtab->unit_context;
+    return semcheck_get_current_unit_index();
+}
+
+static int semcheck_candidate_is_direct_for_current_unit(SymTab_t *symtab, HashNode_t *candidate)
+{
+    int source_unit_index = semcheck_candidate_source_unit_index(candidate);
+    int current_unit_index;
+    int system_unit_index;
+
+    current_unit_index = semcheck_candidate_current_unit_index(symtab);
+    if (source_unit_index == 0)
+    {
+        if (current_unit_index <= 0 || candidate->defined_in_unit)
+            return 1;
+        return candidate->mangled_id != NULL && strchr(candidate->mangled_id, '$') != NULL;
+    }
+    if (current_unit_index <= 0)
+        return 1;
+    if (source_unit_index == current_unit_index)
+        return 1;
+
+    system_unit_index = unit_registry_add("System");
+    if (source_unit_index == system_unit_index)
+        return 1;
+
+    return unit_registry_is_dep(current_unit_index, source_unit_index);
+}
+
+static int semcheck_candidate_is_local_callable_for_shadowing(SymTab_t *symtab, HashNode_t *candidate)
+{
+    int current_unit_index;
+    int candidate_unit_index;
+
+    (void)symtab;
+    if (candidate == NULL || candidate->defined_in_unit)
+        return 0;
+    if (semcheck_candidate_is_builtin(symtab, candidate))
+        return 0;
+    current_unit_index = semcheck_candidate_current_unit_index(symtab);
+    if (current_unit_index > 0)
+    {
+        candidate_unit_index = semcheck_candidate_source_unit_index(candidate);
+        if (candidate_unit_index != current_unit_index)
+            return 0;
+    }
+    if (candidate->hash_type == HASHTYPE_FUNCTION ||
+        candidate->hash_type == HASHTYPE_PROCEDURE)
+        return 1;
+    if (candidate->hash_type == HASHTYPE_VAR &&
+        candidate->type != NULL &&
+        candidate->type->kind == TYPE_KIND_PROCEDURE)
+        return 1;
+    return 0;
+}
+
 static void semcheck_set_pointer_info_from_kgpc_type(struct Expression *expr, SymTab_t *symtab, KgpcType *type)
 {
     if (expr == NULL || type == NULL || !kgpc_type_is_pointer(type))
@@ -4766,6 +4843,87 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && overload_candidates == NULL) {
         overload_candidates = FindAllIdents(symtab, id);
+    }
+    if (!was_unit_qualified && overload_candidates != NULL)
+    {
+        int has_local_candidate = 0;
+        int has_direct_candidate = 0;
+        int has_indirect_candidate = 0;
+
+        for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+        {
+            HashNode_t *hn = (HashNode_t *)cn->cur;
+            if (hn == NULL)
+                continue;
+            if (semcheck_candidate_is_local_callable_for_shadowing(symtab, hn))
+            {
+                has_local_candidate = 1;
+                continue;
+            }
+            if (semcheck_candidate_is_builtin(symtab, hn))
+            {
+                has_direct_candidate = 1;
+                continue;
+            }
+            if (semcheck_candidate_is_direct_for_current_unit(symtab, hn))
+                has_direct_candidate = 1;
+            else
+                has_indirect_candidate = 1;
+        }
+
+        if (has_local_candidate)
+        {
+            ListNode_t *filtered = NULL;
+            ListNode_t *tail = NULL;
+            for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+            {
+                HashNode_t *hn = (HashNode_t *)cn->cur;
+                if (!semcheck_candidate_is_local_callable_for_shadowing(symtab, hn))
+                    continue;
+
+                ListNode_t *new_node = CreateListNode(hn, LIST_UNSPECIFIED);
+                if (new_node == NULL)
+                    continue;
+                if (filtered == NULL)
+                    filtered = new_node;
+                else
+                    tail->next = new_node;
+                tail = new_node;
+            }
+            if (filtered != NULL)
+            {
+                destroy_list(overload_candidates);
+                overload_candidates = filtered;
+            }
+        }
+        else if (has_direct_candidate && has_indirect_candidate)
+        {
+            ListNode_t *filtered = NULL;
+            ListNode_t *tail = NULL;
+            for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+            {
+                HashNode_t *hn = (HashNode_t *)cn->cur;
+                if (hn == NULL)
+                    continue;
+                if (!semcheck_candidate_is_builtin(symtab, hn) &&
+                    !semcheck_candidate_is_direct_for_current_unit(symtab, hn))
+                    continue;
+
+                ListNode_t *new_node = CreateListNode(hn, LIST_UNSPECIFIED);
+                if (new_node == NULL)
+                    continue;
+                if (filtered == NULL)
+                    filtered = new_node;
+                else
+                    tail->next = new_node;
+                tail = new_node;
+            }
+            if (filtered != NULL)
+            {
+                destroy_list(overload_candidates);
+                overload_candidates = filtered;
+            }
+        }
     }
     /* When the call was unit-qualified (e.g. System.Foo), filter candidates to
      * only those belonging to the specified unit.  This prevents a same-named

@@ -2669,6 +2669,13 @@ int kgpc_type_is_pointer(const KgpcType *type)
     return (type != NULL && type->kind == TYPE_KIND_POINTER);
 }
 
+int kgpc_type_is_set(const KgpcType *type)
+{
+    return (type != NULL &&
+        type->kind == TYPE_KIND_PRIMITIVE &&
+        type->info.primitive_type_tag == SET_TYPE);
+}
+
 int kgpc_type_is_record(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_RECORD);

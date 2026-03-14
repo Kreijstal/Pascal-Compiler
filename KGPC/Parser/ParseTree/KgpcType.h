@@ -234,6 +234,10 @@ void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias);
  * Returns 1 if it's a pointer, 0 otherwise. */
 int kgpc_type_is_pointer(const KgpcType *type);
 
+/* Check if a KgpcType represents a set type.
+ * Returns 1 if it's a set, 0 otherwise. */
+int kgpc_type_is_set(const KgpcType *type);
+
 /* For pointer types, get the type tag of what it points to.
  * Returns UNKNOWN_TYPE if not a pointer or if the pointed-to type is complex. */
 int kgpc_type_get_pointer_subtype_tag(KgpcType *type);

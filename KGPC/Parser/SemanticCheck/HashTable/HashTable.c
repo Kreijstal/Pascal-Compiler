@@ -580,6 +580,18 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
         assert(var_type == HASHVAR_UNTYPED && "When KgpcType provided, var_type should be HASHVAR_UNTYPED");
         assert(record_type == NULL && "When KgpcType provided, record_type should be NULL");
         assert(type_alias == NULL && "When KgpcType provided, type_alias should be NULL");
+        if (type->kind == TYPE_KIND_PROCEDURE &&
+            type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = type->info.proc_info.definition;
+            hash_node->defined_in_unit =
+                def->tree_data.subprogram_data.defined_in_unit ? 1 : 0;
+            hash_node->unit_is_public =
+                def->tree_data.subprogram_data.unit_is_public ? 1 : 0;
+            if (def->tree_data.subprogram_data.source_unit_index > 0)
+                hash_node->source_unit_index =
+                    def->tree_data.subprogram_data.source_unit_index;
+        }
     }
     /* If type is NULL, this is an UNTYPED node (valid for untyped procedure parameters) */
     /* No legacy fields to populate - they've been removed */

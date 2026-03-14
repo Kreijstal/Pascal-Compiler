@@ -2322,13 +2322,18 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     int error_count = 0;
     struct Expression *set_expr = (struct Expression *)args->cur;
     int set_type = UNKNOWN_TYPE;
+    int set_type_owned = 0;
     error_count += semcheck_stmt_expr_tag(&set_type, symtab, set_expr, max_scope_lev, MUTATE);
-    if (set_type != SET_TYPE)
+    KgpcType *set_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, set_expr,
+        max_scope_lev, MUTATE, &set_type_owned);
+    if (set_type != SET_TYPE && !kgpc_type_is_set(set_kgpc_type))
     {
         semcheck_error_with_context("Error on line %d, %s target must be a set.\n",
             stmt->line_num, display_name);
         ++error_count;
     }
+    if (set_type_owned && set_kgpc_type != NULL)
+        destroy_kgpc_type(set_kgpc_type);
 
     struct Expression *value_expr = (struct Expression *)args->next->cur;
     int value_type = UNKNOWN_TYPE;
@@ -8502,6 +8507,8 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         int collection_is_array = 0;
         int collection_is_list = 0;
         int collection_is_string = 0;
+        int collection_is_set = 0;
+        int collection_is_enum_domain = 0;
         const char *list_element_id = NULL;
 
         return_val += semcheck_stmt_expr_tag(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
@@ -8512,6 +8519,20 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         if (collection_kgpc_type != NULL) {
             if (kgpc_type_is_array(collection_kgpc_type)) {
                 collection_is_array = 1;
+            } else if (kgpc_type_is_set(collection_kgpc_type)) {
+                collection_is_set = 1;
+            } else if (collection_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                       collection_kgpc_type->info.primitive_type_tag == ENUM_TYPE &&
+                       collection != NULL &&
+                       collection->type == EXPR_VAR_ID &&
+                       collection->expr_data.id != NULL) {
+                HashNode_t *type_node = NULL;
+                if (FindIdent(&type_node, symtab, collection->expr_data.id) >= 0 &&
+                    type_node != NULL &&
+                    type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    collection_is_enum_domain = 1;
+                }
             } else {
                 /* Lists are represented as pointers to class records */
                 KgpcType *record_candidate = collection_kgpc_type;
@@ -8544,7 +8565,8 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         if (collection_is_string)
             collection_is_array = 1;
 
-        if (!collection_is_array && !collection_is_list) {
+        if (!collection_is_array && !collection_is_list &&
+            !collection_is_set && !collection_is_enum_domain) {
             semcheck_error_with_context("Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;

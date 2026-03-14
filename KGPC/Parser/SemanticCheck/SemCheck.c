@@ -300,6 +300,25 @@ static void semcheck_mark_type_decl_units(ListNode_t *type_decls, int unit_index
     }
 }
 
+static void semcheck_mark_subprogram_units(ListNode_t *subprograms, int unit_index)
+{
+    if (subprograms == NULL || unit_index <= 0)
+        return;
+
+    for (ListNode_t *cur = subprograms; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_SUBPROGRAM)
+            continue;
+
+        if (tree->tree_data.subprogram_data.source_unit_index == 0)
+            tree->tree_data.subprogram_data.source_unit_index = unit_index;
+    }
+}
+
 static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode_t *limit,
     const char *type_id, int source_unit_index, const struct RecordType *canonical_record)
 {
@@ -3617,6 +3636,11 @@ const char *semcheck_get_current_subprogram_id(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.id;
 }
 
+int semcheck_get_current_unit_index(void)
+{
+    return g_semcheck_current_unit_index;
+}
+
 const char *semcheck_get_current_subprogram_result_var_name(void)
 {
     if (g_semcheck_current_subprogram == NULL)
@@ -4520,6 +4544,22 @@ typedef struct SubprogramPredeclLookup
     HashNode_t *body_pair_match;
 } SubprogramPredeclLookup;
 
+static int semcheck_subprogram_node_source_unit_index(HashNode_t *candidate)
+{
+    if (candidate == NULL)
+        return 0;
+    if (candidate->type != NULL &&
+        candidate->type->kind == TYPE_KIND_PROCEDURE &&
+        candidate->type->info.proc_info.definition != NULL)
+    {
+        int def_unit_idx =
+            candidate->type->info.proc_info.definition->tree_data.subprogram_data.source_unit_index;
+        if (def_unit_idx > 0)
+            return def_unit_idx;
+    }
+    return candidate->source_unit_index;
+}
+
 static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
     SymTab_t *symtab,
     Tree_t *subprogram,
@@ -4535,6 +4575,7 @@ static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
     ListNode_t *all_matches = FindAllIdents(symtab, lookup_id);
     ListNode_t *cur = all_matches;
     int current_has_body = (subprogram->tree_data.subprogram_data.statement_list != NULL);
+    int current_source_unit = subprogram->tree_data.subprogram_data.source_unit_index;
 
     while (cur != NULL)
     {
@@ -4543,6 +4584,7 @@ static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
         int existing_has_body = 0;
         int mangled_match = 0;
         int signature_match = 0;
+        int candidate_source_unit = 0;
 
         if (candidate == NULL)
         {
@@ -4551,6 +4593,15 @@ static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
         }
 
         if (candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+        {
+            cur = cur->next;
+            continue;
+        }
+
+        candidate_source_unit = semcheck_subprogram_node_source_unit_index(candidate);
+        if ((current_source_unit > 0 && candidate_source_unit > 0 &&
+             candidate_source_unit != current_source_unit) ||
+            (current_source_unit == 0 && candidate_source_unit > 0))
         {
             cur = cur->next;
             continue;
@@ -13500,6 +13551,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.interface_type_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.implementation_type_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
         g_semcheck_current_unit_index);
 
     /* Check interface section */

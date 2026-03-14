@@ -107,6 +107,52 @@ static int codegen_expr_is_string_like(const struct Expression *expr)
     }
     return 0;
 }
+
+static int codegen_enum_type_literal_count(KgpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE ||
+        type->info.primitive_type_tag != ENUM_TYPE ||
+        type->type_alias == NULL || type->type_alias->enum_literals == NULL)
+        return 0;
+    return ListLength(type->type_alias->enum_literals);
+}
+
+static int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_type)
+{
+    if (set_type == NULL || !kgpc_type_is_set(set_type))
+        return -1;
+
+    if (set_type->type_alias != NULL)
+    {
+        struct TypeAlias *alias = set_type->type_alias;
+        if (alias->is_enum_set && alias->inline_enum_values != NULL)
+        {
+            int count = ListLength(alias->inline_enum_values);
+            if (count > 0)
+                return count - 1;
+        }
+
+        if (alias->set_element_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *elem_node = NULL;
+            if (FindIdent(&elem_node, ctx->symtab, alias->set_element_type_id) >= 0 &&
+                elem_node != NULL && elem_node->type != NULL)
+            {
+                int count = codegen_enum_type_literal_count(elem_node->type);
+                if (count > 0)
+                    return count - 1;
+            }
+        }
+    }
+
+    {
+        long long set_size = kgpc_type_sizeof(set_type);
+        if (set_size > 0 && set_size <= INT_MAX)
+            return (int)(set_size * 8 - 1);
+    }
+
+    return 31;
+}
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -10402,8 +10448,29 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         return inst_list;
     }
 
-    // Get array type info from semantic check
+    // Get collection type info from semantic check
     KgpcType *array_type = collection->resolved_kgpc_type;
+    int is_enum_domain = 0;
+    int is_set_collection = (array_type != NULL && kgpc_type_is_set(array_type));
+    int enum_domain_upper = -1;
+
+    if (collection->type == EXPR_VAR_ID && collection->expr_data.id != NULL)
+    {
+        HashNode_t *collection_node = NULL;
+        if (FindIdent(&collection_node, symtab, collection->expr_data.id) >= 0 &&
+            collection_node != NULL &&
+            collection_node->hash_type == HASHTYPE_TYPE &&
+            collection_node->type != NULL)
+        {
+            int enum_count = codegen_enum_type_literal_count(collection_node->type);
+            if (enum_count > 0)
+            {
+                is_enum_domain = 1;
+                enum_domain_upper = enum_count - 1;
+                array_type = collection_node->type;
+            }
+        }
+    }
     
     // Check if this is a list-like class with default indexed property
     int is_list_class = 0;
@@ -10980,6 +11047,291 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s (string path)\n", __func__);
         #endif
+        return inst_list;
+    }
+
+    if (is_enum_domain) {
+        char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
+        gen_label(cond_label, 18, ctx);
+        gen_label(body_label, 18, ctx);
+        gen_label(exit_label, 18, ctx);
+        gen_label(incr_label, 18, ctx);
+
+        StackNode_t *index_slot = codegen_alloc_temp_slot("for_in_enum_idx");
+        if (index_slot == NULL) {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for enum for-in index");
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (!codegen_push_loop(ctx, exit_label, incr_label))
+            return inst_list;
+
+        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *loop_var_addr_reg = NULL;
+        if (idx_reg == NULL) {
+            codegen_pop_loop(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for enum for-in value");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", index_slot->offset, idx_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+        if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+            free_reg(get_reg_stack(), idx_reg);
+            codegen_pop_loop(ctx);
+            return inst_list;
+        }
+
+        {
+            long long elem_size = (loop_var != NULL && loop_var->resolved_kgpc_type != NULL) ?
+                kgpc_type_sizeof(loop_var->resolved_kgpc_type) : 4;
+            if (elem_size <= 1) {
+                const char *byte_reg = register_name8(idx_reg);
+                if (byte_reg == NULL) {
+                    free_reg(get_reg_stack(), idx_reg);
+                    free_reg(get_reg_stack(), loop_var_addr_reg);
+                    codegen_pop_loop(ctx);
+                    codegen_report_error(ctx, "ERROR: Unable to get byte register for enum for-in");
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
+            } else if (elem_size == 2) {
+                const char *word_reg = codegen_register_name16(idx_reg);
+                if (word_reg == NULL) {
+                    free_reg(get_reg_stack(), idx_reg);
+                    free_reg(get_reg_stack(), loop_var_addr_reg);
+                    codegen_pop_loop(ctx);
+                    codegen_report_error(ctx, "ERROR: Unable to get word register for enum for-in");
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
+            } else if (elem_size >= 8) {
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", idx_reg->bit_32, idx_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", idx_reg->bit_64, loop_var_addr_reg->bit_64);
+            } else {
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", idx_reg->bit_32, loop_var_addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), idx_reg);
+        free_reg(get_reg_stack(), loop_var_addr_reg);
+
+        inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+        codegen_pop_loop(ctx);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tincl\t-%d(%%rbp)\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", enum_domain_upper, index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+        inst_list = add_inst(inst_list, buffer);
+        return inst_list;
+    }
+
+    if (is_set_collection) {
+        char cond_label[18], body_label[18], exit_label[18], incr_label[18], skip_body_label[18], buffer[256];
+        gen_label(cond_label, 18, ctx);
+        gen_label(body_label, 18, ctx);
+        gen_label(exit_label, 18, ctx);
+        gen_label(incr_label, 18, ctx);
+        gen_label(skip_body_label, 18, ctx);
+
+        int upper_bound = codegen_set_iteration_upper_bound(ctx, array_type);
+        if (upper_bound < 0) {
+            codegen_report_error(ctx, "ERROR: Unable to determine FOR-IN set bounds");
+            return inst_list;
+        }
+
+        StackNode_t *index_slot = codegen_alloc_temp_slot("for_in_set_idx");
+        if (index_slot == NULL) {
+            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for set for-in index");
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (!codegen_push_loop(ctx, exit_label, incr_label))
+            return inst_list;
+
+        Register_t *base_reg = NULL;
+        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *byte_index_reg = NULL;
+        Register_t *bit_reg = NULL;
+        Register_t *byte_val_reg = NULL;
+        Register_t *mask_reg = NULL;
+        Register_t *loop_var_addr_reg = NULL;
+        const char *bit_byte_reg = NULL;
+
+        inst_list = codegen_address_for_expr(collection, inst_list, ctx, &base_reg);
+        if (base_reg == NULL || codegen_had_error(ctx)) {
+            codegen_pop_loop(ctx);
+            return inst_list;
+        }
+
+        if (idx_reg == NULL) {
+            free_reg(get_reg_stack(), base_reg);
+            codegen_pop_loop(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for set for-in index");
+            return inst_list;
+        }
+        byte_index_reg = get_free_reg(get_reg_stack(), &inst_list);
+        bit_reg = get_free_reg(get_reg_stack(), &inst_list);
+        byte_val_reg = get_free_reg(get_reg_stack(), &inst_list);
+        mask_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (byte_index_reg == NULL || bit_reg == NULL || byte_val_reg == NULL || mask_reg == NULL) {
+            if (mask_reg) free_reg(get_reg_stack(), mask_reg);
+            if (byte_val_reg) free_reg(get_reg_stack(), byte_val_reg);
+            if (bit_reg) free_reg(get_reg_stack(), bit_reg);
+            if (byte_index_reg) free_reg(get_reg_stack(), byte_index_reg);
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), base_reg);
+            codegen_pop_loop(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to allocate registers for set for-in body");
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", index_slot->offset, idx_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", idx_reg->bit_32, byte_index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tshrl\t$3, %s\n", byte_index_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", idx_reg->bit_32, bit_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tandl\t$7, %s\n", bit_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s,%s,1), %s\n",
+            base_reg->bit_64, byte_index_reg->bit_64, byte_val_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$1, %s\n", mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        bit_byte_reg = register_name8(bit_reg);
+        if (bit_byte_reg == NULL) {
+            free_reg(get_reg_stack(), mask_reg);
+            free_reg(get_reg_stack(), byte_val_reg);
+            free_reg(get_reg_stack(), bit_reg);
+            free_reg(get_reg_stack(), byte_index_reg);
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), base_reg);
+            codegen_pop_loop(ctx);
+            codegen_report_error(ctx, "ERROR: Unable to get byte register for set for-in bit index");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovb\t%s, %%cl\n", bit_byte_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tshll\t%%cl, %s\n", mask_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", mask_reg->bit_32, byte_val_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjz\t%s\n", skip_body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+        if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+            free_reg(get_reg_stack(), mask_reg);
+            free_reg(get_reg_stack(), byte_val_reg);
+            free_reg(get_reg_stack(), bit_reg);
+            free_reg(get_reg_stack(), byte_index_reg);
+            free_reg(get_reg_stack(), idx_reg);
+            free_reg(get_reg_stack(), base_reg);
+            codegen_pop_loop(ctx);
+            return inst_list;
+        }
+
+        {
+            long long elem_size = (loop_var != NULL && loop_var->resolved_kgpc_type != NULL) ?
+                kgpc_type_sizeof(loop_var->resolved_kgpc_type) : 4;
+            if (elem_size <= 1) {
+                const char *byte_reg = register_name8(idx_reg);
+                if (byte_reg == NULL) {
+                    free_reg(get_reg_stack(), loop_var_addr_reg);
+                    free_reg(get_reg_stack(), mask_reg);
+                    free_reg(get_reg_stack(), byte_val_reg);
+                    free_reg(get_reg_stack(), bit_reg);
+                    free_reg(get_reg_stack(), byte_index_reg);
+                    free_reg(get_reg_stack(), idx_reg);
+                    free_reg(get_reg_stack(), base_reg);
+                    codegen_pop_loop(ctx);
+                    codegen_report_error(ctx, "ERROR: Unable to get byte register for set for-in store");
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovb\t%s, (%s)\n", byte_reg, loop_var_addr_reg->bit_64);
+            } else if (elem_size == 2) {
+                const char *word_reg = codegen_register_name16(idx_reg);
+                if (word_reg == NULL) {
+                    free_reg(get_reg_stack(), loop_var_addr_reg);
+                    free_reg(get_reg_stack(), mask_reg);
+                    free_reg(get_reg_stack(), byte_val_reg);
+                    free_reg(get_reg_stack(), bit_reg);
+                    free_reg(get_reg_stack(), byte_index_reg);
+                    free_reg(get_reg_stack(), idx_reg);
+                    free_reg(get_reg_stack(), base_reg);
+                    codegen_pop_loop(ctx);
+                    codegen_report_error(ctx, "ERROR: Unable to get word register for set for-in store");
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovw\t%s, (%s)\n", word_reg, loop_var_addr_reg->bit_64);
+            } else if (elem_size >= 8) {
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", idx_reg->bit_32, idx_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", idx_reg->bit_64, loop_var_addr_reg->bit_64);
+            } else {
+                snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n", idx_reg->bit_32, loop_var_addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        free_reg(get_reg_stack(), loop_var_addr_reg);
+        free_reg(get_reg_stack(), mask_reg);
+        free_reg(get_reg_stack(), byte_val_reg);
+        free_reg(get_reg_stack(), bit_reg);
+        free_reg(get_reg_stack(), byte_index_reg);
+        free_reg(get_reg_stack(), idx_reg);
+        free_reg(get_reg_stack(), base_reg);
+
+        inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", skip_body_label);
+        inst_list = add_inst(inst_list, buffer);
+        codegen_pop_loop(ctx);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tincl\t-%d(%%rbp)\n", index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%d, -%d(%%rbp)\n", upper_bound, index_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+        inst_list = add_inst(inst_list, buffer);
         return inst_list;
     }
     
