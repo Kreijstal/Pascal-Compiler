@@ -355,6 +355,55 @@ static inline struct RecordType* semcheck_stmt_get_record_type_from_node(HashNod
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/from_cparser.h"
 #include "../../../identifier_utils.h"
+
+static int semcheck_current_subprogram_is_constructor_fallback(SymTab_t *symtab)
+{
+    if (semcheck_get_current_subprogram_is_constructor())
+        return 1;
+
+    const char *method_name = semcheck_get_current_subprogram_method_name();
+    const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+    const char *owner = semcheck_get_current_subprogram_owner_class();
+    const char *owner_name = owner_full != NULL ? owner_full : owner;
+    if (symtab == NULL || method_name == NULL || owner_name == NULL)
+        return 0;
+
+    HashNode_t *self_node = NULL;
+    if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+    {
+        struct RecordType *self_record = get_record_type_from_node(self_node);
+        if (self_record != NULL && self_record->method_templates != NULL)
+        {
+            for (ListNode_t *cur = self_record->method_templates; cur != NULL; cur = cur->next)
+            {
+                struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+                if (tmpl != NULL && tmpl->name != NULL &&
+                    pascal_identifier_equals(tmpl->name, method_name) &&
+                    tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                    return 1;
+            }
+        }
+    }
+
+    HashNode_t *owner_node = NULL;
+    if (FindIdent(&owner_node, symtab, (char *)owner_name) != 0 || owner_node == NULL)
+        return 0;
+
+    struct RecordType *record = get_record_type_from_node(owner_node);
+    if (record == NULL || record->method_templates == NULL)
+        return 0;
+
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+            return 1;
+    }
+
+    return 0;
+}
 #include <math.h>
 
 /* Check if the given KgpcType represents a Currency type.
@@ -2009,9 +2058,9 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
 
     int value_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
-    if (!is_integer_type(value_type) && !is_real_family_type(value_type))
+    if (!is_ordinal_type(value_type) && !is_real_family_type(value_type))
     {
-        semcheck_error_with_context("Error on line %d, Str value must be an integer or real.\n", stmt->line_num);
+        semcheck_error_with_context("Error on line %d, Str value must be an ordinal or real.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -3236,6 +3285,17 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             break;
 
         case STMT_PROCEDURE_CALL:
+            if (stmt->stmt_data.procedure_call_data.id != NULL &&
+                pascal_identifier_equals(stmt->stmt_data.procedure_call_data.id, "fail") &&
+                stmt->stmt_data.procedure_call_data.expr_args == NULL &&
+                semcheck_current_subprogram_is_constructor_fallback(symtab))
+            {
+                stmt->type = STMT_EXIT;
+                memset(&stmt->stmt_data, 0, sizeof(stmt->stmt_data));
+                stmt->stmt_data.exit_data.return_expr = NULL;
+                return_val += semcheck_stmt_main(symtab, stmt, max_scope_lev);
+                break;
+            }
             return_val += semcheck_proccall(symtab, stmt, max_scope_lev);
             break;
 
@@ -4745,6 +4805,18 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
     const char *prop_name = lhs->expr_data.id;
     if (prop_name == NULL)
         return -1;
+
+    {
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        const char *result_var = semcheck_get_current_subprogram_result_var_name();
+        const char *method_name = semcheck_get_current_subprogram_method_name();
+        int is_result_name =
+            (cur_sub_id != NULL && pascal_identifier_equals(prop_name, cur_sub_id)) ||
+            (result_var != NULL && pascal_identifier_equals(prop_name, result_var)) ||
+            (method_name != NULL && pascal_identifier_equals(prop_name, method_name));
+        if (is_result_name)
+            return -1;
+    }
 
     /* WITH-context fields must be resolved as assignments on the active record,
      * not rewritten as module-property setter calls. */

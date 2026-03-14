@@ -13755,6 +13755,8 @@ static struct Expression *convert_set_literal(ast_t *set_node) {
     return mk_set(set_node->line, mask, elements, all_constant);
 }
 
+static struct Expression *convert_inherited_operator_expr(int line_num, const char *op_id, ast_t *arg_node);
+
 static struct Expression *convert_factor(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
     if (expr_node == NULL) {
@@ -14024,6 +14026,15 @@ static struct Expression *convert_factor(ast_t *expr_node) {
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
         }
+        if (saw_inherited && id != NULL)
+        {
+            struct Expression *inherited_op = convert_inherited_operator_expr(expr_node->line, id, child);
+            if (inherited_op != NULL)
+            {
+                free(id);
+                return inherited_op;
+            }
+        }
         ListNode_t *args = convert_expression_list(child);
         struct Expression *result = mk_functioncall(expr_node->line, id, args);
         if (saw_inherited && result != NULL)
@@ -14103,6 +14114,35 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     default:
         break;
     }
+    return NULL;
+}
+
+static struct Expression *convert_inherited_operator_expr(int line_num, const char *op_id, ast_t *arg_node)
+{
+    if (g_current_method_name == NULL || op_id == NULL || arg_node == NULL || arg_node->next != NULL)
+        return NULL;
+
+    struct Expression *lhs = mk_functioncall(line_num, strdup(g_current_method_name), NULL);
+    if (lhs == NULL)
+        return NULL;
+    lhs->expr_data.function_call_data.is_inherited_call = 1;
+
+    struct Expression *rhs = convert_expression(arg_node);
+    if (rhs == NULL)
+    {
+        destroy_expr(lhs);
+        return NULL;
+    }
+
+    if (strcasecmp(op_id, "and") == 0)
+        return mk_mulop(line_num, AND, lhs, rhs);
+    if (strcasecmp(op_id, "xor") == 0)
+        return mk_mulop(line_num, XOR, lhs, rhs);
+    if (strcasecmp(op_id, "or") == 0)
+        return mk_addop(line_num, OR, lhs, rhs);
+
+    destroy_expr(lhs);
+    destroy_expr(rhs);
     return NULL;
 }
 
@@ -16878,7 +16918,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             is_class_operator = 1;
         }
     }
-    int is_constructor = (method_name != NULL && strcasecmp(method_name, "create") == 0);
+    int is_constructor = (method_node->typ == PASCAL_T_CONSTRUCTOR_DECL) ||
+        (method_name != NULL && strcasecmp(method_name, "create") == 0);
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
@@ -17152,6 +17193,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
         tree->tree_data.subprogram_data.method_name = (char *)string_intern(method_name);
         tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
+        tree->tree_data.subprogram_data.is_constructor = is_constructor;
         tree->tree_data.subprogram_data.is_static_method = is_static_method;
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);

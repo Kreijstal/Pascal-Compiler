@@ -3676,6 +3676,13 @@ const char *semcheck_get_current_subprogram_owner_class_outer(void)
     return g_semcheck_current_subprogram->tree_data.subprogram_data.owner_class_outer;
 }
 
+int semcheck_get_current_subprogram_is_constructor(void)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return 0;
+    return g_semcheck_current_subprogram->tree_data.subprogram_data.is_constructor;
+}
+
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int *owns_type)
 {
     if (owns_type != NULL)
@@ -3719,6 +3726,61 @@ KgpcType *semcheck_get_current_subprogram_return_kgpc_type(SymTab_t *symtab, int
     }
 
     return NULL;
+}
+
+ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self)
+{
+    if (g_semcheck_current_subprogram == NULL)
+        return NULL;
+
+    ListNode_t *result = NULL;
+    ListNode_t *tail = NULL;
+    for (ListNode_t *cur = g_semcheck_current_subprogram->tree_data.subprogram_data.args_var;
+         cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        ListNode_t *ids = NULL;
+        if (decl == NULL)
+            continue;
+        if (decl->type == TREE_VAR_DECL)
+            ids = decl->tree_data.var_decl_data.ids;
+        else if (decl->type == TREE_ARR_DECL)
+            ids = decl->tree_data.arr_decl_data.ids;
+        else
+            continue;
+
+        for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next)
+        {
+            const char *param_id = (const char *)id_node->cur;
+            if (param_id == NULL)
+                continue;
+            if (!include_self && pascal_identifier_equals(param_id, "Self"))
+                continue;
+
+            struct Expression *arg_expr = mk_varid(g_semcheck_current_subprogram->line_num, strdup(param_id));
+            if (arg_expr == NULL)
+            {
+                destroy_list(result);
+                return NULL;
+            }
+
+            ListNode_t *node = CreateListNode(arg_expr, LIST_EXPR);
+            if (node == NULL)
+            {
+                destroy_expr(arg_expr);
+                destroy_list(result);
+                return NULL;
+            }
+
+            if (result == NULL)
+                result = node;
+            else
+                tail->next = node;
+            tail = node;
+        }
+    }
+
+    return result;
 }
 
 void semcheck_mark_static_link_needed(int scope_level, HashNode_t *node)
@@ -16858,14 +16920,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         
         /* Constructors implicitly yield the constructed instance, so do not
          * require an explicit assignment to the return variable. */
-        int is_constructor = 0;
-        {
-            const char *name = subprogram->tree_data.subprogram_data.method_name;
-            if (name == NULL)
-                name = subprogram->tree_data.subprogram_data.id;
-            if (name != NULL && strcasecmp(name, "create") == 0)
-                is_constructor = 1;
-        }
+        int is_constructor = subprogram->tree_data.subprogram_data.is_constructor;
 
         /* Check if either the function name or "Result" was assigned to */
         int return_was_assigned = is_constructor ? 1 : (hash_return->mutated != NO_MUTATE);

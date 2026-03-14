@@ -70,7 +70,9 @@ const char *semcheck_get_current_subprogram_method_name(void);
 const char *semcheck_get_current_subprogram_owner_class(void);
 const char *semcheck_get_current_subprogram_owner_class_full(void);
 const char *semcheck_get_current_subprogram_owner_class_outer(void);
+int semcheck_get_current_subprogram_is_constructor(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
+ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self);
 
 /* Save/restore the current unit context for field type resolution.
  * When resolving field types of a record defined in another unit,

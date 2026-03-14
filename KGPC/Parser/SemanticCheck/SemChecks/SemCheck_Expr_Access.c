@@ -487,7 +487,42 @@ int semcheck_arrayaccess(int *type_return,
 
     int base_type = UNKNOWN_TYPE;
     KgpcType *base_kgpc_type = NULL;
-    return_val += semcheck_expr_with_type(&base_kgpc_type, symtab, array_expr, max_scope_lev, mutating);
+    int base_mutating = mutating;
+    if (mutating != NO_MUTATE &&
+        (array_expr->type == EXPR_VAR_ID || array_expr->type == EXPR_RECORD_ACCESS))
+    {
+        struct ClassProperty *prop = NULL;
+        if (array_expr->type == EXPR_VAR_ID)
+        {
+            HashNode_t *self_node = NULL;
+            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            {
+                struct RecordType *self_record = get_record_type_from_node(self_node);
+                if (self_record != NULL)
+                    prop = semcheck_find_class_property(symtab, self_record,
+                        array_expr->expr_data.id, NULL);
+            }
+        }
+        else if (array_expr->type == EXPR_RECORD_ACCESS)
+        {
+            struct Expression *record_expr = array_expr->expr_data.record_access_data.record_expr;
+            const char *field_id = array_expr->expr_data.record_access_data.field_id;
+            if (record_expr != NULL && field_id != NULL)
+            {
+                KgpcType *record_kgpc_type = NULL;
+                semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, NO_MUTATE);
+                struct RecordType *owner_record = semcheck_with_resolve_record_type(symtab,
+                    record_expr, semcheck_tag_from_kgpc(record_expr->resolved_kgpc_type), expr->line_num);
+                if (owner_record != NULL)
+                    prop = semcheck_find_class_property(symtab, owner_record, field_id, NULL);
+            }
+        }
+
+        if (prop != NULL && !(prop->is_indexed && prop->write_accessor != NULL))
+            base_mutating = NO_MUTATE;
+    }
+
+    return_val += semcheck_expr_with_type(&base_kgpc_type, symtab, array_expr, max_scope_lev, base_mutating);
     base_type = semcheck_tag_from_kgpc(base_kgpc_type);
 
     /* Support default indexed property access by converting obj[idx] to obj.field[idx].
@@ -1166,6 +1201,16 @@ int semcheck_funccall(int *type_return,
      * E.g., T(inherited Get(Index)^) should call TFPSList.Get, not TFPGList.Get. */
     if (expr->expr_data.function_call_data.is_inherited_call && id != NULL)
     {
+        if (args_given == NULL)
+        {
+            ListNode_t *forwarded_args = semcheck_clone_current_subprogram_actual_args(0);
+            if (forwarded_args != NULL)
+            {
+                expr->expr_data.function_call_data.args_expr = forwarded_args;
+                args_given = forwarded_args;
+            }
+        }
+
         HashNode_t *self_node = NULL;
         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
         {

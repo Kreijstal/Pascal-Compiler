@@ -1996,6 +1996,30 @@ int semcheck_varid(int *type_return,
     id = expr->expr_data.id;
     semcheck_clear_pointer_info(expr);
     semcheck_clear_array_info(expr);
+    if (mutating != NO_MUTATE && id != NULL)
+    {
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        const char *result_var = semcheck_get_current_subprogram_result_var_name();
+        const char *method_name = semcheck_get_current_subprogram_method_name();
+        int is_result_name =
+            (cur_sub_id != NULL && pascal_identifier_equals(id, cur_sub_id)) ||
+            (result_var != NULL && pascal_identifier_equals(id, result_var)) ||
+            (method_name != NULL && pascal_identifier_equals(id, method_name));
+        if (is_result_name)
+        {
+            int owns_ret = 0;
+            KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &owns_ret);
+            if (ret_type != NULL)
+            {
+                *type_return = semcheck_tag_from_kgpc(ret_type);
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
+                semcheck_set_result_expr_metadata(expr, symtab, ret_type);
+                if (owns_ret)
+                    destroy_kgpc_type(ret_type);
+                return return_val;
+            }
+        }
+    }
     if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
@@ -2288,30 +2312,6 @@ int semcheck_varid(int *type_return,
             }
         }
 resolved:;
-    }
-    if (mutating != NO_MUTATE && id != NULL)
-    {
-        const char *cur_sub_id = semcheck_get_current_subprogram_id();
-        const char *result_var = semcheck_get_current_subprogram_result_var_name();
-        const char *method_name = semcheck_get_current_subprogram_method_name();
-        int is_result_name =
-            (cur_sub_id != NULL && pascal_identifier_equals(id, cur_sub_id)) ||
-            (result_var != NULL && pascal_identifier_equals(id, result_var)) ||
-            (method_name != NULL && pascal_identifier_equals(id, method_name));
-        if (is_result_name)
-        {
-            int owns_ret = 0;
-            KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &owns_ret);
-            if (ret_type != NULL)
-            {
-                *type_return = semcheck_tag_from_kgpc(ret_type);
-                semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
-                semcheck_set_result_expr_metadata(expr, symtab, ret_type);
-                if (owns_ret)
-                    destroy_kgpc_type(ret_type);
-                return return_val;
-            }
-        }
     }
     if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
