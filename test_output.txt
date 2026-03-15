@@ -1,0 +1,1 @@
+PAnsiChar assign works

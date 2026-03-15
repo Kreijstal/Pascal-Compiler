@@ -594,6 +594,7 @@ int semcheck_relop(int *type_return,
                                         /* Transform expression from RELOP to FUNCTION_CALL */
                                         expr->type = EXPR_FUNCTION_CALL;
                                         memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                                        expr->expr_data.function_call_data.is_operator_call = 1;
 
                                         expr->expr_data.function_call_data.id = strdup(operator_method);
                                         /* Use the actual mangled name from the symbol table */
@@ -984,6 +985,7 @@ relop_fallback:
                                 if (return_type != NULL)
                                 {
                                     expr->type = EXPR_FUNCTION_CALL;
+                                    expr->expr_data.function_call_data.is_operator_call = 1;
                                     memset(&expr->expr_data.function_call_data, 0,
                                         sizeof(expr->expr_data.function_call_data));
                                     expr->expr_data.function_call_data.id = strdup(operator_method);
@@ -1593,6 +1595,7 @@ int semcheck_addop(int *type_return,
                                 /* Change expression type to FUNCTION_CALL */
                                 expr->type = EXPR_FUNCTION_CALL;
                                 memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                                expr->expr_data.function_call_data.is_operator_call = 1;
 
                                 /* Populate function_call_data */
                                 expr->expr_data.function_call_data.id = strdup(operator_method);
@@ -1865,6 +1868,7 @@ int semcheck_mulop(int *type_return,
                                 /* Change expression type to FUNCTION_CALL */
                                 expr->type = EXPR_FUNCTION_CALL;
                                 memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                                expr->expr_data.function_call_data.is_operator_call = 1;
 
                                 /* Populate function_call_data */
                                 expr->expr_data.function_call_data.id = strdup(operator_method);
@@ -2011,6 +2015,7 @@ static int semcheck_try_helper_member(int *type_return, SymTab_t *symtab,
     if (method_node != NULL)
     {
         expr->type = EXPR_FUNCTION_CALL;
+        expr->expr_data.function_call_data.is_operator_call = 1;
         memset(&expr->expr_data.function_call_data, 0,
             sizeof(expr->expr_data.function_call_data));
         expr->expr_data.function_call_data.id = strdup(id);
@@ -2708,6 +2713,7 @@ resolved:;
                     {
                         expr->type = EXPR_FUNCTION_CALL;
                         memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.is_operator_call = 1;
                         expr->expr_data.function_call_data.id = getter_id;
                         expr->expr_data.function_call_data.args_expr = NULL;
                         expr->expr_data.function_call_data.mangled_id = NULL;
@@ -2803,6 +2809,7 @@ resolved:;
                                     expr->expr_data.id = NULL;
                                     
                                     expr->type = EXPR_FUNCTION_CALL;
+                                    expr->expr_data.function_call_data.is_operator_call = 1;
                                     memset(&expr->expr_data.function_call_data, 0,
                                         sizeof(expr->expr_data.function_call_data));
                                     expr->expr_data.function_call_data.id = saved_id;
@@ -3087,6 +3094,7 @@ resolved:;
                                             if (args_list != NULL)
                                             {
                                                 expr->type = EXPR_FUNCTION_CALL;
+                                        expr->expr_data.function_call_data.is_operator_call = 1;
                                                 memset(&expr->expr_data.function_call_data, 0,
                                                     sizeof(expr->expr_data.function_call_data));
                                                 expr->expr_data.function_call_data.id = getter_name;
@@ -3116,6 +3124,7 @@ resolved:;
 
             expr->type = EXPR_FUNCTION_CALL;
             memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+            expr->expr_data.function_call_data.is_operator_call = 1;
             expr->expr_data.function_call_data.id = func_id;
             expr->expr_data.function_call_data.args_expr = NULL;
             expr->expr_data.function_call_data.mangled_id = NULL;

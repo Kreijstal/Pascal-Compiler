@@ -1824,6 +1824,13 @@ static int is_operator_token_name(const char *name)
             strcasecmp(name, "LessThanOrEqual") == 0);
 }
 
+/* Tag a function call expression as an operator dispatch if applicable. */
+static void tag_operator_call(struct Expression *expr, int is_operator)
+{
+    if (expr != NULL && is_operator)
+        expr->expr_data.function_call_data.is_operator_call = 1;
+}
+
 /* Encode operator symbols into valid identifier names for assembly */
 static char *encode_operator_name(const char *op_name) {
     if (op_name == NULL)
@@ -6239,6 +6246,8 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 snprintf(buffer, sizeof(buffer), "0..%d", size_val);
                 list_builder_append(&dims_builder, strdup(buffer), LIST_STRING);
                 type_info->array_dimensions = list_builder_finish(&dims_builder);
+                /* Numeric bounds are in type_info->start/end; no symbolic strings needed */
+                type_info->array_dims_parsed = 1;
             }
 
             free(dup);
@@ -13512,6 +13521,11 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                         snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
                         free(orig_id);
                         decl->tree_data.type_decl_data.id = qualified_id;
+                        /* Set outer_type_id on record types for nested type qualification */
+                        if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                            decl->tree_data.type_decl_data.info.record != NULL &&
+                            decl->tree_data.type_decl_data.info.record->outer_type_id == NULL)
+                            decl->tree_data.type_decl_data.info.record->outer_type_id = strdup(parent_type_name);
                     }
                     /* Also qualify pointer_type_id for pointer aliases referencing
                      * sibling types in the same nested scope */
@@ -13581,6 +13595,8 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                     {
                         free(decl->tree_data.type_decl_data.info.record->type_id);
                         decl->tree_data.type_decl_data.info.record->type_id = strdup(qualified_id);
+                        if (decl->tree_data.type_decl_data.info.record->outer_type_id == NULL)
+                            decl->tree_data.type_decl_data.info.record->outer_type_id = strdup(parent_type_name);
                         qualify_record_field_nested_types(decl->tree_data.type_decl_data.info.record,
                             parent_type_name, type_section);
                         if (decl->tree_data.type_decl_data.info.record->parent_class_name != NULL &&
@@ -14048,6 +14064,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 if (base_expr != NULL)
                     args = PushListNodeFront(args, CreateListNode(base_expr, LIST_EXPR));
                 struct Expression *call_expr = mk_functioncall(expr_node->line, method_id, args);
+                tag_operator_call(call_expr, is_operator_token_name(method_id));
                 if (call_expr != NULL)
                 {
                     call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
@@ -14143,6 +14160,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         }
         ListNode_t *args = convert_expression_list(child);
         struct Expression *result = mk_functioncall(expr_node->line, id, args);
+        tag_operator_call(result, is_operator_token_name(id));
         if (saw_inherited && result != NULL)
             result->expr_data.function_call_data.is_inherited_call = 1;
         return result;

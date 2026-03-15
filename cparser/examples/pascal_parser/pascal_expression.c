@@ -1444,7 +1444,6 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
         specialize_typecast_with_suffixes,        // specialize T<T>(x) with suffixes
         specialize_typecast,                      // specialize T<T>(x) without suffixes
-        specialize_bare,                          // specialize T<T> without args (for @specialize, .Method)
         typecast_any_with_suffixes,               // Identifier casts with suffixes (e.g., PAnsiChar(x)^)
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)

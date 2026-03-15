@@ -869,6 +869,7 @@ static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
         ? operator_node->mangled_id
         : (operator_node->id != NULL ? operator_node->id : "op_assign");
     struct Expression *call_expr = mk_functioncall(source_expr->line_num, strdup(call_id), NULL);
+    call_expr->expr_data.function_call_data.is_operator_call = 1;
     call_expr->expr_data.function_call_data.args_expr = CreateListNode(source_expr, LIST_EXPR);
     if (operator_node->mangled_id != NULL)
         call_expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);

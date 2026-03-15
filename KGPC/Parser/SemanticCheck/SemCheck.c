@@ -7310,16 +7310,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (record_info != NULL)
                         {
                             if (record_info->type_id == NULL)
-                            {
                                 record_info->type_id = strdup(type_id);
-                                /* For nested types like TOuter.TInner, extract outer_type_id */
-                                if (record_info->outer_type_id == NULL && type_id != NULL)
-                                {
-                                    const char *dot = strrchr(type_id, '.');
-                                    if (dot != NULL && dot != type_id)
-                                        record_info->outer_type_id = strndup(type_id, (size_t)(dot - type_id));
-                                }
-                            }
 
                             KgpcType *kgpc_type = create_record_type(record_info);
                             if (record_type_is_class(record_info))
@@ -7718,15 +7709,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                     /* Annotate the record with its canonical name if missing */
                     if (record_info != NULL && record_info->type_id == NULL)
-                    {
                         record_info->type_id = strdup(type_id);
-                        if (record_info->outer_type_id == NULL && type_id != NULL)
-                        {
-                            const char *dot = strrchr(type_id, '.');
-                            if (dot != NULL && dot != type_id)
-                                record_info->outer_type_id = strndup(type_id, (size_t)(dot - type_id));
-                        }
-                    }
                     
                     KgpcType *kgpc_type = create_record_type(record_info);
                     if (record_type_is_class(record_info))
@@ -10077,24 +10060,8 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
         const char *end_str_ref = alias->array_dim_end_str;
         char *start_str_alloc = NULL;
         char *end_str_alloc = NULL;
-        if (start_str_ref == NULL || end_str_ref == NULL)
-        {
-            /* Fallback: parse from dimension string for legacy data */
-            ListNode_t *first_dim = alias->array_dimensions;
-            if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
-            {
-                char *dim_str = (char *)first_dim->cur;
-                char *separator = strstr(dim_str, "..");
-                if (separator != NULL)
-                {
-                    size_t slen = (size_t)(separator - dim_str);
-                    start_str_alloc = strndup(dim_str, slen);
-                    end_str_alloc = strdup(separator + 2);
-                    start_str_ref = start_str_alloc;
-                    end_str_ref = end_str_alloc;
-                }
-            }
-        }
+        /* No fallback: all dimension paths in from_cparser.c now set
+         * array_dim_start_str/array_dim_end_str structurally. */
         if (start_str_ref != NULL && end_str_ref != NULL)
         {
             const char *start_str = start_str_ref;

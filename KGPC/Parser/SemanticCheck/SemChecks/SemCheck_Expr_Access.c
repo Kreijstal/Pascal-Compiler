@@ -108,7 +108,7 @@ static int semcheck_candidate_is_direct_for_current_unit(SymTab_t *symtab, HashN
     {
         if (current_unit_index <= 0 || candidate->defined_in_unit)
             return 1;
-        return candidate->source_unit_index > 0;
+        return candidate->mangled_id != NULL && strchr(candidate->mangled_id, '$') != NULL;
     }
     if (current_unit_index <= 0)
         return 1;
@@ -1651,18 +1651,7 @@ int semcheck_funccall(int *type_return,
 
     args_given = expr->expr_data.function_call_data.args_expr;
     int injected_self = 0;
-    /* Detect operator dispatch calls.  The id may be a mangled name like
-     * TVariant__op_assign that hasn't been resolved to a HashNode yet,
-     * so we check known operator name patterns. */
-    int is_operator_dispatch = (id != NULL &&
-        (strncmp(id, "op_", 3) == 0 || strstr(id, "__op_") != NULL ||
-         strcmp(id, "+") == 0 || strcmp(id, "-") == 0 ||
-         strcmp(id, "*") == 0 || strcmp(id, "/") == 0 ||
-         strcmp(id, "=") == 0 || strcmp(id, "<>") == 0 ||
-         strcmp(id, "<") == 0 || strcmp(id, ">") == 0 ||
-         strcmp(id, "<=") == 0 || strcmp(id, ">=") == 0 ||
-         strcmp(id, "**") == 0 || strcmp(id, ":=") == 0 ||
-         strcasecmp(id, "Implicit") == 0 || strcasecmp(id, "Explicit") == 0));
+    int is_operator_dispatch = expr->expr_data.function_call_data.is_operator_call;
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
