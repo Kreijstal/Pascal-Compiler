@@ -1565,7 +1565,7 @@ int semcheck_addop(int *type_return,
                                 {
                                     HashNode_t *cand = (HashNode_t *)node_cur->cur;
                                     if (cand != NULL && cand->id != NULL &&
-                                        strcasestr(cand->id, "constexprint") != NULL)
+                                        strstr(cand->id, "constexprint") != NULL)
                                     {
                                         fprintf(stderr,
                                             "[SemCheck] addop nearby id=%s mangled=%s src_unit=%d defined_in_unit=%d\n",
