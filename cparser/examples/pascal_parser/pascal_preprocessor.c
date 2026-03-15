@@ -1408,6 +1408,53 @@ static bool read_file_contents(const char *filename, char **buffer, size_t *leng
         return set_error(error_message, "failed to read '%s'", filename);
     }
     data[read] = '\0';
+
+    {
+        const char *cursor = data;
+        int line = 1;
+        while (*cursor != '\0')
+        {
+            const char *line_start = cursor;
+            while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r')
+                ++cursor;
+
+            const char *trimmed = line_start;
+            while (trimmed < cursor && (*trimmed == ' ' || *trimmed == '\t'))
+                ++trimmed;
+
+            size_t trimmed_len = (size_t)(cursor - trimmed);
+            if (trimmed_len >= 7)
+            {
+                int is_conflict_marker = 0;
+                if (strncmp(trimmed, "<<<<<<<", 7) == 0 ||
+                    strncmp(trimmed, ">>>>>>>", 7) == 0)
+                {
+                    if (trimmed_len == 7 || trimmed[7] == ' ' || trimmed[7] == '\t')
+                        is_conflict_marker = 1;
+                }
+                else if (strncmp(trimmed, "=======", 7) == 0)
+                {
+                    if (trimmed_len == 7)
+                        is_conflict_marker = 1;
+                }
+
+                if (is_conflict_marker)
+                {
+                    free(data);
+                    return set_error(error_message,
+                        "merge conflict marker found in '%s' at line %d",
+                        filename, line);
+                }
+            }
+
+            if (*cursor == '\r' && cursor[1] == '\n')
+                ++cursor;
+            if (*cursor != '\0')
+                ++cursor;
+            ++line;
+        }
+    }
+
     if (buffer) {
         *buffer = data;
     }

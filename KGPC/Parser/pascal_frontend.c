@@ -289,6 +289,54 @@ static char *read_file(const char *path, size_t *out_len)
     }
 
     buffer[len] = '\0';
+
+    {
+        const char *cursor = buffer;
+        int line = 1;
+        while (*cursor != '\0')
+        {
+            const char *line_start = cursor;
+            while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r')
+                ++cursor;
+
+            const char *trimmed = line_start;
+            while (trimmed < cursor && (*trimmed == ' ' || *trimmed == '\t'))
+                ++trimmed;
+
+            size_t trimmed_len = (size_t)(cursor - trimmed);
+            if (trimmed_len >= 7)
+            {
+                int is_conflict_marker = 0;
+                if (strncmp(trimmed, "<<<<<<<", 7) == 0 ||
+                    strncmp(trimmed, ">>>>>>>", 7) == 0)
+                {
+                    if (trimmed_len == 7 || trimmed[7] == ' ' || trimmed[7] == '\t')
+                        is_conflict_marker = 1;
+                }
+                else if (strncmp(trimmed, "=======", 7) == 0)
+                {
+                    if (trimmed_len == 7)
+                        is_conflict_marker = 1;
+                }
+
+                if (is_conflict_marker)
+                {
+                    fprintf(stderr,
+                        "ERROR: Merge conflict marker found in %s at line %d\n",
+                        path, line);
+                    free(buffer);
+                    return NULL;
+                }
+            }
+
+            if (*cursor == '\r' && cursor[1] == '\n')
+                ++cursor;
+            if (*cursor != '\0')
+                ++cursor;
+            ++line;
+        }
+    }
+
     if (out_len != NULL)
         *out_len = (size_t)len;
 
