@@ -14,6 +14,9 @@
 #include <string.h>
 #include <assert.h>
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 extern void free_ast(struct ast_t *ast);
 extern struct ast_t *copy_ast(struct ast_t *orig);
 
@@ -237,6 +240,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->return_type_ast = NULL;
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast(method->method_impl_ast) : NULL;
+    clone->source_offset = method->source_offset;
 
     return clone;
 }
@@ -1253,6 +1257,8 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.mangled_id);
           if (tree->tree_data.subprogram_data.cname_override != NULL)
             free(tree->tree_data.subprogram_data.cname_override);
+          if (tree->tree_data.subprogram_data.internproc_id != NULL)
+            free(tree->tree_data.subprogram_data.internproc_id);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
           if (tree->tree_data.subprogram_data.return_type_ref != NULL)
@@ -1307,6 +1313,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.var_decl_data.absolute_base_id);
           if (tree->tree_data.var_decl_data.absolute_field_id != NULL)
               free(tree->tree_data.var_decl_data.absolute_field_id);
+          if (tree->tree_data.var_decl_data.cname_override != NULL)
+              free(tree->tree_data.var_decl_data.cname_override);
           break;
 
         case TREE_ARR_DECL:
@@ -1325,6 +1333,10 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.arr_decl_data.static_label);
           if (tree->tree_data.arr_decl_data.init_guard_label != NULL)
               free(tree->tree_data.arr_decl_data.init_guard_label);
+          if (tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
+              free(tree->tree_data.arr_decl_data.unresolved_index_type);
+          if (tree->tree_data.arr_decl_data.array_dimensions != NULL)
+              destroy_list(tree->tree_data.arr_decl_data.array_dimensions);
           break;
 
         case TREE_CONST_DECL:
@@ -1634,6 +1646,11 @@ void destroy_expr(struct Expression *expr)
               destroy_expr(expr->expr_data.function_call_data.procedural_var_expr);
               expr->expr_data.function_call_data.procedural_var_expr = NULL;
           }
+          if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+          {
+              destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+              expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
+          }
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
               destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
@@ -1895,6 +1912,8 @@ void destroy_record_type(struct RecordType *record_type)
             if (method != NULL) {
                 free(method->name);
                 free(method->mangled_name);
+                free(method->param_sig);
+                free(method->resolved_mangled_id);
                 free(method);
             }
             ListNode_t *next = cur->next;
@@ -1944,6 +1963,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->method_templates = clone_method_template_list(record_type->method_templates);
     clone->is_class = record_type->is_class;
     clone->is_interface = record_type->is_interface;
+    clone->is_packed = record_type->is_packed;
     clone->is_type_helper = record_type->is_type_helper;
     clone->helper_base_type_id = record_type->helper_base_type_id ?
         strdup(record_type->helper_base_type_id) : NULL;
@@ -1956,6 +1976,8 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->num_generic_args = record_type->num_generic_args;
     clone->is_generic_specialization = record_type->is_generic_specialization;
     clone->method_clones_emitted = 0;
+    clone->parent_fields_merged = 0;
+    clone->source_unit_index = record_type->source_unit_index;
     clone->generic_args = NULL;
     if (record_type->generic_args != NULL && record_type->num_generic_args > 0)
     {
@@ -2159,7 +2181,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.body_statement = compound_statement;
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] mk_program: body_statement=%p\n", compound_statement);
     }
     new_tree->tree_data.program_data.finalization_statements = NULL;
@@ -2273,6 +2295,10 @@ Tree_t *mk_procedure(int line_num, char *id, ListNode_t *args, ListNode_t *const
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.is_constructor = 0;
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }
@@ -2313,6 +2339,10 @@ Tree_t *mk_function(int line_num, char *id, ListNode_t *args, ListNode_t *const_
     new_tree->tree_data.subprogram_data.subprograms = subprograms;
     new_tree->tree_data.subprogram_data.statement_list = compound_statement;
     new_tree->tree_data.subprogram_data.is_used = 0; /* Mark_used will set reachable routines */
+    new_tree->tree_data.subprogram_data.is_constructor = 0;
+    new_tree->tree_data.subprogram_data.nostackframe = 0;
+    new_tree->tree_data.subprogram_data.is_varargs = 0;
+    new_tree->tree_data.subprogram_data.is_static_method = 0;
 
     return new_tree;
 }
@@ -2336,6 +2366,7 @@ Tree_t *mk_vardecl(int line_num, ListNode_t *ids, int type, char *type_id,
     new_tree->tree_data.var_decl_data.type_id = type_id;
     new_tree->tree_data.var_decl_data.type_ref = NULL;
     new_tree->tree_data.var_decl_data.is_var_param = is_var_param;
+    new_tree->tree_data.var_decl_data.is_const_param = 0;
     new_tree->tree_data.var_decl_data.is_untyped_param = 0;
     new_tree->tree_data.var_decl_data.inferred_type = inferred_type;
     new_tree->tree_data.var_decl_data.initializer = initializer;
@@ -2376,8 +2407,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->is_array = is_array;
     alias->array_start = start;
     alias->array_end = end;
-    alias->array_element_type = UNKNOWN_TYPE;
-    alias->array_element_type_id = NULL;
+    alias->array_element_type = is_array ? actual_type : UNKNOWN_TYPE;
+    alias->array_element_type_id = (is_array && type_id != NULL) ? strdup(type_id) : NULL;
     alias->array_element_type_ref = NULL;
     alias->is_shortstring = 0;
     alias->is_open_array = (alias->is_array && end < start);
@@ -2394,6 +2425,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->inline_enum_values = NULL;
     alias->is_enum = 0;
     alias->enum_is_scoped = 0;
+    alias->enum_has_explicit_values = 0;
     alias->enum_literals = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
@@ -2473,6 +2505,7 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.init_guard_label = NULL;
     new_tree->tree_data.arr_decl_data.defined_in_unit = 0;
     new_tree->tree_data.arr_decl_data.unit_is_public = 0;
+    new_tree->tree_data.arr_decl_data.unresolved_index_type = NULL;
 
     return new_tree;
 }
@@ -2895,6 +2928,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->array_element_size = 0;
     expr->array_is_dynamic = 0;
     expr->array_element_record_type = NULL;
+    expr->is_specialize_addr_target = 0;
     expr->expr_data.array_literal_data.elements = NULL;
     expr->expr_data.array_literal_data.element_count = 0;
     expr->expr_data.array_literal_data.elements_semchecked = 0;
@@ -2913,6 +2947,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
+    expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.function_call_data.call_qualifier = NULL;
     expr->expr_data.typecast_data.target_type_ref = NULL;
@@ -3111,6 +3146,12 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
     new_expr->expr_data.function_call_data.call_qualifier = NULL;
+    new_expr->expr_data.function_call_data.is_virtual_call = 0;
+    new_expr->expr_data.function_call_data.vmt_index = -1;
+    new_expr->expr_data.function_call_data.self_class_name = NULL;
+    new_expr->expr_data.function_call_data.is_class_method_call = 0;
+    new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    new_expr->expr_data.function_call_data.is_inherited_call = 0;
 
     return new_expr;
 }
@@ -3399,6 +3440,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     alias->is_char_alias = 0;
     alias->is_shortstring = 0;
     alias->enum_is_scoped = 0;
+    alias->enum_has_explicit_values = 0;
     alias->is_range = 0;
     alias->range_known = 0;
     alias->range_start = 0;

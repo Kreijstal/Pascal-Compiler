@@ -7,6 +7,7 @@
 typedef struct { tag_t tag; combinator_t** expr_parser; } set_args;
 
 void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser);
+void init_pascal_type_expression_parser(combinator_t** p);
 ParseResult parse_pascal_expression(input_t* input, combinator_t* parser);
 combinator_t* pascal_identifier(tag_t tag);
 combinator_t* pascal_expression_identifier(tag_t tag);

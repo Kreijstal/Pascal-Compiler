@@ -4,11 +4,11 @@ program OsRuntimeFeatures;
   {$define KGPC_COMPILER}
 {$endif}
 
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
+{$if defined(FPC)}
 {$mode objfpc}{$H+}
 {$endif}
 
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
+{$if defined(FPC)}
   {$ifdef MSWINDOWS}
   uses SysUtils, DynLibs, Windows;
   {$else}
@@ -32,7 +32,7 @@ begin
         BoolStr := 'FALSE';
 end;
 
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
+{$if defined(FPC)}
 {$ifdef MSWINDOWS}
 function SetEnvironmentVariable(const Name, Value: string): Boolean;
 begin
@@ -51,6 +51,7 @@ end;
 {$else}
 function c_setenv(name, value: PChar; overwrite: cint): cint; cdecl; external 'c' name 'setenv';
 function c_unsetenv(name: PChar): cint; cdecl; external 'c' name 'unsetenv';
+function c_getpid: cint; cdecl; external 'c' name 'getpid';
 function SetEnvironmentVariable(const Name, Value: string): Boolean;
 begin
     Result := c_setenv(PChar(AnsiString(Name)), PChar(AnsiString(Value)), 1) = 0;
@@ -63,7 +64,7 @@ end;
 
 function GetProcessID: Longint;
 begin
-    GetProcessID := fpGetPid;
+    GetProcessID := c_getpid;
 end;
 {$endif}
 
@@ -71,7 +72,7 @@ end;
 
 function LoadUnixLibrary: NativeUInt;
 begin
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
+{$if defined(FPC)}
     Result := NativeUInt(LoadLibrary('libc.so.6'));
     if Result = 0 then
         Result := NativeUInt(LoadLibrary('libc.so'));

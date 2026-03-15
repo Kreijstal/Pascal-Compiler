@@ -123,12 +123,22 @@ static void advance_input_pos(input_t* in, int old_pos, int new_pos) {
 // --- Helper Functions ---
 /* Fast layout consumer: processes all whitespace and comments in one go
  * without calling read1() per character. Updates line/col in bulk. */
+/* Cache: last position where layout was already consumed.
+ * If layout is called at this same position, it's a no-op. */
+static int g_layout_clean_pos = -1;
+static const char* g_layout_clean_buf = NULL;
+
 static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     (void)parser_name;
     const char* buf = in->buffer;
     int pos = in->start;
     int len = in->length;
+
+    /* Fast path: if we already consumed layout at this position, skip entirely */
+    if (pos == g_layout_clean_pos && buf == g_layout_clean_buf) {
+        return make_success(ast_nil);
+    }
 
     for (;;) {
         /* Skip whitespace in bulk */
@@ -190,6 +200,9 @@ static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) 
     if (pos != in->start) {
         advance_input_pos(in, in->start, pos);
     }
+    /* Mark this position as layout-clean so redundant calls are no-ops */
+    g_layout_clean_pos = in->start;
+    g_layout_clean_buf = buf;
     return make_success(ast_nil);
 }
 
@@ -219,51 +232,83 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
     InputState state;
     save_input_state(in, &state);
 
-    int start_pos = in->start;
     char c = read1(in);
     unsigned char uc = (unsigned char)c;
 
-    if (!(c == '_' || isalpha(uc) || uc >= 0x80)) {
+    if (c == EOF || !(c == '_' || isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
 
+    /* Build the normalized identifier text (without whitespace around dots)
+     * in a dynamic buffer.  This handles "unit . Type" -> "unit.Type". */
+    size_t buf_cap = 64;
+    size_t buf_len = 0;
+    char *buf = (char *)safe_malloc(buf_cap);
+
+    #define QID_APPEND(ch) do { \
+        if (buf_len + 1 >= buf_cap) { \
+            buf_cap *= 2; \
+            char *tmp = (char *)realloc(buf, buf_cap); \
+            if (!tmp) { free(buf); abort(); } \
+            buf = tmp; \
+        } \
+        buf[buf_len++] = (ch); \
+    } while (0)
+
     while (true) {
+        InputState after_segment;
         while (c != EOF) {
             uc = (unsigned char)c;
             if (isalnum(uc) || c == '_' || uc >= 0x80) {
+                QID_APPEND(c);
+                save_input_state(in, &after_segment);
                 c = read1(in);
                 continue;
             }
             break;
         }
 
+        /* after_segment now holds the position right after the last
+         * identifier character (before 'c' was read). */
+
+        /* Skip optional horizontal whitespace before potential dot. */
+        while (c == ' ' || c == '\t') {
+            c = read1(in);
+        }
+
         if (c == '.') {
             char next = read1(in);
-            unsigned char unext = (unsigned char)next;
-            if (!(next == '_' || isalpha(unext) || unext >= 0x80)) {
-                restore_input_state(in, &state);
-                return make_failure_v2(in, parser_name, strdup("Expected identifier segment after '.'"), NULL);
+            /* Skip optional horizontal whitespace after dot. */
+            while (next == ' ' || next == '\t') {
+                next = read1(in);
             }
+            unsigned char unext = (unsigned char)next;
+            if (next == EOF || (next != '_' && !isalpha(unext) && !(unext >= 0x80))) {
+                /* Not a qualified identifier continuation — the dot is not part
+                 * of this identifier.  Backtrack to just after the last complete
+                 * identifier segment. */
+                restore_input_state(in, &after_segment);
+                break;
+            }
+            QID_APPEND('.');
             c = next;
             continue;
         }
 
+        /* Not a dot — backtrack to just after the last identifier segment. */
+        restore_input_state(in, &after_segment);
         break;
     }
 
-    if (c != EOF) {
-        in->start--;
-    }
+    #undef QID_APPEND
 
-    int len = in->start - start_pos;
-    char* text = (char*)safe_malloc(len + 1);
-    snprintf(text, len + 1, "%.*s", len, in->buffer + start_pos);
+    buf[buf_len] = '\0';
 
     ast_t* ast = new_ast();
     ast->typ = pargs->tag;
-    ast->sym = sym_lookup(text);
-    free(text);
+    ast->sym = sym_lookup(buf);
+    free(buf);
     ast->child = NULL;
     ast->next = NULL;
     set_ast_position(ast, in);

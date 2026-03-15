@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: system.pp compiles with 0 errors (158 warnings); next blocker is sysutils.pp (syssb.inc record access)
+## Status: pp.pas loads 267 units then hangs in semantic analysis; 2 remaining errors (DirectorySeparator)
 
 ## Prerequisites
 
@@ -173,11 +173,42 @@ ordering issues.
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-## Units with Compilation Errors
+### pp.pas (2 errors + infinite loop)
+```bash
+./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
+  -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -Sg \
+  -IFPCSource/rtl/objpas \
+  -IFPCSource/rtl/objpas/sysutils \
+  -IFPCSource/rtl/objpas/classes \
+  -IFPCSource/rtl/linux \
+  -IFPCSource/rtl/unix \
+  -IFPCSource/rtl/inc \
+  -IFPCSource/rtl/x86_64 \
+  -IFPCSource/rtl/linux/x86_64 \
+  -IFPCSource/rtl/unix/x86_64 \
+  -IFPCSource/compiler \
+  -IFPCSource/compiler/x86 \
+  -IFPCSource/compiler/x86_64 \
+  -FuFPCSource/rtl/unix \
+  -FuFPCSource/rtl/linux \
+  -FuFPCSource/rtl/objpas \
+  -FuFPCSource/rtl/inc \
+  -FuFPCSource/rtl/objpas/sysutils \
+  -FuFPCSource/rtl/objpas/classes \
+  -FuFPCSource/compiler \
+  -FuFPCSource/compiler/x86 \
+  -FuFPCSource/compiler/x86_64 \
+  -FuFPCSource/compiler/systems
+```
 
-- `sysutils.pp` - **record access/type mismatch** in `rtl/objpas/sysutils/syssb.inc`:
-  - `Result.FCurrentPosition := StartPosition;`
-  - `Result.FEndPosition := StartPosition + Length;`
+Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
+The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
+
+Remaining issues:
+1. `constant DirectorySeparator is undefined or not a string const` (×2) — sysutils typed constant
+2. **Infinite loop** in semantic analysis after loading 267 units (1GB+ RSS)
+
+## Remaining Blockers
 
 ## Flags
 

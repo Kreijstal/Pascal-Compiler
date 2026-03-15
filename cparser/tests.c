@@ -362,7 +362,7 @@ void test_errmap_combinator(void) {
 
     TEST_ASSERT(!res.is_success);
     TEST_ASSERT(strcmp(res.value.error->message, "In custom context") == 0);
-    TEST_ASSERT(strstr(res.value.error->cause->message, "Expected 'hello'") != NULL);
+    TEST_ASSERT(strstr(parse_error_get_message(res.value.error->cause), "Expected 'hello'") != NULL);
 
     free_error(res.value.error);
     free_combinator(p);
@@ -430,7 +430,7 @@ void test_partial_ast_functionality(void) {
     
     // Verify the original error is preserved as cause
     TEST_ASSERT(wrapped_result.value.error->cause != NULL);
-    TEST_ASSERT(strstr(wrapped_result.value.error->cause->message, "Expected 'expected_keyword'") != NULL);
+    TEST_ASSERT(strstr(parse_error_get_message(wrapped_result.value.error->cause), "Expected 'expected_keyword'") != NULL);
 
     free_error(wrapped_result.value.error);
     free_combinator(p);

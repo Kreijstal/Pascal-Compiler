@@ -26,8 +26,6 @@ const char* pascal_reserved_keywords[] = {
     "label", "goto",
     // Unit initialization/finalization keywords
     "initialization", "finalization",
-    // Anonymous function support
-    "reference",
     NULL
 };
 

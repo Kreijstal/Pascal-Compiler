@@ -171,7 +171,7 @@ static bool peek_assignment_operator(input_t* in) {
                 kw_end++;
             }
             size_t kw_len = (size_t)(kw_end - kw_start);
-            if (kw_len >= 2 && kw_len <= 7) {
+            if (kw_len >= 2 && kw_len <= 9) {
                 /* Check for statement-terminating keywords (case-insensitive) */
                 if ((kw_len == 4 && strncasecmp(buffer + kw_start, "else", 4) == 0) ||
                     (kw_len == 4 && strncasecmp(buffer + kw_start, "then", 4) == 0) ||
@@ -179,7 +179,8 @@ static bool peek_assignment_operator(input_t* in) {
                     (kw_len == 3 && strncasecmp(buffer + kw_start, "end", 3) == 0) ||
                     (kw_len == 5 && strncasecmp(buffer + kw_start, "until", 5) == 0) ||
                     (kw_len == 6 && strncasecmp(buffer + kw_start, "except", 6) == 0) ||
-                    (kw_len == 7 && strncasecmp(buffer + kw_start, "finally", 7) == 0)) {
+                    (kw_len == 7 && strncasecmp(buffer + kw_start, "finally", 7) == 0) ||
+                    (kw_len == 9 && strncasecmp(buffer + kw_start, "otherwise", 9) == 0)) {
                     return false;
                 }
             }
@@ -218,7 +219,8 @@ static bool case_branch_should_stop(input_t* in, combinator_t* case_label_list) 
     pascal_word_slice_t slice;
     if (pascal_peek_word(in, &slice)) {
         if (pascal_word_equals_ci(&slice, "else") ||
-            pascal_word_equals_ci(&slice, "end")) {
+            pascal_word_equals_ci(&slice, "end") ||
+            pascal_word_equals_ci(&slice, "otherwise")) {
             return true;
         }
     }
@@ -248,7 +250,7 @@ static bool case_branch_should_stop(input_t* in, combinator_t* case_label_list) 
 static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parser_name) {
     case_stmt_list_args* clargs = (case_stmt_list_args*)args;
     if (clargs == NULL || clargs->stmt_parser == NULL || *clargs->stmt_parser == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Invalid case branch parser state"), NULL);
+        return make_failure_static(in, "Invalid case branch parser state");
     }
 
     InputState state;
@@ -341,8 +343,7 @@ static bool next_non_layout_is_comma(input_t* in) {
 static ParseResult with_context_comma_guard_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     if (next_non_layout_is_comma(in)) {
-        return make_failure_v2(in, parser_name,
-            strdup("Expected expression in WITH context list"), NULL);
+        return make_failure_static(in, "Expected expression in WITH context list");
     }
     return make_success(ast_nil);
 }
@@ -383,6 +384,92 @@ static const char* case_call_name(ast_t* call_node) {
     return NULL;
 }
 
+static const char* case_last_segment(const char* name) {
+    if (name == NULL) {
+        return NULL;
+    }
+    const char* last = name;
+    for (const char* p = name; *p; ++p) {
+        if (*p == '.') {
+            last = p + 1;
+        }
+    }
+    return last;
+}
+
+static bool case_typecast_name_allowed(const char* name) {
+    if (name == NULL) {
+        return false;
+    }
+    const char* last = case_last_segment(name);
+    if (last == NULL || *last == '\0') {
+        return false;
+    }
+    size_t len = strlen(last);
+    if (len >= 2 && last[len - 2] == '_' && tolower((unsigned char)last[len - 1]) == 't') {
+        return true;
+    }
+    return false;
+}
+
+static ParseResult case_allowed_call_name_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    combinator_t* ident = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult res = parse(in, ident);
+    free_combinator(ident);
+    if (!res.is_success) {
+        restore_input_state(in, &state);
+        return res;
+    }
+    ast_t* ast = res.value.ast;
+    const char* name = (ast != NULL && ast->sym != NULL) ? ast->sym->name : NULL;
+    if (!case_call_name_allowed(case_last_segment(name))) {
+        free_ast(ast);
+        restore_input_state(in, &state);
+        return make_failure_static(in, "Expected allowed case function name");
+    }
+    return make_success(ast);
+}
+
+static combinator_t* case_allowed_call_name(void) {
+    combinator_t* comb = new_combinator();
+    comb->fn = case_allowed_call_name_fn;
+    comb->args = NULL;
+    comb->name = strdup("case_allowed_call_name");
+    return comb;
+}
+
+static ParseResult case_typecast_name_fn(input_t* in, void* args, char* parser_name) {
+    (void)args;
+    InputState state;
+    save_input_state(in, &state);
+    combinator_t* ident = token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER));
+    ParseResult res = parse(in, ident);
+    free_combinator(ident);
+    if (!res.is_success) {
+        restore_input_state(in, &state);
+        return res;
+    }
+    ast_t* ast = res.value.ast;
+    const char* name = (ast != NULL && ast->sym != NULL) ? ast->sym->name : NULL;
+    if (!case_typecast_name_allowed(name)) {
+        free_ast(ast);
+        restore_input_state(in, &state);
+        return make_failure_static(in, "Expected case typecast name");
+    }
+    return make_success(ast);
+}
+
+static combinator_t* case_typecast_name(void) {
+    combinator_t* comb = new_combinator();
+    comb->fn = case_typecast_name_fn;
+    comb->args = NULL;
+    comb->name = strdup("case_typecast_name");
+    return comb;
+}
+
 static bool case_label_has_disallowed_call(ast_t* node) {
     if (node == NULL || node == ast_nil) {
         return false;
@@ -412,7 +499,7 @@ static bool case_label_has_disallowed_call(ast_t* node) {
 static ParseResult case_label_guard_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* inner = (combinator_t*)args;
     if (inner == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Internal case label guard error"), NULL);
+        return make_failure_static(in, "Internal case label guard error");
     }
     int start = in->start;
     ParseResult res = parse(in, inner);
@@ -422,8 +509,7 @@ static ParseResult case_label_guard_fn(input_t* in, void* args, char* parser_nam
     if (case_label_has_disallowed_call(res.value.ast)) {
         free_ast(res.value.ast);
         in->start = start;
-        return make_failure_v2(in, parser_name,
-            strdup("Function calls are not valid case labels"), NULL);
+        return make_failure_static(in, "Function calls are not valid case labels");
     }
     return res;
 }
@@ -456,10 +542,15 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
     // Note: boolean literals (true/false) must come BEFORE cident to avoid being
     // parsed as identifiers.
     combinator_t* case_func_call = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        pascal_qualified_identifier(PASCAL_T_IDENTIFIER),
+        case_allowed_call_name(),
         between(token(match("(")), token(match(")")),
             optional(sep_by(lazy(expr_parser), token(match(","))))
         ),
+        NULL
+    );
+    combinator_t* case_typecast = seq(new_combinator(), PASCAL_T_TYPECAST,
+        case_typecast_name(),
+        between(token(match("(")), token(match(")")), lazy(expr_parser)),
         NULL
     );
     combinator_t* const_expr_factor = multi(new_combinator(), PASCAL_T_NONE,
@@ -474,6 +565,7 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         token(create_keyword_parser("true", PASCAL_T_BOOLEAN)),   // Boolean true
         token(create_keyword_parser("false", PASCAL_T_BOOLEAN)),  // Boolean false
         case_func_call,
+        case_typecast,
         pascal_qualified_identifier(PASCAL_T_IDENTIFIER),  // supports dotted identifiers like THorzRectAlign.Left
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);
@@ -550,7 +642,8 @@ static bool is_statement_boundary_token(input_t* in) {
            (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
            (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
            (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
-           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0) ||
+           (word_len == 9 && strncasecmp(buffer + pos, "otherwise", 9) == 0);
 }
 
 static bool is_statement_list_boundary_token(input_t* in) {
@@ -587,7 +680,8 @@ static bool is_statement_list_boundary_token(input_t* in) {
            (word_len == 4 && strncasecmp(buffer + pos, "else", 4) == 0) ||
            (word_len == 5 && strncasecmp(buffer + pos, "until", 5) == 0) ||
            (word_len == 6 && strncasecmp(buffer + pos, "except", 6) == 0) ||
-           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0);
+           (word_len == 7 && strncasecmp(buffer + pos, "finally", 7) == 0) ||
+           (word_len == 9 && strncasecmp(buffer + pos, "otherwise", 9) == 0);
 }
 
 static ast_t* make_empty_statement_node(input_t* in) {
@@ -605,10 +699,10 @@ static ast_t* make_empty_statement_node(input_t* in) {
 static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     if (in == NULL) {
-        return make_failure_v2(NULL, parser_name, strdup("Empty statement parser requires input"), NULL);
+        return make_failure_static(NULL, "Empty statement parser requires input");
     }
     if (!is_statement_boundary_token(in)) {
-        return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
+        return make_failure_static(in, "Empty statement can only appear before boundary tokens (end, else, until, except, finally)");
     }
     return make_success(make_empty_statement_node(in));
 }
@@ -620,7 +714,7 @@ typedef struct {
 static ParseResult statement_list_with_empty_fn(input_t* in, void* args, char* parser_name) {
     stmt_list_args* slargs = (stmt_list_args*)args;
     if (slargs == NULL || slargs->stmt_parser == NULL || *slargs->stmt_parser == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Statement list parser misconfigured"), NULL);
+        return make_failure_static(in, "Statement list parser misconfigured");
     }
 
     ast_t* head = NULL;
@@ -740,12 +834,12 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
     const char* buffer = in->buffer;
     int length = in->length > 0 ? in->length : (int)strlen(buffer);
     if (length <= 0) {
-        return make_failure_v2(in, parser_name, strdup("Empty input while parsing statement"), NULL);
+        return make_failure_static(in, "Empty input while parsing statement");
     }
 
     int pos = skip_pascal_layout_preview(in, in->start);
     if (pos >= length) {
-        return make_failure_v2(in, parser_name, strdup("Unexpected end of input while parsing statement"), NULL);
+        return make_failure_static(in, "Unexpected end of input while parsing statement");
     }
 
     const char* slice = buffer + pos;
@@ -830,7 +924,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
 
         if (reserved_keyword && !keyword_allowed_as_expr) {
-            return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
+            return make_failure_static(in, "Reserved keyword cannot start a statement here");
         }
 
         // NOTE: Do NOT use speculative assignment parsing here (trying assignment even without `:=`).
@@ -844,7 +938,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return parse(in, dispatch->expr_parser);
         }
 
-        return make_failure_v2(in, parser_name, strdup("Unable to dispatch identifier-led statement"), NULL);
+        return make_failure_static(in, "Unable to dispatch identifier-led statement");
     }
 
     if (starts_digit) {
@@ -854,7 +948,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         if (dispatch->expr_parser != NULL) {
             return parse(in, dispatch->expr_parser);
         }
-        return make_failure_v2(in, parser_name, strdup("Unable to dispatch numeric-led statement"), NULL);
+        return make_failure_static(in, "Unable to dispatch numeric-led statement");
     }
 
     if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
@@ -865,7 +959,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         return parse(in, dispatch->expr_parser);
     }
 
-    return make_failure_v2(in, parser_name, strdup("No matching statement parser"), NULL);
+    return make_failure_static(in, "No matching statement parser");
 }
 
 static ParseResult for_init_dispatch_fn(input_t* in, void* args, char* parser_name) {
@@ -989,7 +1083,7 @@ static ParseResult expr_lvalue_fn(input_t* in, void* args, char* parser_name) {
         if (res.value.ast != NULL && res.value.ast != ast_nil) {
             free_ast(res.value.ast);
         }
-        return make_failure_v2(in, parser_name, strdup("Expected lvalue expression"), NULL);
+        return make_failure_static(in, "Expected lvalue expression");
     }
 
     return res;
@@ -1085,7 +1179,7 @@ static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) 
             free_error(dot_res.value.error);
         }
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '.' in member access"), NULL);
+        return make_failure_static(in, "Expected '.' in member access");
     }
     free_ast(dot_res.value.ast);
 
@@ -1097,7 +1191,7 @@ static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) 
             free_error(ident_res.value.error);
         }
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier after '.'"), NULL);
+        return make_failure_static(in, "Expected identifier after '.'");
     }
 
     ast_t* ident_ast = ident_res.value.ast;
@@ -1306,7 +1400,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* specialize_typecast_base = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(keyword_ci("specialize")),
         specialize_type_base,
-        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        between(token(match("(")), token(match(")")),
+            sep_by(lazy(expr_parser), token(match(",")))),
         NULL
     );
     // Require pointer suffix followed by optional additional suffixes
@@ -1331,7 +1426,8 @@ void init_pascal_statement_parser(combinator_t** p) {
     combinator_t* specialize_lvalue_simple = seq(new_combinator(), PASCAL_T_TYPECAST,
         token(keyword_ci("specialize")),
         specialize_type_base,
-        between(token(match("(")), token(match(")")), lazy(expr_parser)),
+        between(token(match("(")), token(match(")")),
+            sep_by(lazy(expr_parser), token(match(",")))),
         NULL
     );
 
@@ -1769,8 +1865,12 @@ void init_pascal_statement_parser(combinator_t** p) {
             lazy(expr_parser),                     // case expression
             token(keyword_ci("of")),               // of keyword
             sep_end_by(case_branch, token(match(";"))), // case branches with optional trailing semicolon
-            optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else clause
-                token(keyword_ci("else")),         // else keyword
+            optional(seq(new_combinator(), PASCAL_T_ELSE, // optional else/otherwise clause
+                multi(new_combinator(), PASCAL_T_NONE,
+                    token(keyword_ci("else")),
+                    token(keyword_ci("otherwise")),
+                    NULL
+                ),
                 case_branch_body,                  // else statement or list
                 optional(token(match(";"))),      // optional semicolon after else block
                 NULL

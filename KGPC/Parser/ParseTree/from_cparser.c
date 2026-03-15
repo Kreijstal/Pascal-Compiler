@@ -28,6 +28,9 @@ static char* strndup(const char* s, size_t n)
 #include "from_cparser.h"
 #include "../../string_intern.h"
 
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
+
 #include "../List/List.h"
 #include "tree.h"
 #include "tree_types.h"
@@ -40,7 +43,6 @@ static char* strndup(const char* s, size_t n)
 #include "../../identifier_utils.h"
 #include "../pascal_frontend.h"
 #include "../ErrVars.h"
-
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
  * ============================================================================
@@ -68,7 +70,7 @@ static int kgpc_debug_subprog_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
-        cached = (getenv("KGPC_DEBUG_SUBPROG") != NULL) ? 1 : 0;
+        cached = (kgpc_getenv("KGPC_DEBUG_SUBPROG") != NULL) ? 1 : 0;
     return cached;
 }
 
@@ -76,7 +78,7 @@ static int kgpc_debug_decl_scan_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
-        cached = (getenv("KGPC_DEBUG_DECL_SCAN") != NULL) ? 1 : 0;
+        cached = (kgpc_getenv("KGPC_DEBUG_DECL_SCAN") != NULL) ? 1 : 0;
     return cached;
 }
 
@@ -93,6 +95,98 @@ static ast_t *g_interface_section_ast = NULL;
 static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
+
+/* Global registry of enum type ranges across unit loads.
+ * Persists across calls to tree_from_pascal_ast so that enum types
+ * defined in already-loaded units can be resolved when parsing later units. */
+typedef struct EnumTypeEntry {
+    char *name;
+    int start;
+    int end;
+    struct EnumTypeEntry *next;
+} EnumTypeEntry;
+static EnumTypeEntry *g_enum_type_registry = NULL;
+
+static void enum_registry_add(const char *name, int start, int end) {
+    if (name == NULL) return;
+    /* Check for existing entry (case-insensitive) */
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            e->start = start;
+            e->end = end;
+            return;
+        }
+    }
+    EnumTypeEntry *entry = (EnumTypeEntry *)calloc(1, sizeof(EnumTypeEntry));
+    if (entry == NULL) return;
+    entry->name = strdup(name);
+    entry->start = start;
+    entry->end = end;
+    entry->next = g_enum_type_registry;
+    g_enum_type_registry = entry;
+}
+
+static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
+    if (name == NULL) return -1;
+    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0) {
+            *out_start = e->start;
+            *out_end = e->end;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static void enum_registry_free(void) {
+    EnumTypeEntry *e = g_enum_type_registry;
+    while (e != NULL) {
+        EnumTypeEntry *next = e->next;
+        free(e->name);
+        free(e);
+        e = next;
+    }
+    g_enum_type_registry = NULL;
+}
+
+/* Forward declaration for const expression evaluator (defined later in the file). */
+static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth);
+
+/* Scan a PASCAL_T_TYPE_SECTION and register all enumerated and subrange types in the global registry. */
+static void enum_registry_scan_type_section(ast_t *type_section) {
+    if (type_section == NULL) return;
+    for (ast_t *decl = type_section->child; decl != NULL; decl = decl->next) {
+        if (decl->typ != PASCAL_T_TYPE_DECL) continue;
+        ast_t *id_node = decl->child;
+        if (id_node == NULL || id_node->typ != PASCAL_T_IDENTIFIER ||
+            id_node->sym == NULL || id_node->sym->name == NULL)
+            continue;
+        /* Find the type spec */
+        ast_t *spec = id_node->next;
+        while (spec != NULL && spec->typ != PASCAL_T_TYPE_SPEC &&
+               spec->typ != PASCAL_T_ENUMERATED_TYPE &&
+               spec->typ != PASCAL_T_RANGE_TYPE)
+            spec = spec->next;
+        if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
+            spec = spec->child;
+        if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
+            int count = 0;
+            for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
+                if (lit->typ == PASCAL_T_IDENTIFIER) count++;
+            }
+            if (count > 0)
+                enum_registry_add(id_node->sym->name, 0, count - 1);
+        } else if (spec != NULL && spec->typ == PASCAL_T_RANGE_TYPE) {
+            ast_t *lower = spec->child;
+            ast_t *upper = (lower != NULL) ? lower->next : NULL;
+            int low_val = 0, high_val = 0;
+            if (evaluate_const_int_expr(lower, &low_val, 0) == 0 &&
+                evaluate_const_int_expr(upper, &high_val, 0) == 0) {
+                enum_registry_add(id_node->sym->name, low_val, high_val);
+            }
+        }
+    }
+}
 
 static int is_external_directive(const char *directive)
 {
@@ -293,19 +387,6 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     return true;
 }
 
-static bool ast_chain_contains(ast_t *head, ast_t *target, int max_steps) {
-    if (head == NULL || target == NULL || max_steps <= 0) {
-        return false;
-    }
-    int steps = 0;
-    for (ast_t *cur = head; cur != NULL && steps < max_steps; cur = cur->next, steps++) {
-        if (cur == target) {
-            return true;
-        }
-    }
-    return false;
-}
-
 typedef struct {
     int is_array;
     int is_array_of_const;
@@ -330,6 +411,7 @@ typedef struct {
     ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
     int is_enum;
     int enum_is_scoped;
+    int enum_has_explicit_values;
     ListNode_t *enum_literals;
     int is_file;
     int file_type;
@@ -346,6 +428,7 @@ typedef struct {
     long long range_start;
     long long range_end;
     int is_class_reference;  /* For "class of T" types */
+    char *unresolved_index_type;  /* Deferred enum index type name */
 } TypeInfo;
 
 /* Frontend error counter for errors during AST to tree conversion */
@@ -438,7 +521,11 @@ static TypeRef *type_ref_from_name_and_args(const char *base_name, ListNode_t *t
 {
     if (base_name == NULL)
         return NULL;
-    QualifiedIdent *qid = qualified_ident_from_single(base_name);
+    QualifiedIdent *qid = NULL;
+    if (strchr(base_name, '.') != NULL)
+        qid = qualified_ident_from_dotted(base_name);
+    else
+        qid = qualified_ident_from_single(base_name);
     if (qid == NULL)
         return NULL;
     int arg_count = ListLength(type_args);
@@ -924,6 +1011,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
         return;
 
+    if (info->type_ref != NULL) {
+        type_ref_free(info->type_ref);
+        info->type_ref = NULL;
+    }
     if (info->element_type_id != NULL) {
         free(info->element_type_id);
         info->element_type_id = NULL;
@@ -988,6 +1079,10 @@ static void destroy_type_info_contents(TypeInfo *info) {
         destroy_kgpc_type(info->element_kgpc_type);
         info->element_kgpc_type = NULL;
     }
+    if (info->unresolved_index_type != NULL) {
+        free(info->unresolved_index_type);
+        info->unresolved_index_type = NULL;
+    }
 }
 
 static void reset_const_sections(void) {
@@ -1043,6 +1138,16 @@ static int const_section_is_resourcestring(ast_t *const_section) {
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
+
+/* Parse a range bound string that may be a number or boolean literal.
+ * Used for multi-dimensional array range extraction. */
+static int parse_range_bound(const char *s) {
+    if (s == NULL) return 0;
+    if (strcasecmp(s, "true") == 0) return 1;
+    if (strcasecmp(s, "false") == 0) return 0;
+    return atoi(s);
+}
+
 static int select_range_primitive_tag(const TypeInfo *info);
 
 static int resolve_const_expr_from_sections(const char *expr, int *result)
@@ -1119,7 +1224,7 @@ static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
     entry->type_args = type_info->generic_type_args;
     entry->next = g_pending_generic_aliases;
     g_pending_generic_aliases = entry;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL &&
         decl->tree_data.type_decl_data.id != NULL &&
         entry->base_name != NULL)
     {
@@ -1142,10 +1247,20 @@ void from_cparser_disable_pending_specializations(void) {
 static ast_t *unwrap_pascal_node(ast_t *node);
 static struct Expression *convert_expression(ast_t *expr_node);
 
+/* Global offset added to all source_index values during conversion.
+ * Set via from_cparser_set_source_offset() before converting each unit's AST,
+ * so that source_index values are globally unique across all source buffers. */
+static int g_source_offset = 0;
+
+void from_cparser_set_source_offset(int offset)
+{
+    g_source_offset = offset;
+}
+
 /* Helper to copy source index from AST node to Expression for accurate error context */
 static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
     if (expr != NULL && node != NULL) {
-        expr->source_index = node->index;
+        expr->source_index = node->index + g_source_offset;
     }
     return expr;
 }
@@ -1185,8 +1300,167 @@ static char *generate_anonymous_method_name(int is_function) {
     return name;
 }
 
-static void register_class_method_ex(const char *class_name, const char *method_name, 
-                                      int is_virtual, int is_override, int is_static) {
+static int is_param_modifier(const char *name) {
+    if (name == NULL) return 0;
+    return (strcasecmp(name, "const") == 0 ||
+            strcasecmp(name, "var") == 0 ||
+            strcasecmp(name, "out") == 0 ||
+            strcasecmp(name, "constref") == 0 ||
+            strcasecmp(name, "ref") == 0);
+}
+
+static int count_param_names_in_param(ast_t *param) {
+    if (param == NULL || param->typ != PASCAL_T_PARAM)
+        return 0;
+    int count = 0;
+    for (ast_t *c = param->child; c != NULL; c = c->next) {
+        if (c->typ == PASCAL_T_TYPE_SPEC)
+            break;
+        if (c->typ != PASCAL_T_IDENTIFIER || c->sym == NULL || c->sym->name == NULL)
+            continue;
+        if (is_param_modifier(c->sym->name))
+            continue;
+        count++;
+    }
+    return count;
+}
+
+int from_cparser_count_params_ast(struct ast_t *params_ast) {
+    if (params_ast == NULL)
+        return 0;
+
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    int count = 0;
+    for (; param != NULL; param = param->next) {
+        if (param->typ != PASCAL_T_PARAM)
+            continue;
+        count += count_param_names_in_param(param);
+    }
+    return count;
+}
+
+static ast_t *find_param_type_spec(ast_t *param) {
+    if (param == NULL)
+        return NULL;
+    for (ast_t *c = param->child; c != NULL; c = c->next) {
+        if (c->typ == PASCAL_T_TYPE_SPEC)
+            return c;
+    }
+    return NULL;
+}
+
+static char *append_sig(char *sig, const char *type_str) {
+    const char *part = (type_str != NULL) ? type_str : "<unknown>";
+    size_t part_len = strlen(part);
+    if (sig == NULL) {
+        char *out = (char *)malloc(part_len + 1);
+        if (out == NULL)
+            return NULL;
+        memcpy(out, part, part_len + 1);
+        return out;
+    }
+    size_t sig_len = strlen(sig);
+    char *out = (char *)realloc(sig, sig_len + 1 + part_len + 1);
+    if (out == NULL) {
+        free(sig);
+        return NULL;
+    }
+    out[sig_len] = ',';
+    memcpy(out + sig_len + 1, part, part_len + 1);
+    return out;
+}
+
+static char *param_type_string_from_type_node(ast_t *type_node) {
+    if (type_node == NULL)
+        return strdup("<unknown>");
+
+    char *type_id = NULL;
+    TypeInfo type_info;
+    memset(&type_info, 0, sizeof(TypeInfo));
+    convert_type_spec(type_node, &type_id, NULL, &type_info);
+    TypeRef *type_ref = type_ref_from_info_or_id(&type_info, type_id);
+    char *rendered = NULL;
+    if (type_ref != NULL)
+        rendered = type_ref_render_mangled(type_ref);
+    if (rendered == NULL && type_id != NULL)
+        rendered = strdup(type_id);
+    if (rendered == NULL)
+        rendered = strdup("<unknown>");
+    if (type_ref != NULL)
+        type_ref_free(type_ref);
+    destroy_type_info_contents(&type_info);
+    if (type_id != NULL)
+        free(type_id);
+    return rendered;
+}
+
+static char *param_type_signature_from_params_ast(ast_t *params_ast) {
+    if (params_ast == NULL)
+        return NULL;
+    ast_t *param = params_ast;
+    if (param->typ == PASCAL_T_PARAM_LIST)
+        param = param->child;
+
+    char *sig = NULL;
+    for (; param != NULL; param = param->next) {
+        if (param->typ != PASCAL_T_PARAM)
+            continue;
+        int name_count = count_param_names_in_param(param);
+        ast_t *type_node = find_param_type_spec(param);
+        char *type_str = param_type_string_from_type_node(type_node);
+        for (int i = 0; i < name_count; i++)
+            sig = append_sig(sig, type_str);
+        if (type_str != NULL)
+            free(type_str);
+    }
+    return sig;
+}
+
+static int count_params_in_method_impl(ast_t *method_node) {
+    if (method_node == NULL)
+        return -1;
+    int count = 0;
+    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM)
+            count += from_cparser_count_params_ast(node);
+    }
+    return count;
+}
+
+static char *param_type_signature_from_method_impl(ast_t *method_node) {
+    if (method_node == NULL)
+        return NULL;
+    char *sig = NULL;
+    for (ast_t *cur = method_node->child; cur != NULL; cur = cur->next) {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM) {
+            char *chunk = param_type_signature_from_params_ast(node);
+            if (chunk == NULL)
+                continue;
+            if (sig == NULL) {
+                sig = chunk;
+            } else {
+                char *combined = append_sig(sig, chunk);
+                free(chunk);
+                sig = combined;
+            }
+        }
+    }
+    return sig;
+}
+
+static void register_class_method_ex(const char *class_name, const char *method_name,
+                                      int is_virtual, int is_override, int is_static,
+                                      int is_class_method,
+                                      int param_count, char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
 
@@ -1199,6 +1473,9 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_virtual = is_virtual;
     binding->is_override = is_override;
     binding->is_static = is_static;
+    binding->is_class_method = is_class_method;
+    binding->param_count = param_count;
+    binding->param_sig = param_sig;
 
     ListNode_t *node = NULL;
     if (binding->class_name != NULL && binding->method_name != NULL)
@@ -1206,6 +1483,8 @@ static void register_class_method_ex(const char *class_name, const char *method_
 
     if (node == NULL) {
         /* class_name and method_name are interned -- do not free */
+        if (binding->param_sig != NULL)
+            free(binding->param_sig);
         free(binding);
         return;
     }
@@ -1213,15 +1492,18 @@ static void register_class_method_ex(const char *class_name, const char *method_
     node->next = class_method_bindings;
     class_method_bindings = node;
     
-    if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
-        fprintf(stderr, "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d)\n",
-            class_name, method_name, is_virtual, is_override, is_static);
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
+        fprintf(stderr,
+            "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
+            class_name, method_name, is_virtual, is_override, is_static, is_class_method,
+            param_count, param_sig != NULL ? param_sig : "<null>");
     }
 }
 
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
-    int is_virtual, int is_override, int is_static) {
-    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static);
+    int is_virtual, int is_override, int is_static, int param_count) {
+    register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
+        0, param_count, NULL);
 }
 
 
@@ -1267,9 +1549,101 @@ static int is_method_static(const char *class_name, const char *method_name) {
     return has_static;
 }
 
+static int is_method_static_with_signature(const char *class_name, const char *method_name,
+                                           int param_count, const char *param_sig) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    if (param_sig == NULL && param_count < 0)
+        return is_method_static(class_name, method_name);
+
+    int has_static = 0;
+    int has_instance = 0;
+    int has_match = 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            int matches = 0;
+            if (param_sig != NULL && binding->param_sig != NULL) {
+                if (strcmp(binding->param_sig, param_sig) == 0)
+                    matches = 1;
+            } else if (param_count >= 0 && binding->param_count == param_count) {
+                matches = 1;
+            }
+            if (matches) {
+                has_match = 1;
+                if (binding->is_static)
+                    has_static = 1;
+                else
+                    has_instance = 1;
+            }
+        }
+        cur = cur->next;
+    }
+    if (has_match) {
+        if (has_instance)
+            return 0;
+        return has_static;
+    }
+    return is_method_static(class_name, method_name);
+}
+
 /* Public wrapper for is_method_static */
 int from_cparser_is_method_static(const char *class_name, const char *method_name) {
     return is_method_static(class_name, method_name);
+}
+
+/* Check if a method is declared with 'class' keyword (Self = VMT pointer, not instance).
+ * Returns 1 if class method, 0 otherwise. */
+int from_cparser_is_method_class_method(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_class_method)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+/* Check if a method is a non-static class method (Self = VMT pointer).
+ * Returns 1 only if ALL matching bindings with is_class_method=1 are also
+ * non-static. Returns 0 if no class method bindings exist, or if there are
+ * mixed overloads (some class, some instance) with conflicting staticness. */
+int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name) {
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+    int found_nonstatic_class = 0;
+    int found_instance = 0;
+    ListNode_t *cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, class_name) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_class_method && !binding->is_static)
+                found_nonstatic_class = 1;
+            else if (!binding->is_class_method)
+                found_instance = 1;
+        }
+        cur = cur->next;
+    }
+    /* If there are mixed overloads (class + instance with same name),
+     * don't mark as class method — overload resolution should pick correctly. */
+    if (found_instance && found_nonstatic_class)
+        return 0;
+    return found_nonstatic_class;
 }
 
 int from_cparser_is_type_helper(const char *helper_id) {
@@ -1284,6 +1658,7 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
+    /* First pass: search under exact class name. */
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
@@ -1296,6 +1671,74 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
         }
         cur = cur->next;
     }
+    /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
+     * registered under the unqualified name before renaming. Only try if no exact match. */
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = dot + 1;
+    cur = class_method_bindings;
+    while (cur != NULL) {
+        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
+        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
+            strcasecmp(binding->class_name, unqualified) == 0 &&
+            strcasecmp(binding->method_name, method_name) == 0)
+        {
+            if (binding->is_virtual || binding->is_override)
+                return 1;
+        }
+        cur = cur->next;
+    }
+    return 0;
+}
+
+int from_cparser_is_method_virtual_with_signature(const char *class_name, const char *method_name,
+    int param_count, const char *param_sig)
+{
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    if (param_sig == NULL && param_count < 0)
+        return from_cparser_is_method_virtual(class_name, method_name);
+
+    /* Helper lambda-like: check bindings for a given class name string. */
+    #define CHECK_BINDINGS_FOR(cname) \
+        do { \
+            ListNode_t *_cur = class_method_bindings; \
+            while (_cur != NULL) { \
+                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
+                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
+                    strcasecmp(_b->class_name, (cname)) == 0 && \
+                    strcasecmp(_b->method_name, method_name) == 0) \
+                { \
+                    int _matches = 0; \
+                    if (param_sig != NULL && _b->param_sig != NULL) { \
+                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                    } else if (param_count >= 0 && _b->param_count == param_count) { \
+                        _matches = 1; \
+                    } \
+                    if (_matches) { \
+                        has_match = 1; \
+                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                    } \
+                } \
+                _cur = _cur->next; \
+            } \
+        } while (0)
+
+    int has_match = 0;
+    int has_virtual = 0;
+    /* First pass: exact class name. */
+    CHECK_BINDINGS_FOR(class_name);
+    /* Second pass: unqualified fallback — only if nothing found under exact name. */
+    if (!has_match) {
+        const char *dot = strrchr(class_name, '.');
+        if (dot != NULL)
+            CHECK_BINDINGS_FOR(dot + 1);
+    }
+    #undef CHECK_BINDINGS_FOR
+    if (has_match)
+        return has_virtual;
     return 0;
 }
 
@@ -1346,6 +1789,30 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
 
 static int typed_const_counter = 0;
 
+static int is_operator_token_name(const char *name)
+{
+    if (name == NULL)
+        return 0;
+    return (strcmp(name, "+") == 0 || strcmp(name, "-") == 0 ||
+            strcmp(name, "*") == 0 || strcmp(name, "/") == 0 ||
+            strcmp(name, "=") == 0 || strcmp(name, "<>") == 0 ||
+            strcmp(name, "<") == 0 || strcmp(name, ">") == 0 ||
+            strcmp(name, "<=") == 0 || strcmp(name, ">=") == 0 ||
+            strcmp(name, "**") == 0 || strcmp(name, ":=") == 0 ||
+            strcasecmp(name, "div") == 0 || strcasecmp(name, "mod") == 0 ||
+            strcasecmp(name, "and") == 0 || strcasecmp(name, "or") == 0 ||
+            strcasecmp(name, "not") == 0 || strcasecmp(name, "xor") == 0 ||
+            strcasecmp(name, "shl") == 0 || strcasecmp(name, "shr") == 0 ||
+            strcasecmp(name, "in") == 0 || strcasecmp(name, "is") == 0 ||
+            strcasecmp(name, "as") == 0 ||
+            strcasecmp(name, "Implicit") == 0 || strcasecmp(name, "Explicit") == 0 ||
+            strcasecmp(name, "Equal") == 0 || strcasecmp(name, "NotEqual") == 0 ||
+            strcasecmp(name, "GreaterThan") == 0 ||
+            strcasecmp(name, "GreaterThanOrEqual") == 0 ||
+            strcasecmp(name, "LessThan") == 0 ||
+            strcasecmp(name, "LessThanOrEqual") == 0);
+}
+
 /* Encode operator symbols into valid identifier names for assembly */
 static char *encode_operator_name(const char *op_name) {
     if (op_name == NULL)
@@ -1374,7 +1841,19 @@ static char *encode_operator_name(const char *op_name) {
     if (strcmp(op_name, "in") == 0 || strcmp(op_name, "IN") == 0) return strdup("op_in");
     if (strcmp(op_name, "is") == 0 || strcmp(op_name, "IS") == 0) return strdup("op_is");
     if (strcmp(op_name, "as") == 0 || strcmp(op_name, "AS") == 0) return strdup("op_as");
+    if (strcasecmp(op_name, "Equal") == 0) return strdup("op_eq");
+    if (strcasecmp(op_name, "NotEqual") == 0) return strdup("op_ne");
+    if (strcasecmp(op_name, "GreaterThan") == 0) return strdup("op_gt");
+    if (strcasecmp(op_name, "GreaterThanOrEqual") == 0) return strdup("op_ge");
+    if (strcasecmp(op_name, "LessThan") == 0) return strdup("op_lt");
+    if (strcasecmp(op_name, "LessThanOrEqual") == 0) return strdup("op_le");
+    if (strcasecmp(op_name, "Add") == 0) return strdup("op_add");
+    if (strcasecmp(op_name, "Subtract") == 0) return strdup("op_sub");
+    if (strcasecmp(op_name, "Multiply") == 0) return strdup("op_mul");
+    if (strcasecmp(op_name, "Divide") == 0) return strdup("op_div");
     if (strcmp(op_name, ":=") == 0) return strdup("op_assign");
+    /* FPC class operator Implicit is assignment-style conversion. */
+    if (strcasecmp(op_name, "Implicit") == 0) return strdup("op_assign");
     
     /* For other operators or named operators, use the name as-is */
     return strdup(op_name);
@@ -1406,20 +1885,62 @@ static char *mangle_method_name(const char *class_name, const char *method_name)
     return result;
 }
 
+/* Method mangling without operator alias encoding.
+ * Use this for ordinary method declarations/implementations so names like Add
+ * are preserved as methods instead of being treated as operators. */
+static char *mangle_method_name_raw(const char *class_name, const char *method_name) {
+    if (method_name == NULL)
+        return NULL;
+    if (class_name == NULL || class_name[0] == '\0')
+        return strdup(method_name);
+
+    size_t class_len = strlen(class_name);
+    size_t method_len = strlen(method_name);
+    size_t total = class_len + 2 + method_len + 1;
+    char *result = (char *)malloc(total);
+    if (result == NULL)
+        return NULL;
+    snprintf(result, total, "%s__%s", class_name, method_name);
+    return result;
+}
+
+static char *method_param_type_suffix(Tree_t *param_decl)
+{
+    if (param_decl == NULL)
+        return NULL;
+
+    if (param_decl->type == TREE_VAR_DECL)
+    {
+        if (param_decl->tree_data.var_decl_data.type_ref != NULL)
+            return type_ref_render_mangled(param_decl->tree_data.var_decl_data.type_ref);
+        if (param_decl->tree_data.var_decl_data.type_id != NULL)
+            return strdup(param_decl->tree_data.var_decl_data.type_id);
+    }
+    else if (param_decl->type == TREE_ARR_DECL)
+    {
+        if (param_decl->tree_data.arr_decl_data.type_ref != NULL)
+            return type_ref_render_mangled(param_decl->tree_data.arr_decl_data.type_ref);
+        if (param_decl->tree_data.arr_decl_data.type_id != NULL)
+            return strdup(param_decl->tree_data.arr_decl_data.type_id);
+    }
+
+    return NULL;
+}
+
 /* Get method information for a class */
 void get_class_methods(const char *class_name, ListNode_t **methods_out, int *count_out) {
     if (methods_out != NULL)
         *methods_out = NULL;
     if (count_out != NULL)
         *count_out = 0;
-    
+
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
-    
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
-    
+
     ListNode_t *cur = class_method_bindings;
     while (cur != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
@@ -1438,7 +1959,7 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
         }
         cur = cur->next;
     }
-    
+
     *methods_out = head;
     *count_out = count;
 }
@@ -1496,7 +2017,7 @@ static char *dup_first_identifier_in_node(ast_t *node)
     node = unwrap_pascal_node(node);
     if (node == NULL)
         return NULL;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] inspect node typ=%d (%s) sym=%s\n",
             node->typ, pascal_tag_to_string(node->typ),
             (node->sym != NULL && node->sym->name != NULL) ? node->sym->name : "<null>");
@@ -1516,7 +2037,7 @@ static char *dup_first_identifier_in_node(ast_t *node)
 }
 
 static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
             (void *)args_node,
             args_node != NULL ? args_node->typ : -1,
@@ -1542,12 +2063,12 @@ static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
              node->typ == PASCAL_T_QUALIFIED_IDENTIFIER))
         {
             char *dup = dup_first_identifier_in_node(node);
-            if (getenv("KGPC_DEBUG_TFPG") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] collect args extracted=%s\n", dup != NULL ? dup : "<null>");
             if (dup != NULL)
             {
                 ListNode_t *append_node = list_builder_append(&builder, dup, LIST_STRING);
-                if (getenv("KGPC_DEBUG_TFPG") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                     fprintf(stderr, "[KGPC] appended type_arg node=%p type=%d\n",
                         (void *)append_node, append_node != NULL ? append_node->type : -1);
             }
@@ -1579,7 +2100,7 @@ static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out,
         name_node = name_node->child;
     if (name_node == NULL)
         return 0;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
     {
         fprintf(stderr, "[KGPC] constructed type base node typ=%d (%s) sym=%s next_typ=%d (%s)\n",
             name_node->typ,
@@ -1710,7 +2231,7 @@ static void substitute_record_field(struct RecordField *field, GenericTypeDecl *
     if (field == NULL)
         return;
     
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (debug_env != NULL && field->name != NULL)
     {
         fprintf(stderr, "[KGPC] substitute_record_field BEFORE: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
@@ -1767,7 +2288,7 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     if (base_name == NULL)
         return NULL;
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     GenericTypeDecl *generic = generic_registry_find_decl(base_name);
     if (generic == NULL || generic->record_template == NULL) {
         if (debug_env != NULL)
@@ -1838,6 +2359,51 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     arg_types = NULL;
 
     substitute_record_type_parameters(record, generic, record->generic_args);
+
+    /* Rewrite references to nested types within the generic class.
+     * E.g. field FOnCompare with type_id="TCompareFunc" needs to become
+     * "TFPGList$TMyRecord.TCompareFunc" for proper resolution. */
+    if (generic->nested_type_decls != NULL) {
+        /* Collect the short names of nested types (without the prefix) */
+        size_t gen_prefix_len = strlen(base_name);
+        ListNode_t *field_node = record->fields;
+        while (field_node != NULL) {
+            if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL) {
+                struct RecordField *field = (struct RecordField *)field_node->cur;
+                if (field->type_id != NULL) {
+                    /* Check if this type_id matches a nested type name */
+                    ListNode_t *nt = generic->nested_type_decls;
+                    while (nt != NULL) {
+                        if (nt->type == LIST_TREE && nt->cur != NULL) {
+                            Tree_t *nt_tree = (Tree_t *)nt->cur;
+                            if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL) {
+                                const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                                /* nested type id is like "TFPGList.TCompareFunc" */
+                                if (strncmp(nt_id, base_name, gen_prefix_len) == 0 &&
+                                    nt_id[gen_prefix_len] == '.') {
+                                    const char *short_name = nt_id + gen_prefix_len + 1;
+                                    if (strcasecmp(field->type_id, short_name) == 0) {
+                                        /* Rewrite to specialized: "TFPGList$TMyRecord.TCompareFunc" */
+                                        size_t new_len = strlen(specialized_name) + 1 + strlen(short_name) + 1;
+                                        char *new_id = (char *)malloc(new_len);
+                                        if (new_id != NULL) {
+                                            snprintf(new_id, new_len, "%s.%s", specialized_name, short_name);
+                                            free(field->type_id);
+                                            field->type_id = new_id;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        nt = nt->next;
+                    }
+                }
+            }
+            field_node = field_node->next;
+        }
+    }
+
     generic_registry_add_specialization(base_name, record->generic_args, arg_count);
 
     if (specialized_name_out != NULL)
@@ -1911,7 +2477,7 @@ static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_ar
     if (result_out != NULL)
         *result_out = UNKNOWN_TYPE;
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     GenericTypeDecl *generic = generic_registry_find_decl(base_name);
     Tree_t *generic_decl_tree = generic != NULL ? generic->original_decl : NULL;
     ast_t *generic_ast = generic_decl_tree != NULL ?
@@ -1979,7 +2545,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
 
     GenericTypeDecl *generic = generic_registry_find_decl(class_name);
     if (generic == NULL || generic->record_template == NULL) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
             fprintf(stderr, "[KGPC] record_generic_method_impl: no generic decl for %s\n", class_name);
         return;
     }
@@ -1994,7 +2560,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
                 strcasecmp(template->name, method_name) == 0)
             {
                 template->method_impl_ast = copy_ast(method_ast);
-                if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
                     fprintf(stderr, "[KGPC] recorded method implementation for %s.%s\n", class_name, method_name);
                 break;
             }
@@ -2009,11 +2575,15 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
         record->generic_args == NULL || record->num_generic_args <= 0)
         return;
 
+    const char *generic_name = record->generic_decl->name;
+    size_t gen_prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
     ast_t *cursor = node;
     while (cursor != NULL)
     {
         if (cursor->sym != NULL && cursor->sym->name != NULL)
         {
+            /* Substitute generic type parameters (e.g. T -> TMyRecord) */
             for (int i = 0; i < record->generic_decl->num_type_params && i < record->num_generic_args; ++i)
             {
                 const char *param_name = record->generic_decl->type_parameters[i];
@@ -2024,6 +2594,53 @@ static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *
                     free(cursor->sym->name);
                     cursor->sym->name = strdup(arg_name);
                     break;
+                }
+            }
+            /* Substitute the generic class name itself with the specialized name
+             * (e.g. TFPGList -> TFPGList$TMyRecord in method parameter types) */
+            if (generic_name != NULL && record->type_id != NULL &&
+                strcasecmp(cursor->sym->name, generic_name) == 0)
+            {
+                free(cursor->sym->name);
+                cursor->sym->name = strdup(record->type_id);
+            }
+            /* Substitute nested type short names with their specialized full names.
+             * E.g. TFPGListEnumeratorSpec -> TFPGList$TMyRecord.TFPGListEnumeratorSpec
+             * inside method bodies of the specialized class. */
+            if (record->generic_decl->nested_type_decls != NULL && record->type_id != NULL)
+            {
+                ListNode_t *nt = record->generic_decl->nested_type_decls;
+                while (nt != NULL)
+                {
+                    if (nt->type == LIST_TREE && nt->cur != NULL)
+                    {
+                        Tree_t *nt_tree = (Tree_t *)nt->cur;
+                        if (nt_tree->type == TREE_TYPE_DECL && nt_tree->tree_data.type_decl_data.id != NULL)
+                        {
+                            const char *nt_id = nt_tree->tree_data.type_decl_data.id;
+                            /* nested type id is like "TFPGList.TFPGListEnumeratorSpec" */
+                            if (gen_prefix_len > 0 &&
+                                strncmp(nt_id, generic_name, gen_prefix_len) == 0 &&
+                                nt_id[gen_prefix_len] == '.')
+                            {
+                                const char *short_name = nt_id + gen_prefix_len + 1;
+                                if (strcasecmp(cursor->sym->name, short_name) == 0)
+                                {
+                                    /* Rewrite to "TFPGList$TMyRecord.TFPGListEnumeratorSpec" */
+                                    size_t new_len = strlen(record->type_id) + 1 + strlen(short_name) + 1;
+                                    char *new_name = (char *)malloc(new_len);
+                                    if (new_name != NULL)
+                                    {
+                                        snprintf(new_name, new_len, "%s.%s", record->type_id, short_name);
+                                        free(cursor->sym->name);
+                                        cursor->sym->name = new_name;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    nt = nt->next;
                 }
             }
         }
@@ -2070,7 +2687,14 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
         return NULL;
 
     rewrite_method_impl_ast(method_copy, record);
+
+    /* Restore the source offset from when the template was parsed,
+     * so source_index values map to the correct source buffer. */
+    int saved_offset = g_source_offset;
+    g_source_offset = method_template->source_offset;
     Tree_t *method_tree = convert_method_impl(method_copy);
+    g_source_offset = saved_offset;
+
     free_ast(method_copy);
     return method_tree;
 }
@@ -2237,6 +2861,12 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     rewrite_generic_subprogram_ast(ast_copy, specialized_name,
         template->tree_data.subprogram_data.generic_type_params, arg_types, arg_count);
 
+    /* Restore the source offset from the unit that defined the template,
+     * so that source_index values in the specialized code map to the
+     * correct source buffer (e.g., fgl.pp, not the main program). */
+    int saved_offset = g_source_offset;
+    g_source_offset = template->tree_data.subprogram_data.generic_template_source_offset;
+
     Tree_t *result = NULL;
     if (template->type == TREE_SUBPROGRAM &&
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_PROC)
@@ -2245,6 +2875,7 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
         template->tree_data.subprogram_data.sub_type == TREE_SUBPROGRAM_FUNC)
         result = convert_function(ast_copy);
 
+    g_source_offset = saved_offset;
     free_ast(ast_copy);
 
     if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
@@ -2275,7 +2906,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
             if (target_id != NULL &&
                 parse_generic_mangled_id(target_id, &base, &args, &argc))
             {
-                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                     fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
                         target_id, base ? base : "<null>", argc);
                 ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
@@ -2289,7 +2920,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
                             strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
                         {
-                            if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
                                     sub->tree_data.subprogram_data.id);
                             if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
@@ -2557,22 +3188,22 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
     if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
         return;
 
-    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
         fprintf(stderr, "[KGPC] resolve_pending_generic_subprograms\n");
 
     ListNode_t *sub = program_tree->tree_data.program_data.subprograms;
-    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL && sub == NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL && sub == NULL)
         fprintf(stderr, "[KGPC] program has no subprograms\n");
     while (sub != NULL)
     {
-        if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
             fprintf(stderr, "[KGPC] subprogram node type=%d\n", sub->type);
         if (sub->type == LIST_TREE && sub->cur != NULL)
         {
             Tree_t *sub_tree = (Tree_t *)sub->cur;
             if (sub_tree->type == TREE_SUBPROGRAM)
             {
-                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL &&
                     sub_tree->tree_data.subprogram_data.id != NULL)
                 {
                     fprintf(stderr, "[KGPC] subprogram %s generic_params=%d\n",
@@ -2816,7 +3447,7 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
         record->generic_decl == NULL || record->generic_args == NULL ||
         record->num_generic_args <= 0)
     {
-        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
             record != NULL && record->type_id != NULL)
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
@@ -2824,7 +3455,7 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
     if (record->method_clones_emitted)
         return;
 
-    const char *debug_env = getenv("KGPC_DEBUG_GENERIC_CLONES");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES");
     int appended_any = 0;
     ListNode_t *cur = record->method_templates;
     while (cur != NULL)
@@ -2879,14 +3510,249 @@ void append_generic_method_clones(Tree_t *program_tree)
     }
 }
 
+/* Clone nested type declarations from a generic class for a specialization.
+ * For example, if TFPGList has nested type TFPGList.PT = ^T, then specializing
+ * TFPGList<TMyRecord> produces TFPGList$TMyRecord.PT = ^TMyRecord.
+ * The cloned declarations are appended to the program's type declaration list. */
+static void clone_nested_types_for_specialization(
+    GenericTypeDecl *generic_decl,
+    const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
+    ListNode_t *type_args,        /* concrete type arguments */
+    ListNode_t **type_list_out,   /* where to append new type decls */
+    ListNode_t **subprograms_out) /* where to append method clones (may be NULL) */
+{
+    if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
+        specialized_name == NULL || type_list_out == NULL)
+        return;
+
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
+    const char *generic_name = generic_decl->name;
+    size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
+
+    /* Build arg_types array for substitution */
+    int arg_count = 0;
+    ListNode_t *arg_cur = type_args;
+    while (arg_cur != NULL) {
+        if (arg_cur->type == LIST_STRING) arg_count++;
+        arg_cur = arg_cur->next;
+    }
+
+    ListNode_t *cur = generic_decl->nested_type_decls;
+    while (cur != NULL) {
+        if (cur->type == LIST_TREE && cur->cur != NULL) {
+            Tree_t *orig = (Tree_t *)cur->cur;
+            if (orig->type == TREE_TYPE_DECL && orig->tree_data.type_decl_data.id != NULL) {
+                const char *orig_id = orig->tree_data.type_decl_data.id;
+                /* Check that orig_id starts with generic_name + "." */
+                if (prefix_len > 0 && strncmp(orig_id, generic_name, prefix_len) == 0 &&
+                    orig_id[prefix_len] == '.')
+                {
+                    const char *suffix = orig_id + prefix_len; /* e.g., ".PT" */
+                    /* Build new id: specialized_name + suffix */
+                    size_t new_id_len = strlen(specialized_name) + strlen(suffix) + 1;
+                    char *new_id = (char *)malloc(new_id_len);
+                    if (new_id == NULL) { cur = cur->next; continue; }
+                    snprintf(new_id, new_id_len, "%s%s", specialized_name, suffix);
+
+                    Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
+                    if (clone == NULL) { free(new_id); cur = cur->next; continue; }
+
+                    clone->source_index = orig->source_index;
+                    clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
+                    clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
+
+                    if (orig->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *src_alias = &orig->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        *dst_alias = *src_alias; /* Shallow copy */
+                        dst_alias->target_type_id = src_alias->target_type_id ?
+                            strdup(src_alias->target_type_id) : NULL;
+                        dst_alias->pointer_type_id = src_alias->pointer_type_id ?
+                            strdup(src_alias->pointer_type_id) : NULL;
+                        dst_alias->array_element_type_id = src_alias->array_element_type_id ?
+                            strdup(src_alias->array_element_type_id) : NULL;
+                        dst_alias->inline_record_type = NULL;
+                        dst_alias->target_type_ref = src_alias->target_type_ref ?
+                            type_ref_clone(src_alias->target_type_ref) : NULL;
+                        dst_alias->array_element_type_ref = src_alias->array_element_type_ref ?
+                            type_ref_clone(src_alias->array_element_type_ref) : NULL;
+
+                        /* Substitute generic type parameters in type identifiers.
+                         * For example, if T → TMyRecord, then "T" → "TMyRecord",
+                         * and pointer_type_id "T" → "TMyRecord". */
+                        for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                            const char *param = generic_decl->type_parameters[pi];
+                            /* Get the concrete type for this parameter */
+                            ListNode_t *a = type_args;
+                            for (int ai = 0; ai < pi && a != NULL; ai++)
+                                a = a->next;
+                            if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                continue;
+                            const char *concrete = (const char *)a->cur;
+
+                            if (dst_alias->target_type_id != NULL &&
+                                strcasecmp(dst_alias->target_type_id, param) == 0) {
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->pointer_type_id != NULL &&
+                                strcasecmp(dst_alias->pointer_type_id, param) == 0) {
+                                free(dst_alias->pointer_type_id);
+                                dst_alias->pointer_type_id = strdup(concrete);
+                            }
+                            if (dst_alias->array_element_type_id != NULL &&
+                                strcasecmp(dst_alias->array_element_type_id, param) == 0) {
+                                free(dst_alias->array_element_type_id);
+                                dst_alias->array_element_type_id = strdup(concrete);
+                            }
+                        }
+
+                        /* Substitute type parameters in mangled names like
+                         * "TFPGListEnumerator$T" -> "TFPGListEnumerator$TMyRecord" */
+                        if (dst_alias->target_type_id != NULL) {
+                            for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
+                                const char *param = generic_decl->type_parameters[pi];
+                                ListNode_t *a = type_args;
+                                for (int ai = 0; ai < pi && a != NULL; ai++)
+                                    a = a->next;
+                                if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
+                                    continue;
+                                const char *concrete = (const char *)a->cur;
+                                if (param == NULL || concrete == NULL) continue;
+                                size_t param_len = strlen(param);
+                                /* Look for "$T" pattern at the end or "$T$" in the middle */
+                                char *pos = dst_alias->target_type_id;
+                                while ((pos = strchr(pos, '$')) != NULL) {
+                                    pos++; /* skip '$' */
+                                    if (strncasecmp(pos, param, param_len) == 0 &&
+                                        (pos[param_len] == '\0' || pos[param_len] == '$')) {
+                                        /* Found "$T" — rebuild the string with "$TMyRecord" */
+                                        size_t prefix_len2 = (pos - dst_alias->target_type_id);
+                                        size_t suffix_len = strlen(pos + param_len);
+                                        size_t concrete_len = strlen(concrete);
+                                        char *new_target = malloc(prefix_len2 + concrete_len + suffix_len + 1);
+                                        if (new_target != NULL) {
+                                            memcpy(new_target, dst_alias->target_type_id, prefix_len2);
+                                            memcpy(new_target + prefix_len2, concrete, concrete_len);
+                                            memcpy(new_target + prefix_len2 + concrete_len,
+                                                   pos + param_len, suffix_len + 1);
+                                            free(dst_alias->target_type_id);
+                                            dst_alias->target_type_id = new_target;
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        /* Also substitute qualified names: if target_type_id refers
+                         * to another nested type of the same generic (e.g., "TFPGList.PT"),
+                         * rewrite to "TFPGList$TMyRecord.PT" */
+                        if (dst_alias->target_type_id != NULL &&
+                            strncmp(dst_alias->target_type_id, generic_name, prefix_len) == 0 &&
+                            dst_alias->target_type_id[prefix_len] == '.') {
+                            const char *inner_suffix = dst_alias->target_type_id + prefix_len;
+                            size_t new_target_len = strlen(specialized_name) + strlen(inner_suffix) + 1;
+                            char *new_target = (char *)malloc(new_target_len);
+                            if (new_target != NULL) {
+                                snprintf(new_target, new_target_len, "%s%s", specialized_name, inner_suffix);
+                                free(dst_alias->target_type_id);
+                                dst_alias->target_type_id = new_target;
+                            }
+                        }
+                    }
+
+                    /* If the target_type_id is a mangled generic name like
+                     * "TFPGListEnumerator$TMyRecord", ensure that specialization
+                     * actually exists by triggering instantiation. */
+                    int alias_type_set = 0;
+                    if (clone->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
+                        if (debug_env != NULL && dst_alias->target_type_id != NULL)
+                            fprintf(stderr, "[KGPC] clone alias %s target_type_id=%s\n",
+                                clone->tree_data.type_decl_data.id, dst_alias->target_type_id);
+                        if (dst_alias->target_type_id != NULL) {
+                            char *dollar = strchr(dst_alias->target_type_id, '$');
+                            if (dollar != NULL) {
+                                /* Extract base name and type args from mangled name */
+                                size_t base_len = dollar - dst_alias->target_type_id;
+                                char *inner_base = strndup(dst_alias->target_type_id, base_len);
+                                GenericTypeDecl *inner_generic = generic_registry_find_decl(inner_base);
+                                if (inner_generic != NULL) {
+                                    /* Build type args from the suffix */
+                                    const char *arg_str = dollar + 1;
+                                    ListNode_t *inner_args = CreateListNode(strdup(arg_str), LIST_STRING);
+                                    char *inner_spec_name = NULL;
+                                    struct RecordType *inner_record =
+                                        instantiate_generic_record(inner_base, inner_args, &inner_spec_name);
+                                    if (inner_record != NULL) {
+                                        /* Set the alias clone's inline_record_type to the
+                                         * specialized record.  The semantic checker will
+                                         * register both the mangled name (inner_record->type_id)
+                                         * and the alias name in the symbol table (see line 7012+
+                                         * in SemCheck.c).  This also enables constructor
+                                         * resolution via record_info. */
+                                        dst_alias->inline_record_type = inner_record;
+                                        dst_alias->base_type = RECORD_TYPE;
+                                        KgpcType *alias_type = create_record_type(inner_record);
+                                        if (inner_record->is_class) {
+                                            KgpcType *ptr = create_pointer_type(alias_type);
+                                            kgpc_type_release(alias_type);
+                                            alias_type = ptr;
+                                        }
+                                        clone->tree_data.type_decl_data.kgpc_type = alias_type;
+                                        alias_type_set = 1;
+                                        if (debug_env != NULL)
+                                            fprintf(stderr, "[KGPC] triggered nested specialization %s\n",
+                                                inner_spec_name);
+                                    }
+                                    if (inner_spec_name != NULL) free(inner_spec_name);
+                                    destroy_list(inner_args);
+                                }
+                                free(inner_base);
+                            }
+                        }
+                    }
+
+                    /* Also handle procedure/function type declarations */
+                    if (!alias_type_set && orig->tree_data.type_decl_data.kgpc_type != NULL) {
+                        clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
+                        kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
+                    }
+
+                    ListNode_t *node = CreateListNode(clone, LIST_TREE);
+                    if (node != NULL) {
+                        node->next = *type_list_out;
+                        *type_list_out = node;
+                    } else {
+                        destroy_tree(clone);
+                    }
+
+                    /* If we triggered a nested specialization via inline_record_type,
+                     * also emit method clones for the inner specialization. */
+                    if (alias_type_set && subprograms_out != NULL)
+                        append_specialized_method_clones(clone, subprograms_out);
+
+                    if (debug_env != NULL)
+                        fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
 void resolve_pending_generic_aliases(Tree_t *program_tree)
 {
     PendingGenericAlias *cur = g_pending_generic_aliases;
     g_pending_generic_aliases = NULL;
     ListNode_t **clone_dest = NULL;
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE)
+    ListNode_t **type_list = NULL;
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
         clone_dest = &program_tree->tree_data.program_data.subprograms;
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+    }
 
     while (cur != NULL) {
         PendingGenericAlias *next = cur->next;
@@ -2903,12 +3769,25 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
             alias->base_type = RECORD_TYPE;
             if (cur->decl->tree_data.type_decl_data.kgpc_type == NULL) {
                 KgpcType *inline_type = create_record_type(record);
-                if (record->is_class)
-                    inline_type = create_pointer_type(inline_type);
+                if (record->is_class) {
+                    KgpcType *ptr = create_pointer_type(inline_type);
+                    kgpc_type_release(inline_type);
+                    inline_type = ptr;
+                }
                 cur->decl->tree_data.type_decl_data.kgpc_type = inline_type;
             }
             if (clone_dest != NULL)
                 append_specialized_method_clones(cur->decl, clone_dest);
+
+            /* Clone nested type declarations for this specialization */
+            if (type_list != NULL && specialized_name != NULL && cur->base_name != NULL) {
+                GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
+                if (generic != NULL && generic->nested_type_decls != NULL) {
+                    clone_nested_types_for_specialization(generic, specialized_name,
+                        cur->type_args, type_list, clone_dest);
+                }
+            }
+
             if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
                 cur->base_name != NULL)
             {
@@ -3009,7 +3888,7 @@ static ListNode_t *collect_specialize_type_args(ast_t *args_node) {
     }
 
     ListNode_t *result = list_builder_finish(&builder);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] collect_constructed_type_args result=%p\n", (void *)result);
     return result;
 }
@@ -3278,7 +4157,7 @@ static int map_type_name(const char *name, char **type_id_out) {
     if (strcasecmp(name, "extended") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("Extended");
-        return REAL_TYPE;
+        return EXTENDED_TYPE;
     }
     if (strcasecmp(name, "valreal") == 0) {
         if (type_id_out != NULL)
@@ -3290,11 +4169,19 @@ static int map_type_name(const char *name, char **type_id_out) {
             *type_id_out = strdup("shortstring");
         return SHORTSTRING_TYPE;
     }
-    if (strcasecmp(name, "string") == 0 ||
-        strcasecmp(name, "ansistring") == 0 ||
-        strcasecmp(name, "widestring") == 0) {
+    if (strcasecmp(name, "string") == 0) {
         if (type_id_out != NULL)
             *type_id_out = strdup("string");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "ansistring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("AnsiString");
+        return STRING_TYPE;
+    }
+    if (strcasecmp(name, "widestring") == 0) {
+        if (type_id_out != NULL)
+            *type_id_out = strdup("WideString");
         return STRING_TYPE;
     }
     if (strcasecmp(name, "shortstring") == 0) {
@@ -3368,9 +4255,9 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
 {
     if (base_type_id == NULL)
         return 0;
-    /* Real/Single/Double/Extended: codegen passes Self by value via SSE. */
+    /* Real/Single/Double/Extended: helper Self is passed by value. */
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag == REAL_TYPE)
+    if (is_real_family_type(type_tag))
         return 0;
     /* String types are heap-allocated pointers — by value is correct. */
     if (type_tag == STRING_TYPE || type_tag == SHORTSTRING_TYPE ||
@@ -3403,16 +4290,18 @@ static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
         return NULL;
 
     int type_tag = map_type_name(base_type_id, NULL);
-    if (type_tag != REAL_TYPE)
+    if (!is_real_family_type(type_tag))
         return NULL;
 
     struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
     if (alias == NULL)
         return NULL;
 
-    alias->base_type = REAL_TYPE;
+    alias->base_type = type_tag;
     if (pascal_identifier_equals(base_type_id, "Single"))
         alias->storage_size = 4;
+    else if (pascal_identifier_equals(base_type_id, "Extended"))
+        alias->storage_size = 10;
     else
         alias->storage_size = 8;
 
@@ -3448,7 +4337,7 @@ static int tuple_is_record_constructor(ast_t *tuple_node)
 
     int has_fields = 0;
     int has_record_like = 0;
-    int debug_tuple = (getenv("KGPC_DEBUG_RECORD_TUPLE") != NULL);
+    int debug_tuple = (kgpc_getenv("KGPC_DEBUG_RECORD_TUPLE") != NULL);
     int debug_this = debug_tuple && tuple_node->line >= 2165 && tuple_node->line <= 2175;
     if (debug_this)
     {
@@ -3625,8 +4514,12 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
                 int ordinal = 0;
                 ast_t *literal = spec->child;
                 while (literal != NULL) {
-                    if (literal->typ == PASCAL_T_IDENTIFIER && literal->sym != NULL) {
-                        if (strcmp(literal->sym->name, identifier) == 0) {
+                    ast_t *literal_id = literal;
+                    if (literal_id != NULL && literal_id->typ == PASCAL_T_ASSIGNMENT)
+                        literal_id = literal_id->child;
+                    if (literal_id != NULL && literal_id->typ == PASCAL_T_IDENTIFIER &&
+                        literal_id->sym != NULL) {
+                        if (strcmp(literal_id->sym->name, identifier) == 0) {
                             return ordinal; /* Found it! Return the ordinal value */
                         }
                     }
@@ -3666,9 +4559,13 @@ static int resolve_enum_literal_in_type(const char *type_name, const char *liter
                 if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
                     int ordinal = 0;
                     for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
-                        if (lit->typ == PASCAL_T_IDENTIFIER && lit->sym != NULL &&
-                            lit->sym->name != NULL &&
-                            strcasecmp(lit->sym->name, literal) == 0) {
+                        ast_t *lit_id = lit;
+                        if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT)
+                            lit_id = lit_id->child;
+                        if (lit_id != NULL && lit_id->typ == PASCAL_T_IDENTIFIER &&
+                            lit_id->sym != NULL &&
+                            lit_id->sym->name != NULL &&
+                            strcasecmp(lit_id->sym->name, literal) == 0) {
                             return ordinal;
                         }
                         ordinal++;
@@ -3699,40 +4596,57 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
             /* Get the type name (first child) */
             ast_t *type_id = type_decl->child;
             if (type_id != NULL && type_id->typ == PASCAL_T_IDENTIFIER && type_id->sym != NULL) {
-                if (strcmp(type_id->sym->name, type_name) == 0) {
+                if (strcasecmp(type_id->sym->name, type_name) == 0) {
                     /* Found the type - now check if it's an enumerated type */
                     ast_t *type_spec_node = type_id->next;
                     
-                    while (type_spec_node != NULL && 
+                    while (type_spec_node != NULL &&
                            type_spec_node->typ != PASCAL_T_TYPE_SPEC &&
-                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE) {
+                           type_spec_node->typ != PASCAL_T_ENUMERATED_TYPE &&
+                           type_spec_node->typ != PASCAL_T_RANGE_TYPE) {
                         type_spec_node = type_spec_node->next;
                     }
-                    
+
                     /* Unwrap TYPE_SPEC if needed */
                     ast_t *spec = type_spec_node;
                     if (spec != NULL && spec->typ == PASCAL_T_TYPE_SPEC && spec->child != NULL)
                         spec = spec->child;
-                    
+
                     /* Check if it's an enumerated type */
                     if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
                         /* Count the enum values */
                         int count = 0;
                         ast_t *literal = spec->child;
                         while (literal != NULL) {
-                            if (literal->typ == PASCAL_T_IDENTIFIER)
+                            if (literal->typ == PASCAL_T_IDENTIFIER ||
+                                literal->typ == PASCAL_T_ASSIGNMENT)
                                 count++;
                             literal = literal->next;
                         }
-                        
+
                         if (count > 0) {
                             *out_start = 0;
                             *out_end = count - 1;
+                            enum_registry_add(type_name, 0, count - 1);
                             return 0; /* Success */
                         }
                     }
-                    
-                    /* Found the type but it's not an enum */
+
+                    /* Check if it's a subrange type (e.g., 0..NUM_REGS - 1) */
+                    if (spec != NULL && spec->typ == PASCAL_T_RANGE_TYPE) {
+                        ast_t *lower = spec->child;
+                        ast_t *upper = (lower != NULL) ? lower->next : NULL;
+                        int low_val = 0, high_val = 0;
+                        if (evaluate_const_int_expr(lower, &low_val, 0) == 0 &&
+                            evaluate_const_int_expr(upper, &high_val, 0) == 0) {
+                            *out_start = low_val;
+                            *out_end = high_val;
+                            enum_registry_add(type_name, low_val, high_val);
+                            return 0; /* Success */
+                        }
+                    }
+
+                    /* Found the type but it's not an enum or resolved subrange */
                     return -1;
                 }
             }
@@ -3816,6 +4730,220 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
 
 static int resolve_const_string_in_node(const char *identifier, ast_t *node,
                                         ast_t *const_section, const char **out_value, int depth);
+static int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
+                                                  const char **out_value, int depth);
+
+typedef struct AstStringValue {
+    char *data;
+    size_t len;
+} AstStringValue;
+
+static void ast_string_value_reset(AstStringValue *value)
+{
+    if (value == NULL)
+        return;
+    free(value->data);
+    value->data = NULL;
+    value->len = 0;
+}
+
+static int ast_string_value_assign_bytes(AstStringValue *value, const char *data, size_t len)
+{
+    char *copy = NULL;
+    if (value == NULL)
+        return -1;
+    if (len > 0)
+    {
+        copy = (char *)malloc(len);
+        if (copy == NULL)
+            return -1;
+        memcpy(copy, data, len);
+    }
+    ast_string_value_reset(value);
+    value->data = copy;
+    value->len = len;
+    return 0;
+}
+
+static int ast_string_value_append(AstStringValue *dst, const AstStringValue *src)
+{
+    char *combined = NULL;
+    if (dst == NULL || src == NULL)
+        return -1;
+    if (src->len == 0)
+        return 0;
+    combined = (char *)malloc(dst->len + src->len);
+    if (combined == NULL)
+        return -1;
+    if (dst->len > 0 && dst->data != NULL)
+        memcpy(combined, dst->data, dst->len);
+    memcpy(combined + dst->len, src->data, src->len);
+    free(dst->data);
+    dst->data = combined;
+    dst->len += src->len;
+    return 0;
+}
+
+static int parse_ast_char_code(ast_t *node, unsigned int *out_value)
+{
+    const char *literal;
+    const char *digits;
+    int base = 10;
+
+    if (node == NULL || out_value == NULL)
+        return -1;
+
+    node = unwrap_pascal_node(node);
+    if (node == NULL || node->typ != PASCAL_T_CHAR_CODE)
+        return -1;
+
+    literal = (node->sym != NULL) ? node->sym->name : NULL;
+    if (literal == NULL)
+        return -1;
+
+    digits = literal;
+    if (*digits == '#')
+        ++digits;
+    if (*digits == '$')
+    {
+        base = 16;
+        ++digits;
+    }
+    if (*digits == '\0')
+        return -1;
+
+    {
+        char *endptr = NULL;
+        long parsed = strtol(digits, &endptr, base);
+        if (endptr == NULL || *endptr != '\0' || parsed < 0)
+            return -1;
+        *out_value = (unsigned int)parsed;
+    }
+    return 0;
+}
+
+static int evaluate_const_string_ast(ast_t *node, ast_t *const_section,
+                                     AstStringValue *out_value, int depth)
+{
+    ast_t *unwrapped;
+    if (node == NULL || out_value == NULL || depth > 32)
+        return -1;
+
+    unwrapped = unwrap_pascal_node(node);
+    if (unwrapped == NULL)
+        return -1;
+
+    switch (unwrapped->typ)
+    {
+        case PASCAL_T_STRING:
+        case PASCAL_T_CHAR:
+        {
+            const char *value = (unwrapped->sym != NULL) ? unwrapped->sym->name : NULL;
+            if (value == NULL)
+                return -1;
+            return ast_string_value_assign_bytes(out_value, value, strlen(value));
+        }
+
+        case PASCAL_T_CHAR_CODE:
+        {
+            unsigned int ch = 0;
+            unsigned char byte;
+            if (parse_ast_char_code(unwrapped, &ch) != 0)
+                return -1;
+            byte = (unsigned char)(ch & 0xffu);
+            return ast_string_value_assign_bytes(out_value, (const char *)&byte, 1);
+        }
+
+        case PASCAL_T_IDENTIFIER:
+        {
+            const char *resolved = NULL;
+            if (unwrapped->sym != NULL && unwrapped->sym->name != NULL &&
+                resolve_const_string_from_ast_internal(unwrapped->sym->name, const_section,
+                                                       &resolved, depth + 1) == 0 &&
+                resolved != NULL)
+            {
+                return ast_string_value_assign_bytes(out_value, resolved, strlen(resolved));
+            }
+            return -1;
+        }
+
+        case PASCAL_T_ADD:
+        {
+            AstStringValue left = {0};
+            AstStringValue right = {0};
+            ast_t *lhs = unwrapped->child;
+            ast_t *rhs = (lhs != NULL) ? lhs->next : NULL;
+            int result = -1;
+
+            if (evaluate_const_string_ast(lhs, const_section, &left, depth + 1) != 0)
+                goto concat_cleanup;
+            if (evaluate_const_string_ast(rhs, const_section, &right, depth + 1) != 0)
+                goto concat_cleanup;
+            if (ast_string_value_assign_bytes(out_value, left.data, left.len) != 0)
+                goto concat_cleanup;
+            if (ast_string_value_append(out_value, &right) != 0)
+            {
+                ast_string_value_reset(out_value);
+                goto concat_cleanup;
+            }
+            result = 0;
+
+concat_cleanup:
+            ast_string_value_reset(&left);
+            ast_string_value_reset(&right);
+            return result;
+        }
+
+        default:
+            return -1;
+    }
+}
+
+static int type_info_targets_char_array(const TypeInfo *type_info, int *is_widechar_out)
+{
+    int is_char_array_target = 0;
+    int is_widechar_array_target = 0;
+
+    if (is_widechar_out != NULL)
+        *is_widechar_out = 0;
+    if (type_info == NULL)
+        return 0;
+
+    is_char_array_target = (type_info->element_type == CHAR_TYPE);
+    is_widechar_array_target = (type_info->element_type_id != NULL &&
+                                strcasecmp(type_info->element_type_id, "widechar") == 0);
+    if (!is_char_array_target && type_info->element_type_id != NULL &&
+        (strcasecmp(type_info->element_type_id, "char") == 0 ||
+         strcasecmp(type_info->element_type_id, "ansichar") == 0))
+    {
+        is_char_array_target = 1;
+    }
+
+    if (is_widechar_out != NULL)
+        *is_widechar_out = is_widechar_array_target;
+    return is_char_array_target || is_widechar_array_target;
+}
+
+static struct Expression *mk_const_array_element_lhs(int line_num, const char *array_name,
+    int outer_index, int inner_index, int is_multidim)
+{
+    struct Expression *base_expr = mk_varid(line_num, strdup(array_name));
+    struct Expression *outer_index_expr = mk_inum(line_num, outer_index);
+    struct Expression *inner_index_expr = mk_inum(line_num, inner_index);
+
+    if (is_multidim)
+    {
+        struct Expression *lhs = mk_arrayaccess(line_num, base_expr, outer_index_expr);
+        lhs->expr_data.array_access_data.extra_indices =
+            CreateListNode(inner_index_expr, LIST_EXPR);
+        return lhs;
+    }
+
+    {
+        struct Expression *outer_access = mk_arrayaccess(line_num, base_expr, outer_index_expr);
+        return mk_arrayaccess(line_num, outer_access, inner_index_expr);
+    }
+}
 
 static int resolve_const_string_in_section(const char *identifier, ast_t *const_section,
                                            const char **out_value, int depth) {
@@ -3919,6 +5047,9 @@ static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *t
     if (resolve_enum_type_range_in_section_chain(type_name, g_interface_section_ast, out_start, out_end) == 0)
         return 0;
     if (resolve_enum_type_range_in_section_chain(type_name, g_implementation_section_ast, out_start, out_end) == 0)
+        return 0;
+    /* Fallback: check the cross-unit enum registry */
+    if (enum_registry_lookup(type_name, out_start, out_end) == 0)
         return 0;
     return -1;
 }
@@ -4080,9 +5211,9 @@ static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *con
         if (resolve_enum_type_range_with_fallback(range_str, type_section, &enum_start, &enum_end) == 0) {
             info->start = enum_start;
             info->end = enum_end;
-        } else if (id_for_error != NULL) {
-            fprintf(stderr, "ERROR: Could not resolve array index type '%s' for %s.\n",
-                    range_str, id_for_error);
+        } else {
+            /* Defer resolution — store the type name for a post-load fixup pass */
+            info->unresolved_index_type = strdup(range_str);
         }
     }
 
@@ -4216,6 +5347,34 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
         }
         return -1;
     }
+    case PASCAL_T_NOT:
+    {
+        int inner = 0;
+        if (evaluate_const_int_expr(expr->child, &inner, depth + 1) == 0) {
+            *out_value = ~inner;
+            return 0;
+        }
+        return -1;
+    }
+    case PASCAL_T_AND:
+    case PASCAL_T_OR:
+    case PASCAL_T_XOR:
+    {
+        int left = 0, right = 0;
+        if (expr->child == NULL || expr->child->next == NULL)
+            return -1;
+        if (evaluate_const_int_expr(expr->child, &left, depth + 1) != 0)
+            return -1;
+        if (evaluate_const_int_expr(expr->child->next, &right, depth + 1) != 0)
+            return -1;
+        if (expr->typ == PASCAL_T_AND)
+            *out_value = left & right;
+        else if (expr->typ == PASCAL_T_OR)
+            *out_value = left | right;
+        else
+            *out_value = left ^ right;
+        return 0;
+    }
     default:
         return -1;
     }
@@ -4340,6 +5499,57 @@ static int const_expr_parse_number(ConstExprScanner *scanner, long long *out_val
     return 0;
 }
 
+/* Resolve SizeOf(typename) to a compile-time constant for known types.
+   Returns the size in bytes on x86_64, or -1 if the type is unknown. */
+static int resolve_sizeof_type(const char *type_name) {
+    if (type_name == NULL)
+        return -1;
+    /* Pointer-sized types (8 bytes on x86_64) */
+    if (strcasecmp(type_name, "Pointer") == 0 ||
+        strcasecmp(type_name, "CodePointer") == 0 ||
+        strcasecmp(type_name, "SizeInt") == 0 ||
+        strcasecmp(type_name, "SizeUInt") == 0 ||
+        strcasecmp(type_name, "PtrInt") == 0 ||
+        strcasecmp(type_name, "PtrUInt") == 0 ||
+        strcasecmp(type_name, "Int64") == 0 ||
+        strcasecmp(type_name, "QWord") == 0 ||
+        strcasecmp(type_name, "NativeInt") == 0 ||
+        strcasecmp(type_name, "NativeUInt") == 0 ||
+        strcasecmp(type_name, "ValSInt") == 0 ||
+        strcasecmp(type_name, "ValUInt") == 0 ||
+        strcasecmp(type_name, "CodePtrInt") == 0 ||
+        strcasecmp(type_name, "CodePtrUInt") == 0)
+        return 8;
+    /* 4-byte types */
+    if (strcasecmp(type_name, "LongInt") == 0 ||
+        strcasecmp(type_name, "LongWord") == 0 ||
+        strcasecmp(type_name, "DWord") == 0 ||
+        strcasecmp(type_name, "Cardinal") == 0 ||
+        strcasecmp(type_name, "Integer") == 0 ||
+        strcasecmp(type_name, "Single") == 0)
+        return 4;
+    /* 2-byte types */
+    if (strcasecmp(type_name, "SmallInt") == 0 ||
+        strcasecmp(type_name, "Word") == 0 ||
+        strcasecmp(type_name, "WideChar") == 0)
+        return 2;
+    /* 1-byte types */
+    if (strcasecmp(type_name, "Byte") == 0 ||
+        strcasecmp(type_name, "ShortInt") == 0 ||
+        strcasecmp(type_name, "Boolean") == 0 ||
+        strcasecmp(type_name, "Char") == 0 ||
+        strcasecmp(type_name, "AnsiChar") == 0)
+        return 1;
+    /* 8-byte float */
+    if (strcasecmp(type_name, "Double") == 0 ||
+        strcasecmp(type_name, "Real") == 0)
+        return 8;
+    /* 10-byte extended (padded to 16 on x86_64 in some ABIs, but SizeOf returns 10) */
+    if (strcasecmp(type_name, "Extended") == 0)
+        return 10;
+    return -1;
+}
+
 static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out_value) {
     const_expr_skip_ws(scanner);
     size_t start = scanner->pos;
@@ -4360,6 +5570,54 @@ static int const_expr_parse_identifier(ConstExprScanner *scanner, long long *out
         return -1;
     memcpy(ident, scanner->input + start, len);
     ident[len] = '\0';
+
+    /* Handle SizeOf(typename) as a compile-time builtin */
+    if (strcasecmp(ident, "sizeof") == 0) {
+        free(ident);
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != '(')
+            return -1;
+        scanner->pos++;  /* skip '(' */
+        const_expr_skip_ws(scanner);
+        /* Read the type name argument */
+        size_t arg_start = scanner->pos;
+        while (scanner->input[scanner->pos] != '\0' &&
+               scanner->input[scanner->pos] != ')' &&
+               (isalnum((unsigned char)scanner->input[scanner->pos]) || scanner->input[scanner->pos] == '_'))
+            scanner->pos++;
+        size_t arg_len = scanner->pos - arg_start;
+        if (arg_len == 0)
+            return -1;
+        char *type_name = (char *)malloc(arg_len + 1);
+        if (type_name == NULL)
+            return -1;
+        memcpy(type_name, scanner->input + arg_start, arg_len);
+        type_name[arg_len] = '\0';
+        const_expr_skip_ws(scanner);
+        if (scanner->input[scanner->pos] != ')') {
+            free(type_name);
+            return -1;
+        }
+        scanner->pos++;  /* skip ')' */
+        int size = resolve_sizeof_type(type_name);
+        free(type_name);
+        if (size < 0)
+            return -1;
+        *out_value = size;
+        return 0;
+    }
+
+    /* Handle boolean literals */
+    if (strcasecmp(ident, "false") == 0) {
+        free(ident);
+        *out_value = 0;
+        return 0;
+    }
+    if (strcasecmp(ident, "true") == 0) {
+        free(ident);
+        *out_value = 1;
+        return 0;
+    }
 
     int val = resolve_const_int_from_ast(ident, scanner->const_section, INT_MIN);
     free(ident);
@@ -4391,6 +5649,13 @@ static int const_expr_parse_unary(ConstExprScanner *scanner, long long *out_valu
         if (const_expr_parse_unary(scanner, &inner) != 0)
             return -1;
         *out_value = -inner;
+        return 0;
+    }
+    if (const_expr_match_keyword(scanner, "not")) {
+        long long inner = 0;
+        if (const_expr_parse_unary(scanner, &inner) != 0)
+            return -1;
+        *out_value = ~inner;
         return 0;
     }
     return const_expr_parse_primary(scanner, out_value);
@@ -4485,7 +5750,37 @@ static int const_expr_parse_add(ConstExprScanner *scanner, long long *out_value)
 }
 
 static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out_value) {
-    return const_expr_parse_add(scanner, out_value);
+    long long lhs = 0;
+    if (const_expr_parse_add(scanner, &lhs) != 0)
+        return -1;
+
+    while (1) {
+        if (const_expr_match_keyword(scanner, "and")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs & rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "or")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs | rhs;
+            continue;
+        }
+        if (const_expr_match_keyword(scanner, "xor")) {
+            long long rhs = 0;
+            if (const_expr_parse_add(scanner, &rhs) != 0)
+                return -1;
+            lhs = lhs ^ rhs;
+            continue;
+        }
+        break;
+    }
+
+    *out_value = lhs;
+    return 0;
 }
 
 static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
@@ -4539,7 +5834,7 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {
         if (strcasecmp(expr->sym->name, "sizeof") == 0 &&
-            getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+            kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC] sizeof node typ=%d child=%p child_typ=%d child_sym=%s next_typ=%d\n",
@@ -4652,7 +5947,7 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
             ast_t *arg_node = expr->child->child;
             if (arg_node == NULL)
                 arg_node = expr->child->next;
-            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] sizeof wrapper typ=%d arg_typ=%d arg_sym=%s\n",
@@ -4757,6 +6052,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->set_element_type_id = NULL;
         type_info->set_element_type_ref = NULL;
         type_info->is_enum = 0;
+        type_info->enum_has_explicit_values = 0;
         type_info->enum_literals = NULL;
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
@@ -4785,7 +6081,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     if (spec_node == NULL)
         return UNKNOWN_TYPE;
 
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] convert_type_spec node typ=%d (%s) sym=%s\n",
             spec_node->typ,
             pascal_tag_to_string(spec_node->typ),
@@ -4970,7 +6266,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->type_ref = type_ref_from_name_and_args(base_name, type_args);
 
             if (record != NULL) {
-                if (getenv("KGPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
                 {
                     fprintf(stderr, "[KGPC] convert_type_spec generic %s -> record=%p type_info_ptr=%p record_out_ptr=%p\n",
                         specialized_name, (void *)record, (void *)type_info, (void *)record_out);
@@ -5057,6 +6353,23 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             destroy_expr(upper_expr);
         }
 
+        /* Fallback: try evaluating bounds from the AST using const int registry
+         * (handles cases like 0..NUM_REGS - 1 where NUM_REGS is a named constant) */
+        if (!have_start) {
+            int val = 0;
+            if (evaluate_const_int_expr(spec_node->child, &val, 0) == 0) {
+                start_value = val;
+                have_start = 1;
+            }
+        }
+        if (!have_end && spec_node->child != NULL) {
+            int val = 0;
+            if (evaluate_const_int_expr(spec_node->child->next, &val, 0) == 0) {
+                end_value = val;
+                have_end = 1;
+            }
+        }
+
         if (type_info != NULL) {
             type_info->is_range = 1;
             type_info->range_start = start_value;
@@ -5079,7 +6392,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (element_node != NULL && element_node->next != NULL)
                 element_node = element_node->next;
 
-            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
                 fprintf(stderr, "[KGPC] array type children:");
                 for (ast_t *dim = child; dim != NULL; dim = dim->next) {
                     fprintf(stderr, " %d(%s)", dim->typ, pascal_tag_to_string(dim->typ));
@@ -5128,7 +6441,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     }
 
                     if ((lower_str == NULL || upper_str == NULL) &&
-                        getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+                        kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
                     {
                         fprintf(stderr,
                             "[KGPC] array bounds serialize failed: lower typ=%d (%s) upper typ=%d (%s)\n",
@@ -5217,7 +6530,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = mapped;
                         if (mapped == UNKNOWN_TYPE && type_info->element_type_id == NULL)
                             type_info->element_type_id = dup;
-                        else if (mapped != UNKNOWN_TYPE)
+                        else
                             free(dup);
                     }
                 } else if (element_node->typ == PASCAL_T_TYPE_SPEC) {
@@ -5230,6 +6543,13 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = SHORTSTRING_TYPE;
                         if (type_info->element_type_id == NULL)
                             type_info->element_type_id = strdup("ShortString");
+                        if (nested_id != NULL)
+                            free(nested_id);
+                    } else if (nested_info.is_range && mapped == UNKNOWN_TYPE) {
+                        /* Subrange element type (e.g., array[0..15] of 0..15).
+                         * The element is a range type wrapped in TYPE_SPEC —
+                         * treat as integer. */
+                        type_info->element_type = INT_TYPE;
                         if (nested_id != NULL)
                             free(nested_id);
                     } else {
@@ -5309,7 +6629,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->pointer_type = mapped;
                 if (mapped == UNKNOWN_TYPE && type_info->pointer_type_id == NULL)
                     type_info->pointer_type_id = dup;
-                else if (mapped != UNKNOWN_TYPE)
+                else
                     free(dup);
                 if (type_id_out != NULL && *type_id_out == NULL && type_info->pointer_type_id != NULL)
                     *type_id_out = strdup(type_info->pointer_type_id);
@@ -5331,8 +6651,47 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     type_info->set_element_type = mapped;
                     if (mapped == UNKNOWN_TYPE && type_info->set_element_type_id == NULL)
                         type_info->set_element_type_id = dup;
-                    else if (mapped != UNKNOWN_TYPE)
+                    else
                         free(dup);
+                }
+                /* Handle subrange as set element type: set of 0..31 */
+                else if (elem->typ == PASCAL_T_RANGE_TYPE) {
+                    ast_t *lower = unwrap_pascal_node(elem->child);
+                    ast_t *upper = (lower != NULL) ? unwrap_pascal_node(lower->next) : NULL;
+                    long long start_value = 0;
+                    long long end_value = 0;
+                    int have_start = 0;
+                    int have_end = 0;
+                    struct Expression *lower_expr = convert_expression(lower);
+                    struct Expression *upper_expr = convert_expression(upper);
+                    if (lower_expr != NULL) {
+                        have_start = (extract_constant_int(lower_expr, &start_value) == 0);
+                        destroy_expr(lower_expr);
+                    }
+                    if (upper_expr != NULL) {
+                        have_end = (extract_constant_int(upper_expr, &end_value) == 0);
+                        destroy_expr(upper_expr);
+                    }
+                    if (!have_start && elem->child != NULL) {
+                        int val = 0;
+                        if (evaluate_const_int_expr(elem->child, &val, 0) == 0) {
+                            start_value = val;
+                            have_start = 1;
+                        }
+                    }
+                    if (!have_end && elem->child != NULL) {
+                        int val = 0;
+                        if (evaluate_const_int_expr(elem->child->next, &val, 0) == 0) {
+                            end_value = val;
+                            have_end = 1;
+                        }
+                    }
+                    if (have_start && have_end) {
+                        type_info->range_known = 1;
+                        type_info->range_start = start_value;
+                        type_info->range_end = end_value;
+                    }
+                    type_info->set_element_type = INT_TYPE;
                 }
                 /* Handle anonymous enum as set element type: set of (val1, val2, ...) */
                 else if (elem->typ == PASCAL_T_ENUMERATED_TYPE) {
@@ -5357,7 +6716,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         if (type_info != NULL) {
             type_info->is_file = 1;
             ast_t *elem = spec_node->child;
-            while (elem != NULL && elem->typ == PASCAL_T_NONE)
+            while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
                 elem = elem->child;
             if (elem != NULL && elem->typ == PASCAL_T_IDENTIFIER) {
                 char *dup = dup_symbol(elem);
@@ -5365,7 +6724,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->file_type = mapped;
                 if (mapped == UNKNOWN_TYPE && type_info->file_type_id == NULL)
                     type_info->file_type_id = dup;
-                else if (mapped != UNKNOWN_TYPE)
+                else
                     free(dup);
             }
         }
@@ -5382,6 +6741,11 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (value != NULL) {
                 if (value->typ == PASCAL_T_IDENTIFIER)
                     list_builder_append(&enum_builder, dup_symbol(value), LIST_STRING);
+                else if (value->typ == PASCAL_T_ASSIGNMENT &&
+                         value->child != NULL && value->child->typ == PASCAL_T_IDENTIFIER) {
+                    list_builder_append(&enum_builder, dup_symbol(value->child), LIST_STRING);
+                    type_info->enum_has_explicit_values = 1;
+                }
                 value = value->next;
             }
             type_info->enum_literals = list_builder_finish(&enum_builder);
@@ -5523,7 +6887,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
     if (spec_node == NULL)
         return NULL;
 
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] convert_type_spec_to_kgpctype node typ=%d sym=%s\n",
             spec_node->typ,
             (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
@@ -5565,10 +6929,12 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         
         if (type_tag != UNKNOWN_TYPE) {
             KgpcType *type = create_primitive_type(type_tag);
-            /* If this is RawByteString or UnicodeString, create a type_alias to preserve the name */
+            /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
             if (type != NULL && preserved_type_id != NULL &&
-                (strcasecmp(preserved_type_id, "RawByteString") == 0 ||
-                 strcasecmp(preserved_type_id, "UnicodeString") == 0)) {
+                (strcasecmp(preserved_type_id, "AnsiString") == 0 ||
+                 strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0 ||
+                 strcasecmp(preserved_type_id, "WideString") == 0)) {
                 /* Create a TypeAlias to preserve the original type name */
                 struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
                 if (alias != NULL) {
@@ -5655,13 +7021,17 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (element_type == NULL)
             return NULL;
 
-        return create_array_type(element_type, start, end);
+        {
+            KgpcType *arr = create_array_type(element_type, start, end);
+            kgpc_type_release(element_type);
+            return arr;
+        }
     }
 
     /* Handle file types */
     if (spec_node->typ == PASCAL_T_FILE_TYPE) {
         ast_t *elem = spec_node->child;
-        while (elem != NULL && elem->typ == PASCAL_T_NONE)
+        while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
             elem = elem->child;
 
         if (elem == NULL) {
@@ -5715,7 +7085,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 }
             }
 
-            return create_pointer_type(points_to);
+            KgpcType *ptr = create_pointer_type(points_to);
+            if (points_to != NULL) kgpc_type_release(points_to);
+            return ptr;
         }
         return create_pointer_type(NULL);
     }
@@ -5763,6 +7135,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* For functions, get return type */
         KgpcType *return_type = NULL;
         char *return_type_id = NULL;
+        int owns_return_type = 0;
         if (is_function) {
             #ifdef DEBUG_KGPC_TYPE_CREATION
             fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
@@ -5839,6 +7212,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                 #endif
                 if (cursor->typ == PASCAL_T_TYPE_SPEC) {
                     return_type = convert_type_spec_to_kgpctype(cursor, symtab);
+                    owns_return_type = (return_type != NULL);
                     if (return_type_id == NULL && cursor->child != NULL &&
                         cursor->child->sym != NULL && cursor->child->sym->name != NULL)
                     {
@@ -5851,6 +7225,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         int ret_tag = map_type_name(ret_type_name, NULL);
                         if (ret_tag != UNKNOWN_TYPE) {
                             return_type = create_primitive_type(ret_tag);
+                            owns_return_type = 1;
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
@@ -5873,10 +7248,22 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         }
         
         KgpcType *proc_type = create_procedure_type(params, return_type);
-        if (proc_type != NULL && return_type_id != NULL)
-            proc_type->info.proc_info.return_type_id = return_type_id;
-        else if (return_type_id != NULL)
-            free(return_type_id);
+        /* create_procedure_type retains return_type; release our ref if we own it */
+        if (owns_return_type && return_type != NULL)
+            kgpc_type_release(return_type);
+        if (proc_type != NULL) {
+            /* create_procedure_type makes a shallow copy of params; tell the
+             * type to own (deeply free) its copy so the TREE_VAR_DECL param
+             * nodes are eventually freed.  Then free the original list nodes. */
+            proc_type->info.proc_info.owns_params = 1;
+            DestroyList(params);
+            if (return_type_id != NULL)
+                proc_type->info.proc_info.return_type_id = return_type_id;
+        } else {
+            destroy_list(params);
+            if (return_type_id != NULL)
+                free(return_type_id);
+        }
         return proc_type;
     }
 
@@ -5905,7 +7292,9 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         if (record != NULL) {
             KgpcType *rec_type = create_record_type(record);
             if (rec_type != NULL) {
-                return create_pointer_type(rec_type);
+                KgpcType *ptr = create_pointer_type(rec_type);
+                kgpc_type_release(rec_type);
+                return ptr;
             }
         }
         return NULL;
@@ -6003,7 +7392,11 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     /* Skip to the type specification */
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE) {
+           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_FILE_TYPE &&
+           cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
+           cursor->typ != PASCAL_T_FUNCTION_TYPE &&
+           cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
         cursor = cursor->next;
     }
 
@@ -6027,6 +7420,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
                 field_type_id = mapped_id;
                 free(candidate);
             } else {
+                free(mapped_id);
                 field_type_id = candidate;
             }
         }
@@ -6056,6 +7450,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
+            /* string[N] fields are shortstrings (array[0..N] of Char with length byte) */
+            if (field_desc->type == UNKNOWN_TYPE && field_info.is_shortstring)
+                field_desc->type = SHORTSTRING_TYPE;
             field_desc->type_id = type_id_copy;
             field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
@@ -6120,11 +7517,13 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     char *write_accessor = NULL;
     int has_indexer = 0;
     int is_default = 0;
+    int next_accessor_is_write = 0; /* set when we see "write" keyword */
+    int next_accessor_is_read = 0;  /* set when we see "read" keyword */
 
     ast_t *cursor = property_node->child;
     if (cursor != NULL && cursor->typ == PASCAL_T_NONE && cursor->child != NULL)
         cursor = cursor->child;
-    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
     {
         fprintf(stderr, "[KGPC] property decl child list:\n");
         for (ast_t *dbg = cursor; dbg != NULL; dbg = dbg->next)
@@ -6187,7 +7586,29 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
                 type_node = unwrapped;
                 free(dup);
             }
-            else if (read_accessor == NULL)
+            else if (strcasecmp(dup, "read") == 0)
+            {
+                next_accessor_is_read = 1;
+                next_accessor_is_write = 0;
+                free(dup);
+            }
+            else if (strcasecmp(dup, "write") == 0)
+            {
+                next_accessor_is_write = 1;
+                next_accessor_is_read = 0;
+                free(dup);
+            }
+            else if (next_accessor_is_read && read_accessor == NULL)
+            {
+                read_accessor = dup;
+                next_accessor_is_read = 0;
+            }
+            else if (next_accessor_is_write && write_accessor == NULL)
+            {
+                write_accessor = dup;
+                next_accessor_is_write = 0;
+            }
+            else if (read_accessor == NULL && !next_accessor_is_write)
             {
                 read_accessor = dup;
             }
@@ -6267,7 +7688,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
     if (prop == NULL)
         return;
 
-    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
     {
         fprintf(stderr,
             "[KGPC] module property name=%s type=%d type_id=%s read=%s write=%s\n",
@@ -6366,7 +7787,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
                                         prop->type_ref != NULL ? type_ref_clone(prop->type_ref)
                                                                : type_ref_from_single_name(return_type_id);
                                     append_subprogram_node(subprograms, func_tree);
-                                    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+                                    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
                                     {
                                         fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
                                     }
@@ -6417,10 +7838,19 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         return;
 
     method_template->kind = METHOD_TEMPLATE_UNKNOWN;
+
+    /* Check the node type for constructor/destructor declarations.
+     * The parser uses PASCAL_T_CONSTRUCTOR_DECL / PASCAL_T_DESTRUCTOR_DECL
+     * for methods declared with the 'constructor' / 'destructor' keyword,
+     * so the kind must be set from the node type, not from child sym_names. */
+    if (method_ast->typ == PASCAL_T_CONSTRUCTOR_DECL)
+        method_template->kind = METHOD_TEMPLATE_CONSTRUCTOR;
+    else if (method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)
+        method_template->kind = METHOD_TEMPLATE_DESTRUCTOR;
     
     /* First pass: check ALL children for "class" keyword before the method name.
-     * The parser places optional(token(keyword_ci("class"))) before the function keyword,
-     * so we need to scan all children to find it. */
+     * The parser produces an IDENTIFIER child with sym->name="class" when
+     * create_keyword_parser("class", PASCAL_T_IDENTIFIER) matches. */
     ast_t *cursor = method_ast->child;
     while (cursor != NULL)
     {
@@ -6428,11 +7858,12 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         if (node == NULL)
             node = cursor;
         const char *sym_name = (node->sym != NULL) ? node->sym->name : NULL;
-        
-        /* Check for "class" keyword in any child node */
+
+        /* Check for "class" keyword in any child node.
+         * Note: "class function" has Self = VMT pointer; "class function ... static" has no Self.
+         * Only set is_class_method here; is_static is set by the "static" directive. */
         if (sym_name != NULL && strcasecmp(sym_name, "class") == 0) {
             method_template->is_class_method = 1;
-            method_template->is_static = 1;
         }
         cursor = cursor->next;
     }
@@ -6450,7 +7881,6 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
         {
             case PASCAL_T_IDENTIFIER:
                 if (method_template->return_type_ast == NULL &&
-                    method_template->params_ast != NULL &&
                     sym_name != NULL &&
                     method_template->name != NULL &&
                     strcasecmp(sym_name, method_template->name) != 0 &&
@@ -6622,6 +8052,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
+    template->source_offset = g_source_offset;
     return template;
 }
 
@@ -6650,9 +8081,11 @@ static void collect_class_members(ast_t *node, const char *class_name,
     while (cursor != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped != NULL) {
-            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
-                fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) in %s\n",
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) raw_typ=%d sym=%s in %s\n",
                     unwrapped->typ, pascal_tag_to_string(unwrapped->typ),
+                    cursor->typ,
+                    (cursor->sym && cursor->sym->name) ? cursor->sym->name : "(null)",
                     class_name ? class_name : "<unknown>");
             }
             switch (unwrapped->typ) {
@@ -6694,6 +8127,43 @@ static void collect_class_members(ast_t *node, const char *class_name,
                         }
                     }
                 }
+                else if (saw_class)
+                {
+                    /* "class function/procedure" member: propagate is_class_method to templates */
+                    for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
+                    {
+                        ast_t *cn = unwrap_pascal_node(child);
+                        if (cn == NULL) cn = child;
+                        if (cn->typ == PASCAL_T_METHOD_DECL ||
+                            cn->typ == PASCAL_T_CONSTRUCTOR_DECL ||
+                            cn->typ == PASCAL_T_DESTRUCTOR_DECL)
+                        {
+                            struct MethodTemplate *template = create_method_template(cn);
+                            if (template != NULL)
+                            {
+                                template->is_class_method = 1;
+                                {
+                                    int param_count = from_cparser_count_params_ast(template->params_ast);
+                                    char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                                    register_class_method_ex(class_name, template->name,
+                                        template->is_virtual, template->is_override, template->is_static,
+                                        template->is_class_method,
+                                        param_count, param_sig);
+                                }
+                                if (method_builder != NULL)
+                                    list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
+                                else
+                                    destroy_method_template_instance(template);
+                            }
+                        }
+                        else if (cn->typ == PASCAL_T_PROPERTY_DECL)
+                        {
+                            struct ClassProperty *property = convert_property_decl(cn);
+                            if (property != NULL && property_builder != NULL)
+                                list_builder_append(property_builder, property, LIST_CLASS_PROPERTY);
+                        }
+                    }
+                }
                 else
                 {
                     collect_class_members(unwrapped->child, class_name, field_builder, property_builder,
@@ -6709,7 +8179,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
             case PASCAL_T_VAR_SECTION: {
                 /* Handle var / class var sections inside classes. */
                 int is_class_var_section = 0;
-                if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
                 {
                     fprintf(stderr, "[KGPC] class var section nodes:");
                     for (ast_t *dbg = unwrapped->child; dbg != NULL; dbg = dbg->next)
@@ -6733,9 +8203,10 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 }
                 for (ast_t *child = unwrapped->child; child != NULL; child = child->next)
                 {
-                    if (child->typ == PASCAL_T_FIELD_DECL)
+                    ast_t *node = unwrap_pascal_node(child);
+                    if (node != NULL && node->typ == PASCAL_T_FIELD_DECL)
                     {
-                        ListNode_t *fields = convert_class_field_decl(child);
+                        ListNode_t *fields = convert_class_field_decl(node);
                         if (is_class_var_section && fields != NULL)
                         {
                             for (ListNode_t *fnode = fields; fnode != NULL; fnode = fnode->next)
@@ -6759,12 +8230,18 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 if (template == NULL)
                     break;
 
-                if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && template->name != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && template->name != NULL)
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                register_class_method_ex(class_name, template->name,
-                    template->is_virtual, template->is_override, template->is_static);
+                {
+                    int param_count = from_cparser_count_params_ast(template->params_ast);
+                    char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                    register_class_method_ex(class_name, template->name,
+                        template->is_virtual, template->is_override, template->is_static,
+                        template->is_class_method,
+                        param_count, param_sig);
+                }
 
                 if (method_builder != NULL)
                     list_builder_append(method_builder, template, LIST_METHOD_TEMPLATE);
@@ -6784,12 +8261,21 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 if (nested_type_builder != NULL) {
                     /* Store a pointer to the AST node for later processing */
                     list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
-                    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                         fprintf(stderr, "[KGPC] collect_class_members: found NESTED_TYPE_SECTION in %s at line %d\n",
                             class_name ? class_name : "<unknown>", unwrapped->line);
                 }
                 break;
             }
+            case PASCAL_T_CLASS_BODY:
+            case PASCAL_T_ACCESS_MODIFIER:
+            case PASCAL_T_PRIVATE_SECTION:
+            case PASCAL_T_PUBLIC_SECTION:
+            case PASCAL_T_PROTECTED_SECTION:
+            case PASCAL_T_PUBLISHED_SECTION:
+                collect_class_members(unwrapped->child, class_name, field_builder,
+                    property_builder, method_builder, nested_type_builder);
+                break;
             default:
                 break;
             }
@@ -6805,7 +8291,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     if (nested_types_out != NULL)
         *nested_types_out = NULL;
 
-    if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
         fprintf(stderr, "[KGPC] convert_class_type %s\n", class_name);
 
     ListBuilder field_builder;
@@ -6849,7 +8335,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         body_start = scan;
     }
 
-    if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_class_type: processing class %s\n", class_name ? class_name : "<null>");
         if (body_start != NULL) {
             fprintf(stderr, "[KGPC]   body_start type: %d\n", body_start->typ);
@@ -6897,6 +8383,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->methods = NULL;  /* Methods list will be populated during semantic checking */
     record->is_class = 1;
     record->is_interface = 0;
+    record->is_packed = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -6908,6 +8395,8 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->num_generic_args = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
@@ -7069,6 +8558,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->methods = NULL;
     record->is_class = 0;
     record->is_interface = 1;
+    record->is_packed = 0;
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -7081,6 +8571,7 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     record->is_generic_specialization = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->default_indexed_element_type_id = NULL;
@@ -7104,7 +8595,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     int is_class_var = 0;
     int saw_class = 0;
     int saw_var = 0;
-    if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
     {
         fprintf(stderr, "[KGPC] field_decl identifiers:");
         for (ast_t *dbg = field_decl_node->child; dbg != NULL; dbg = dbg->next)
@@ -7161,6 +8652,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
            cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
            cursor->typ != PASCAL_T_REFERENCE_TO_TYPE) {
@@ -7202,6 +8694,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                 field_type_id = mapped_id;
                 free(candidate);
             } else {
+                free(mapped_id);
                 field_type_id = candidate;
             }
         }
@@ -7231,6 +8724,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
+            /* string[N] fields are shortstrings (array[0..N] of Char with length byte) */
+            if (field_desc->type == UNKNOWN_TYPE && field_info.is_shortstring)
+                field_desc->type = SHORTSTRING_TYPE;
             field_desc->type_id = type_id_copy;
             field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
@@ -7465,7 +8961,7 @@ static void convert_record_members(ast_t *node, ListBuilder *builder,
             /* Handle var / class var / class threadvar sections inside objects.
              * The VAR_SECTION wraps keyword nodes and FIELD_DECL children. */
             int is_class_var_section = 0;
-            if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
             {
                 fprintf(stderr, "[KGPC] var section nodes:");
                 for (ast_t *dbg = cur->child; dbg != NULL; dbg = dbg->next)
@@ -7548,7 +9044,7 @@ static void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_bu
             /* Found a nested type section */
             if (nested_type_builder != NULL) {
                 list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
-                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                     fprintf(stderr, "[KGPC] collect_record_nested_types: found NESTED_TYPE_SECTION at line %d\n",
                         unwrapped->line);
             }
@@ -7583,6 +9079,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
         record->method_templates = NULL;
         record->is_class = 0;
         record->is_interface = 0;
+        record->is_packed = 0;
         record->is_type_helper = 1;
         record->helper_base_type_id = NULL;
         record->helper_parent_id = NULL;
@@ -7742,6 +9239,10 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->method_templates = list_builder_finish(&method_template_builder);
     record->is_class = 0;
     record->is_interface = 0;
+    record->is_packed = (record_node->sym != NULL &&
+        record_node->sym->name != NULL &&
+        (strcasecmp(record_node->sym->name, "packed") == 0 ||
+         strcasecmp(record_node->sym->name, "bitpacked") == 0));
     record->is_type_helper = 0;
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
@@ -7753,6 +9254,8 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->num_generic_args = 0;
     record->is_generic_specialization = 0;
     record->method_clones_emitted = 0;
+    record->parent_fields_merged = 0;
+    record->source_unit_index = 0;
     record->default_indexed_property = NULL;
     record->default_indexed_element_type = UNKNOWN_TYPE;
     record->record_properties = list_builder_finish(&property_builder);
@@ -7847,7 +9350,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         } else {
             default_value_node = find_ast_node_type(param_node, PASCAL_T_DEFAULT_VALUE);
         }
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[convert_param] type_node=%p type_node->next=%p next_typ=%d\n",
                 (void*)type_node, 
                 (void*)(type_node ? type_node->next : NULL),
@@ -7860,7 +9363,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
     if (default_value_node != NULL) {
         /* PASCAL_T_DEFAULT_VALUE's child IS the expression (no "=" token since match returns ast_nil) */
         ast_t *expr_node = default_value_node->child;
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[convert_param] default_value_node=%p expr_node=%p\n",
                 (void*)default_value_node, (void*)expr_node);
         }
@@ -7870,7 +9373,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
                 /* Wrap expression in a var_assign statement with NULL var for storage */
                 default_init = mk_varassign(default_value_node->line, default_value_node->col, 
                                             NULL, default_expr);
-                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
                     fprintf(stderr, "[convert_param] Created default_init=%p\n", (void*)default_init);
                 }
             }
@@ -7924,7 +9427,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
-            if (getenv("KGPC_DEBUG_ARRAY_PARAM") != NULL && param_decl != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_PARAM") != NULL && param_decl != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] array param %s: element_type=%d element_id=%s is_array_of_const=%d\n",
@@ -7939,6 +9442,8 @@ static ListNode_t *convert_param(ast_t *param_node) {
         {
             param_decl = mk_vardecl(param_node->line, id_node, var_type, type_id_copy,
                 is_var_param, 0, default_init, NULL, inline_alias, NULL);
+            if (param_decl != NULL)
+                param_decl->tree_data.var_decl_data.is_const_param = is_const_param;
             if (param_decl != NULL && (type_node == NULL || type_node->typ != PASCAL_T_TYPE_SPEC))
                 param_decl->tree_data.var_decl_data.is_untyped_param = 1;
             if (param_decl != NULL)
@@ -8013,8 +9518,10 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     ListBuilder params_builder;
     list_builder_init(&params_builder);
 
-    /* Add implicit Self parameter for instance methods */
-    if (!method_template->is_static && !method_template->is_class_method) {
+    /* Add implicit Self parameter for instance methods and non-static class methods.
+     * For instance methods, Self = instance pointer.
+     * For class methods (non-static), Self = VMT pointer (class reference). */
+    if (!method_template->is_static) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
         int self_type_tag = UNKNOWN_TYPE;
@@ -8081,10 +9588,16 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     }
 
     KgpcType *proc_type = create_procedure_type(params, return_type);
-    if (proc_type != NULL && return_type_id != NULL)
-        proc_type->info.proc_info.return_type_id = return_type_id;
-    else if (return_type_id != NULL)
-        free(return_type_id);
+    if (proc_type != NULL) {
+        proc_type->info.proc_info.owns_params = 1;
+        DestroyList(params);
+        if (return_type_id != NULL)
+            proc_type->info.proc_info.return_type_id = return_type_id;
+    } else {
+        destroy_list(params);
+        if (return_type_id != NULL)
+            free(return_type_id);
+    }
 
     return proc_type;
 }
@@ -8124,6 +9637,9 @@ static int is_node_to_skip_as_initializer(ast_t *node) {
         return 0;
     return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
+
+static int select_range_primitive_tag(const TypeInfo *info);
+static long long compute_range_storage_size(const TypeInfo *info);
 
 static Tree_t *convert_var_decl(ast_t *decl_node) {
     ast_t *cur = decl_node->child;
@@ -8166,6 +9682,9 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 free(type_id);
                 type_id = NULL;
             }
+            /* Free any type_info from the first convert_type_spec call,
+             * since convert_type_spec resets all fields to NULL without freeing */
+            destroy_type_info_contents(&type_info);
             var_type = convert_type_spec(search, &type_id, NULL, &type_info);
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);
@@ -8285,6 +9804,16 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         if (decl != NULL)
             decl->tree_data.arr_decl_data.type_ref =
                 type_ref_from_element_info(&type_info, element_type_id);
+        if (decl != NULL && type_info.unresolved_index_type != NULL) {
+            decl->tree_data.arr_decl_data.unresolved_index_type = type_info.unresolved_index_type;
+            type_info.unresolved_index_type = NULL;  /* ownership transferred */
+        }
+        /* Transfer array_dimensions for multi-dim linearization */
+        if (decl != NULL && type_info.array_dimensions != NULL &&
+            type_info.array_dimensions->next != NULL) {
+            decl->tree_data.arr_decl_data.array_dimensions = type_info.array_dimensions;
+            type_info.array_dimensions = NULL;
+        }
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         if (type_id != NULL)
@@ -8382,7 +9911,22 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     }
 
     struct TypeAlias *inline_alias = NULL;
-    if (type_info.is_file && type_id == NULL)
+    if (type_info.is_range)
+    {
+        inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (inline_alias != NULL)
+        {
+            inline_alias->is_range = 1;
+            inline_alias->range_known = type_info.range_known;
+            inline_alias->range_start = type_info.range_start;
+            inline_alias->range_end = type_info.range_end;
+            inline_alias->base_type = select_range_primitive_tag(&type_info);
+            inline_alias->storage_size = compute_range_storage_size(&type_info);
+            if (var_type == UNKNOWN_TYPE)
+                var_type = inline_alias->base_type;
+        }
+    }
+    if (inline_alias == NULL && type_info.is_file && type_id == NULL)
     {
         inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
         if (inline_alias != NULL)
@@ -8455,7 +9999,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     char *absolute_target = NULL;
     {
         ast_t *abs_node = decl_node->child;
-        if (getenv("KGPC_DEBUG_ABSOLUTE") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_ABSOLUTE") != NULL) {
             int idx = 0;
             for (ast_t *dbg = abs_node; dbg != NULL; dbg = dbg->next) {
                 fprintf(stderr, "[KGPC] absolute scan %d: typ=%d sym=%s\n",
@@ -8576,18 +10120,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
      * We support 2D and 3D arrays (one or two levels of nesting). */
     int is_multidim = (type_info->array_dimensions != NULL && type_info->array_dimensions->next != NULL);
     int is_3d = 0;
+    int is_4d = 0;
     int multidim_inner_start = 0, multidim_inner_end = -1;
     int multidim_infer_bounds = 0;  /* Set to 1 if we need to infer bounds from initializer */
     int dim3_start = 0, dim3_end = -1;
     int dim3_infer_bounds = 0;
+    int dim4_start = 0, dim4_end = -1;
+    int dim4_infer_bounds = 0;
     if (is_multidim) {
         /* Check for 3 dimensions */
         if (type_info->array_dimensions->next->next != NULL) {
             is_3d = 1;
-            /* Check for more than 3 dimensions - not yet supported */
+            /* Check for 4 dimensions */
             if (type_info->array_dimensions->next->next->next != NULL) {
-                fprintf(stderr, "ERROR: Unsupported 4+ dimensional const array %s.\n", *id_ptr);
-                return -1;
+                is_4d = 1;
+                /* Check for more than 4 dimensions - not yet supported */
+                if (type_info->array_dimensions->next->next->next->next != NULL) {
+                    fprintf(stderr, "ERROR: Unsupported 5+ dimensional const array %s.\n", *id_ptr);
+                    return -1;
+                }
             }
             /* Extract 2nd dimension bounds */
             const char *dim2_range = (const char *)type_info->array_dimensions->next->cur;
@@ -8597,8 +10148,23 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
+                        if (multidim_inner_start == 0 && multidim_inner_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    multidim_inner_start = s;
+                                    multidim_inner_end = e;
+                                } else {
+                                    multidim_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         multidim_infer_bounds = 1;
                     }
@@ -8613,12 +10179,60 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        dim3_start = atoi(range_copy);
-                        dim3_end = atoi(dotdot + 2);
+                        dim3_start = parse_range_bound(range_copy);
+                        dim3_end = parse_range_bound(dotdot + 2);
+                        if (dim3_start == 0 && dim3_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    dim3_start = s;
+                                    dim3_end = e;
+                                } else {
+                                    dim3_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         dim3_infer_bounds = 1;
                     }
                     free(range_copy);
+                }
+            }
+            /* Extract 4th dimension bounds */
+            if (is_4d) {
+                const char *dim4_range = (const char *)type_info->array_dimensions->next->next->next->cur;
+                if (dim4_range != NULL) {
+                    char *range_copy = strdup(dim4_range);
+                    if (range_copy != NULL) {
+                        char *dotdot = strstr(range_copy, "..");
+                        if (dotdot != NULL) {
+                            *dotdot = '\0';
+                            dim4_start = parse_range_bound(range_copy);
+                            dim4_end = parse_range_bound(dotdot + 2);
+                            if (dim4_start == 0 && dim4_end == 0) {
+                                int has_alpha = 0;
+                                for (const char *p = range_copy; *p; ++p)
+                                    if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                                if (has_alpha) {
+                                    int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                    int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                    if (s >= 0 && e >= 0) {
+                                        dim4_start = s;
+                                        dim4_end = e;
+                                    } else {
+                                        dim4_infer_bounds = 1;
+                                    }
+                                }
+                            }
+                        } else {
+                            dim4_infer_bounds = 1;
+                        }
+                        free(range_copy);
+                    }
                 }
             }
         } else {
@@ -8631,8 +10245,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     char *dotdot = strstr(range_copy, "..");
                     if (dotdot != NULL) {
                         *dotdot = '\0';
-                        multidim_inner_start = atoi(range_copy);
-                        multidim_inner_end = atoi(dotdot + 2);
+                        multidim_inner_start = parse_range_bound(range_copy);
+                        multidim_inner_end = parse_range_bound(dotdot + 2);
+                        /* Enum subrange like OS_F32..OS_F128 parses as 0..0;
+                         * try resolving enum ordinals first */
+                        if (multidim_inner_start == 0 && multidim_inner_end == 0) {
+                            int has_alpha = 0;
+                            for (const char *p = range_copy; *p; ++p)
+                                if (isalpha((unsigned char)*p)) { has_alpha = 1; break; }
+                            if (has_alpha) {
+                                int s = resolve_enum_ordinal_from_ast(range_copy, type_section);
+                                int e = resolve_enum_ordinal_from_ast(dotdot + 2, type_section);
+                                if (s >= 0 && e >= 0) {
+                                    multidim_inner_start = s;
+                                    multidim_inner_end = e;
+                                } else {
+                                    multidim_infer_bounds = 1;
+                                }
+                            }
+                        }
                     } else {
                         /* Enum type - need to infer bounds from initializer */
                         multidim_infer_bounds = 1;
@@ -8644,13 +10275,46 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (type_info->is_open_array) {
-        fprintf(stderr, "ERROR: Open array typed const %s is not supported.\n", *id_ptr);
-        return -1;
+        /* Open array typed constants: count initializer elements and convert
+         * to a static array[0..N-1].  This matches FPC behaviour where
+         * "const V: array of Integer = (1,2,3)" is laid out as a fixed-size
+         * array whose bounds are inferred from the initializer. */
+        ast_t *open_tuple = value_node;
+        if (open_tuple != NULL) {
+            ast_t *uw = unwrap_pascal_node(open_tuple);
+            if (uw != NULL &&
+                (uw->typ == PASCAL_T_TYPE_SPEC ||
+                 uw->typ == PASCAL_T_ARRAY_TYPE ||
+                 uw->typ == PASCAL_T_RECORD_TYPE ||
+                 uw->typ == PASCAL_T_POINTER_TYPE ||
+                 uw->typ == PASCAL_T_PROCEDURE_TYPE ||
+                 uw->typ == PASCAL_T_FUNCTION_TYPE) &&
+                uw->next != NULL) {
+                open_tuple = unwrap_pascal_node(uw->next);
+            } else {
+                open_tuple = uw;
+            }
+        }
+        if (open_tuple == NULL || open_tuple->typ != PASCAL_T_TUPLE) {
+            fprintf(stderr, "ERROR: Open array typed const %s must have a tuple initializer.\n", *id_ptr);
+            return -1;
+        }
+        int elem_count = 0;
+        for (ast_t *e = open_tuple->child; e != NULL; e = e->next)
+            ++elem_count;
+        if (elem_count == 0) {
+            fprintf(stderr, "ERROR: Open array typed const %s has no elements.\n", *id_ptr);
+            return -1;
+        }
+        type_info->start = 0;
+        type_info->end = elem_count - 1;
+        type_info->is_open_array = 0;
     }
 
     ast_t *tuple_node = value_node;
     int is_string_initializer = 0;
     const char *string_initializer = NULL;
+    AstStringValue owned_string_initializer = {0};
     if (tuple_node != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(tuple_node);
         if (unwrapped != NULL &&
@@ -8671,11 +10335,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 *id_ptr);
         return -1;
     }
+    int single_record_element = 0;
+    int is_widechar_array_target = 0;
+    int is_char_array_target = type_info_targets_char_array(type_info, &is_widechar_array_target);
     if (tuple_node->typ == PASCAL_T_STRING) {
-        int is_char_array = (type_info->element_type == CHAR_TYPE);
-        int is_widechar_array = (type_info->element_type_id != NULL &&
-                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
-        if (is_char_array || is_widechar_array) {
+        if (is_char_array_target || is_widechar_array_target) {
             is_string_initializer = 1;
             if (tuple_node->sym != NULL && tuple_node->sym->name != NULL)
                 string_initializer = tuple_node->sym->name;
@@ -8685,10 +10349,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             return -1;
         }
     } else if (tuple_node->typ == PASCAL_T_IDENTIFIER) {
-        int is_char_array = (type_info->element_type == CHAR_TYPE);
-        int is_widechar_array = (type_info->element_type_id != NULL &&
-                                 strcasecmp(type_info->element_type_id, "widechar") == 0);
-        if (!is_char_array && !is_widechar_array) {
+        if (!is_char_array_target && !is_widechar_array_target) {
             fprintf(stderr, "ERROR: Const array %s string initializer requires a char array type.\n",
                     *id_ptr);
             return -1;
@@ -8708,6 +10369,17 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     *id_ptr);
             return -1;
         }
+    } else if (tuple_node->typ == PASCAL_T_RECORD_CONSTRUCTOR) {
+        single_record_element = 1;
+    } else if (is_char_array_target || is_widechar_array_target) {
+        if (evaluate_const_string_ast(tuple_node, const_section, &owned_string_initializer, 0) == 0) {
+            is_string_initializer = 1;
+        } else if (tuple_node->typ != PASCAL_T_TUPLE) {
+            fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
+                    *id_ptr);
+            ast_string_value_reset(&owned_string_initializer);
+            return -1;
+        }
     } else if (tuple_node->typ != PASCAL_T_TUPLE) {
         fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
                 *id_ptr);
@@ -8725,10 +10397,29 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (end >= start)
         expected_count = end - start + 1;
 
+    while (!single_record_element &&
+           expected_count != 1 &&
+           tuple_node != NULL &&
+           tuple_node->typ == PASCAL_T_TUPLE &&
+           tuple_node->child != NULL &&
+           tuple_node->child->next == NULL) {
+        ast_t *nested_tuple = unwrap_pascal_node(tuple_node->child);
+        if (nested_tuple == NULL ||
+            nested_tuple->typ != PASCAL_T_TUPLE ||
+            tuple_is_record_constructor(nested_tuple)) {
+            break;
+        }
+        tuple_node = nested_tuple;
+    }
+
     int actual_count = 0;
     if (is_string_initializer) {
-        if (string_initializer != NULL)
+        if (owned_string_initializer.data != NULL || owned_string_initializer.len > 0)
+            actual_count = (int)owned_string_initializer.len;
+        else if (string_initializer != NULL)
             actual_count = (int)strlen(string_initializer);
+    } else if (single_record_element) {
+        actual_count = 1;
     } else {
         for (ast_t *elem = tuple_node->child; elem != NULL; elem = elem->next)
             ++actual_count;
@@ -8753,6 +10444,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     if (expected_count >= 0 && actual_count != expected_count) {
+        ast_string_value_reset(&owned_string_initializer);
         fprintf(stderr,
                 "ERROR: Const array %s initializer count %d does not match declared range %d..%d.\n",
                 *id_ptr, actual_count, start, end);
@@ -8782,9 +10474,11 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
     }
 
-    /* For 2D/3D arrays (array[a..b, c..d] or array[a..b, c..d, e..f]), treat as nested arrays */
+    /* For 2D/3D/4D arrays (array[a..b, c..d, ...]), treat as nested arrays */
     int element_is_2d_array = 0;  /* For 3D arrays, elements are 2D arrays */
+    int element_is_3d_array = 0;  /* For 4D arrays, elements are 3D arrays */
     TypeInfo element_2d_inner_info = {0};
+    TypeInfo element_3d_inner_info = {0};
     if (is_multidim && !element_is_array) {
         element_is_array = 1;
         element_array_info.is_array = 1;
@@ -8802,6 +10496,18 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             element_2d_inner_info.element_type = type_info->element_type;
             element_2d_inner_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
         }
+
+        /* For 4D arrays, elements of element_2d_inner are themselves arrays */
+        if (is_4d) {
+            element_is_3d_array = 1;
+            element_3d_inner_info.is_array = 1;
+            element_3d_inner_info.start = dim4_start;
+            element_3d_inner_info.end = dim4_end;
+            element_3d_inner_info.element_type = type_info->element_type;
+            element_3d_inner_info.element_type_id = type_info->element_type_id != NULL ? strdup(type_info->element_type_id) : NULL;
+        }
+
+        /* No need to flatten — array_dimensions will be preserved for linearization */
 
         /* For enum-indexed arrays, infer inner dimension from first row of initializer */
         if (multidim_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
@@ -8837,32 +10543,90 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 }
             }
         }
+        /* For 4D arrays with enum-indexed 4th dimension, infer from first element */
+        if (is_4d && dim4_infer_bounds && tuple_node != NULL && tuple_node->typ == PASCAL_T_TUPLE) {
+            ast_t *first_row = tuple_node->child;
+            if (first_row != NULL) {
+                ast_t *first_row_unwrapped = unwrap_pascal_node(first_row);
+                if (first_row_unwrapped != NULL && first_row_unwrapped->typ == PASCAL_T_TUPLE) {
+                    ast_t *first_inner = first_row_unwrapped->child;
+                    if (first_inner != NULL) {
+                        ast_t *first_inner_unwrapped = unwrap_pascal_node(first_inner);
+                        if (first_inner_unwrapped != NULL && first_inner_unwrapped->typ == PASCAL_T_TUPLE) {
+                            ast_t *first_inner2 = first_inner_unwrapped->child;
+                            if (first_inner2 != NULL) {
+                                ast_t *first_inner2_unwrapped = unwrap_pascal_node(first_inner2);
+                                if (first_inner2_unwrapped != NULL && first_inner2_unwrapped->typ == PASCAL_T_TUPLE) {
+                                    int innermost_count = 0;
+                                    for (ast_t *elem = first_inner2_unwrapped->child; elem != NULL; elem = elem->next)
+                                        ++innermost_count;
+                                    element_3d_inner_info.start = 0;
+                                    element_3d_inner_info.end = innermost_count - 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     if (is_string_initializer) {
-        const char *str = string_initializer;
-        if (str == NULL)
-            str = "";
+        const unsigned char *str = NULL;
+        if (owned_string_initializer.data != NULL)
+            str = (const unsigned char *)owned_string_initializer.data;
+        else if (string_initializer != NULL)
+            str = (const unsigned char *)string_initializer;
         for (int i = 0; i < actual_count; ++i) {
-            struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)(unsigned char)str[i]);
+            unsigned char byte = (str != NULL) ? str[i] : 0;
+            struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
             struct Expression *index_expr = mk_inum(const_decl_node->line, index);
             struct Expression *base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
+            if (is_widechar_array_target) {
+                base_expr->is_array_expr = 1;
+                base_expr->array_element_type = CHAR_TYPE;
+                base_expr->array_element_size = 2;
+                base_expr->array_element_type_id = strdup("WideChar");
+            }
             struct Expression *lhs = mk_arrayaccess(const_decl_node->line, base_expr, index_expr);
+            if (is_widechar_array_target) {
+                lhs->array_element_type = CHAR_TYPE;
+                lhs->array_element_size = 2;
+                lhs->array_element_type_id = strdup("WideChar");
+                lhs->array_lower_bound = start;
+                lhs->array_upper_bound = end;
+            }
             struct Statement *assign = mk_varassign(const_decl_node->line, const_decl_node->col, lhs, rhs);
             list_builder_append(&stmt_builder, assign, LIST_STMT);
             ++index;
         }
     } else {
-        ast_t *element = tuple_node->child;
+        ast_t *element = single_record_element ? tuple_node : tuple_node->child;
         while (element != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(element);
 
             if (element_is_array) {
-                if (unwrapped == NULL || unwrapped->typ != PASCAL_T_TUPLE) {
+                AstStringValue row_string_initializer = {0};
+                int row_is_string_initializer = 0;
+                int row_is_widechar_target = 0;
+                int row_is_char_array_target =
+                    (!element_is_2d_array && !element_is_3d_array &&
+                     type_info_targets_char_array(&element_array_info, &row_is_widechar_target));
+
+                if (row_is_char_array_target && unwrapped != NULL &&
+                    evaluate_const_string_ast(unwrapped, const_section,
+                        &row_string_initializer, 0) == 0)
+                {
+                    row_is_string_initializer = 1;
+                }
+
+                if (!row_is_string_initializer &&
+                    (unwrapped == NULL || unwrapped->typ != PASCAL_T_TUPLE)) {
                     fprintf(stderr, "ERROR: Const array %s expects tuple initializer for element %d.\n",
                             *id_ptr, index);
                     destroy_list(stmt_builder.head);
                     destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
                     return -1;
                 }
 
@@ -8873,10 +10637,15 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     inner_expected = inner_end - inner_start + 1;
 
                 int inner_actual = 0;
-                for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next)
-                    ++inner_actual;
+                if (row_is_string_initializer) {
+                    inner_actual = (int)row_string_initializer.len;
+                } else {
+                    for (ast_t *inner = unwrapped->child; inner != NULL; inner = inner->next)
+                        ++inner_actual;
+                }
 
-                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                if (!row_is_string_initializer &&
+                    inner_expected >= 0 && inner_actual != inner_expected) {
                     if (inner_start == 0 && inner_end == 0 &&
                         element_array_info.array_dimensions != NULL &&
                         element_array_info.array_dimensions->cur != NULL) {
@@ -8895,13 +10664,58 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                     }
                 }
 
-                if (inner_expected >= 0 && inner_actual != inner_expected) {
+                if (row_is_string_initializer && inner_expected >= 0 && inner_actual > inner_expected) {
+                    fprintf(stderr,
+                            "ERROR: Const array %s element %d string initializer length %d exceeds declared range %d..%d.\n",
+                            *id_ptr, index, inner_actual, inner_start, inner_end);
+                    destroy_list(stmt_builder.head);
+                    destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
+                    return -1;
+                }
+
+                if (!row_is_string_initializer &&
+                    inner_expected >= 0 && inner_actual != inner_expected) {
                     fprintf(stderr,
                             "ERROR: Const array %s element %d initializer count %d does not match declared range %d..%d.\n",
                             *id_ptr, index, inner_actual, inner_start, inner_end);
                     destroy_list(stmt_builder.head);
                     destroy_type_info_contents(&element_array_info);
+                    ast_string_value_reset(&row_string_initializer);
                     return -1;
+                }
+
+                if (row_is_string_initializer) {
+                    int fill_count = (inner_expected >= 0) ? inner_expected : inner_actual;
+                    int inner_index = inner_start;
+                    for (int byte_index = 0; byte_index < fill_count; ++byte_index) {
+                        unsigned char byte = 0;
+                        struct Expression *rhs;
+                        struct Expression *lhs;
+
+                        if ((size_t)byte_index < row_string_initializer.len &&
+                            row_string_initializer.data != NULL)
+                            byte = (unsigned char)row_string_initializer.data[byte_index];
+                        rhs = mk_charcode(element->line, (unsigned int)byte);
+                        lhs = mk_const_array_element_lhs(element->line, *id_ptr, index,
+                            inner_index, is_multidim);
+                        if (row_is_widechar_target) {
+                            lhs->array_element_type = CHAR_TYPE;
+                            lhs->array_element_size = 2;
+                            lhs->array_element_type_id = strdup("WideChar");
+                            lhs->array_lower_bound = inner_start;
+                            lhs->array_upper_bound = (inner_expected >= 0) ? inner_end :
+                                (inner_start + fill_count - 1);
+                        }
+                        list_builder_append(&stmt_builder,
+                            mk_varassign(element->line, element->col, lhs, rhs), LIST_STMT);
+                        ++inner_index;
+                    }
+
+                    ast_string_value_reset(&row_string_initializer);
+                    ++index;
+                    element = single_record_element ? NULL : element->next;
+                    continue;
                 }
 
                 int inner_index = inner_start;
@@ -8922,6 +10736,60 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                         int innermost_index = element_2d_inner_info.start;
                         for (ast_t *innermost = inner_unwrapped->child; innermost != NULL; innermost = innermost->next) {
                             ast_t *innermost_unwrapped = unwrap_pascal_node(innermost);
+
+                            /* For 4D arrays, handle the 4th dimension */
+                            if (element_is_3d_array) {
+                                if (innermost_unwrapped == NULL || innermost_unwrapped->typ != PASCAL_T_TUPLE) {
+                                    fprintf(stderr, "ERROR: Const 4D array %s expects tuple for element [%d][%d][%d].\n",
+                                            *id_ptr, index, inner_index, innermost_index);
+                                    destroy_list(stmt_builder.head);
+                                    destroy_type_info_contents(&element_array_info);
+                                    destroy_type_info_contents(&element_2d_inner_info);
+                                    destroy_type_info_contents(&element_3d_inner_info);
+                                    return -1;
+                                }
+
+                                int dim4_index = element_3d_inner_info.start;
+                                for (ast_t *dim4_elem = innermost_unwrapped->child; dim4_elem != NULL; dim4_elem = dim4_elem->next) {
+                                    ast_t *dim4_unwrapped = unwrap_pascal_node(dim4_elem);
+                                    struct Expression *rhs = convert_expression(dim4_unwrapped);
+                                    if (rhs == NULL) {
+                                        fprintf(stderr, "ERROR: Unsupported const array element in %s[%d][%d][%d][%d].\n",
+                                                *id_ptr, index, inner_index, innermost_index, dim4_index);
+                                        destroy_list(stmt_builder.head);
+                                        destroy_type_info_contents(&element_array_info);
+                                        destroy_type_info_contents(&element_2d_inner_info);
+                                        destroy_type_info_contents(&element_3d_inner_info);
+                                        return -1;
+                                    }
+
+                                    struct Expression *outer_index_expr = mk_inum(element->line, index);
+                                    struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
+                                    struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
+                                    struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
+                                    struct Expression *dim4_index_expr = mk_inum(element->line, dim4_index);
+                                    struct Expression *lhs;
+                                    if (is_multidim) {
+                                        /* True multi-dim: arr[d1, d2, d3, d4] */
+                                        lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                        ListNode_t *extra3 = CreateListNode(dim4_index_expr, LIST_EXPR);
+                                        ListNode_t *extra2 = CreateListNode(innermost_index_expr, LIST_EXPR);
+                                        ListNode_t *extra1 = CreateListNode(inner_index_expr, LIST_EXPR);
+                                        extra1->next = extra2;
+                                        extra2->next = extra3;
+                                        lhs->expr_data.array_access_data.extra_indices = extra1;
+                                    } else {
+                                        /* Array-of-array-of-array-of-array: arr[d1][d2][d3][d4] */
+                                        struct Expression *a1 = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                        struct Expression *a2 = mk_arrayaccess(element->line, a1, inner_index_expr);
+                                        struct Expression *a3 = mk_arrayaccess(element->line, a2, innermost_index_expr);
+                                        lhs = mk_arrayaccess(element->line, a3, dim4_index_expr);
+                                    }
+                                    struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
+                                    list_builder_append(&stmt_builder, assign, LIST_STMT);
+                                    ++dim4_index;
+                                }
+                            } else {
                             struct Expression *rhs = convert_expression(innermost_unwrapped);
                             if (rhs == NULL) {
                                 fprintf(stderr, "ERROR: Unsupported const array element in %s[%d][%d][%d].\n",
@@ -8934,13 +10802,25 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
 
                             struct Expression *outer_index_expr = mk_inum(element->line, index);
                             struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                            struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
                             struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                            struct Expression *middle_access = mk_arrayaccess(element->line, outer_access, inner_index_expr);
                             struct Expression *innermost_index_expr = mk_inum(element->line, innermost_index);
-                            struct Expression *lhs = mk_arrayaccess(element->line, middle_access, innermost_index_expr);
+                            struct Expression *lhs;
+                            if (is_multidim) {
+                                /* True multi-dim: arr[outer, inner, innermost] */
+                                lhs = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                ListNode_t *extra2 = CreateListNode(innermost_index_expr, LIST_EXPR);
+                                ListNode_t *extra1 = CreateListNode(inner_index_expr, LIST_EXPR);
+                                extra1->next = extra2;
+                                lhs->expr_data.array_access_data.extra_indices = extra1;
+                            } else {
+                                /* Array-of-array-of-array: arr[outer][inner][innermost] */
+                                struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
+                                struct Expression *middle_access = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                                lhs = mk_arrayaccess(element->line, middle_access, innermost_index_expr);
+                            }
                             struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
                             list_builder_append(&stmt_builder, assign, LIST_STMT);
+                            }
                             ++innermost_index;
                         }
                     } else {
@@ -8949,25 +10829,49 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                             fprintf(stderr, "ERROR: Unsupported const array element in %s[%d].\n", *id_ptr, index);
                             destroy_list(stmt_builder.head);
                             destroy_type_info_contents(&element_array_info);
+                            ast_string_value_reset(&row_string_initializer);
                             return -1;
                         }
 
-                        struct Expression *outer_index_expr = mk_inum(element->line, index);
-                        struct Expression *base_expr = mk_varid(element->line, strdup(*id_ptr));
-                        struct Expression *outer_access = mk_arrayaccess(element->line, base_expr, outer_index_expr);
-                        struct Expression *inner_index_expr = mk_inum(element->line, inner_index);
-                        struct Expression *lhs = mk_arrayaccess(element->line, outer_access, inner_index_expr);
+                        struct Expression *lhs = mk_const_array_element_lhs(
+                            element->line, *id_ptr, index, inner_index, is_multidim);
+                        if (row_is_widechar_target) {
+                            lhs->array_element_type = CHAR_TYPE;
+                            lhs->array_element_size = 2;
+                            lhs->array_element_type_id = strdup("WideChar");
+                            lhs->array_lower_bound = inner_start;
+                            lhs->array_upper_bound = inner_end;
+                        }
                         struct Statement *assign = mk_varassign(element->line, element->col, lhs, rhs);
                         list_builder_append(&stmt_builder, assign, LIST_STMT);
                     }
                     ++inner_index;
                 }
 
+                ast_string_value_reset(&row_string_initializer);
                 ++index;
-                element = element->next;
+                element = single_record_element ? NULL : element->next;
                 continue;
             }
 
+            /* A single-field record constructor (Ch: [...]) gets parsed as FIELD_WIDTH.
+               Convert it to a single-child RECORD_CONSTRUCTOR for uniform handling.
+               Skip when the field value is a TUPLE — convert_expression's FIELD_WIDTH
+               handler already recognizes TUPLE values as record constructors. */
+            if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FIELD_WIDTH &&
+                unwrapped->child != NULL && unwrapped->child->typ == PASCAL_T_IDENTIFIER) {
+                ast_t *fval = unwrapped->child->next;
+                ast_t *fval_unwrapped = unwrap_pascal_node(fval);
+                if (fval_unwrapped == NULL || fval_unwrapped->typ != PASCAL_T_TUPLE) {
+                    unwrapped->typ = PASCAL_T_ASSIGNMENT;
+                    ast_t *wrapper = new_ast();
+                    *wrapper = *unwrapped;
+                    wrapper->next = NULL;
+                    unwrapped->typ = PASCAL_T_RECORD_CONSTRUCTOR;
+                    unwrapped->child = wrapper;
+                    unwrapped->sym = NULL;
+                }
+            }
             /* Special handling for record constructors in const arrays */
             if (unwrapped != NULL &&
                 (unwrapped->typ == PASCAL_T_RECORD_CONSTRUCTOR ||
@@ -9039,12 +10943,14 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             }
 
             ++index;
-            element = element->next;
+            element = single_record_element ? NULL : element->next;
         }
     }
 
     destroy_type_info_contents(&element_array_info);
     destroy_type_info_contents(&element_2d_inner_info);
+    destroy_type_info_contents(&element_3d_inner_info);
+    ast_string_value_reset(&owned_string_initializer);
 
     ListNode_t *assignments = list_builder_finish(&stmt_builder);
     struct Statement *initializer = NULL;
@@ -9056,21 +10962,36 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (type_info->array_dimensions != NULL && type_info->array_dimensions->cur != NULL) {
         range_str = strdup((char *)type_info->array_dimensions->cur);
     }
+    int decl_element_type = type_info->element_type;
+    char *decl_element_type_id = type_info->element_type_id != NULL ?
+        strdup(type_info->element_type_id) : NULL;
     struct RecordType *inline_record = type_info->record_type;
     if (inline_record != NULL)
         type_info->record_type = NULL;
-    Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, type_info->element_type,
-                                      type_info->element_type_id, start, end, range_str, initializer,
+    Tree_t *array_decl = mk_arraydecl(const_decl_node->line, ids, decl_element_type,
+                                      decl_element_type_id, start, end, range_str, initializer,
                                       inline_record);
     array_decl->tree_data.arr_decl_data.type_ref =
         type_ref_from_element_info(type_info, type_info->element_type_id);
+    if (type_info->element_kgpc_type != NULL)
+    {
+        array_decl->tree_data.arr_decl_data.element_kgpc_type = type_info->element_kgpc_type;
+        kgpc_type_retain(array_decl->tree_data.arr_decl_data.element_kgpc_type);
+    }
     type_info->element_type_id = NULL;
 
-    if (type_info->array_dimensions != NULL) {
-        destroy_list(type_info->array_dimensions);
+    /* Transfer array_dimensions to declaration for multi-dim linearization.
+     * Only when 2+ dimensions — single-dim doesn't need linearization. */
+    if (type_info->array_dimensions != NULL &&
+        type_info->array_dimensions->next != NULL) {
+        array_decl->tree_data.arr_decl_data.array_dimensions = type_info->array_dimensions;
         type_info->array_dimensions = NULL;
     }
 
+    if (type_info->unresolved_index_type != NULL) {
+        array_decl->tree_data.arr_decl_data.unresolved_index_type = type_info->unresolved_index_type;
+        type_info->unresolved_index_type = NULL;
+    }
     array_decl->tree_data.arr_decl_data.is_typed_const = 1;
     array_decl->tree_data.arr_decl_data.has_static_storage = 1;
 
@@ -9163,8 +11084,11 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                 free(type_name);
                 cur = cur->next;
             } else {
-                /* Not a known type — don't consume, let later handlers deal with it */
-                free(type_name);
+                /* Unknown type name — treat as type annotation for typed consts
+                 * like: cnodeutils: tnodeutilsclass = tnodeutils
+                 * where 'tnodeutilsclass' is not a builtin type. */
+                type_id = type_name;
+                cur = cur->next;
             }
         }
     } else if (cur != NULL && cur->typ == PASCAL_T_NONE) {
@@ -9215,6 +11139,35 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         return NULL;
     }
 
+    /* A single-field record constructor like (Ch: [Ch_Mop2]) gets parsed as a
+       parenthesized FIELD_WIDTH expression (the : is the WriteLn format operator).
+       When we have a typed const, convert FIELD_WIDTH back to a single-field
+       RECORD_CONSTRUCTOR so the lowering code handles it correctly.
+       FIELD_WIDTH structure:  child=IDENTIFIER(Ch) -> next=SET(...)
+       Needed structure:       RECORD_CONSTRUCTOR -> child=ASSIGNMENT -> child=IDENTIFIER(Ch) -> next=SET(...)
+       We repurpose the FIELD_WIDTH node as the ASSIGNMENT and create a wrapper. */
+    if (value_node->typ == PASCAL_T_FIELD_WIDTH && type_id != NULL &&
+        value_node->child != NULL && value_node->child->typ == PASCAL_T_IDENTIFIER) {
+        /* Check the field value — if it's a TUPLE, the existing convert_expression
+           FIELD_WIDTH handler already handles it as a single-field record constructor.
+           Only convert for non-TUPLE values (e.g. set constructors) that need help. */
+        ast_t *field_val = value_node->child->next;
+        ast_t *field_val_unwrapped = unwrap_pascal_node(field_val);
+        if (field_val_unwrapped == NULL || field_val_unwrapped->typ != PASCAL_T_TUPLE) {
+            /* Turn the FIELD_WIDTH into an ASSIGNMENT (same child structure) */
+            value_node->typ = PASCAL_T_ASSIGNMENT;
+            /* Wrap: create a RECORD_CONSTRUCTOR that replaces value_node in the AST.
+               We do this by swapping: copy value_node's ASSIGNMENT data into a new node,
+               then make value_node the RECORD_CONSTRUCTOR pointing to it. */
+            ast_t *assignment = new_ast();
+            *assignment = *value_node;
+            assignment->next = NULL;
+            value_node->typ = PASCAL_T_RECORD_CONSTRUCTOR;
+            value_node->child = assignment;
+            value_node->sym = NULL;
+        }
+    }
+
     if (type_info.is_array) {
         if (lower_const_array(const_decl_node, &id, &type_info, value_node, var_builder, type_section, const_section) != 0)
             free(id);
@@ -9258,6 +11211,12 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
 
             destroy_type_info_contents(&type_info);
             return NULL;
+        }
+        /* If the value is a tuple that looks like a record constructor (field: value; ...),
+           treat it as a record constructor instead of a plain expression. */
+        if (value_node != NULL && value_node->typ == PASCAL_T_TUPLE &&
+            tuple_is_record_constructor(value_node)) {
+            value_node->typ = PASCAL_T_RECORD_CONSTRUCTOR;
         }
         if (value_node != NULL && value_node->typ != PASCAL_T_RECORD_CONSTRUCTOR && !empty_tuple_record_const) {
             struct Expression *init_expr = convert_expression(value_node);
@@ -9344,7 +11303,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                             struct RecordField *field_desc =
                                 find_record_field_by_name(record_info, field_name);
                             if (field_desc != NULL && field_desc->is_array) {
-                                if (getenv("KGPC_DEBUG_RECORD_CONST") != NULL)
+                                if (kgpc_getenv("KGPC_DEBUG_RECORD_CONST") != NULL)
                                 {
                                     fprintf(stderr,
                                         "[KGPC] record const %s.%s array elem type=%d id=%s\n",
@@ -9552,6 +11511,8 @@ static int select_range_primitive_tag(const TypeInfo *info)
     return INT64_TYPE;
 }
 
+static long long compute_range_storage_size(const TypeInfo *info);
+
 static long long compute_range_storage_size(const TypeInfo *info)
 {
     if (info == NULL || !info->is_range || !info->range_known)
@@ -9640,7 +11601,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     ast_t *interface_spec = NULL;
     ListNode_t *nested_type_sections = NULL;
     if (spec_node != NULL) {
-        if (getenv("KGPC_DEBUG_TFPG") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
             fprintf(stderr, "[KGPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
                 spec_node->typ,
                 (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>",
@@ -9659,7 +11620,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             ast_t *target_name = class_of_node->child;
             while (target_name != NULL && target_name->typ != PASCAL_T_IDENTIFIER)
                 target_name = target_name->next;
-            if (target_name != NULL && getenv("KGPC_DEBUG_TFPG") != NULL) {
+            if (target_name != NULL && kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
                 fprintf(stderr, "[KGPC] convert_type_decl: class of target=%s for id=%s\n",
                     (target_name->sym && target_name->sym->name) ? target_name->sym->name : "<null>",
                     id);
@@ -9702,7 +11663,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         /* Recursively process this nested type section */
                         append_type_decls_from_section(type_section_ast, nested_type_decls_out,
                             NULL, NULL, NULL, id);
-                        if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                             fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for class %s\n", id);
                     }
                     section_cursor = section_cursor->next;
@@ -9735,7 +11696,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         if (type_section_ast != NULL) {
                             append_type_decls_from_section(type_section_ast, nested_type_decls_out,
                                 NULL, NULL, NULL, id);
-                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                                 fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for record %s\n", id);
                         }
                         section_cursor = section_cursor->next;
@@ -9778,7 +11739,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             }
         }
             }
-            if (getenv("KGPC_DEBUG_TFPG") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
                     id, mapped_type,
                     type_id != NULL ? type_id : "<null>",
@@ -9792,6 +11753,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (record_type->is_class || record_type->is_interface) {
             /* Classes and interfaces are pointers to records */
             kgpc_type = create_pointer_type(rec_type);
+            kgpc_type_release(rec_type);
         } else {
             kgpc_type = rec_type;
         }
@@ -9808,7 +11770,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (record_type->is_type_helper && record_type->helper_base_type_id != NULL &&
             record_type->type_id != NULL)
         {
-            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
                 fprintf(stderr, "[KGPC] Registering type helper mapping: %s -> %s\n",
                     record_type->type_id, record_type->helper_base_type_id);
             register_type_helper_mapping(record_type->type_id, record_type->helper_base_type_id);
@@ -9826,9 +11788,15 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static);
-                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                        {
+                            int param_count = from_cparser_count_params_ast(template->params_ast);
+                            char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            register_class_method_ex(id, template->name,
+                                template->is_virtual, template->is_override, template->is_static,
+                                template->is_class_method,
+                                param_count, param_sig);
+                        }
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
                         destroy_method_template_instance(template);
@@ -9848,9 +11816,17 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     struct MethodTemplate *template = (struct MethodTemplate *)tmpl_cur->cur;
                     if (template != NULL)
                     {
-                        register_class_method_ex(id, template->name,
-                            template->is_virtual, template->is_override, template->is_static);
-                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                        if (template->is_class_method)
+                            template->is_static = 1;
+                        {
+                            int param_count = from_cparser_count_params_ast(template->params_ast);
+                            char *param_sig = param_type_signature_from_params_ast(template->params_ast);
+                            register_class_method_ex(id, template->name,
+                                template->is_virtual, template->is_override, template->is_static,
+                                template->is_class_method,
+                                param_count, param_sig);
+                        }
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered helper method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
                     }
@@ -9886,7 +11862,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (decl != NULL)
     {
         decl->tree_data.type_decl_data.kgpc_type = kgpc_type;
-        if (getenv("KGPC_DEBUG_TFPG") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL &&
             decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             decl->tree_data.type_decl_data.id != NULL)
         {
@@ -9928,6 +11904,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             type_info.element_type_ref = NULL;
         }
         alias->is_pointer = type_info.is_pointer;
+        alias->is_class_reference = type_info.is_class_reference;
         alias->pointer_type = type_info.pointer_type;
         if (type_info.pointer_type_id != NULL) {
             alias->pointer_type_id = type_info.pointer_type_id;
@@ -9949,6 +11926,11 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             alias->set_element_type_ref = type_info.set_element_type_ref;
             type_info.set_element_type_ref = NULL;
         }
+        if (type_info.is_set && type_info.range_known) {
+            alias->range_known = 1;
+            alias->range_start = type_info.range_start;
+            alias->range_end = type_info.range_end;
+        }
         alias->is_enum_set = type_info.is_enum_set;
         if (type_info.inline_enum_values != NULL) {
             alias->inline_enum_values = type_info.inline_enum_values;
@@ -9956,6 +11938,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         }
         alias->is_enum = type_info.is_enum;
         alias->enum_is_scoped = type_info.enum_is_scoped;
+        alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
         if (type_info.enum_literals != NULL) {
             alias->enum_literals = type_info.enum_literals;
             type_info.enum_literals = NULL;
@@ -9975,8 +11958,9 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             alias->inline_record_type = type_info.record_type;
             type_info.record_type = NULL;
             if (alias->inline_record_type->is_class) {
-                KgpcType *inline_type = create_record_type(alias->inline_record_type);
-                inline_type = create_pointer_type(inline_type);
+                KgpcType *rec = create_record_type(alias->inline_record_type);
+                KgpcType *inline_type = create_pointer_type(rec);
+                kgpc_type_release(rec);
                 if (decl->tree_data.type_decl_data.kgpc_type != NULL)
                     destroy_kgpc_type(decl->tree_data.type_decl_data.kgpc_type);
                 decl->tree_data.type_decl_data.kgpc_type = inline_type;
@@ -10030,7 +12014,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
 
     ast_t *param_list = id_node->next;
     ast_t *type_spec_node = param_list != NULL ? param_list->next : NULL;
-    if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
         fprintf(stderr, "[KGPC] convert_generic_type_decl %s (type_spec_node=%p typ=%d)\n",
             id, (void *)type_spec_node, type_spec_node != NULL ? type_spec_node->typ : -1);
     struct RecordType *record_template = NULL;
@@ -10080,6 +12064,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         }
     }
 
+    ListNode_t *generic_nested_types = NULL;
     if (type_spec_node != NULL) {
         ast_t *spec_body = type_spec_node;
         if (spec_body->typ == PASCAL_T_TYPE_SPEC && spec_body->child != NULL)
@@ -10087,9 +12072,28 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
         if (spec_body != NULL) {
             if (spec_body->typ == PASCAL_T_CLASS_TYPE)
             {
-                if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+                ListNode_t *nested_type_sections = NULL;
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
-                record_template = convert_class_type_ex(id, spec_body, NULL);
+                record_template = convert_class_type_ex(id, spec_body, &nested_type_sections);
+                /* Convert nested type sections into type declarations for later specialization */
+                if (nested_type_sections != NULL) {
+                    ListNode_t *section_cursor = nested_type_sections;
+                    while (section_cursor != NULL) {
+                        ast_t *type_section_ast = (ast_t *)section_cursor->cur;
+                        if (type_section_ast != NULL) {
+                            append_type_decls_from_section(type_section_ast, &generic_nested_types,
+                                NULL, NULL, NULL, id);
+                        }
+                        section_cursor = section_cursor->next;
+                    }
+                    /* Clean up section list (not AST nodes) */
+                    while (nested_type_sections != NULL) {
+                        ListNode_t *next = nested_type_sections->next;
+                        free(nested_type_sections);
+                        nested_type_sections = next;
+                    }
+                }
             }
             else if (spec_body->typ == PASCAL_T_RECORD_TYPE || spec_body->typ == PASCAL_T_OBJECT_TYPE)
                 record_template = convert_record_type(spec_body);
@@ -10117,7 +12121,16 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
-    generic_registry_add_decl(id, param_names, param_count, decl);
+    GenericTypeDecl *generic_decl = generic_registry_add_decl(id, param_names, param_count, decl);
+    if (generic_decl != NULL && generic_nested_types != NULL) {
+        generic_decl->nested_type_decls = generic_nested_types;
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
+            int count = 0;
+            ListNode_t *cur = generic_nested_types;
+            while (cur != NULL) { count++; cur = cur->next; }
+            fprintf(stderr, "[KGPC] stored %d nested type decls for generic %s\n", count, id);
+        }
+    }
 
     (void)type_spec_node; /* Placeholder for future template storage */
 
@@ -10150,7 +12163,7 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
         if (node != NULL) {
             switch (node->typ) {
             case PASCAL_T_TYPE_SECTION:
-                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                     fprintf(stderr, "[KGPC] convert_routine_body TYPE_SECTION at line=%d\n", node->line);
                 }
                 if (type_decl_list != NULL)
@@ -10990,7 +13003,7 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
         if (!is_const_section)
             continue;
 
-        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
             fprintf(stderr, "[KGPC] class const section in %s at line %d\n",
                 class_id, node != NULL ? node->line : -1);
         }
@@ -11007,7 +13020,7 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
             if (decl != NULL && decl->type == TREE_CONST_DECL &&
                 decl->tree_data.const_decl_data.id != NULL)
             {
-                if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
                     fprintf(stderr, "[KGPC]   class const %s.%s\n",
                         class_id, decl->tree_data.const_decl_data.id);
                 }
@@ -11401,7 +13414,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
     while (*tail != NULL)
         tail = &(*tail)->next;
 
-    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
         fprintf(stderr, "[KGPC] append_type_decls_from_section: type_section->typ=%d child=%p line=%d parent=%s\n",
                 type_section->typ, (void*)type_section->child, type_section->line,
                 parent_type_name ? parent_type_name : "<none>");
@@ -11424,7 +13437,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         if (unwrapped == NULL)
             unwrapped = type_decl;
 
-        if (getenv("KGPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
             char *name = dup_first_identifier_in_node(unwrapped);
             fprintf(stderr, "[KGPC] type-section decl tag=%d (%s) name=%s\n",
                     unwrapped->typ,
@@ -11449,7 +13462,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         }
 
         if (treat_as_generic && unwrapped != NULL) {
-            if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
                 char *type_name = dup_first_identifier_in_node(unwrapped);
                 if (type_name != NULL) {
                     fprintf(stderr, "[KGPC] append_type_decls_from_section saw generic-like %s (tag=%d)\n",
@@ -11816,6 +13829,8 @@ static struct Expression *convert_set_literal(ast_t *set_node) {
     return mk_set(set_node->line, mask, elements, all_constant);
 }
 
+static struct Expression *convert_inherited_operator_expr(int line_num, const char *op_id, ast_t *arg_node);
+
 static struct Expression *convert_factor(ast_t *expr_node) {
     expr_node = unwrap_pascal_node(expr_node);
     if (expr_node == NULL) {
@@ -11944,13 +13959,95 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             qualified_ident_free(qid);
         return expr;
     }
+    case PASCAL_T_CONSTRUCTED_TYPE:
+    {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        if (extract_constructed_type_info(expr_node, &base_name, &type_args))
+        {
+            char *specialized_name = mangle_specialized_name_from_list(base_name, type_args);
+            if (specialized_name == NULL && base_name != NULL)
+                specialized_name = strdup(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+            if (base_name != NULL)
+                free(base_name);
+            if (specialized_name != NULL)
+                return mk_varid(expr_node->line, specialized_name);
+        }
+        return NULL;
+    }
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
+        if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+        {
+            fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS] FUNC_CALL line=%d child_typ=%d(%s)\n",
+                expr_node->line,
+                child != NULL ? child->typ : -1,
+                child != NULL ? pascal_tag_to_string(child->typ) : "<null>");
+            if (child != NULL && child->sym != NULL && child->sym->name != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS]   child sym=%s\n",
+                    child->sym->name);
+            }
+            if (child != NULL && child->child != NULL)
+            {
+                fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS]   child->child typ=%d(%s) sym=%s\n",
+                    child->child->typ,
+                    pascal_tag_to_string(child->child->typ),
+                    (child->child->sym != NULL && child->child->sym->name != NULL)
+                        ? child->child->sym->name : "<null>");
+            }
+        }
+        if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS)
+        {
+            struct Expression *callee = convert_expression(child);
+            ListNode_t *args = convert_expression_list(child->next);
+            if (callee != NULL && callee->type == EXPR_RECORD_ACCESS &&
+                callee->expr_data.record_access_data.record_expr != NULL &&
+                callee->expr_data.record_access_data.field_id != NULL)
+            {
+                struct Expression *base_expr =
+                    callee->expr_data.record_access_data.record_expr;
+                char *method_id = strdup(callee->expr_data.record_access_data.field_id);
+                callee->expr_data.record_access_data.record_expr = NULL;
+                destroy_expr(callee);
+                if (base_expr != NULL)
+                    args = PushListNodeFront(args, CreateListNode(base_expr, LIST_EXPR));
+                struct Expression *call_expr = mk_functioncall(expr_node->line, method_id, args);
+                if (call_expr != NULL)
+                {
+                    call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                    call_expr->expr_data.function_call_data.placeholder_method_name =
+                        method_id != NULL ? strdup(method_id) : NULL;
+                }
+                return call_expr;
+            }
+            if (callee != NULL)
+                destroy_expr(callee);
+            return mk_functioncall(expr_node->line, NULL, args);
+        }
+        int saw_inherited = 0;
         if (child != NULL) {
             if (child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0) {
+                    saw_inherited = 1;
+                    child = child->next;
+                    /* Now child points to the method name; extract it */
+                    if (child != NULL && child->typ == PASCAL_T_IDENTIFIER) {
+                        id = dup_symbol(child);
+                        child = child->next;
+                    } else if (child != NULL) {
+                        ast_t *unwrapped = unwrap_pascal_node(child);
+                        if (unwrapped != NULL && unwrapped->typ == PASCAL_T_IDENTIFIER) {
+                            id = dup_symbol(unwrapped);
+                            child = child->next;
+                        }
+                    }
+                }
+                else if (name != NULL)
                     id = dup_symbol(child);
             } else if (child->typ == PASCAL_T_TYPECAST &&
                        child->child != NULL &&
@@ -11972,12 +14069,15 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 return call_expr;
             } else if (child->child != NULL && child->child->typ == PASCAL_T_IDENTIFIER) {
                 const char *name = ast_symbol_name(child->child);
-                if (name != NULL && strcasecmp(name, "inherited") != 0)
+                if (name != NULL && strcasecmp(name, "inherited") == 0)
+                    saw_inherited = 1;
+                else if (name != NULL)
                     id = dup_symbol(child->child);
             }
-            child = child->next;
+            if (!saw_inherited)
+                child = child->next;
         }
-        if (id == NULL) {
+        if (id == NULL && !saw_inherited) {
             for (ast_t *scan = expr_node->child; scan != NULL; scan = scan->next) {
                 ast_t *node = unwrap_pascal_node(scan);
                 if (node == NULL)
@@ -11990,20 +14090,30 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                     const char *name = ast_symbol_name(node);
                     if (name == NULL)
                         continue;
-                    if (strcasecmp(name, "inherited") == 0)
-                        continue;
                     id = strdup(name);
                     break;
                 }
             }
         }
-        if (id == NULL && g_current_method_name != NULL) {
+        if (id == NULL && saw_inherited && g_current_method_name != NULL) {
             /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
         }
+        if (saw_inherited && id != NULL)
+        {
+            struct Expression *inherited_op = convert_inherited_operator_expr(expr_node->line, id, child);
+            if (inherited_op != NULL)
+            {
+                free(id);
+                return inherited_op;
+            }
+        }
         ListNode_t *args = convert_expression_list(child);
-        return mk_functioncall(expr_node->line, id, args);
+        struct Expression *result = mk_functioncall(expr_node->line, id, args);
+        if (saw_inherited && result != NULL)
+            result->expr_data.function_call_data.is_inherited_call = 1;
+        return result;
     }
     case PASCAL_T_ARRAY_ACCESS: {
         ast_t *array_node = expr_node->child;
@@ -12081,6 +14191,35 @@ static struct Expression *convert_binary_expr(ast_t *node, int type) {
     return NULL;
 }
 
+static struct Expression *convert_inherited_operator_expr(int line_num, const char *op_id, ast_t *arg_node)
+{
+    if (g_current_method_name == NULL || op_id == NULL || arg_node == NULL || arg_node->next != NULL)
+        return NULL;
+
+    struct Expression *lhs = mk_functioncall(line_num, strdup(g_current_method_name), NULL);
+    if (lhs == NULL)
+        return NULL;
+    lhs->expr_data.function_call_data.is_inherited_call = 1;
+
+    struct Expression *rhs = convert_expression(arg_node);
+    if (rhs == NULL)
+    {
+        destroy_expr(lhs);
+        return NULL;
+    }
+
+    if (strcasecmp(op_id, "and") == 0)
+        return mk_mulop(line_num, AND, lhs, rhs);
+    if (strcasecmp(op_id, "xor") == 0)
+        return mk_mulop(line_num, XOR, lhs, rhs);
+    if (strcasecmp(op_id, "or") == 0)
+        return mk_addop(line_num, OR, lhs, rhs);
+
+    destroy_expr(lhs);
+    destroy_expr(rhs);
+    return NULL;
+}
+
 static struct Expression *convert_unary_expr(ast_t *node) {
     struct Expression *inner = convert_expression(node->child);
     // Only negate for PASCAL_T_NEG, unary plus (PASCAL_T_POS) returns the inner expression as-is
@@ -12099,7 +14238,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     ast_t *original_node = expr_node;  /* Save for source_index */
     expr_node = unwrap_pascal_node(expr_node);
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_expression: typ=%d line=%d\n", expr_node->typ, expr_node->line);
         if (expr_node->next != NULL) {
             fprintf(stderr, "[KGPC] convert_expression: has next sibling typ=%d\n", expr_node->next->typ);
@@ -12107,6 +14246,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     }
 
     if (expr_node == NULL || expr_node == ast_nil)
+        return NULL;
+
+    /* PASCAL_T_NONE nodes are empty/placeholder nodes from the parser
+     * (e.g., optional clauses that were absent).  Treat as NULL silently. */
+    if (expr_node->typ == PASCAL_T_NONE)
         return NULL;
 
     struct Expression *result = NULL;
@@ -12118,6 +14262,8 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     case PASCAL_T_CHAR_CODE:
     case PASCAL_T_BOOLEAN:
     case PASCAL_T_IDENTIFIER:
+    case PASCAL_T_QUALIFIED_IDENTIFIER:
+    case PASCAL_T_CONSTRUCTED_TYPE:
     case PASCAL_T_FUNC_CALL:
     case PASCAL_T_ARRAY_ACCESS:
     case PASCAL_T_SET:
@@ -12174,7 +14320,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         memset(&type_info, 0, sizeof(TypeInfo));
         TypeRef *type_ref_local = NULL;
         
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_expression IS: value_node=%p type_node=%p\n", value_node, type_node);
             if (type_node) fprintf(stderr, "[KGPC]   type_node typ=%d\n", type_node->typ);
         }
@@ -12183,7 +14329,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         {
             target_type = convert_type_spec(type_node, &target_type_id, &inline_record, &type_info);
             
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   convert_type_spec result: type=%d id=%s\n", target_type, target_type_id ? target_type_id : "<null>");
             }
             
@@ -12344,12 +14490,12 @@ tuple_cleanup:
         ast_t *unwrapped_type = unwrap_pascal_node(type_node);
         if (unwrapped_type != NULL)
         {
-            if (getenv("KGPC_DEBUG_BODY") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
                 fprintf(stderr, "[KGPC] TYPECAST handler: type_node typ=%d unwrapped typ=%d\n",
                     type_node ? type_node->typ : -1, unwrapped_type->typ);
             target_type = convert_type_spec(unwrapped_type, &target_type_id,
                 &record_type, &type_info);
-            if (getenv("KGPC_DEBUG_BODY") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
                 fprintf(stderr, "[KGPC] TYPECAST handler: after convert_type_spec target_type=%d target_type_id=%s\n",
                     target_type, target_type_id ? target_type_id : "(null)");
             type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
@@ -12537,9 +14683,145 @@ tuple_cleanup:
         return tc_expr;
     }
     case PASCAL_T_DEREF:
-        return mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
+    {
+        struct Expression *result = mk_pointer_deref(expr_node->line, convert_expression(expr_node->child));
+        return set_expr_source_index(result, expr_node);
+    }
     case PASCAL_T_ADDR:
-        return mk_addressof(expr_node->line, convert_expression(expr_node->child));
+    {
+        /* Resolve @specialize Type<T>.Method at conversion time while
+         * preprocessed_source still points to the correct unit's buffer.
+         * Once units are merged into the program tree the source indices
+         * become invalid for the main program's buffer, so the semcheck
+         * fallback (which re-parses source text) would fail. */
+        ast_t *child = expr_node->child;
+        if (child != NULL && child->sym != NULL && child->sym->name != NULL &&
+            strcasecmp(child->sym->name, "specialize") == 0 &&
+            preprocessed_source != NULL && preprocessed_length > 0 &&
+            expr_node->index >= 0 && (size_t)expr_node->index < preprocessed_length)
+        {
+            size_t idx = (size_t)expr_node->index;
+            /* Scan forward to find '@' on this line */
+            size_t line_end = idx;
+            while (line_end < preprocessed_length &&
+                   preprocessed_source[line_end] != '\n' &&
+                   preprocessed_source[line_end] != '\r' &&
+                   preprocessed_source[line_end] != ';')
+                line_end++;
+
+            size_t at_pos = idx;
+            for (size_t s = idx; s < line_end; ++s)
+            {
+                if (preprocessed_source[s] == '@') { at_pos = s; break; }
+            }
+            size_t i = at_pos;
+            if (i < line_end && preprocessed_source[i] == '@')
+                i++;
+            while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                i++;
+            /* Skip optional 'specialize' keyword */
+            const char *kw = "specialize";
+            size_t kw_len = 10;
+            if (i + kw_len <= line_end && strncasecmp(preprocessed_source + i, kw, kw_len) == 0)
+            {
+                i += kw_len;
+                while (i < line_end && (preprocessed_source[i] == ' ' || preprocessed_source[i] == '\t'))
+                    i++;
+            }
+            /* Parse type name including angle brackets: Type<T> */
+            size_t type_start = i;
+            int angle_depth = 0;
+            while (i < line_end)
+            {
+                char ch = preprocessed_source[i];
+                if (ch == '<') angle_depth++;
+                else if (ch == '>') { if (angle_depth > 0) angle_depth--; }
+                else if (ch == '.' && angle_depth == 0) break;
+                else if (ch == '\n' || ch == ';' || ch == '\r') break;
+                i++;
+            }
+            if (i < line_end && preprocessed_source[i] == '.' && i > type_start)
+            {
+                /* Extract type name */
+                size_t type_len = i - type_start;
+                char *type_raw = (char *)malloc(type_len + 1);
+                if (type_raw != NULL)
+                {
+                    memcpy(type_raw, preprocessed_source + type_start, type_len);
+                    type_raw[type_len] = '\0';
+                    i++; /* skip '.' */
+                    /* Parse method name */
+                    size_t method_start = i;
+                    while (i < line_end && (isalnum((unsigned char)preprocessed_source[i]) || preprocessed_source[i] == '_'))
+                        i++;
+                    if (i > method_start)
+                    {
+                        size_t method_len = i - method_start;
+                        char *method_id = (char *)malloc(method_len + 1);
+                        if (method_id != NULL)
+                        {
+                            memcpy(method_id, preprocessed_source + method_start, method_len);
+                            method_id[method_len] = '\0';
+                            /* Mangle generic type: Type<T> -> Type$T */
+                            char *lt = strchr(type_raw, '<');
+                            char *mangled = NULL;
+                            if (lt != NULL)
+                            {
+                                char *gt = strrchr(type_raw, '>');
+                                if (gt != NULL && gt > lt)
+                                {
+                                    size_t base_len = (size_t)(lt - type_raw);
+                                    char args_buf[256];
+                                    size_t args_len = 0;
+                                    int adepth = 0;
+                                    for (const char *p = lt + 1; p < gt; ++p)
+                                    {
+                                        char ac = *p;
+                                        if (ac == '<') { adepth++; continue; }
+                                        if (ac == '>') { if (adepth > 0) adepth--; continue; }
+                                        if (adepth == 0 && ac == ',') ac = '$';
+                                        if (adepth == 0 && ac == ' ') continue;
+                                        if (args_len + 1 < sizeof(args_buf))
+                                            args_buf[args_len++] = ac;
+                                    }
+                                    args_buf[args_len] = '\0';
+                                    size_t out_len = base_len + 1 + args_len;
+                                    mangled = (char *)malloc(out_len + 1);
+                                    if (mangled != NULL)
+                                        snprintf(mangled, out_len + 1, "%.*s$%s", (int)base_len, type_raw, args_buf);
+                                }
+                            }
+                            if (mangled == NULL)
+                                mangled = strdup(type_raw);
+
+                            if (mangled != NULL)
+                            {
+                                /* Rewrite: @(specialize) -> @(MangledType.Method) */
+                                struct Expression *base_expr = mk_varid(expr_node->line, mangled);
+                                struct Expression *access = mk_recordaccess(expr_node->line, base_expr, method_id);
+                                if (access != NULL)
+                                {
+                                    access->is_specialize_addr_target = 1;
+                                    struct Expression *result = mk_addressof(expr_node->line, access);
+                                    free(type_raw);
+                                    return set_expr_source_index(result, expr_node);
+                                }
+                                /* access creation failed; fall through */
+                                destroy_expr(base_expr);
+                            }
+                            else
+                            {
+                                free(method_id);
+                            }
+                        }
+                    }
+                    free(type_raw);
+                }
+            }
+        }
+        struct Expression *result = mk_addressof(expr_node->line, convert_expression(expr_node->child));
+        return set_expr_source_index(result, expr_node);
+    }
     case PASCAL_T_ANONYMOUS_FUNCTION:
     {
         /* Anonymous function: params -> return_type -> body 
@@ -12672,11 +14954,8 @@ tuple_cleanup:
     }
     default: {
         const char *name = tag_name(expr_node->typ);
-        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.",
+        fprintf(stderr, "ERROR: unsupported expression tag %d (%s) at line %d.\n",
                 expr_node->typ, name, expr_node->line);
-        if (expr_node->sym != NULL && expr_node->sym->name != NULL)
-            fprintf(stderr, " (symbol: %s)", expr_node->sym->name);
-        fprintf(stderr, "\n");
         break;
     }
     }
@@ -12850,8 +15129,68 @@ static struct Expression *convert_member_access(ast_t *node) {
     ast_t *base_node = node->child;
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
     ast_t *args_node = (field_node != NULL) ? field_node->next : NULL;
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+        node != NULL && (node->line == 255 || node->line == 256))
+    {
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS line=%d base=%d(%s:%s) field=%d(%s:%s) args=%d(%s:%s)\n",
+            node->line,
+            base_node != NULL ? base_node->typ : -1,
+            base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
+            (base_node != NULL && base_node->sym != NULL && base_node->sym->name != NULL)
+                ? base_node->sym->name : "<null>",
+            field_node != NULL ? field_node->typ : -1,
+            field_node != NULL ? pascal_tag_to_string(field_node->typ) : "<null>",
+            (field_node != NULL && field_node->sym != NULL && field_node->sym->name != NULL)
+                ? field_node->sym->name : "<null>",
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>",
+            (args_node != NULL && args_node->sym != NULL && args_node->sym->name != NULL)
+                ? args_node->sym->name : "<null>");
+        for (ast_t *it = field_node != NULL ? field_node->child : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   field.child typ=%d(%s:%s) grandchild=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+    }
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+    {
+        const char *field_sym = (field_node != NULL && field_node->sym != NULL &&
+                                 field_node->sym->name != NULL)
+            ? field_node->sym->name : "<null>";
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] MEMBER_ACCESS base=%d(%s) field=%d(%s:%s) args=%d(%s)\n",
+            base_node != NULL ? base_node->typ : -1,
+            base_node != NULL ? pascal_tag_to_string(base_node->typ) : "<null>",
+            field_node != NULL ? field_node->typ : -1,
+            field_node != NULL ? pascal_tag_to_string(field_node->typ) : "<null>",
+            field_sym,
+            args_node != NULL ? args_node->typ : -1,
+            args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
+        if (field_node != NULL && field_node->typ == PASCAL_T_FUNC_CALL && field_node->child != NULL)
+        {
+            ast_t *fc = field_node->child;
+            const char *fc_sym = (fc->sym != NULL && fc->sym->name != NULL) ? fc->sym->name : "<null>";
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func child=%d(%s:%s)\n",
+                fc->typ, pascal_tag_to_string(fc->typ), fc_sym);
+            if (fc->child != NULL)
+            {
+                const char *fc2_sym = (fc->child->sym != NULL && fc->child->sym->name != NULL)
+                    ? fc->child->sym->name : "<null>";
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS]   MEMBER_ACCESS func child->child=%d(%s:%s)\n",
+                    fc->child->typ, pascal_tag_to_string(fc->child->typ), fc2_sym);
+            }
+        }
+    }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_member_access: base=%d field=%d args=%d\n",
             base_node ? base_node->typ : -1,
             field_node ? field_node->typ : -1,
@@ -12860,7 +15199,7 @@ static struct Expression *convert_member_access(ast_t *node) {
 
     /* Check for function call (MEMBER_ACCESS with ARG_LIST as 3rd child) */
     if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access: detected ARG_LIST child, converting to function call\n");
         }
         
@@ -12918,7 +15257,7 @@ static struct Expression *convert_member_access_chain(int line,
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_member_access_chain: field_node typ=%d, has_next=%d\n",
             field_node->typ, field_node->next != NULL);
         if (field_node->next != NULL) {
@@ -12938,15 +15277,65 @@ static struct Expression *convert_member_access_chain(int line,
 
     /* Check if this is PASCAL_T_FUNC_CALL (type 43) */
     if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FUNC_CALL) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access_chain: detected FUNC_CALL, converting to method call\n");
         }
         
         ast_t *method_id_node = unwrapped->child;
         ast_t *args_node = (method_id_node != NULL) ? method_id_node->next : NULL;
         
-        if (method_id_node != NULL && method_id_node->typ == PASCAL_T_IDENTIFIER) {
-            char *method_id = dup_symbol(method_id_node);
+        char *method_id = NULL;
+        char *placeholder_name = NULL;
+        if (method_id_node != NULL) {
+            ast_t *method_unwrapped = unwrap_pascal_node(method_id_node);
+            if (method_unwrapped == NULL)
+                method_unwrapped = method_id_node;
+            if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+                method_unwrapped != NULL &&
+                method_unwrapped->typ == PASCAL_T_IDENTIFIER &&
+                method_unwrapped->sym != NULL &&
+                method_unwrapped->sym->name != NULL &&
+                strcasecmp(method_unwrapped->sym->name, "specialize") == 0)
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_SPECIALIZE_CALLS] METHOD specialize-shape line=%d base_expr_type=%d args_node=%d(%s)\n",
+                    line,
+                    base_expr != NULL ? base_expr->type : -1,
+                    args_node != NULL ? args_node->typ : -1,
+                    args_node != NULL ? pascal_tag_to_string(args_node->typ) : "<null>");
+                for (ast_t *dbg = args_node, *it = dbg; it != NULL; it = it->next)
+                {
+                    const char *sym = (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>";
+                    fprintf(stderr,
+                        "[KGPC_DEBUG_SPECIALIZE_CALLS]   method-arg node typ=%d(%s) sym=%s child=%d(%s)\n",
+                        it->typ, pascal_tag_to_string(it->typ), sym,
+                        it->child != NULL ? it->child->typ : -1,
+                        it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+                }
+            }
+            if (method_unwrapped->typ == PASCAL_T_IDENTIFIER) {
+                method_id = dup_symbol(method_unwrapped);
+                if (method_id != NULL)
+                    placeholder_name = strdup(method_id);
+            } else if (method_unwrapped->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+                char *base_name = NULL;
+                ListNode_t *type_args = NULL;
+                if (extract_constructed_type_info(method_unwrapped, &base_name, &type_args)) {
+                    if (base_name != NULL) {
+                        method_id = mangle_specialized_name_from_list(base_name, type_args);
+                        if (method_id == NULL)
+                            method_id = strdup(base_name);
+                        placeholder_name = strdup(base_name);
+                    }
+                }
+                if (base_name != NULL)
+                    free(base_name);
+                if (type_args != NULL)
+                    destroy_list(type_args);
+            }
+        }
+
+        if (method_id != NULL) {
             
             /* Convert args - handle both ARG_LIST and direct siblings */
             ListNode_t *args_list = NULL;
@@ -13014,15 +15403,19 @@ static struct Expression *convert_member_access_chain(int line,
             call_expr->expr_data.function_call_data.resolved_func = NULL;
             call_expr->resolved_kgpc_type = NULL;
             call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-            call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+            call_expr->expr_data.function_call_data.placeholder_method_name =
+                (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
+            placeholder_name = NULL;
 
             return call_expr;
         }
+        if (placeholder_name != NULL)
+            free(placeholder_name);
     }
 
     /* Check if field_node has ARG_LIST as sibling (method call) */
     if (unwrapped != NULL && unwrapped->next != NULL && unwrapped->next->typ == PASCAL_T_ARG_LIST) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access_chain: detected ARG_LIST sibling, converting to function call\n");
         }
         
@@ -13073,6 +15466,103 @@ static struct Expression *convert_member_access_chain(int line,
     int node_line = (unwrapped->line != 0) ? unwrapped->line : line;
 
     switch (unwrapped->typ) {
+    case PASCAL_T_TYPECAST: {
+        /* Static/generic class method syntax may be encoded as a TYPECAST
+         * in the member field position:
+         *   TMarshal.specialize FixArray<T>(Arr)
+         * => MEMBER_ACCESS(base=TMarshal, field=TYPECAST(CONSTRUCTED_TYPE(FixArray<T>), Arr))
+         */
+        ast_t *cast_type_node = unwrapped->child;
+        ast_t *cast_value_node = (cast_type_node != NULL) ? cast_type_node->next : NULL;
+        ast_t *cast_type = unwrap_pascal_node(cast_type_node);
+        if (cast_type == NULL)
+            cast_type = cast_type_node;
+
+        char *method_id = NULL;
+        char *placeholder_name = NULL;
+        if (cast_type != NULL && cast_type->typ == PASCAL_T_IDENTIFIER) {
+            method_id = dup_symbol(cast_type);
+            if (method_id != NULL)
+                placeholder_name = strdup(method_id);
+        } else if (cast_type != NULL && cast_type->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+            char *base_name = NULL;
+            ListNode_t *type_args = NULL;
+            if (extract_constructed_type_info(cast_type, &base_name, &type_args)) {
+                if (base_name != NULL) {
+                    method_id = mangle_specialized_name_from_list(base_name, type_args);
+                    if (method_id == NULL)
+                        method_id = strdup(base_name);
+                    placeholder_name = strdup(base_name);
+                }
+            }
+            if (base_name != NULL)
+                free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+        }
+
+        if (method_id == NULL) {
+            destroy_expr(base_expr);
+            return NULL;
+        }
+
+        ListNode_t *args_list = NULL;
+        ListNode_t *tail = NULL;
+        if (cast_value_node != NULL && cast_value_node->typ == PASCAL_T_ARG_LIST) {
+            for (ast_t *arg = cast_value_node->child; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
+                    continue;
+                }
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
+        } else if (cast_value_node != NULL) {
+            /* Convert all argument expressions (siblings linked via ->next).
+             * With sep_by in the parser, multi-argument specialize calls
+             * produce sibling nodes rather than a single expression. */
+            for (ast_t *arg = cast_value_node; arg != NULL; arg = arg->next) {
+                struct Expression *arg_expr = convert_expression(arg);
+                if (arg_expr == NULL)
+                    continue;
+                ListNode_t *new_node = CreateListNode(arg_expr, LIST_EXPR);
+                if (new_node == NULL)
+                {
+                    destroy_expr(arg_expr);
+                    continue;
+                }
+                if (args_list == NULL) {
+                    args_list = new_node;
+                    tail = new_node;
+                } else {
+                    tail->next = new_node;
+                    tail = new_node;
+                }
+            }
+        }
+
+        args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
+        struct Expression *call_expr = mk_functioncall(line, method_id, args_list);
+        if (call_expr != NULL) {
+            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+            call_expr->expr_data.function_call_data.placeholder_method_name =
+                (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
+            placeholder_name = NULL;
+        }
+        if (placeholder_name != NULL)
+            free(placeholder_name);
+        return call_expr;
+    }
     case PASCAL_T_IDENTIFIER: {
         char *field_id = dup_symbol(unwrapped);
         if (field_id == NULL) {
@@ -13183,15 +15673,63 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL && right == NULL)
+    {
+        ast_t *u_rhs = unwrap_pascal_node(rhs);
+        ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN rhs-convert-null line=%d lhs_typ=%d rhs_typ=%d(%s) rhs_sym=%s rhs_child_typ=%d(%s)\n",
+            assign_node != NULL ? assign_node->line : -1,
+            lhs != NULL ? lhs->typ : -1,
+            dbg_rhs != NULL ? dbg_rhs->typ : -1,
+            dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
+                ? dbg_rhs->sym->name : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->child != NULL) ? dbg_rhs->child->typ : -1,
+            (dbg_rhs != NULL && dbg_rhs->child != NULL)
+                ? pascal_tag_to_string(dbg_rhs->child->typ) : "<null>");
+    }
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+        assign_node != NULL && assign_node->line == 256)
+    {
+        ast_t *u_rhs = unwrap_pascal_node(rhs);
+        ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
+        fprintf(stderr,
+            "[KGPC_DEBUG_SPECIALIZE_CALLS] ASSIGN line=256 rhs=%d(%s:%s)\n",
+            dbg_rhs != NULL ? dbg_rhs->typ : -1,
+            dbg_rhs != NULL ? pascal_tag_to_string(dbg_rhs->typ) : "<null>",
+            (dbg_rhs != NULL && dbg_rhs->sym != NULL && dbg_rhs->sym->name != NULL)
+                ? dbg_rhs->sym->name : "<null>");
+        for (ast_t *it = rhs != NULL ? rhs->next : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN raw rhs.next typ=%d(%s:%s) child=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+        for (ast_t *it = dbg_rhs != NULL ? dbg_rhs->next : NULL; it != NULL; it = it->next)
+        {
+            fprintf(stderr,
+                "[KGPC_DEBUG_SPECIALIZE_CALLS]   ASSIGN rhs.next typ=%d(%s:%s) child=%d(%s)\n",
+                it->typ,
+                pascal_tag_to_string(it->typ),
+                (it->sym != NULL && it->sym->name != NULL) ? it->sym->name : "<null>",
+                it->child != NULL ? it->child->typ : -1,
+                it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
+        }
+    }
     struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
     if (stmt != NULL) {
-        stmt->source_index = assign_node->index;
+        stmt->source_index = assign_node->index + g_source_offset;
     }
     return stmt;
 }
 
 static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_proc_call: typ=%d line=%d\n",
             call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
         if (call_node && call_node->child) {
@@ -13203,18 +15741,18 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     char *id = NULL;
 
     if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   Handling MEMBER_ACCESS\n");
         }
         ast_t *args_node = child->next;
         struct Statement *method_stmt = convert_method_call_statement(child, args_node);
         if (method_stmt != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   convert_method_call_statement returned statement\n");
             }
             return method_stmt;
         }
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   convert_method_call_statement returned NULL\n");
         }
     }
@@ -13259,14 +15797,14 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
         }
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC]   id=%s\n", id ? id : "(null)");
     }
 
     ListNode_t *args = convert_expression_list(args_start);
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
-        call->source_index = call_node->index;
+        call->source_index = call_node->index + g_source_offset;
         /* If id starts with __, it's a method call placeholder from convert_method_call_statement.
          * Extract the bare method name and set the structured flag. */
         if (id != NULL && strncmp(id, "__", 2) == 0) {
@@ -13400,7 +15938,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
     {
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_statement: stmt_node NULL after unwrap\n");
         return NULL;
     }
@@ -13431,6 +15969,14 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
             label = dup_symbol(label_node);
         return mk_goto(stmt_node->line, label);
     }
+    case PASCAL_T_STATEMENT_LIST: {
+        /* A STATEMENT_LIST appearing as a statement — flatten as compound statement */
+        ast_t *inner = stmt_node->child;
+        if (inner == NULL)
+            return NULL;
+        ListNode_t *stmts = convert_statement_list(inner);
+        return mk_compoundstatement(stmt_node->line, stmts);
+    }
     case PASCAL_T_STATEMENT: {
         ast_t *inner = unwrap_pascal_node(stmt_node->child);
         if (inner == NULL)
@@ -13459,7 +16005,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return convert_statement(inner);
     }
     case PASCAL_T_FUNC_CALL:
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_statement: FUNC_CALL at line %d\n", stmt_node->line);
         return convert_proc_call(stmt_node, true);
     case PASCAL_T_MEMBER_ACCESS: {
@@ -13829,11 +16375,18 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return mk_case(stmt_node->line, selector_expr, list_builder_finish(&branches_builder), else_stmt);
     }
     default: {
+        /* Try to convert unknown tags as expressions (e.g., NOT, AND, OR in const contexts) */
+        struct Expression *expr = convert_expression(stmt_node);
+        if (expr != NULL)
+            return mk_exprstmt(stmt_node->line, stmt_node->col, expr);
+
         const char *name = tag_name(stmt_node->typ);
         fprintf(stderr, "ERROR: unsupported statement tag %d (%s) at line %d.",
                 stmt_node->typ, name, stmt_node->line);
         if (stmt_node->sym != NULL && stmt_node->sym->name != NULL)
             fprintf(stderr, " (symbol: %s)", stmt_node->sym->name);
+        if (stmt_node->child != NULL)
+            fprintf(stderr, " (child: %s/%d)", tag_name(stmt_node->child->typ), stmt_node->child->line);
         fprintf(stderr, "\n");
         break;
     }
@@ -13853,7 +16406,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_statement_list: starting, stmt_list_node=%p\n", (void*)stmt_list_node);
     }
     
@@ -13877,7 +16430,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
             continue;
         }
 
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_statement_list: processing stmt %d, typ=%d line=%d\n", 
                     stmt_count, unwrapped->typ, unwrapped->line);
             fprintf(stderr, "[KGPC]   calling convert_statement...\n");
@@ -13886,18 +16439,18 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 
         struct Statement *stmt = convert_statement(unwrapped);
         
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   convert_statement returned: %p\n", (void*)stmt);
             fflush(stderr);
         }
         
         if (stmt != NULL) {
             list_builder_append(&builder, stmt, LIST_STMT);
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   -> converted successfully\n");
                 fflush(stderr);
             }
-        } else if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        } else if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   -> convert_statement returned NULL, dropped statement typ=%d line=%d\n",
                 unwrapped->typ, unwrapped->line);
             fflush(stderr);
@@ -13906,7 +16459,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         stmt_count++;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_statement_list: processed %d statements\n", stmt_count);
     }
 
@@ -13917,12 +16470,12 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 static struct Statement *convert_block(ast_t *block_node) {
     if (block_node == NULL)
     {
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_block: block_node is NULL\n");
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_block: typ=%d line=%d\n", block_node->typ, block_node->line);
         if (block_node->child) {
             fprintf(stderr, "[KGPC]   child typ=%d line=%d\n", 
@@ -13938,13 +16491,13 @@ static struct Statement *convert_block(ast_t *block_node) {
 
     ast_t *stmts = block_node->child;
     if (stmts == ast_nil) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_block: stmts is ast_nil, treating as NULL\n");
         }
         stmts = NULL;
     }
     ListNode_t *list = convert_statement_list(stmts);
-    if (list == NULL && getenv("KGPC_DEBUG_BODY") != NULL)
+    if (list == NULL && kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
         fprintf(stderr, "[KGPC] convert_block: statement list is NULL\n");
     return mk_compoundstatement(block_node->line, list);
 }
@@ -13975,8 +16528,62 @@ static int ast_has_keyword(ast_t *node, const char *keyword, int max_depth) {
     return ast_has_keyword_in_list(node->child, keyword, max_depth - 1);
 }
 
+/* Build a TypeAlias capturing a complex return type from TypeInfo, transferring
+ * ownership of heap-allocated fields.  Cleans up remaining TypeInfo contents. */
+static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int return_type,
+                                                   char *return_type_id)
+{
+    struct TypeAlias *alias = NULL;
+    if (type_info->is_array || type_info->is_pointer || type_info->is_set ||
+        type_info->is_enum || type_info->is_file || type_info->is_record) {
+        alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (alias != NULL) {
+            alias->base_type = return_type;
+            alias->target_type_id = return_type_id;
+            if (type_info->is_array) {
+                alias->is_array = 1;
+                alias->array_start = type_info->start;
+                alias->array_end = type_info->end;
+                alias->array_element_type = type_info->element_type;
+                alias->array_element_type_id = type_info->element_type_id;
+                alias->is_shortstring = type_info->is_shortstring;
+                alias->is_open_array = type_info->is_open_array;
+            }
+            if (type_info->is_pointer) {
+                alias->is_pointer = 1;
+                alias->pointer_type = type_info->pointer_type;
+                alias->pointer_type_id = type_info->pointer_type_id;
+            }
+            if (type_info->is_set) {
+                alias->is_set = 1;
+                alias->set_element_type = type_info->set_element_type;
+                alias->set_element_type_id = type_info->set_element_type_id;
+            }
+            if (type_info->is_enum) {
+                alias->is_enum = 1;
+                alias->enum_is_scoped = type_info->enum_is_scoped;
+                alias->enum_literals = type_info->enum_literals;
+            }
+            if (type_info->is_file) {
+                alias->is_file = 1;
+                alias->file_type = type_info->file_type;
+                alias->file_type_id = type_info->file_type_id;
+            }
+            /* NULL out transferred pointers so destroy_type_info_contents
+             * won't double-free them. */
+            type_info->element_type_id = NULL;
+            type_info->pointer_type_id = NULL;
+            type_info->set_element_type_id = NULL;
+            type_info->enum_literals = NULL;
+            type_info->file_type_id = NULL;
+        }
+    }
+    destroy_type_info_contents(type_info);
+    return alias;
+}
+
 static Tree_t *convert_method_impl(ast_t *method_node) {
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
     }
 
@@ -13984,9 +16591,25 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
 
     ast_t *cur = method_node->child;
+    /* Skip optional keyword identifiers like "class" or "generic" that appear
+     * before the qualified identifier (e.g., "class function THost.SeedSum"). */
+    int method_decl_uses_operator_keyword = 0;
+    while (cur != NULL) {
+        ast_t *skip_node = unwrap_pascal_node(cur);
+        if (skip_node == NULL) skip_node = cur;
+        if (skip_node->typ == PASCAL_T_IDENTIFIER &&
+            skip_node->sym != NULL && skip_node->sym->name != NULL &&
+            is_method_decl_keyword(skip_node->sym->name)) {
+            if (strcasecmp(skip_node->sym->name, "operator") == 0)
+                method_decl_uses_operator_keyword = 1;
+            cur = cur->next;
+            continue;
+        }
+        break;
+    }
     ast_t *qualified = unwrap_pascal_node(cur);
 
-    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
         fprintf(stderr, "[Operator] convert_method_impl: cur=%p qualified=%p\n", (void*)cur, (void*)qualified);
         if (qualified != NULL) {
             fprintf(stderr, "[Operator]   qualified->typ=%d\n", qualified->typ);
@@ -14000,20 +16623,22 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * This is detected by checking if the first identifier is a known operator symbol */
     if (qualified != NULL && qualified->typ == PASCAL_T_IDENTIFIER) {
         char *potential_op = dup_symbol(qualified);
+        int is_operator_symbol = (potential_op != NULL && is_operator_token_name(potential_op));
+        int should_parse_standalone_operator = method_decl_uses_operator_keyword || is_operator_symbol;
         /* Check if this is an operator symbol (encoded to op_xxx means it's an operator) */
-        char *encoded_op = (potential_op != NULL) ? encode_operator_name(potential_op) : NULL;
-        int is_operator_symbol = (encoded_op != NULL && strcmp(potential_op, encoded_op) != 0);
+        char *encoded_op = (potential_op != NULL && should_parse_standalone_operator)
+            ? encode_operator_name(potential_op) : NULL;
         free(potential_op);
 
-        if (is_operator_symbol) {
+        if (should_parse_standalone_operator) {
             /* This is a standalone operator - qualified is the operator symbol directly */
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] Detected operator symbol: encoded=%s\n", encoded_op);
             }
             /* Get the param list to determine the type.
              * The next node could be PASCAL_T_PARAM_LIST or directly a PASCAL_T_PARAM */
             ast_t *param_node = qualified->next;
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] param_node=%p typ=%d (PARAM_LIST=%d, PARAM=%d)\n",
                     (void*)param_node, param_node ? param_node->typ : -1,
                     PASCAL_T_PARAM_LIST, PASCAL_T_PARAM);
@@ -14043,7 +16668,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                         if (mangled_name != NULL) {
                             snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
 
-                            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
                             }
 
@@ -14099,7 +16724,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                     snprintf(new_name, new_len, "%s_%s", mangled_name, ret_suffix);
                                     free(mangled_name);
                                     mangled_name = new_name;
-                                    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                                    if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                         fprintf(stderr, "[Operator] Standalone operator (with rettype): %s\n", mangled_name);
                                     }
                                 }
@@ -14131,7 +16756,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL)
-                                tree->source_index = method_node->index;
+                                tree->source_index = method_node->index + g_source_offset;
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.return_type_ref =
                                     return_type_ref != NULL ? type_ref_clone(return_type_ref)
@@ -14155,7 +16780,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: cur=%p typ=%d\n",
                     (void*)cur, cur ? cur->typ : -1);
             if (cur && cur->sym && cur->sym->name) {
@@ -14186,16 +16811,23 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     ast_t *ident_nodes[32];  // more than enough for any reasonable nesting depth
     int ident_count = 0;
 
+    ast_t *method_type_param_list = NULL;  /* TYPE_PARAM_LIST after the last IDENTIFIER (method-level generic) */
+    ast_t *pending_type_param_list = NULL;
     for (ast_t *cursor = class_node; cursor != NULL; cursor = cursor->next) {
         if (cursor->typ == PASCAL_T_IDENTIFIER && ident_count < 32) {
             ident_nodes[ident_count++] = cursor;
+            pending_type_param_list = NULL;  /* TYPE_PARAM_LIST before an IDENTIFIER is class-level, reset */
         }
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        if (cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
+            pending_type_param_list = cursor;
+        }
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
                     cursor->typ, pascal_tag_to_string(cursor->typ),
                     (cursor->sym && cursor->sym->name) ? cursor->sym->name : "<null>");
         }
     }
+    method_type_param_list = pending_type_param_list;  /* Last TYPE_PARAM_LIST with no IDENTIFIER after it */
 
     if (ident_count < 2)
         return NULL;  // Need at least ClassName and MethodName
@@ -14271,7 +16903,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
     }
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[FromCParser] convert_method_impl: class_name=%s method_name=%s effective_class=%s effective_class_full=%s\n",
             class_name ? class_name : "<null>",
             method_name ? method_name : "<null>",
@@ -14281,17 +16913,34 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     
     /* Don't re-register the method here - it was already registered during class declaration */
     
-    /* Check if this method was declared as static in the record/class declaration */
-    int is_static_method = is_method_static(effective_class, method_name);
+    /* Check if this method was declared as static. Use signature-aware lookup
+     * for overload disambiguation. Also detect class methods (Self = VMT). */
+    int is_static_method = 0;
+    int is_class_method_impl = from_cparser_is_method_class_method(effective_class, method_name);
+    int method_param_count = count_params_in_method_impl(method_node);
+    char *method_param_sig = param_type_signature_from_method_impl(method_node);
+    int method_declares_operator = method_decl_uses_operator_keyword;
     if (method_node != NULL && method_name != NULL)
     {
         struct MethodTemplate impl_template = {0};
         impl_template.name = (char *)method_name;
         annotate_method_template(&impl_template, method_node);
-        if (impl_template.is_static || impl_template.is_class_method)
+        /* Only truly static methods skip Self; class methods have Self = VMT pointer */
+        if (impl_template.is_static)
             is_static_method = 1;
+        if (impl_template.is_class_method)
+            is_class_method_impl = 1;
     }
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+    if (!is_static_method)
+        is_static_method = is_method_static_with_signature(effective_class, method_name,
+            method_param_count, method_param_sig);
+    /* A static class method (class function ... static) has no Self */
+    if (is_class_method_impl && is_static_method)
+        is_static_method = 1;
+    /* A non-static class method (class function) has Self = VMT, so don't skip it */
+    else if (is_class_method_impl && !is_static_method)
+        is_static_method = 0;
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 
                 method_name ? method_name : "<null>",
@@ -14301,18 +16950,27 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     const char *mangle_owner = effective_class;
     if (effective_class_full != NULL && effective_class_full != effective_class)
         mangle_owner = effective_class_full;
-    char *proc_name = mangle_method_name(mangle_owner, method_name);
+    char *proc_name = mangle_method_name_raw(mangle_owner, method_name);
     if (proc_name == NULL) {
         free(class_name);
         free(method_name);
         free(effective_class_last);
+        if (method_param_sig != NULL)
+            free(method_param_sig);
         return NULL;
     }
     
-    /* Check if this is a class operator (static method) by checking the method name */
+    /* Check if this is a class operator.
+     * Named operators like Add/Subtract must come from "operator" declarations,
+     * otherwise normal methods (e.g. TList.Add) are misclassified. */
     int is_class_operator = 0;
-    if (method_name != NULL) {
-        /* Class operators have operator symbols as names */
+    if (method_declares_operator)
+    {
+        is_class_operator = 1;
+    }
+    else if (method_name != NULL)
+    {
+        /* Fallback only for symbolic operators to keep legacy parser cases working. */
         if (strcmp(method_name, "+") == 0 || strcmp(method_name, "-") == 0 ||
             strcmp(method_name, "*") == 0 || strcmp(method_name, "/") == 0 ||
             strcmp(method_name, "=") == 0 || strcmp(method_name, "<>") == 0 ||
@@ -14324,16 +16982,27 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             strcasecmp(method_name, "not") == 0 || strcasecmp(method_name, "xor") == 0 ||
             strcasecmp(method_name, "shl") == 0 || strcasecmp(method_name, "shr") == 0 ||
             strcasecmp(method_name, "in") == 0 || strcasecmp(method_name, "is") == 0 ||
-            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0) {
+            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0 ||
+            strcasecmp(method_name, "Implicit") == 0 || strcasecmp(method_name, "Explicit") == 0 ||
+            strcasecmp(method_name, "Equal") == 0 || strcasecmp(method_name, "NotEqual") == 0 ||
+            strcasecmp(method_name, "GreaterThan") == 0 ||
+            strcasecmp(method_name, "GreaterThanOrEqual") == 0 ||
+            strcasecmp(method_name, "LessThan") == 0 ||
+            strcasecmp(method_name, "LessThanOrEqual") == 0) {
             is_class_operator = 1;
         }
     }
-    int is_constructor = (method_name != NULL && strcasecmp(method_name, "create") == 0);
+    int is_constructor = (method_node->typ == PASCAL_T_CONSTRUCTOR_DECL) ||
+        (method_name != NULL && strcasecmp(method_name, "create") == 0);
 
     ListBuilder params_builder;
     list_builder_init(&params_builder);
     char **generic_type_params = NULL;
     int num_generic_type_params = 0;
+    /* Extract method-level generic type params found inside the qualified identifier */
+    if (method_type_param_list != NULL) {
+        num_generic_type_params = extract_generic_type_params(method_type_param_list, &generic_type_params);
+    }
     ListNode_t *const_decls = NULL;
     ListBuilder var_builder;
     list_builder_init(&var_builder);
@@ -14354,11 +17023,16 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     const char *helper_base = (effective_class != NULL) ? lookup_type_helper_base(effective_class) : NULL;
     int is_helper_method = (helper_base != NULL);
-    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && effective_class != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && effective_class != NULL)
         fprintf(stderr, "[KGPC] convert_method_impl: looking up helper base for %s -> %s\n",
             effective_class, helper_base ? helper_base : "(not found)");
 
     /* Add Self parameter only for instance methods, not for class operators or static methods */
+    if (kgpc_getenv("KGPC_ASSERT_STATIC_SELF") != NULL && is_static_method) {
+        assert(!is_class_operator && "static method should not be class operator");
+        assert(method_param_sig != NULL || method_param_count >= 0);
+    }
+
     if (!is_class_operator && !is_static_method) {
         ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
         char *self_type_id = NULL;
@@ -14416,64 +17090,17 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_RETURN_TYPE: {
             /* Method has a return type - it's a function, not a procedure */
             has_return_type = 1;
-            TypeInfo type_info;
+            TypeInfo type_info = {0};
             return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
             if (return_type_ref == NULL)
                 return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
-
             if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
-            {
                 return_type_id = strdup(node->sym->name);
-            }
-            
-            /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
-            if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
-                type_info.is_enum || type_info.is_file || type_info.is_record) {
-                inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
-                if (inline_return_type != NULL) {
-                    memset(inline_return_type, 0, sizeof(struct TypeAlias));
-                    inline_return_type->base_type = return_type;
-                    inline_return_type->target_type_id = return_type_id;
-                    
-                    if (type_info.is_array) {
-                        inline_return_type->is_array = 1;
-                        inline_return_type->array_start = type_info.start;
-                        inline_return_type->array_end = type_info.end;
-                        inline_return_type->array_element_type = type_info.element_type;
-                        inline_return_type->array_element_type_id = type_info.element_type_id;
-                        inline_return_type->is_shortstring = type_info.is_shortstring;
-                        inline_return_type->is_open_array = type_info.is_open_array;
-                    }
-                    
-                    if (type_info.is_pointer) {
-                        inline_return_type->is_pointer = 1;
-                        inline_return_type->pointer_type = type_info.pointer_type;
-                        inline_return_type->pointer_type_id = type_info.pointer_type_id;
-                    }
-                    
-                    if (type_info.is_set) {
-                        inline_return_type->is_set = 1;
-                        inline_return_type->set_element_type = type_info.set_element_type;
-                        inline_return_type->set_element_type_id = type_info.set_element_type_id;
-                    }
-                    
-                    if (type_info.is_enum) {
-                        inline_return_type->is_enum = 1;
-                        inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
-                        inline_return_type->enum_literals = type_info.enum_literals;
-                    }
-                    
-                    if (type_info.is_file) {
-                        inline_return_type->is_file = 1;
-                        inline_return_type->file_type = type_info.file_type;
-                        inline_return_type->file_type_id = type_info.file_type_id;
-                    }
-                }
-            }
+            inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
             break;
         }
         case PASCAL_T_TYPE_SECTION:
-            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                 fprintf(stderr, "[KGPC] convert_function TYPE_SECTION at line=%d\n", node->line);
             }
             append_type_decls_from_section(node, &type_decls, &nested_subs,
@@ -14554,6 +17181,54 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     ListNode_t *params = list_builder_finish(&params_builder);
     ListNode_t *label_decls = list_builder_finish(&label_builder);
+
+    if (is_class_operator && method_name != NULL && mangle_owner != NULL)
+    {
+        char *encoded_method = encode_operator_name(method_name);
+        char *param_suffix = NULL;
+        char *ret_suffix = NULL;
+        if (params != NULL && params->cur != NULL)
+            param_suffix = method_param_type_suffix((Tree_t *)params->cur);
+        if (return_type_ref != NULL)
+            ret_suffix = type_ref_render_mangled(return_type_ref);
+        if (ret_suffix == NULL && return_type_id != NULL)
+            ret_suffix = strdup(return_type_id);
+
+        if (encoded_method != NULL && (param_suffix != NULL || ret_suffix != NULL))
+        {
+            size_t name_len = strlen(mangle_owner) + strlen(encoded_method) + 3;
+            if (param_suffix != NULL)
+                name_len += strlen(param_suffix) + 1;
+            if (ret_suffix != NULL)
+                name_len += strlen(ret_suffix) + 1;
+            char *disambiguated = (char *)malloc(name_len);
+            if (disambiguated != NULL)
+            {
+                int written = snprintf(disambiguated, name_len, "%s__%s", mangle_owner, encoded_method);
+                if (written > 0 && (size_t)written < name_len)
+                {
+                    size_t used = (size_t)written;
+                    if (param_suffix != NULL)
+                    {
+                        snprintf(disambiguated + used, name_len - used, "_%s", param_suffix);
+                        used = strlen(disambiguated);
+                    }
+                    if (ret_suffix != NULL)
+                        snprintf(disambiguated + used, name_len - used, "_%s", ret_suffix);
+                    free(proc_name);
+                    proc_name = disambiguated;
+                }
+                else
+                {
+                    free(disambiguated);
+                }
+            }
+        }
+
+        free(encoded_method);
+        free(param_suffix);
+        free(ret_suffix);
+    }
     
     Tree_t *tree;
     if (has_return_type) {
@@ -14566,7 +17241,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            nested_subs, body, 0, 0);
     }
     if (tree != NULL)
-        tree->source_index = method_node->index;
+        tree->source_index = method_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -14583,7 +17258,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
          * E.g., for TManager.TState.Init, mangled_id = "TManager.TState__Init" */
         if (effective_class_full != NULL && effective_class_full != effective_class)
         {
-            char *full_mangled = mangle_method_name(effective_class_full, method_name);
+            char *full_mangled = mangle_method_name_raw(effective_class_full, method_name);
             tree->tree_data.subprogram_data.mangled_id = full_mangled != NULL ? full_mangled : strdup(proc_name);
         }
         else
@@ -14592,6 +17267,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
         tree->tree_data.subprogram_data.method_name = (char *)string_intern(method_name);
         tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
+        tree->tree_data.subprogram_data.is_constructor = is_constructor;
+        tree->tree_data.subprogram_data.is_static_method = is_static_method;
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);
         if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
@@ -14623,6 +17300,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
             tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
             num_generic_type_params = 0;
         }
@@ -14639,7 +17317,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * to prevent adding this to the subprograms list. */
     GenericTypeDecl *generic_decl = generic_registry_find_decl(effective_class);
     if (generic_decl != NULL && generic_decl->record_template != NULL) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n", 
                     effective_class, method_name);
         }
@@ -14649,11 +17327,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         free(method_name);
         free(effective_class_last);
         free(effective_class_outer);
+        if (method_param_sig != NULL)
+            free(method_param_sig);
         g_current_method_name = prev_method_name_ctx;
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s\n", effective_class, method_name);
     }
 
@@ -14668,6 +17348,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     free(method_name);
     free(effective_class_last);
     free(effective_class_outer);
+    if (method_param_sig != NULL)
+        free(method_param_sig);
     g_current_method_name = prev_method_name_ctx;
     return tree;
 }
@@ -14703,6 +17385,46 @@ static int extract_generic_type_params(ast_t *type_param_list, char ***out_param
     return count;
 }
 
+/* Map FPC [internproc:fpc_in_XXX] intrinsic names to KGPC runtime function names.
+   Returns a strdup'd name or NULL if no mapping exists. */
+static char *map_internproc_to_runtime(const char *fpc_name)
+{
+    if (fpc_name == NULL) return NULL;
+    static const struct { const char *fpc; const char *kgpc; } table[] = {
+        /* Math real intrinsics (ValReal = Double on x86_64) */
+        {"fpc_in_trunc_real",  "kgpc_trunc"},
+        {"fpc_in_round_real",  "kgpc_round"},
+        {"fpc_in_sqrt_real",   "kgpc_sqrt"},
+        {"fpc_in_abs_real",    "kgpc_abs_real"},
+        {"fpc_in_sin_real",    "kgpc_sin"},
+        {"fpc_in_cos_real",    "kgpc_cos"},
+        {"fpc_in_arctan_real", "kgpc_arctan"},
+        {"fpc_in_ln_real",     "kgpc_ln"},
+        {"fpc_in_exp_real",    "kgpc_exp"},
+        {"fpc_in_frac_real",   "kgpc_frac"},
+        {"fpc_in_int_real",    "kgpc_int_real"},
+        {"fpc_in_pi_real",     "kgpc_pi"},
+        {"fpc_in_sqr_real",    "kgpc_sqr_real"},
+        /* Lo/Hi intrinsics */
+        {"fpc_in_lo_Word",     "lo_w"},
+        {"fpc_in_lo_long",     "lo_li"},
+        {"fpc_in_lo_qword",    "lo_qw"},
+        {"fpc_in_hi_Word",     "hi_w"},
+        {"fpc_in_hi_long",     "hi_li"},
+        {"fpc_in_hi_qword",    "hi_qw"},
+        /* Integer Abs */
+        {"fpc_in_abs_long",    "kgpc_abs_int"},
+        /* Chr intrinsic */
+        {"fpc_in_chr_byte",    "kgpc_chr"},
+        {NULL, NULL}
+    };
+    for (int i = 0; table[i].fpc != NULL; i++) {
+        if (strcasecmp(fpc_name, table[i].fpc) == 0)
+            return strdup(table[i].kgpc);
+    }
+    return NULL;
+}
+
 static char *extract_external_name_from_node(ast_t *node)
 {
     if (node == NULL || node->child == NULL)
@@ -14730,7 +17452,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     char *id = NULL;
     static int debug_external_nodes = -1;
     if (debug_external_nodes == -1)
-        debug_external_nodes = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+        debug_external_nodes = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
 
     while (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER &&
            cur->sym != NULL && cur->sym->name != NULL &&
@@ -14742,6 +17464,17 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
 
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
+
+    /* Standalone operator declarations sometimes arrive through the
+     * procedure-declaration grammar path even though they have a return type.
+     * Reuse convert_function() so interface declarations get the same
+     * mangled ids as implementations (e.g. TMyType__op_sub_TMyType). */
+    if (id != NULL &&
+        (strcasecmp(id, "operator") == 0 || is_operator_token_name(id)))
+    {
+        free(id);
+        return convert_function(proc_node);
+    }
 
     if (cur != NULL)
         cur = cur->next;
@@ -14778,11 +17511,12 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        if (getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
             fprintf(stderr, "[KGPC] convert_procedure directive node: typ=%d sym=%s child_typ=%d\n",
                 cur->typ,
                 (cur->sym != NULL && cur->sym->name != NULL) ? cur->sym->name : "<null>",
@@ -14857,6 +17591,39 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                         if (val == cur->next)
                             cur = cur->next;
                     }
+                } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "compilerproc") == 0) {
+                    is_external = 1;
+                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    ast_t *val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
+                        val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
+                        char *mapped = map_internproc_to_runtime(val->sym->name);
+                        if (mapped != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = mapped;
+                        }
+                        cur = cur->next;  /* Skip the value node */
+                    }
+                } else {
+                    /* Fallback: if the identifier itself is an internproc value
+                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
+                       consumed by the parser and only the value survived. */
+                    char *mapped = map_internproc_to_runtime(self_sym);
+                    if (mapped != NULL) {
+                        is_external = 1;
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
+                    }
                 }
                 free(self_sym);
             }
@@ -14900,7 +17667,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
     if (tree != NULL)
-        tree->source_index = proc_node->index;
+        tree->source_index = proc_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -14911,10 +17678,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -14930,7 +17702,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_standalone_operator = 0;
     static int debug_external_nodes = -1;
     if (debug_external_nodes == -1)
-        debug_external_nodes = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+        debug_external_nodes = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
 
     while (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER &&
            cur->sym != NULL && cur->sym->name != NULL &&
@@ -14944,10 +17716,13 @@ static Tree_t *convert_function(ast_t *func_node) {
         id = dup_symbol(cur);
 
     /* Check if this is a standalone operator declaration */
-    if (id != NULL && strcasecmp(id, "operator") == 0) {
+    if (id != NULL &&
+        (strcasecmp(id, "operator") == 0 || is_operator_token_name(id))) {
         is_standalone_operator = 1;
-        /* Get the operator symbol from the next child */
-        if (cur != NULL) {
+        if (is_operator_token_name(id)) {
+            operator_symbol = strdup(id);
+        } else if (cur != NULL) {
+            /* Get the operator symbol from the next child */
             cur = cur->next;
             if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER) {
                 operator_symbol = dup_symbol(cur);
@@ -14989,7 +17764,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
         /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
         Tree_t *first_param = (Tree_t *)params->cur;
-        if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
             fprintf(stderr, "[Operator] is_standalone_operator=%d operator_symbol=%s\n",
                 is_standalone_operator, operator_symbol);
         }
@@ -15018,61 +17793,13 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
-        TypeInfo type_info;
+        TypeInfo type_info = {0};
         return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
         if (return_type_ref == NULL)
             return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
-
         if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)
-        {
             return_type_id = strdup(cur->sym->name);
-        }
-        
-        /* If it's a complex type (array, pointer, etc.), create a TypeAlias to store the info */
-        if (type_info.is_array || type_info.is_pointer || type_info.is_set || 
-            type_info.is_enum || type_info.is_file || type_info.is_record) {
-            inline_return_type = (struct TypeAlias *)malloc(sizeof(struct TypeAlias));
-            if (inline_return_type != NULL) {
-                memset(inline_return_type, 0, sizeof(struct TypeAlias));
-                inline_return_type->base_type = return_type;
-                inline_return_type->target_type_id = return_type_id;
-                
-                if (type_info.is_array) {
-                    inline_return_type->is_array = 1;
-                    inline_return_type->array_start = type_info.start;
-                    inline_return_type->array_end = type_info.end;
-                    inline_return_type->array_element_type = type_info.element_type;
-                    inline_return_type->array_element_type_id = type_info.element_type_id;
-                    inline_return_type->is_shortstring = type_info.is_shortstring;
-                    inline_return_type->is_open_array = type_info.is_open_array;
-                }
-                
-                if (type_info.is_pointer) {
-                    inline_return_type->is_pointer = 1;
-                    inline_return_type->pointer_type = type_info.pointer_type;
-                    inline_return_type->pointer_type_id = type_info.pointer_type_id;
-                }
-                
-                if (type_info.is_set) {
-                    inline_return_type->is_set = 1;
-                    inline_return_type->set_element_type = type_info.set_element_type;
-                    inline_return_type->set_element_type_id = type_info.set_element_type_id;
-                }
-                
-                if (type_info.is_enum) {
-                    inline_return_type->is_enum = 1;
-                    inline_return_type->enum_is_scoped = type_info.enum_is_scoped;
-                    inline_return_type->enum_literals = type_info.enum_literals;
-                }
-                
-                if (type_info.is_file) {
-                    inline_return_type->is_file = 1;
-                    inline_return_type->file_type = type_info.file_type;
-                    inline_return_type->file_type_id = type_info.file_type_id;
-                }
-            }
-        }
-        
+        inline_return_type = build_inline_return_alias(&type_info, return_type, return_type_id);
         cur = cur->next;
     }
 
@@ -15094,7 +17821,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                 snprintf(mangled_name, name_len, "%s__%s",
                     deferred_param_type_id, deferred_encoded_op);
             }
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
             }
             free(id);
@@ -15116,6 +17843,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_nostackframe = 0;
     int is_varargs = 0;
     char *external_alias = NULL;
+    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -15192,6 +17920,39 @@ static Tree_t *convert_function(ast_t *func_node) {
                         if (val == cur->next)
                             cur = cur->next;
                     }
+                } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "compilerproc") == 0) {
+                    is_external = 1;
+                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    ast_t *val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
+                        val->sym != NULL && val->sym->name != NULL) {
+                        /* Always store the raw INTERNPROC name */
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(val->sym->name);
+                        char *mapped = map_internproc_to_runtime(val->sym->name);
+                        if (mapped != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = mapped;
+                        }
+                        cur = cur->next;  /* Skip the value node */
+                    }
+                } else {
+                    /* Fallback: if the identifier itself is an internproc value
+                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
+                       consumed by the parser and only the value survived. */
+                    char *mapped = map_internproc_to_runtime(self_sym);
+                    if (mapped != NULL) {
+                        is_external = 1;
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = mapped;
+                        if (internproc_id_str != NULL)
+                            free(internproc_id_str);
+                        internproc_id_str = strdup(self_sym);
+                    }
                 }
                 free(self_sym);
             }
@@ -15235,7 +17996,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
     if (tree != NULL)
-        tree->source_index = func_node->index;
+        tree->source_index = func_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
@@ -15251,10 +18012,15 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
         free(external_alias);
+    if (tree != NULL && internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
+    else if (internproc_id_str != NULL)
+        free(internproc_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
             free(generic_type_params[i]);
@@ -15286,13 +18052,13 @@ static ast_t *find_node_by_type(ast_t *node, int target_type) {
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] find_node_by_type: visiting node typ=%d, looking for typ=%d\n", 
                 node->typ, target_type);
     }
     
     if (node->typ == target_type) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] find_node_by_type: FOUND target typ=%d\n", target_type);
         }
         return node;
@@ -15331,6 +18097,104 @@ static ast_t *find_last_node_by_type(ast_t *node, int target_type) {
     return last;
 }
 
+static void resolve_deferred_arrays_in_list(ListNode_t *decl_list)
+{
+    for (ListNode_t *cur = decl_list; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_TREE) continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL || decl->type != TREE_ARR_DECL) continue;
+        if (decl->tree_data.arr_decl_data.unresolved_index_type == NULL) continue;
+
+        const char *type_name = decl->tree_data.arr_decl_data.unresolved_index_type;
+        int start, end;
+        if (enum_registry_lookup(type_name, &start, &end) == 0) {
+            decl->tree_data.arr_decl_data.s_range = start;
+            decl->tree_data.arr_decl_data.e_range = end;
+            free(decl->tree_data.arr_decl_data.unresolved_index_type);
+            decl->tree_data.arr_decl_data.unresolved_index_type = NULL;
+        } else {
+            const char *id = "(unknown)";
+            if (decl->tree_data.arr_decl_data.ids != NULL &&
+                decl->tree_data.arr_decl_data.ids->cur != NULL)
+                id = (const char *)decl->tree_data.arr_decl_data.ids->cur;
+            fprintf(stderr, "ERROR: Could not resolve deferred array index type '%s' for %s.\n",
+                    type_name, id);
+        }
+    }
+}
+
+void from_cparser_resolve_deferred_arrays(Tree_t *program)
+{
+    if (program == NULL) return;
+
+    if (program->type == TREE_PROGRAM_TYPE) {
+        resolve_deferred_arrays_in_list(program->tree_data.program_data.var_declaration);
+    }
+}
+
+void from_cparser_cleanup(void)
+{
+    /* Free type helper mappings (strdup'd strings + struct + list nodes) */
+    while (type_helper_mappings != NULL) {
+        ListNode_t *next = type_helper_mappings->next;
+        struct TypeHelperMapping *entry = (struct TypeHelperMapping *)type_helper_mappings->cur;
+        if (entry != NULL) {
+            free(entry->helper_id);
+            free(entry->base_type_id);
+            free(entry);
+        }
+        free(type_helper_mappings);
+        type_helper_mappings = next;
+    }
+
+    /* Free class method bindings (interned strings - do NOT free, just free structs + list nodes) */
+    while (class_method_bindings != NULL) {
+        ListNode_t *next = class_method_bindings->next;
+        ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
+        if (binding != NULL && binding->param_sig != NULL)
+            free(binding->param_sig);
+        free(binding); /* ClassMethodBinding struct */
+        free(class_method_bindings);
+        class_method_bindings = next;
+    }
+
+    /* Free pending generic aliases */
+    while (g_pending_generic_aliases != NULL) {
+        PendingGenericAlias *next = g_pending_generic_aliases->next;
+        free(g_pending_generic_aliases->base_name);
+        if (g_pending_generic_aliases->type_args != NULL)
+            destroy_list(g_pending_generic_aliases->type_args);
+        free(g_pending_generic_aliases);
+        g_pending_generic_aliases = next;
+    }
+
+    /* Free scoped enum source cache */
+    free(g_scoped_enum_source_path);
+    g_scoped_enum_source_path = NULL;
+    free(g_scoped_enum_source_buffer);
+    g_scoped_enum_source_buffer = NULL;
+    g_scoped_enum_source_length = 0;
+
+    /* Reset const sections */
+    reset_const_sections();
+
+    /* Clear borrowed AST pointers */
+    g_interface_type_section_ast = NULL;
+    g_implementation_type_section_ast = NULL;
+    g_interface_section_ast = NULL;
+    g_implementation_section_ast = NULL;
+    g_current_method_name = NULL;
+
+    /* Reset counters */
+    anonymous_method_counter = 0;
+    typed_const_counter = 0;
+    g_allow_pending_specializations = 0;
+    g_frontend_error_count = 0;
+
+    /* Free cross-unit enum registry */
+    enum_registry_free();
+}
+
 Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     Tree_t *final_tree = NULL;
     if (program_ast == NULL)
@@ -15349,7 +18213,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] tree_from_pascal_ast: root typ=%d\n", cur->typ);
     }
     
@@ -15363,7 +18227,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
          * We need to check if the first child is a PASCAL_T_PROGRAM_HEADER.
          */
         ast_t *first_child = cur->child;
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] tree_from_pascal_ast: program block entered. first_child=%p\n", first_child);
             if (first_child) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: first_child->typ=%d\n", first_child->typ);
@@ -15460,7 +18324,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
-            if (getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
                 fprintf(stderr, "[kgpc program] section typ=%d (%s) line=%d\n",
                     section->typ, pascal_tag_to_string(section->typ), section->line);
             }
@@ -15470,7 +18334,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
             }
             
@@ -15514,7 +18378,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             case PASCAL_T_BEGIN_BLOCK:
             case PASCAL_T_MAIN_BLOCK: {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found block type %d\n", section->typ);
                 }
                 struct Statement *candidate_body = convert_block(section);
@@ -15531,7 +18395,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     body = candidate_body;
                     body_line = section->line;
                 }
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: body assigned, body=%p\n", body);
                 }
                 break;
@@ -15544,12 +18408,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                  * They should be children of VAR_SECTION, TYPE_SECTION, or CONST_SECTION.
                  * If we encounter them here, it means the AST structure is malformed,
                  * but we can safely skip them to continue parsing. */
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Skipping declaration component type %d (should be child of section)\n", section->typ);
                 }
                 break;
             default:
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Skipping unknown node type %d\n", section->typ);
                 }
                 break;
@@ -15561,64 +18425,64 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
          * This handles the case where the parser's seq() and many() combinators
          * don't properly link subsequent children in the sibling chain. */
         if (body == NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Main block not found in sibling chain, searching recursively\n");
             }
             
             /* Search for VAR_SECTION */
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Searching for VAR_SECTION (typ=%d)\n", PASCAL_T_VAR_SECTION);
             }
             ast_t* var_section_node = find_node_by_type(cur->child, PASCAL_T_VAR_SECTION);
             if (var_section_node != NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found VAR_SECTION via recursive search\n");
                 }
                 list_builder_extend(&var_decls_builder, convert_var_section(var_section_node));
             }
             
             /* Search for MAIN_BLOCK */
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Searching for MAIN_BLOCK (typ=%d)\n", PASCAL_T_MAIN_BLOCK);
             }
             ast_t* main_block_node = find_last_node_by_type(cur->child, PASCAL_T_MAIN_BLOCK);
             if (main_block_node == NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found, searching for BEGIN_BLOCK (typ=%d)\n", PASCAL_T_BEGIN_BLOCK);
                 }
                 main_block_node = find_last_node_by_type(cur->child, PASCAL_T_BEGIN_BLOCK);
             }
             /* Also try typ=112 which appears in the AST */
             if (main_block_node == NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=112\n");
                 }
                 main_block_node = find_last_node_by_type(cur->child, 112);
             }
             if (main_block_node != NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK via recursive search (typ=%d)\n", main_block_node->typ);
                 }
                 body = convert_block(main_block_node);
             } else {
                 /* MAIN_BLOCK not found directly. Check if there's a typ=100 node that contains it */
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found directly, searching for typ=100 wrapper\n");
                 }
                 ast_t* wrapper_node = find_last_node_by_type(cur->child, 100);
                 if (wrapper_node != NULL && wrapper_node->child != NULL) {
-                    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                         fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found typ=100 wrapper, checking its children\n");
                     }
                     /* Check if the wrapper's child is a MAIN_BLOCK or BEGIN_BLOCK */
                     ast_t* child = wrapper_node->child;
                     int child_count = 0;
                     while (child != NULL) {
-                        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                             fprintf(stderr, "[KGPC] tree_from_pascal_ast: typ=100 child[%d] has typ=%d\n", child_count, child->typ);
                         }
                         if (child->typ == PASCAL_T_MAIN_BLOCK || child->typ == PASCAL_T_BEGIN_BLOCK) {
-                            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK (typ=%d) inside typ=100 wrapper\n", child->typ);
                             }
                             main_block_node = child;
@@ -15630,7 +18494,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                 }
                 
-                if (body == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (body == NULL && kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found via recursive search\n");
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: PASCAL_T_MAIN_BLOCK=%d, PASCAL_T_BEGIN_BLOCK=%d\n", 
                             PASCAL_T_MAIN_BLOCK, PASCAL_T_BEGIN_BLOCK);
@@ -15645,7 +18509,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         
         /* If no main block was found, create an empty one to avoid NULL body */
         if (body == NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: No main block found, creating empty body\\n");
             }
             body = mk_compoundstatement(cur->line, NULL);
@@ -15697,7 +18561,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         while (section != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting section type %d\n", section->typ);
             }
             /* Check for circular reference */
@@ -15708,17 +18572,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             
             if (section->typ == PASCAL_T_INTERFACE_SECTION) {
                 interface_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] interface at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
                 implementation_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] implementation at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_INITIALIZATION_SECTION) {
                 initialization_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] initialization at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_FINALIZATION_SECTION) {
@@ -15740,19 +18604,18 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             } else {
                 ast_t *section = interface_node->child;
                 while (section != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
             }
             /* Check for circular reference */
                     if (!is_safe_to_continue(visited_if, section)) {
-                        fprintf(stderr, "ERROR: Circular reference detected in interface sections, stopping traversal\n");
-                        break;
+                        section = section->next;
+                        continue;
                     }
                     
-                    ast_t *node = unwrap_pascal_node(section);
-                    for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = (section->typ == PASCAL_T_NONE) ? node_cursor->next : NULL) {
-                        if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                    ast_t *node_cursor = unwrap_pascal_node(section);
+                    if (node_cursor != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL) {
                             fprintf(stderr, "[KGPC] interface node typ=%d (%s)\n",
                                 node_cursor->typ, pascal_tag_to_string(node_cursor->typ));
                         }
@@ -15761,11 +18624,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             append_uses_from_section(node_cursor, &interface_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
-                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                                 fprintf(stderr, "[KGPC] interface TYPE_SECTION at line=%d\n", node_cursor->line);
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_interface_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &interface_type_decls,
                                 NULL, &interface_const_decls, &interface_var_builder, NULL);
                             break;
@@ -15829,7 +18693,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
 
         if (implementation_node != NULL && implementation_node->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
             /* Debug: count implementation section nodes */
-            if (getenv("KGPC_DEBUG_IMPL_SECTION") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_IMPL_SECTION") != NULL) {
                 ast_t *dbg = implementation_node->child;
                 int count = 0;
                 int max_line = 0;
@@ -15856,11 +18720,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 while (definition != NULL && definition != ast_nil) {
                     /* Check for circular reference */
                     if (!is_safe_to_continue(visited_impl, definition)) {
-                        fprintf(stderr, "ERROR: Circular reference detected in implementation sections, stopping traversal\n");
-                        break;
+                        definition = definition->next;
+                        continue;
                     }
 
-                    if (getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
                         definition->typ == PASCAL_T_NONE &&
                         definition->child == NULL &&
                         definition->sym != NULL &&
@@ -15868,16 +18732,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         fprintf(stderr, "[KGPC] impl NONE at line=%d: %.120s\n",
                             definition->line, definition->sym->name);
                     }
-                    ast_t *node = unwrap_pascal_node(definition);
-                    bool iterate_child_chain = (definition->typ == PASCAL_T_NONE);
-                    if (iterate_child_chain && definition->child != NULL && definition->next != NULL) {
-                        if (ast_chain_contains(definition->child, definition->next, 100000)) {
-                            iterate_child_chain = false;
-                        }
-                    }
-                    for (ast_t *node_cursor = node; node_cursor != NULL;
-                         node_cursor = iterate_child_chain ? node_cursor->next : NULL) {
-                        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+                    ast_t *node_cursor = unwrap_pascal_node(definition);
+                    if (node_cursor != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }
                         switch (node_cursor->typ) {
@@ -15887,6 +18744,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         case PASCAL_T_TYPE_SECTION:
                             implementation_type_section_ast = node_cursor;  /* Save for const array enum resolution */
                             g_implementation_type_section_ast = node_cursor;
+                            enum_registry_scan_type_section(node_cursor);
                             append_type_decls_from_section(node_cursor, &implementation_type_decls,
                                 &subprograms, &implementation_const_decls, &implementation_var_builder, NULL);
                             break;
@@ -15899,7 +18757,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node_cursor);
-                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
+                            if (kgpc_debug_subprog_enabled() || kgpc_getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *proc_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] impl convert_procedure(%s) line=%d => %p\n", proc_id, node_cursor->line, (void*)proc);
                                 free(proc_id);
@@ -15909,7 +18767,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node_cursor);
-                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
+                            if (kgpc_debug_subprog_enabled() || kgpc_getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] impl convert_function(%s) line=%d => %p\n", func_id, node_cursor->line, (void*)func);
                                 free(func_id);
@@ -15963,7 +18821,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
              * 2. The first statement directly (if the wrapper was optimized away)
              * We handle both cases by checking if child is PASCAL_T_NONE. */
             ast_t *stmt_list_seq = initialization_node->child;
-            if (getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
                 fprintf(stderr, "[KGPC] initialization_node: typ=%d line=%d\n", 
                         initialization_node->typ, initialization_node->line);
                 if (stmt_list_seq != NULL) {

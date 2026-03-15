@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+staged_files=()
+while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    staged_files+=("$path")
+done < <(git diff --cached --name-only --diff-filter=AM)
+
+[ ${#staged_files[@]} -gt 0 ] || exit 0
+
+binary_files=()
+while IFS=$'\t' read -r added removed path; do
+    [ -n "${path:-}" ] || continue
+    if [ "$added" = "-" ] && [ "$removed" = "-" ]; then
+        binary_files+=("$path")
+    fi
+done < <(git diff --cached --numstat --diff-filter=AM)
+
+if [ ${#binary_files[@]} -gt 0 ]; then
+    echo "pre-commit: refusing to commit staged binary files:" >&2
+    for path in "${binary_files[@]}"; do
+        echo "  $path" >&2
+    done
+    echo "Remove them from the index or convert them to text before committing." >&2
+    exit 1
+fi
+
+exit 0

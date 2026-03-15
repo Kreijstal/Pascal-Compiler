@@ -1,30 +1,30 @@
 program typed_file_demo;
 
-{ Simple runtime test for binary typed files using helper
-  procedures assign/rewrite/reset/close and
-  file_read_integer/file_write_integer. }
+{ Simple runtime test for binary typed files using
+  BlockWrite/BlockRead with untyped file. }
 
 var
   F: file;
   i: Integer;
+  count: LongInt;
 
 begin
   assign(F, 'tests/output/typed_file_demo_int.dat');
-  rewrite(F);
+  rewrite(F, 1);
 
   i := 1;
-  file_write_integer(F, i);
+  BlockWrite(F, i, SizeOf(i));
   i := 2;
-  file_write_integer(F, i);
+  BlockWrite(F, i, SizeOf(i));
 
   close(F);
 
   assign(F, 'tests/output/typed_file_demo_int.dat');
-  reset(F);
+  reset(F, 1);
 
-  file_read_integer(F, i);
+  BlockRead(F, i, SizeOf(i), count);
   writeln(i);
-  file_read_integer(F, i);
+  BlockRead(F, i, SizeOf(i), count);
   writeln(i);
 
   close(F);

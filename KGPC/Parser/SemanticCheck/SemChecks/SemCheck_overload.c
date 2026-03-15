@@ -100,6 +100,67 @@ static int semcheck_total_param_size(ListNode_t *params, SymTab_t *symtab)
     return total;
 }
 
+/* Returns 1 if all parameters in the list are of float (REAL_TYPE) type.
+ * Used to detect float-specialized overloads (Single/Double/Extended) that
+ * share the same mangled name in KGPC's convention. */
+static int semcheck_all_params_float(ListNode_t *params, SymTab_t *symtab)
+{
+    if (params == NULL)
+        return 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        int owns = 0;
+        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
+        int is_float = 0;
+        if (kg != NULL && kg->kind == TYPE_KIND_PRIMITIVE)
+            is_float = (kg->info.primitive_type_tag == REAL_TYPE);
+        if (owns && kg != NULL)
+            destroy_kgpc_type(kg);
+        if (!is_float)
+            return 0;
+    }
+    return 1;
+}
+
+/* Returns the absolute distance between the total declared size of value
+ * (non-var) float parameters and KGPC's native float size (8 bytes each).
+ * A distance of 0 means all value float params are Double (8 bytes) — the
+ * KGPC-native size. Used to prefer the Double overload over Single (4 bytes)
+ * or Extended (16 bytes) when all overloads map to the same mangled name. */
+static int semcheck_value_float_param_distance(ListNode_t *params, SymTab_t *symtab)
+{
+    int n_value = 0;
+    int total_value_size = 0;
+    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL)
+            continue;
+        int is_var = 0;
+        if (decl->type == TREE_VAR_DECL)
+            is_var = decl->tree_data.var_decl_data.is_var_param;
+        if (is_var)
+            continue; /* var/out params are always pointers — skip */
+        n_value++;
+        int owns = 0;
+        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
+        long long sz = 8;
+        if (kg != NULL)
+            sz = kgpc_type_sizeof(kg);
+        if (owns && kg != NULL)
+            destroy_kgpc_type(kg);
+        if (sz <= 0)
+            sz = 8;
+        total_value_size += (int)sz;
+    }
+    if (n_value == 0)
+        return 0;
+    int native = n_value * 8;
+    int dist = total_value_size - native;
+    return dist < 0 ? -dist : dist;
+}
+
 static const char *semcheck_get_param_type_id(Tree_t *decl)
 {
     if (decl == NULL)
@@ -176,9 +237,35 @@ static int are_primitive_tags_compatible(int tag_a, int tag_b)
     if (tag_a == LONGWORD_TYPE && tag_b == LONGWORD_TYPE)
         return 1;
     
-    /* Int64 and QWord have different signedness, so not compatible */
-    
+    /* Int64 and QWord are both 64-bit and interchangeable for var params */
+    if ((tag_a == INT64_TYPE || tag_a == QWORD_TYPE) &&
+        (tag_b == INT64_TYPE || tag_b == QWORD_TYPE))
+        return 1;
+
     return 0;
+}
+
+static int semcheck_is_widechar_like_type(KgpcType *type)
+{
+    if (type == NULL || !kgpc_type_is_char(type))
+        return 0;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL)
+    {
+        if ((alias->alias_name != NULL &&
+             (pascal_identifier_equals(alias->alias_name, "WideChar") ||
+              pascal_identifier_equals(alias->alias_name, "UnicodeChar"))) ||
+            (alias->target_type_id != NULL &&
+             (pascal_identifier_equals(alias->target_type_id, "WideChar") ||
+              pascal_identifier_equals(alias->target_type_id, "UnicodeChar"))))
+        {
+            return 1;
+        }
+    }
+
+    /* WideChar/UnicodeChar are 2-byte CHAR_TYPE in KGPC. */
+    return kgpc_type_sizeof(type) == 2;
 }
 
 int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNode_t *b)
@@ -414,7 +501,7 @@ int semcheck_count_required_params(ListNode_t *params)
     {
         Tree_t *param_decl = (Tree_t *)cur->cur;
         int has_default = param_has_default_value(param_decl);
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             const char *param_id = "?";
             if (param_decl && param_decl->type == TREE_VAR_DECL && param_decl->tree_data.var_decl_data.ids)
                 param_id = (char *)param_decl->tree_data.var_decl_data.ids->cur;
@@ -679,6 +766,31 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     if (arg_expr == NULL)
         return UNKNOWN_TYPE;
 
+    if (arg_expr->type == EXPR_FUNCTION_CALL &&
+        arg_expr->expr_data.function_call_data.args_expr == NULL &&
+        arg_expr->expr_data.function_call_data.id != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
+            arg_expr->expr_data.function_call_data.id);
+        if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE &&
+            type_node->type != NULL)
+        {
+            KgpcType *resolved = type_node->type;
+            struct RecordType *type_record = get_record_type_from_node(type_node);
+            if (type_record != NULL && type_record->is_interface)
+            {
+                HashNode_t *tguid_node = semcheck_find_type_node_with_kgpc_type(symtab, "TGUID");
+                if (tguid_node != NULL && tguid_node->type != NULL)
+                    resolved = tguid_node->type;
+            }
+            if (arg_type_out != NULL)
+                *arg_type_out = resolved;
+            if (owns_type_out != NULL)
+                *owns_type_out = 0;
+            return semcheck_tag_from_kgpc(resolved);
+        }
+    }
+
     int arg_tag = UNKNOWN_TYPE;
     KgpcType *arg_kgpc_type = NULL;
     semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
@@ -842,6 +954,32 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     return arg_tag;
 }
 
+static void semcheck_bind_set_literal_to_formal_type(struct Expression *arg_expr,
+    KgpcType *formal_kgpc,
+    int *owns_arg,
+    KgpcType **arg_kgpc,
+    int *arg_tag)
+{
+    if (arg_expr == NULL || arg_expr->type != EXPR_SET ||
+        formal_kgpc == NULL || !kgpc_type_is_set(formal_kgpc))
+        return;
+
+    semcheck_expr_set_resolved_kgpc_type_shared(arg_expr, formal_kgpc);
+
+    if (owns_arg != NULL && *owns_arg && arg_kgpc != NULL && *arg_kgpc != NULL)
+        destroy_kgpc_type(*arg_kgpc);
+
+    if (arg_kgpc != NULL)
+    {
+        kgpc_type_retain(formal_kgpc);
+        *arg_kgpc = formal_kgpc;
+    }
+    if (owns_arg != NULL)
+        *owns_arg = 1;
+    if (arg_tag != NULL)
+        *arg_tag = SET_TYPE;
+}
+
 
 static MatchQuality semcheck_make_quality(MatchQualityKind kind)
 {
@@ -866,19 +1004,252 @@ static MatchQuality semcheck_match_from_rank(int rank)
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }
 
+static const char *semcheck_overload_record_type_id_from_kgpc(KgpcType *type)
+{
+    if (type == NULL)
+        return NULL;
+
+    if (type->kind == TYPE_KIND_RECORD && type->info.record_info != NULL &&
+        type->info.record_info->type_id != NULL)
+        return type->info.record_info->type_id;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+        type->info.points_to->kind == TYPE_KIND_RECORD &&
+        type->info.points_to->info.record_info != NULL &&
+        type->info.points_to->info.record_info->type_id != NULL)
+        return type->info.points_to->info.record_info->type_id;
+
+    if (type->type_alias != NULL)
+    {
+        if (type->type_alias->target_type_id != NULL)
+            return type->type_alias->target_type_id;
+        if (type->type_alias->alias_name != NULL)
+            return type->type_alias->alias_name;
+    }
+
+    return NULL;
+}
+
+static int semcheck_overload_type_is_recordish(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+    if (kgpc_type_is_record(type))
+        return 1;
+    return semcheck_tag_from_kgpc(type) == RECORD_TYPE;
+}
+
+static int semcheck_overload_record_assign_operator_score(SymTab_t *symtab, HashNode_t *cand,
+    KgpcType *target_type, KgpcType *source_type)
+{
+    if (symtab == NULL || cand == NULL || cand->type == NULL ||
+        target_type == NULL || source_type == NULL)
+        return 0;
+    if (!kgpc_type_is_procedure(cand->type))
+        return 0;
+
+    ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+    if (params == NULL || params->cur == NULL || params->next != NULL)
+        return 0;
+
+    Tree_t *param_decl = (Tree_t *)params->cur;
+    int param_owned = 0;
+    KgpcType *param_type = resolve_type_from_vardecl(param_decl, symtab, &param_owned);
+    if (param_type == NULL)
+        return 0;
+
+    int arg_rank = kgpc_type_conversion_rank(source_type, param_type);
+    if (arg_rank < 0 && are_types_compatible_for_assignment(param_type, source_type, symtab))
+        arg_rank = 4;
+
+    KgpcType *ret_type = kgpc_type_get_return_type(cand->type);
+    int ret_rank = (ret_type != NULL) ? kgpc_type_conversion_rank(ret_type, target_type) : -1;
+    if (ret_rank < 0 && ret_type != NULL &&
+        are_types_compatible_for_assignment(target_type, ret_type, symtab))
+        ret_rank = 4;
+
+    if (param_owned && param_type != NULL)
+        destroy_kgpc_type(param_type);
+
+    return (arg_rank >= 0 && ret_rank >= 0 && ret_type != NULL);
+}
+
+static int semcheck_overload_symbol_is_assign_operator(HashNode_t *cand)
+{
+    if (cand == NULL)
+        return 0;
+    if (cand->id != NULL &&
+        (pascal_identifier_equals(cand->id, ":=") ||
+         pascal_identifier_equals(cand->id, "op_assign")))
+        return 1;
+    if (cand->mangled_id != NULL)
+    {
+        char *mangled_lower = pascal_identifier_lower_dup(cand->mangled_id);
+        int is_assign = (mangled_lower != NULL &&
+            strstr(mangled_lower, "__op_assign") != NULL);
+        free(mangled_lower);
+        return is_assign;
+    }
+    return 0;
+}
+
+static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
+    KgpcType *actual_kgpc, KgpcType *formal_kgpc, int actual_tag)
+{
+    if (symtab == NULL || formal_kgpc == NULL ||
+        !semcheck_overload_type_is_recordish(formal_kgpc))
+        return 0;
+
+    int actual_owned = 0;
+    if (actual_kgpc == NULL)
+    {
+        if (actual_tag == UNKNOWN_TYPE)
+            return 0;
+        actual_kgpc = create_primitive_type(actual_tag);
+        actual_owned = (actual_kgpc != NULL);
+    }
+    if (actual_kgpc == NULL)
+        return 0;
+
+    const char *target_type_id = semcheck_overload_record_type_id_from_kgpc(formal_kgpc);
+    const char *source_type_id = semcheck_overload_record_type_id_from_kgpc(actual_kgpc);
+    int found = 0;
+
+    char ids[8][320];
+    for (int i = 0; i < 8; ++i)
+        ids[i][0] = '\0';
+    if (target_type_id != NULL)
+    {
+        snprintf(ids[0], sizeof(ids[0]), "%s.:=", target_type_id);
+        snprintf(ids[1], sizeof(ids[1]), "%s__op_assign", target_type_id);
+    }
+    if (source_type_id != NULL)
+    {
+        snprintf(ids[2], sizeof(ids[2]), "%s.:=", source_type_id);
+        snprintf(ids[3], sizeof(ids[3]), "%s__op_assign", source_type_id);
+    }
+    if (target_type_id != NULL && source_type_id != NULL)
+    {
+        snprintf(ids[4], sizeof(ids[4]), "%s__op_assign_%s", target_type_id, source_type_id);
+        snprintf(ids[5], sizeof(ids[5]), "%s__op_assign_%s", source_type_id, target_type_id);
+    }
+
+    for (int i = 0; i < 8 && !found; ++i)
+    {
+        if (ids[i][0] == '\0')
+            continue;
+        ListNode_t *cands = FindAllIdents(symtab, ids[i]);
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        ListNode_t *cands = FindAllIdents(symtab, "op_assign");
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        ListNode_t *cands = FindAllIdents(symtab, ":=");
+        for (ListNode_t *cur = cands; cur != NULL; cur = cur->next)
+        {
+            if (semcheck_overload_record_assign_operator_score(symtab,
+                    (HashNode_t *)cur->cur, formal_kgpc, actual_kgpc))
+            {
+                found = 1;
+                break;
+            }
+        }
+        DestroyList(cands);
+    }
+
+    if (!found)
+    {
+        for (ListNode_t *scope = symtab->stack_head; scope != NULL && !found; scope = scope->next)
+        {
+            HashTable_t *table = (HashTable_t *)scope->cur;
+            if (table == NULL)
+                continue;
+            for (int i = 0; i < TABLE_SIZE && !found; ++i)
+            {
+                for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)cur->cur;
+                    if (!semcheck_overload_symbol_is_assign_operator(cand))
+                        continue;
+                    if (semcheck_overload_record_assign_operator_score(symtab, cand,
+                            formal_kgpc, actual_kgpc))
+                    {
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if (!found && symtab->builtins != NULL)
+    {
+        for (int i = 0; i < TABLE_SIZE && !found; ++i)
+        {
+            for (ListNode_t *cur = symtab->builtins->table[i]; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *cand = (HashNode_t *)cur->cur;
+                if (!semcheck_overload_symbol_is_assign_operator(cand))
+                    continue;
+                if (semcheck_overload_record_assign_operator_score(symtab, cand,
+                        formal_kgpc, actual_kgpc))
+                {
+                    found = 1;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (actual_owned)
+        destroy_kgpc_type(actual_kgpc);
+    return found;
+}
+
 static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgpc,
     int formal_tag, KgpcType *formal_kgpc, int is_var_param, SymTab_t *symtab,
     int is_integer_literal)
 {
     if (formal_tag == UNKNOWN_TYPE || formal_tag == BUILTIN_ANY_TYPE)
     {
-        /* Untyped formals are permissive, but when the actual is also unknown
-         * (e.g. forwarding an untyped const parameter), prefer typed overloads
-         * to avoid self-recursive overload selection. */
+        /* Untyped formals accept any argument, but score lower than typed formals
+         * so that typed overloads (e.g. FpRead(buf: PAnsiChar)) are preferred
+         * over untyped ones (e.g. FpRead(var buf)) when both match. */
         if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL)
             return semcheck_make_quality(MATCH_CONVERSION);
-        return semcheck_make_quality(MATCH_EXACT);
+        return semcheck_make_quality(MATCH_CONVERSION);
     }
+
+    /* When the actual is untyped (e.g. forwarding an untyped const parameter),
+     * allow it to match any typed formal as a conversion.  Both untyped→untyped
+     * and untyped→typed get MATCH_CONVERSION, but the tiebreaker prefers
+     * overloads with fewer untyped params. */
+    if (actual_tag == UNKNOWN_TYPE && actual_kgpc == NULL && !is_var_param)
+        return semcheck_make_quality(MATCH_CONVERSION);
 
     if (is_var_param)
     {
@@ -945,8 +1316,13 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
             {
                 return semcheck_make_quality(MATCH_EXACT);
             }
-            /* Allow String <-> ShortString for var params (openstring compatibility) */
-            if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+            /* Allow String <-> ShortString for var params (openstring compatibility).
+             * Only permit this fallback for string/class/interface types —
+             * primitive integer types (e.g. Int64 vs Longint) must NOT match
+             * via assignment compatibility for var/out params. */
+            if (!(actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                  formal_kgpc->kind == TYPE_KIND_PRIMITIVE) &&
+                are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
                 return semcheck_make_quality(MATCH_PROMOTION);
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
@@ -972,10 +1348,42 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_CONVERSION);
     /* For pointer types, don't return early - need to compare subtypes */
     if (actual_tag == formal_tag && formal_tag != POINTER_TYPE)
+    {
+        /* REAL_TYPE is used as a catch-all tag for all floating-point types
+         * (Single, Double, Extended, Real, ValReal, Currency, etc.).
+         * When both actual and formal have the same REAL_TYPE tag, compare
+         * the type_alias names for exact equality so that e.g.
+         * Double actual vs Extended formal is scored as PROMOTION rather
+         * than EXACT.  This prevents ambiguity among Max(Single), Max(Double),
+         * Max(Extended) overloads. */
+        if (formal_tag == REAL_TYPE && actual_kgpc != NULL && formal_kgpc != NULL)
+        {
+            const char *actual_alias = (actual_kgpc->type_alias != NULL) ?
+                actual_kgpc->type_alias->alias_name : NULL;
+            const char *formal_alias = (formal_kgpc->type_alias != NULL) ?
+                formal_kgpc->type_alias->alias_name : NULL;
+            if (actual_alias != NULL && formal_alias != NULL &&
+                !pascal_identifier_equals(actual_alias, formal_alias))
+                return semcheck_make_quality(MATCH_PROMOTION);
+        }
         return semcheck_make_quality(MATCH_EXACT);
+    }
     /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
         return semcheck_make_quality(MATCH_PROMOTION);
+
+    /* Plain Pointer is implicitly convertible to typed pointer parameters
+     * such as PChar/PAnsiChar in RTL code (e.g. FpWrite/FpRead wrappers). */
+    if (actual_tag == POINTER_TYPE && actual_kgpc != NULL &&
+        actual_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+        actual_kgpc->info.primitive_type_tag == POINTER_TYPE &&
+        formal_kgpc != NULL && formal_kgpc->kind == TYPE_KIND_POINTER)
+    {
+        MatchQuality q = semcheck_make_quality(MATCH_PROMOTION);
+        if (kgpc_type_get_pointer_subtype_tag(formal_kgpc) != UNKNOWN_TYPE)
+            q.exact_pointer_subtype = 1;
+        return q;
+    }
 
     if (actual_kgpc != NULL && formal_kgpc != NULL &&
         actual_kgpc->kind == TYPE_KIND_POINTER &&
@@ -1026,12 +1434,64 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
              * integer types in value parameter contexts. */
             if (is_integer_type(actual_sub) && is_integer_type(formal_sub))
                 return semcheck_make_quality(MATCH_CONVERSION);
+            /* Accept char/integer pointee conversions as implicit pointer
+             * conversions (needed by RTL helpers using char/word aliases). */
+            if ((is_integer_type(actual_sub) || actual_sub == CHAR_TYPE) &&
+                (is_integer_type(formal_sub) || formal_sub == CHAR_TYPE))
+            {
+                return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* Plain Pointer is compatible with typed pointer formals and vice versa.
+             * This is required for FPC RTL wrappers like FpRead/FpWrite that pass
+             * Pointer values to PAnsiChar syscall bindings. */
+            if ((actual_sub == POINTER_TYPE && formal_sub != UNKNOWN_TYPE) ||
+                (formal_sub == POINTER_TYPE && actual_sub != UNKNOWN_TYPE))
+            {
+                return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* Also allow WideChar/UnicodeChar pointers to match word-like
+             * integer pointers (used by RTL Unicode map helpers). */
+            if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
+            {
+                int actual_is_widechar = semcheck_is_widechar_like_type(actual_kgpc->info.points_to);
+                int formal_is_widechar = semcheck_is_widechar_like_type(formal_kgpc->info.points_to);
+                if ((actual_is_widechar && is_integer_type(formal_sub)) ||
+                    (formal_is_widechar && is_integer_type(actual_sub)))
+                {
+                    return semcheck_make_quality(MATCH_CONVERSION);
+                }
+            }
             /* Also try kgpc_type_conversion_rank on the pointed-to types */
             if (actual_kgpc->info.points_to != NULL && formal_kgpc->info.points_to != NULL)
             {
                 int rank = kgpc_type_conversion_rank(actual_kgpc->info.points_to, formal_kgpc->info.points_to);
                 if (rank >= 0)
                     return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            /* "class of T" compatibility: when a class type name (^record)
+             * is passed where a class reference (^^record = class of T)
+             * is expected, allow it as a conversion.  The formal's pointee
+             * is itself a pointer-to-record (the class instance type). */
+            if (actual_sub == RECORD_TYPE && formal_sub == POINTER_TYPE &&
+                actual_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to != NULL &&
+                formal_kgpc->info.points_to->kind == TYPE_KIND_POINTER &&
+                formal_kgpc->info.points_to->info.points_to != NULL &&
+                formal_kgpc->info.points_to->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                /* Check if the actual class is compatible with the formal's
+                 * base class (the record inside the class reference). */
+                KgpcType *actual_inner = actual_kgpc->info.points_to;
+                KgpcType *formal_inner = formal_kgpc->info.points_to->info.points_to;
+                if (actual_inner->kind == TYPE_KIND_RECORD &&
+                    formal_inner->kind == TYPE_KIND_RECORD)
+                {
+                    if (actual_inner->info.record_info == formal_inner->info.record_info ||
+                        are_types_compatible_for_assignment(formal_inner, actual_inner, symtab))
+                    {
+                        return semcheck_make_quality(MATCH_CONVERSION);
+                    }
+                }
             }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
@@ -1058,10 +1518,12 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                     q.int_promo_rank = 1;
                 return q;
             }
-            /* Untyped pointer -> typed non-class pointer: prefer this */
+            /* Untyped pointer -> typed non-class pointer: score as
+             * PROMOTION so it ties with untyped-formal PROMOTION, then
+             * the untyped-params tiebreaker picks the typed overload. */
             if (actual_sub == UNKNOWN_TYPE)
             {
-                MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
+                MatchQuality q = semcheck_make_quality(MATCH_PROMOTION);
                 q.exact_pointer_subtype = 1;  /* bonus for pointer match */
                 return q;
             }
@@ -1077,14 +1539,36 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         return semcheck_make_quality(MATCH_PROMOTION);
     }
 
+    /* Nil/Pointer should not implicitly convert to Boolean in overload resolution */
+    if (actual_tag == POINTER_TYPE && formal_tag == BOOL)
+        return semcheck_make_quality(MATCH_INCOMPATIBLE);
+
     if (actual_kgpc != NULL && formal_kgpc != NULL)
     {
         int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
         if (rank >= 0)
             return semcheck_match_from_rank(rank);
-        if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+        /* Skip are_types_compatible_for_assignment when the actual is a
+         * floating-point type and the formal is an integer type.  In Pascal,
+         * Real→Integer is NOT an implicit conversion (requires Trunc/Round).
+         * The generic compatibility check is too permissive here and would
+         * allow Real→Integer as MATCH_CONVERSION, causing ambiguity between
+         * Max(Extended) and Max(Integer) overloads. */
+        if (!(actual_tag == REAL_TYPE && is_integer_type(formal_tag)) &&
+            are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
             return semcheck_make_quality(MATCH_CONVERSION);
     }
+    {
+        const char *formal_type_id = semcheck_overload_record_type_id_from_kgpc(formal_kgpc);
+        if (formal_type_id != NULL &&
+            pascal_identifier_equals(formal_type_id, "tconstexprint") &&
+            is_integer_type(actual_tag))
+        {
+            return semcheck_make_quality(MATCH_CONVERSION);
+        }
+    }
+    if (semcheck_overload_has_record_assign_conversion(symtab, actual_kgpc, formal_kgpc, actual_tag))
+        return semcheck_make_quality(MATCH_CONVERSION);
     if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
         return semcheck_make_quality(MATCH_CONVERSION);
 
@@ -1173,6 +1657,21 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
 
     if (expr->array_element_type_id != NULL)
         return expr->array_element_type_id;
+
+    if (expr->pointer_subtype_id != NULL)
+        return expr->pointer_subtype_id;
+
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.target_type_id != NULL)
+        return expr->expr_data.typecast_data.target_type_id;
+
+    if (expr->resolved_kgpc_type != NULL && expr->resolved_kgpc_type->type_alias != NULL)
+    {
+        if (expr->resolved_kgpc_type->type_alias->alias_name != NULL)
+            return expr->resolved_kgpc_type->type_alias->alias_name;
+        if (expr->resolved_kgpc_type->type_alias->target_type_id != NULL)
+            return expr->resolved_kgpc_type->type_alias->target_type_id;
+    }
 
     if (expr->type != EXPR_VAR_ID)
         return NULL;
@@ -1387,46 +1886,90 @@ static int compare_single_quality(const MatchQuality *a, const MatchQuality *b)
 static int semcheck_compare_match_quality(int arg_count,
     const MatchQuality *a, const MatchQuality *b)
 {
-    int a_better_somewhere = 0;
-    int b_better_somewhere = 0;
+    int a_exact = 0;
+    int b_exact = 0;
+    int a_promotion = 0;
+    int b_promotion = 0;
+    int a_conversion = 0;
+    int b_conversion = 0;
+    int a_incompatible = 0;
+    int b_incompatible = 0;
+    int a_char_rank = 0;
+    int b_char_rank = 0;
+    int a_int_rank = 0;
+    int b_int_rank = 0;
 
     for (int i = 0; i < arg_count; i++)
     {
-        int cmp = compare_single_quality(&a[i], &b[i]);
-        if (cmp < 0)
-            a_better_somewhere = 1;
-        else if (cmp > 0)
-            b_better_somewhere = 1;
+        switch (a[i].kind)
+        {
+            case MATCH_EXACT:
+                a_exact++;
+                break;
+            case MATCH_PROMOTION:
+                a_promotion++;
+                break;
+            case MATCH_CONVERSION:
+                a_conversion++;
+                break;
+            case MATCH_INCOMPATIBLE:
+                a_incompatible++;
+                break;
+        }
+        switch (b[i].kind)
+        {
+            case MATCH_EXACT:
+                b_exact++;
+                break;
+            case MATCH_PROMOTION:
+                b_promotion++;
+                break;
+            case MATCH_CONVERSION:
+                b_conversion++;
+                break;
+            case MATCH_INCOMPATIBLE:
+                b_incompatible++;
+                break;
+        }
+        a_char_rank += a[i].char_promo_rank;
+        b_char_rank += b[i].char_promo_rank;
+        a_int_rank += a[i].int_promo_rank;
+        b_int_rank += b[i].int_promo_rank;
     }
 
-    /* A is strictly better if better somewhere and not worse anywhere */
-    if (a_better_somewhere && !b_better_somewhere)
-        return -1;
-    /* B is strictly better if better somewhere and not worse anywhere */
-    if (b_better_somewhere && !a_better_somewhere)
-        return 1;
-    /* Otherwise ambiguous (either equal everywhere, or mixed) */
-    return 0;
-}
+    if (a_incompatible != b_incompatible)
+        return a_incompatible < b_incompatible ? -1 : 1;
+    if (a_conversion != b_conversion)
+        return a_conversion < b_conversion ? -1 : 1;
+    if (a_promotion != b_promotion)
+        return a_promotion < b_promotion ? -1 : 1;
+    if (a_exact != b_exact)
+        return a_exact > b_exact ? -1 : 1;
+    if (a_char_rank != b_char_rank)
+        return a_char_rank < b_char_rank ? -1 : 1;
+    if (a_int_rank != b_int_rank)
+        return a_int_rank < b_int_rank ? -1 : 1;
 
-static int semcheck_quality_penalty_sum(int arg_count, const MatchQuality *q)
-{
-    if (q == NULL || arg_count <= 0)
-        return 0;
-
-    int total = 0;
-    for (int i = 0; i < arg_count; ++i)
+    /* Same conversion-class histogram: fall back to the per-argument compare
+     * so exact subtype/id matches can still dominate deterministically. */
     {
-        int p = 0;
-        p += q[i].kind * 100;
-        p += q[i].int_promo_rank * 10;
-        p += q[i].char_promo_rank * 10;
-        p -= q[i].exact_type_id ? 3 : 0;
-        p -= q[i].exact_pointer_subtype ? 2 : 0;
-        p -= q[i].exact_array_elem ? 1 : 0;
-        total += p;
+        int a_better_somewhere = 0;
+        int b_better_somewhere = 0;
+        for (int i = 0; i < arg_count; i++)
+        {
+            int cmp = compare_single_quality(&a[i], &b[i]);
+            if (cmp < 0)
+                a_better_somewhere = 1;
+            else if (cmp > 0)
+                b_better_somewhere = 1;
+        }
+        if (a_better_somewhere && !b_better_somewhere)
+            return -1;
+        if (b_better_somewhere && !a_better_somewhere)
+            return 1;
     }
-    return total;
+
+    return 0;
 }
 
 /* Compute class inheritance depth from a KgpcType that points to a class record.
@@ -1601,8 +2144,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         int total_params = semcheck_count_total_params(candidate_args);
         int required_params = semcheck_count_required_params(candidate_args);
         int allow_implicit_leading_self = 0;
+        int allow_implicit_leading_type_qualifier = 0;
 
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_resolve_overload: candidate %s args=%d required=%d given=%d\n",
                 candidate->id, total_params, required_params, given_count);
         }
@@ -1628,6 +2172,28 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             {
                 allow_implicit_leading_self = 1;
             }
+
+            if (!allow_implicit_leading_self &&
+                first_actual != NULL && first_actual->type == EXPR_VAR_ID &&
+                first_actual->expr_data.id != NULL &&
+                given_count == total_params + 1)
+            {
+                int candidate_is_owner_method = 0;
+                if (candidate->owner_class != NULL &&
+                    pascal_identifier_equals(candidate->owner_class, first_actual->expr_data.id))
+                    candidate_is_owner_method = 1;
+                else if (candidate->mangled_id != NULL)
+                {
+                    size_t owner_len = strlen(first_actual->expr_data.id);
+                    if (strncasecmp(candidate->mangled_id, first_actual->expr_data.id, owner_len) == 0 &&
+                        candidate->mangled_id[owner_len] == '_' &&
+                        candidate->mangled_id[owner_len + 1] == '_')
+                        candidate_is_owner_method = 1;
+                }
+                if (candidate_is_owner_method &&
+                    !(first_formal_name != NULL && pascal_identifier_equals(first_formal_name, "Self")))
+                    allow_implicit_leading_type_qualifier = 1;
+            }
         }
 
         int arity_matches = ((given_count >= required_params && given_count <= total_params) ||
@@ -1640,6 +2206,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             int adj_total = total_params - 1;
             int adj_required = required_params > 0 ? required_params - 1 : 0;
             if (given_count >= adj_required && given_count <= adj_total)
+                arity_matches = 1;
+        }
+        if (!arity_matches && allow_implicit_leading_type_qualifier)
+        {
+            int adj_total = total_params;
+            int adj_required = required_params;
+            int given_effective = given_count - 1;
+            if (given_effective >= adj_required && given_effective <= adj_total)
                 arity_matches = 1;
         }
         if (!arity_matches)
@@ -1659,6 +2233,13 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             formal_args = formal_args->next;
         ListNode_t *call_args = args_given;
         int arg_index = 0;
+        if (allow_implicit_leading_type_qualifier && call_args != NULL)
+        {
+            if (qualities != NULL && given_count > 0)
+                qualities[0] = semcheck_make_quality(MATCH_EXACT);
+            arg_index = 1;
+            call_args = call_args->next;
+        }
 
         while (formal_args != NULL && call_args != NULL)
         {
@@ -1914,6 +2495,42 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             pascal_identifier_equals(formal_num, arg_num))
                             quality.exact_type_id = 1;
                     }
+                    if (formal_id != NULL)
+                    {
+                        KgpcType *arg_expr_kgpc = arg_expr->resolved_kgpc_type;
+                        int arg_expr_tag = (arg_expr_kgpc != NULL)
+                            ? semcheck_tag_from_kgpc(arg_expr_kgpc)
+                            : UNKNOWN_TYPE;
+                        int formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                        int arg_kind = (arg_decl_id != NULL)
+                            ? semcheck_string_kind_from_type_id(arg_decl_id)
+                            : 0;
+                        if (arg_kind == 0 && arg_expr_kgpc != NULL)
+                        {
+                            if (semcheck_is_widechar_like_type(arg_expr_kgpc))
+                                arg_kind = 2;
+                            else if (kgpc_type_is_char(arg_expr_kgpc))
+                                arg_kind = 1;
+                        }
+                        if (formal_kind != 0 && arg_kind != 0)
+                        {
+                            if (formal_kind == arg_kind)
+                                quality.exact_type_id = 1;
+                            else
+                            {
+                                if (quality.kind == MATCH_EXACT)
+                                    quality.kind = MATCH_PROMOTION;
+                                quality.char_promo_rank = 1;
+                            }
+                        }
+                        else if (formal_kind == 2 &&
+                                 (arg_expr_tag == CHAR_TYPE || arg_expr_tag == BYTE_TYPE))
+                        {
+                            if (quality.kind == MATCH_EXACT)
+                                quality.kind = MATCH_PROMOTION;
+                            quality.char_promo_rank = 1;
+                        }
+                    }
                 }
 
                 qualities[arg_index++] = quality;
@@ -1979,6 +2596,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
                 }
 
+                semcheck_bind_set_literal_to_formal_type(arg_expr, formal_kgpc,
+                    &owns_arg, &arg_kgpc, &arg_tag);
+
                 MatchQuality quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
 
                 /* When the formal parameter is an array type but the argument
@@ -1988,11 +2608,15 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                  * may spuriously promote a scalar argument (e.g. Boolean) to
                  * an integer match, hiding the correct untyped overload.
                  *
-                 * Exception: string/char arguments can match "array of Char"
-                 * parameters (FPC auto-converts the string to a char array). */
-                if (formal_is_array_decl && !arg_is_array)
+                 * Exception 1: string/char arguments can match "array of Char"
+                 * parameters (FPC auto-converts the string to a char array).
+                 * Exception 2: untyped arguments (from untyped const/var params)
+                 * can match any typed formal, including arrays. */
+                if (formal_is_array_decl && !arg_is_array &&
+                    !(arg_tag == UNKNOWN_TYPE && arg_kgpc == NULL))
                 {
                     int allow_string_to_char_array = 0;
+                    int allow_pointer_backed_array = 0;
                     if (is_string_type(arg_tag) || arg_tag == CHAR_TYPE)
                     {
                         /* Check if formal element type is Char */
@@ -2005,7 +2629,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (elem_tag == CHAR_TYPE)
                             allow_string_to_char_array = 1;
                     }
-                    if (!allow_string_to_char_array)
+                    /* Generic/dynamic array values can flow through as pointer-typed
+                     * expressions (notably with specialize TArray<T> aliases).  Do not
+                     * reject these before quality classification. */
+                    if (!allow_string_to_char_array &&
+                        (arg_tag == POINTER_TYPE ||
+                         (arg_kgpc != NULL && arg_kgpc->kind == TYPE_KIND_POINTER)))
+                    {
+                        allow_pointer_backed_array = 1;
+                    }
+                    if (!allow_string_to_char_array && !allow_pointer_backed_array)
                     {
                         candidate_valid = 0;
                         if (owns_formal && formal_kgpc != NULL)
@@ -2018,12 +2651,24 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
                 if (formal_kgpc == NULL)
                 {
-                    quality = semcheck_make_quality(MATCH_PROMOTION);
+                    if (formal_tag == UNKNOWN_TYPE)
+                    {
+                        /* Truly untyped formal: use classify_match which
+                         * scores untyped→untyped as MATCH_CONVERSION so the
+                         * tiebreaker can prefer typed overloads. */
+                        int is_integer_literal = (arg_expr != NULL && arg_expr->type == EXPR_INUM);
+                        quality = semcheck_classify_match(arg_tag, arg_kgpc,
+                            formal_tag, formal_kgpc, is_var_param, symtab, is_integer_literal);
+                    }
+                    else
+                    {
+                        quality = semcheck_make_quality(MATCH_PROMOTION);
+                    }
                 }
                 else
                 {
                     int is_integer_literal = (arg_expr != NULL && arg_expr->type == EXPR_INUM);
-                    if (getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
                     {
                         const char *formal_id_dbg = semcheck_get_param_type_id(formal_decl);
                         int formal_ptr_sub = (formal_kgpc != NULL &&
@@ -2046,6 +2691,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     quality = semcheck_classify_match(arg_tag, arg_kgpc, formal_tag, formal_kgpc,
                         is_var_param, symtab, is_integer_literal);
 
+                    if (quality.kind == MATCH_INCOMPATIBLE && !is_var_param &&
+                        is_integer_type(arg_tag))
+                    {
+                        const char *formal_type_id = semcheck_get_param_type_id(formal_decl);
+                        if (formal_type_id != NULL &&
+                            pascal_identifier_equals(formal_type_id, "tconstexprint"))
+                        {
+                            quality = semcheck_make_quality(MATCH_CONVERSION);
+                        }
+                    }
                     /* Penalize var/out parameters that receive non-addressable expressions
                      * (literals, computed values). A literal like 1 cannot be passed by
                      * reference, so the value-param overload should be preferred.
@@ -2102,16 +2757,23 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         {
                             quality.kind = MATCH_EXACT;
                             quality.exact_type_id = 1;
+                            quality.char_promo_rank = 0;
                         }
                         else if (formal_id != NULL &&
                             (pascal_identifier_equals(formal_id, "UnicodeString") ||
-                             pascal_identifier_equals(formal_id, "RawByteString") ||
-                             pascal_identifier_equals(formal_id, "WideString") ||
-                             pascal_identifier_equals(formal_id, "AnsiString") ||
-                             pascal_identifier_equals(formal_id, "String")))
+                             pascal_identifier_equals(formal_id, "WideString")))
                         {
                             if (quality.kind == MATCH_EXACT)
                                 quality.kind = MATCH_PROMOTION;
+                            quality.char_promo_rank = 1;
+                        }
+                        else if (formal_id != NULL &&
+                            (pascal_identifier_equals(formal_id, "RawByteString") ||
+                             pascal_identifier_equals(formal_id, "AnsiString") ||
+                             pascal_identifier_equals(formal_id, "String")))
+                        {
+                            quality.kind = MATCH_EXACT;
+                            quality.char_promo_rank = 1;
                         }
                         else if (formal_id == NULL)
                         {
@@ -2121,8 +2783,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             }
                             else if (formal_tag == STRING_TYPE)
                             {
-                                if (quality.kind == MATCH_EXACT)
-                                    quality.kind = MATCH_PROMOTION;
+                                quality.kind = MATCH_EXACT;
                             }
                         }
                     }
@@ -2158,14 +2819,66 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         quality.int_promo_rank = semcheck_integer_promotion_rank(
                             arg_tag, arg_kgpc, formal_tag, formal_kgpc, is_integer_literal);
                     }
-                    /* For char types, prefer smaller formal type (AnsiChar over WideChar) */
+                    /* When an integer argument matches an enum formal, penalize
+                     * so that real integer formals (SizeInt, Int64, etc.) are
+                     * preferred over enum formals in overload resolution. */
+                    else if (is_integer_type(arg_tag) && formal_tag == ENUM_TYPE)
+                    {
+                        quality.int_promo_rank = 10;
+                    }
+                    /* For char types, prefer smaller formal type (AnsiChar over WideChar).
+                     * kgpc_type_equals(AnsiChar, WideChar) returns true (same CHAR_TYPE tag),
+                     * so without this fix, AnsiChar→WideChar would get MATCH_EXACT (kind=0).
+                     * We detect WideChar formals and upgrade kind to MATCH_PROMOTION. */
                     if (arg_tag == CHAR_TYPE && formal_tag == CHAR_TYPE)
                     {
                         long long formal_size = formal_kgpc != NULL ? kgpc_type_sizeof(formal_kgpc) : 1;
-                        if (formal_size <= 1)
-                            quality.char_promo_rank = 0;  /* AnsiChar: best */
+                        int is_wide = (formal_size > 1);
+                        int actual_char_kind = 0;
+                        int formal_char_kind = is_wide ? 2 : 1;
+                        /* Also check by name: WideChar type alias may not carry size in formal params */
+                        const char *fid = semcheck_get_param_type_id(formal_decl);
+                        if (!is_wide)
+                        {
+                            if (fid != NULL && (pascal_identifier_equals(fid, "WideChar") ||
+                                                pascal_identifier_equals(fid, "UnicodeChar")))
+                            {
+                                is_wide = 1;
+                                formal_char_kind = 2;
+                            }
+                        }
+                        if (arg_expr != NULL)
+                        {
+                            const char *arg_decl_id = semcheck_get_expr_decl_type_id(arg_expr, symtab);
+                            if (arg_decl_id != NULL)
+                                actual_char_kind = semcheck_string_kind_from_type_id(arg_decl_id);
+                            if (actual_char_kind == 0 && arg_kgpc != NULL)
+                            {
+                                if (semcheck_is_widechar_like_type(arg_kgpc))
+                                    actual_char_kind = 2;
+                                else if (kgpc_type_is_char(arg_kgpc))
+                                    actual_char_kind = 1;
+                            }
+                        }
+                        if (actual_char_kind != 0 && formal_char_kind != 0)
+                        {
+                            if (actual_char_kind == formal_char_kind)
+                            {
+                                quality.char_promo_rank = 0;
+                            }
+                            else
+                            {
+                                if (quality.kind == MATCH_EXACT)
+                                    quality.kind = MATCH_PROMOTION;
+                                quality.char_promo_rank = 1;
+                            }
+                        }
                         else
-                            quality.char_promo_rank = 1;  /* WideChar: worse */
+                        {
+                            if (is_wide && quality.kind == MATCH_EXACT)
+                                quality.kind = MATCH_PROMOTION;
+                            quality.char_promo_rank = is_wide ? 1 : 0;
+                        }
                     }
                     if (arg_expr != NULL)
                     {
@@ -2178,9 +2891,27 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                 ? arg_kgpc->type_alias->alias_name
                                 : arg_kgpc->type_alias->target_type_id;
                         }
+                        if (arg_type_id == NULL && arg_tag == STRING_TYPE)
+                            arg_type_id = "String";
                         if (formal_id != NULL && arg_type_id != NULL &&
                             pascal_identifier_equals(formal_id, arg_type_id))
                             quality.exact_type_id = 1;
+                        if (!quality.exact_type_id && formal_id != NULL && arg_type_id != NULL)
+                        {
+                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != 0 && arg_kind != 0)
+                            {
+                                if (formal_kind == arg_kind)
+                                    quality.exact_type_id = 1;
+                                else
+                                {
+                                    if (quality.kind == MATCH_EXACT)
+                                        quality.kind = MATCH_PROMOTION;
+                                    quality.char_promo_rank = 1;
+                                }
+                            }
+                        }
                         if (!quality.exact_type_id && formal_id != NULL && arg_type_id != NULL)
                         {
                             const char *formal_num = semcheck_numeric_type_canonical_id(formal_id);
@@ -2188,6 +2919,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             if (formal_num != NULL && arg_num != NULL &&
                                 pascal_identifier_equals(formal_num, arg_num))
                                 quality.exact_type_id = 1;
+                        }
+                        if (formal_id != NULL && arg_type_id != NULL &&
+                            is_string_type(formal_tag) && is_string_type(arg_tag))
+                        {
+                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != 0 && formal_kind == arg_kind)
+                                quality.exact_pointer_subtype = 1;
                         }
                         if (formal_id != NULL && arg_type_id != NULL &&
                             formal_tag == POINTER_TYPE && arg_tag == STRING_TYPE)
@@ -2225,6 +2964,12 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
+        /* For class method overloads (id contains "__"), the current method
+         * being compiled sits at scope 0 (method body) while sibling overloads
+         * are at scope 1 (class level). Normalize them to prevent the scope
+         * filter from excluding sibling overloads. */
+        if (candidate->owner_class != NULL && candidate_scope == 0)
+            candidate_scope = 1;
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;
@@ -2244,15 +2989,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int missing_args = total_params - given_count;
-        if (getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
         {
             fprintf(stderr, "[KGPC] candidate %s (%s) qualities:",
                 candidate->id ? candidate->id : "<null>",
                 candidate->mangled_id ? candidate->mangled_id : "<null>");
             for (int qi = 0; qi < given_count; qi++)
-                fprintf(stderr, " (%d,%d,%d,%d,%d)", (int)qualities[qi].kind,
+                fprintf(stderr, " (%d,%d,%d,%d,%d,%d)", (int)qualities[qi].kind,
                     qualities[qi].exact_type_id, qualities[qi].exact_pointer_subtype,
-                    qualities[qi].exact_array_elem, qualities[qi].int_promo_rank);
+                    qualities[qi].exact_array_elem, qualities[qi].int_promo_rank,
+                    qualities[qi].char_promo_rank);
             fprintf(stderr, " missing=%d\n", missing_args);
         }
         if (num_best == 0)
@@ -2308,12 +3054,31 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     specificity_cmp = cand_int_max < best_int_max ? -1 : 1;
                 else
                 {
-                    int cand_param_size = semcheck_total_param_size(
-                        kgpc_type_get_procedure_params(candidate->type), symtab);
-                    int best_param_size = semcheck_total_param_size(
-                        kgpc_type_get_procedure_params(best_match->type), symtab);
-                    if (cand_param_size != best_param_size)
-                        specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                    ListNode_t *cand_params = kgpc_type_get_procedure_params(candidate->type);
+                    ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
+                    /* For same-mangled float overloads (Single/Double/Extended all map to _r),
+                     * prefer the one whose value param sizes are closest to KGPC's native
+                     * 8-byte float size (Double).  This ensures the generated body uses
+                     * movsd (8-byte) rather than movss (4-byte) or x87 Extended ABI. */
+                    int same_mangled = (best_match->mangled_id != NULL &&
+                        candidate->mangled_id != NULL &&
+                        pascal_identifier_equals(best_match->mangled_id, candidate->mangled_id));
+                    if (same_mangled &&
+                        semcheck_all_params_float(cand_params, symtab) &&
+                        semcheck_all_params_float(best_params, symtab))
+                    {
+                        int cand_dist = semcheck_value_float_param_distance(cand_params, symtab);
+                        int best_dist = semcheck_value_float_param_distance(best_params, symtab);
+                        if (cand_dist != best_dist)
+                            specificity_cmp = cand_dist < best_dist ? -1 : 1;
+                    }
+                    else
+                    {
+                        int cand_param_size = semcheck_total_param_size(cand_params, symtab);
+                        int best_param_size = semcheck_total_param_size(best_params, symtab);
+                        if (cand_param_size != best_param_size)
+                            specificity_cmp = cand_param_size < best_param_size ? -1 : 1;
+                    }
                 }
                 if (specificity_cmp == 0)
                 {
@@ -2321,6 +3086,16 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                      * parameters.  E.g., Equals(TBits) should beat Equals(TObject) when
                      * the actual argument is TBits. */
                     specificity_cmp = semcheck_compare_class_specificity(candidate, best_match, symtab);
+                }
+                if (specificity_cmp == 0)
+                {
+                    /* Prefer overloads with typed params over untyped (var/const)
+                     * params.  E.g., FpRead(buf: PAnsiChar) should beat
+                     * FpRead(var buf) when both match a Pointer argument. */
+                    int cand_untyped = semcheck_count_untyped_params(candidate);
+                    int best_untyped = semcheck_count_untyped_params(best_match);
+                    if (cand_untyped != best_untyped)
+                        specificity_cmp = cand_untyped < best_untyped ? -1 : 1;
                 }
                 if (specificity_cmp == 0)
                 {
@@ -2379,6 +3154,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     best_match = candidate;
                     best_qualities = qualities;
                     best_missing = missing_args;
+                    num_best = 1;
                     continue;
                 }
                 /* True ambiguity: neither is strictly better.
@@ -2402,25 +3178,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 else
                 {
                     num_best++;
-                    /* Mixed partial-order tie: choose lower aggregate penalty
-                     * before declaring true ambiguity. This helps pick the
-                     * more specific candidate in bootstrap overload sets where
-                     * alias/pointer exactness and promotions otherwise produce
-                     * non-dominating vectors. */
-                    int cand_penalty = semcheck_quality_penalty_sum(given_count, qualities);
-                    int best_penalty = semcheck_quality_penalty_sum(given_count, best_qualities);
-                    if (cand_penalty < best_penalty)
-                    {
-                        free(best_qualities);
-                        best_match = candidate;
-                        best_qualities = qualities;
-                        best_missing = missing_args;
-                        num_best = 1;
-                    }
-                    else
-                    {
-                        free(qualities);
-                    }
+                    free(qualities);
                 }
             }
         }

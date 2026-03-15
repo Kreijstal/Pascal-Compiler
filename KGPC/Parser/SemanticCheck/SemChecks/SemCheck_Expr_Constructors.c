@@ -33,6 +33,61 @@ static int integer_literal_fits_type(long long value, int expected_type)
     }
 }
 
+static struct RecordType *semcheck_resolve_record_type_from_ref(SymTab_t *symtab,
+    struct TypeRef *type_ref, const char *type_id)
+{
+    if (symtab == NULL || (type_ref == NULL && type_id == NULL))
+        return NULL;
+
+    struct RecordType *record = NULL;
+    HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
+    if (type_node == NULL)
+        type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab, type_ref, type_id);
+    if (type_node == NULL && type_id != NULL)
+        FindIdent(&type_node, symtab, type_id);
+
+    if (type_node != NULL)
+    {
+        record = get_record_type_from_node(type_node);
+        if (record != NULL)
+            return record;
+
+        if (type_node->type != NULL && kgpc_type_is_record(type_node->type))
+            return kgpc_type_get_record(type_node->type);
+
+        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+        if (alias != NULL)
+        {
+            if (alias->inline_record_type != NULL)
+                return alias->inline_record_type;
+
+            if (alias->target_type_id != NULL || alias->target_type_ref != NULL)
+            {
+                HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(
+                    symtab, alias->target_type_ref, alias->target_type_id);
+                if (target_node == NULL)
+                    target_node = semcheck_find_type_node_with_kgpc_type_ref(
+                        symtab, alias->target_type_ref, alias->target_type_id);
+                if (target_node == NULL && alias->target_type_id != NULL)
+                    FindIdent(&target_node, symtab, alias->target_type_id);
+                if (target_node != NULL)
+                {
+                    record = get_record_type_from_node(target_node);
+                    if (record != NULL)
+                        return record;
+                    if (target_node->type != NULL && kgpc_type_is_record(target_node->type))
+                        return kgpc_type_get_record(target_node->type);
+                }
+            }
+        }
+    }
+
+    if (type_id != NULL)
+        return semcheck_lookup_record_type(symtab, type_id);
+
+    return NULL;
+}
+
 int semcheck_convert_set_literal_to_array_literal(struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_SET)
@@ -112,7 +167,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL)
         return 0;
 
-    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
     {
         fprintf(stderr,
             "[KGPC] typecheck array literal @ line %d: expected_type=%d expected_id=%s\n",
@@ -146,32 +201,18 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
         return 0;
     }
 
-    struct RecordType *expected_record = NULL;
-    if (expected_type == RECORD_TYPE)
+    const char *resolved_type_id = expected_type_id != NULL ?
+        expected_type_id : expr->array_element_type_id;
+    struct RecordType *expected_record = semcheck_resolve_record_type_from_ref(
+        symtab, expr->array_element_type_ref, resolved_type_id);
+    if (expected_record == NULL && expected_type == RECORD_TYPE &&
+        expr->array_element_record_type != NULL)
+        expected_record = expr->array_element_record_type;
+    if (expected_record != NULL)
     {
-        if (expected_type_id != NULL)
-        {
-            expected_record = semcheck_lookup_record_type(symtab, expected_type_id);
-            if (expected_record == NULL)
-            {
-                HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, expected_type_id);
-                if (type_node == NULL)
-                    FindIdent(&type_node, symtab, expected_type_id);
-                if (type_node != NULL)
-                {
-                    expected_record = get_record_type_from_node(type_node);
-                    if (expected_record == NULL && type_node->type != NULL &&
-                        kgpc_type_is_record(type_node->type))
-                    {
-                        expected_record = kgpc_type_get_record(type_node->type);
-                    }
-                }
-            }
-        }
-        if (expected_record != NULL)
-        {
-            expr->array_element_record_type = expected_record;
-        }
+        expr->array_element_record_type = expected_record;
+        if (expected_type == UNKNOWN_TYPE)
+            expected_type = RECORD_TYPE;
     }
 
     int error_count = 0;
@@ -219,10 +260,26 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             max_scope_lev, NO_MUTATE);
         int element_type = semcheck_tag_from_kgpc(element_kgpc_type);
 
-        if (error_count == 0 && expected_type != UNKNOWN_TYPE &&
-            element_type != expected_type)
+        if (error_count == 0 &&
+            ((expected_type != UNKNOWN_TYPE && element_type != expected_type) ||
+             (expected_type == UNKNOWN_TYPE && expected_type_id != NULL)))
         {
             int compatible = 0;
+            KgpcType *expected_element_kgpc = NULL;
+            KgpcType *actual_element_kgpc = element_kgpc_type;
+
+            if (expected_type_id != NULL && symtab != NULL)
+            {
+                HashNode_t *expected_type_node = semcheck_find_preferred_type_node(symtab,
+                    expected_type_id);
+                if (expected_type_node != NULL)
+                {
+                    expected_element_kgpc = expected_type_node->type;
+                    if (expected_element_kgpc != NULL)
+                        kgpc_type_retain(expected_element_kgpc);
+                }
+            }
+
             if (is_integer_type(expected_type) && is_integer_type(element_type))
             {
                 if (element_expr->type == EXPR_INUM)
@@ -239,14 +296,36 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             {
                 compatible = 1;
             }
-            else if (expected_type == STRING_TYPE && element_type == CHAR_TYPE)
+            else if (is_string_type(expected_type) && is_string_type(element_type))
+            {
+                /* FPC accepts shortstring/rawbytestring/ansistring elements in
+                 * open-array string contexts (e.g. array of RawByteString). */
+                compatible = 1;
+            }
+            else if (is_string_type(expected_type) && element_type == CHAR_TYPE &&
+                     element_expr != NULL &&
+                     (element_expr->type == EXPR_CHAR_CODE ||
+                      (element_expr->type == EXPR_STRING &&
+                       element_expr->expr_data.string != NULL &&
+                       strlen(element_expr->expr_data.string) == 1)))
+            {
+                /* Allow literal char elements like ['A', 'B'] in string arrays
+                 * without accepting arbitrary char expressions as strings. */
+                compatible = 1;
+            }
+            else if (expected_element_kgpc != NULL && actual_element_kgpc != NULL &&
+                     are_types_compatible_for_assignment(expected_element_kgpc,
+                         actual_element_kgpc, symtab))
             {
                 compatible = 1;
             }
 
+            if (expected_element_kgpc != NULL)
+                destroy_kgpc_type(expected_element_kgpc);
+
             if (!compatible)
             {
-                if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
                 {
                     fprintf(stderr,
                         "[KGPC] array literal mismatch @ line %d index %d: expected=%d (%s) got=%d\n",
@@ -297,7 +376,10 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     int expected_type = UNKNOWN_TYPE;
     const char *expected_type_id = NULL;
     int expected_is_array_of_const = 0;
+    int expected_element_size = 0;
     int is_open_array_param = (formal_decl->type == TREE_ARR_DECL);
+    int expected_is_array = is_open_array_param;
+    struct TypeAlias *expected_alias = NULL;
     if (formal_decl->type == TREE_ARR_DECL)
     {
         expected_type = formal_decl->tree_data.arr_decl_data.type;
@@ -312,6 +394,12 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     {
         return 0;
     }
+    if (expected_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, expected_type_id);
+        if (type_node != NULL)
+            expected_alias = hashnode_get_type_alias(type_node);
+    }
 
     if (expected_type == ARRAY_OF_CONST_TYPE)
         expected_is_array_of_const = 1;
@@ -321,18 +409,52 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         KgpcType *expected_kgpc = resolve_type_from_vardecl(formal_decl, symtab, &owns_expected);
         if (expected_kgpc != NULL && expected_kgpc->kind == TYPE_KIND_ARRAY)
         {
+            expected_is_array = 1;
             KgpcType *elem = expected_kgpc->info.array_info.element_type;
             if (elem != NULL && elem->kind == TYPE_KIND_PRIMITIVE &&
                 elem->info.primitive_type_tag == ARRAY_OF_CONST_TYPE)
             {
                 expected_is_array_of_const = 1;
             }
+            else if (elem != NULL)
+            {
+                expected_type = semcheck_tag_from_kgpc(elem);
+                expected_type_id = NULL;
+                if (elem->type_alias != NULL && elem->type_alias->alias_name != NULL)
+                    expected_type_id = strdup(elem->type_alias->alias_name);
+                else if (kgpc_type_is_pointer(elem) && elem->info.points_to != NULL &&
+                         elem->info.points_to->type_alias != NULL &&
+                         elem->info.points_to->type_alias->alias_name != NULL)
+                    expected_type_id = strdup(elem->info.points_to->type_alias->alias_name);
+                long long elem_sz = kgpc_type_sizeof(elem);
+                if (elem_sz > 0 && elem_sz <= INT_MAX)
+                    expected_element_size = (int)elem_sz;
+            }
         }
         if (owns_expected && expected_kgpc != NULL)
             destroy_kgpc_type(expected_kgpc);
     }
+    if (!expected_is_array && expected_alias != NULL && expected_alias->is_array)
+        expected_is_array = 1;
+    if (expected_is_array_of_const)
+        expected_is_array = 1;
 
-    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+    if (expected_alias != NULL && expected_alias->is_array)
+    {
+        if (expected_alias->array_element_type != UNKNOWN_TYPE &&
+            expected_alias->array_element_type != -1)
+        {
+            expected_type = expected_alias->array_element_type;
+            expected_type_id = expected_alias->array_element_type_id;
+        }
+        else if (expected_alias->array_element_type_id != NULL)
+        {
+            expected_type = UNKNOWN_TYPE;
+            expected_type_id = expected_alias->array_element_type_id;
+        }
+    }
+
+    if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
     {
         fprintf(stderr,
             "[KGPC] array literal @ line %d: formal_decl=%s expected_type=%d expected_id=%s array_of_const=%d\n",
@@ -346,7 +468,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
 
     if (arg_expr->type == EXPR_SET)
     {
-        if (!expected_is_array_of_const && !is_open_array_param)
+        if (!expected_is_array)
             return 0;
         if (semcheck_convert_set_literal_to_array_literal(arg_expr) != 0)
         {
@@ -394,7 +516,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     if (expected_type_id != NULL)
         arg_expr->array_element_type_id = strdup(expected_type_id);
     arg_expr->array_element_record_type = NULL;
-    arg_expr->array_element_size = 0;
+    arg_expr->array_element_size = expected_element_size;
     arg_expr->array_lower_bound = 0;
     arg_expr->array_upper_bound = arg_expr->expr_data.array_literal_data.element_count - 1;
     arg_expr->is_array_expr = 1;
@@ -484,7 +606,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         else if (field->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            type_node = semcheck_find_preferred_type_node(symtab, field->array_element_type_id);
+            type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field->array_element_type_ref, field->array_element_type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field->array_element_type_ref, field->array_element_type_id);
             if (type_node != NULL)
             {
                 if (type_node->type != NULL)
@@ -513,7 +639,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         KgpcType *pointee_type = NULL;
         if (field->pointer_type_id != NULL)
         {
-            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, field->pointer_type_id);
+            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field->pointer_type_ref, field->pointer_type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field->pointer_type_ref, field->pointer_type_id);
             if (type_node != NULL)
             {
                 if (type_node->type != NULL)
@@ -540,7 +670,11 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        type_node = semcheck_find_preferred_type_node(symtab, field->type_id);
+        type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+            field->type_ref, field->type_id);
+        if (type_node == NULL)
+            type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                field->type_ref, field->type_id);
         if (type_node != NULL)
         {
             if (type_node->type != NULL)
@@ -583,6 +717,16 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = create_record_type(record_type);
 
+    /* Temporarily set unit context to the record's defining unit so field
+     * type lookups prefer same-unit types. */
+    int saved_unit_ctx = 0;
+    int has_unit_ctx = (record_type->source_unit_index > 0);
+    if (has_unit_ctx)
+    {
+        saved_unit_ctx = semcheck_save_unit_context();
+        semcheck_restore_unit_context(record_type->source_unit_index);
+    }
+
     int error_count = 0;
     ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
     while (cur != NULL)
@@ -624,16 +768,54 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         field->field_record_type = field_desc->nested_record;
         if (field_desc->nested_record != NULL)
             field->field_type = RECORD_TYPE;
-        if (field_desc->nested_record == NULL && field_desc->type_id != NULL)
+        if (field_desc->nested_record == NULL &&
+            (field_desc->type_id != NULL || field_desc->type_ref != NULL))
         {
-            struct RecordType *resolved_record = semcheck_lookup_record_type(symtab, field_desc->type_id);
+            struct RecordType *resolved_record = NULL;
+            HashNode_t *type_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field_desc->type_ref, field_desc->type_id);
+            if (type_node == NULL)
+                type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field_desc->type_ref, field_desc->type_id);
+            if (type_node != NULL)
+            {
+                resolved_record = get_record_type_from_node(type_node);
+                if (resolved_record == NULL)
+                {
+                    struct TypeAlias *alias = get_type_alias_from_node(type_node);
+                    if (alias != NULL && alias->target_type_id != NULL)
+                    {
+                        HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                            alias->target_type_ref, alias->target_type_id);
+                        if (target_node == NULL)
+                            target_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                                alias->target_type_ref, alias->target_type_id);
+                        if (target_node != NULL)
+                            resolved_record = get_record_type_from_node(target_node);
+                    }
+                }
+            }
+            if (resolved_record == NULL && field_desc->type_id != NULL)
+                resolved_record = semcheck_lookup_record_type(symtab, field_desc->type_id);
             if (resolved_record != NULL)
             {
                 field->field_record_type = resolved_record;
                 field->field_type = RECORD_TYPE;
             }
         }
-
+        if (field->field_record_type == NULL)
+        {
+            KgpcType *expected_type = semcheck_field_expected_kgpc_type(symtab, field_desc);
+            if (expected_type != NULL)
+            {
+                if (kgpc_type_is_record(expected_type))
+                {
+                    field->field_record_type = kgpc_type_get_record(expected_type);
+                    field->field_type = RECORD_TYPE;
+                }
+                destroy_kgpc_type(expected_type);
+            }
+        }
         if (field_desc->type_id != NULL)
         {
             free(field->field_type_id);
@@ -660,6 +842,57 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
             {
                 field->array_element_record_type = resolved_elem;
                 field->array_element_type = RECORD_TYPE;
+            }
+        }
+        if (field->array_element_record_type == NULL &&
+            (field_desc->array_element_type_ref != NULL || field_desc->array_element_type_id != NULL))
+        {
+            HashNode_t *elem_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                field_desc->array_element_type_ref, field_desc->array_element_type_id);
+            if (elem_node == NULL)
+                elem_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                    field_desc->array_element_type_ref, field_desc->array_element_type_id);
+            if (elem_node != NULL)
+            {
+                struct RecordType *resolved_elem = get_record_type_from_node(elem_node);
+                if (resolved_elem == NULL)
+                {
+                    if (elem_node->type != NULL && kgpc_type_is_record(elem_node->type))
+                        resolved_elem = kgpc_type_get_record(elem_node->type);
+                }
+                if (resolved_elem == NULL)
+                {
+                    struct TypeAlias *alias = get_type_alias_from_node(elem_node);
+                    if (alias != NULL)
+                    {
+                        if (alias->inline_record_type != NULL)
+                            resolved_elem = alias->inline_record_type;
+                    }
+                    if (alias != NULL && resolved_elem == NULL &&
+                        (alias->target_type_id != NULL || alias->target_type_ref != NULL))
+                    {
+                        HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                            alias->target_type_ref, alias->target_type_id);
+                        if (target_node == NULL)
+                            target_node = semcheck_find_type_node_with_kgpc_type_ref(symtab,
+                                alias->target_type_ref, alias->target_type_id);
+                        if (target_node != NULL)
+                            resolved_elem = get_record_type_from_node(target_node);
+                        if (resolved_elem == NULL && target_node != NULL &&
+                            target_node->type != NULL && kgpc_type_is_record(target_node->type))
+                        {
+                            resolved_elem = kgpc_type_get_record(target_node->type);
+                        }
+                    }
+                }
+                if (resolved_elem != NULL)
+                {
+                    field->array_element_record_type = resolved_elem;
+                    field->array_element_type = RECORD_TYPE;
+                    if (field->array_element_type_id == NULL &&
+                        resolved_elem->type_id != NULL)
+                        field->array_element_type_id = strdup(resolved_elem->type_id);
+                }
             }
         }
 
@@ -736,6 +969,11 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
                 if (field->value->array_element_type_id == NULL &&
                     field->array_element_type_id != NULL)
                     field->value->array_element_type_id = strdup(field->array_element_type_id);
+                if (field->value->array_element_record_type == NULL &&
+                    field->array_element_record_type != NULL)
+                {
+                    field->value->array_element_record_type = field->array_element_record_type;
+                }
 
                 int arr_err = semcheck_typecheck_array_literal(field->value, symtab, max_scope_lev,
                     field->array_element_type, field->array_element_type_id, line_num);
@@ -805,6 +1043,10 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
 
         cur = cur->next;
     }
+
+    /* Restore unit context */
+    if (has_unit_ctx)
+        semcheck_restore_unit_context(saved_unit_ctx);
 
     expr->expr_data.record_constructor_data.fields_semchecked = 1;
     return error_count;

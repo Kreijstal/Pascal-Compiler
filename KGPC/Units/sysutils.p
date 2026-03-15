@@ -20,6 +20,9 @@ type
     Byte = 0..255;
     TBytes = array of Byte;
 
+    TSysCharSet = set of Char;
+    TExecuteFlags = set of (ExecInheritsHandles);
+
     TFloatFormat = (ffGeneral, ffExponent, ffFixed, ffNumber, ffCurrency);
 
     TFormatSettings = record
@@ -33,6 +36,7 @@ type
         Size: Int64;
         Time: Longint;
     end;
+    TRawByteSearchRec = TSearchRec;
 
     Exception = class
     private
@@ -44,6 +48,37 @@ type
     end;
 
     EConvertError = class(Exception)
+    end;
+
+    EAbort = class(Exception)
+    end;
+
+    EInOutError = class(Exception)
+    public
+        ErrorCode: Integer;
+    end;
+
+    EOSError = class(Exception)
+    public
+        ErrorCode: LongInt;
+    end;
+
+    EAbstractError = class(Exception)
+    end;
+
+    EAccessViolation = class(Exception)
+    end;
+
+    ERangeError = class(Exception)
+    end;
+
+    EOverflow = class(Exception)
+    end;
+
+    EInvalidPointer = class(Exception)
+    end;
+
+    EDivByZero = class(Exception)
     end;
 
     TEncoding = class
@@ -103,6 +138,7 @@ function AnsiUpperCase(const S: AnsiString): AnsiString;
 function AnsiLowerCase(const S: AnsiString): AnsiString;
 function CompareText(const S1, S2: AnsiString): Integer;
 function SameText(const S1, S2: AnsiString): Boolean;
+procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
@@ -147,8 +183,11 @@ function ChangeFileExt(const FileName, Extension: AnsiString): AnsiString;
 function IncludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function ExcludeTrailingPathDelimiter(const Dir: AnsiString): AnsiString;
 function FindFirst(const Path: AnsiString; Attr: Longint; var F: TSearchRec): Longint;
+function FindNext(var F: TSearchRec): Longint;
 procedure FindClose(var F: TSearchRec);
+function ExpandFileName(const FileName: AnsiString): AnsiString;
 function FileExists(const FileName: AnsiString): Boolean;
+function FileAge(const FileName: AnsiString): LongInt;
 function DeleteFile(const FileName: AnsiString): Boolean;
 function DirectoryExists(const DirName: AnsiString): Boolean;
 function RenameFile(const OldName, NewName: AnsiString): Boolean;
@@ -161,8 +200,13 @@ function GetProcessID: Longint;
 function LoadLibrary(const Name: AnsiString): NativeUInt;
 function GetProcedureAddress(LibHandle: NativeUInt; const ProcName: AnsiString): NativeUInt;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
+function ExecuteProcess(const Path, ComLine: AnsiString; Flags: TExecuteFlags): LongInt; overload;
+function ExecuteProcess(const Path: AnsiString; const ComLine: array of AnsiString; Flags: TExecuteFlags): LongInt; overload;
 procedure SetString(out S: AnsiString; Buffer: PAnsiChar; Len: Integer);
 function FileDateToDateTime(FileDate: LongInt): TDateTime;
+procedure GetLocalTime(var SystemTime: TSystemTime); cdecl; external name 'kgpc_getlocaltime';
+procedure DecodeTime(Time: TDateTime; out Hour, Min, Sec, MSec: Word); cdecl; external name 'kgpc_decodetime';
+procedure DecodeDate(Date: TDateTime; out Year, Month, Day: Word); cdecl; external name 'kgpc_decodedate';
 function StringToGUID(const S: AnsiString): TGUID;
 procedure FillWord(var X; Count: SizeInt; Value: Word);
 
@@ -212,6 +256,7 @@ function kgpc_format(fmt: AnsiString; args: Pointer; count: NativeUInt): AnsiStr
 function kgpc_string_to_int(text: PChar; out value: Integer): Integer; external;
 function kgpc_string_to_real(text: PChar; out value: Double): Integer; external;
 function kgpc_file_exists(path: PChar): Integer; external;
+function kgpc_fileage(path: PChar): Int64; external;
 function kgpc_directory_exists(path: PChar): Integer; external;
 procedure kgpc_sleep_ms(milliseconds: integer); external;
 function kgpc_get_tick_count64: NativeUInt; external;
@@ -237,6 +282,7 @@ function kgpc_get_proc_address(handle: NativeUInt; symbol: PChar): NativeUInt; e
 function kgpc_free_library(handle: NativeUInt): Integer; external;
 function kgpc_strpas(p: PAnsiChar): AnsiString; external;
 function kgpc_strpas_len(p: PAnsiChar; Len: SizeInt): AnsiString; external;
+function c_system(cmd: PAnsiChar): LongInt; cdecl; external name 'system';
 
 function ToPChar(const S: AnsiString): PChar;
 begin
@@ -691,6 +737,11 @@ begin
     SameText := CompareText(S1, S2) = 0;
 end;
 
+procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
+begin
+    Dest := Dest + S;
+end;
+
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 var
     i: integer;
@@ -865,9 +916,9 @@ begin
         Result := '';
         exit;
     end;
-    SetLength(Result, Count);
+    Result := '';
     for i := 1 to Count do
-        Result[i] := C;
+        Result := Result + WideString(C);
 end;
 
 function IntToHex(Value: LongInt): AnsiString;
@@ -1433,9 +1484,26 @@ begin
     FindFirst := 1;
 end;
 
+function FindNext(var F: TSearchRec): Longint;
+begin
+    F.Name := '';
+    FindNext := 1;
+end;
+
 procedure FindClose(var F: TSearchRec);
 begin
     F.Name := '';
+end;
+
+function ExpandFileName(const FileName: AnsiString): AnsiString;
+begin
+    if FileName = '' then
+        ExpandFileName := GetCurrentDir
+    else if (Length(FileName) > 0) and
+            ((FileName[1] = PathDelim) or (FileName[1] = AltPathDelim)) then
+        ExpandFileName := FileName
+    else
+        ExpandFileName := IncludeTrailingPathDelimiter(GetCurrentDir) + FileName;
 end;
 
 function FloatToStr(Value: Real): AnsiString;
@@ -1545,6 +1613,11 @@ begin
   Result := kgpc_file_exists(ToPChar(FileName)) <> 0;
 end;
 
+function FileAge(const FileName: AnsiString): LongInt;
+begin
+  Result := LongInt(kgpc_fileage(ToPChar(FileName)));
+end;
+
 function DeleteFile(const FileName: AnsiString): Boolean;
 begin
   Result := kgpc_delete_file(ToPChar(FileName)) <> 0;
@@ -1603,6 +1676,27 @@ end;
 function FreeLibrary(LibHandle: NativeUInt): Boolean;
 begin
     FreeLibrary := kgpc_free_library(LibHandle) <> 0;
+end;
+
+function ExecuteProcess(const Path, ComLine: AnsiString; Flags: TExecuteFlags): LongInt;
+var
+    Command: AnsiString;
+begin
+    Command := Path;
+    if ComLine <> '' then
+        Command := Command + ' ' + ComLine;
+    ExecuteProcess := c_system(PAnsiChar(Command));
+end;
+
+function ExecuteProcess(const Path: AnsiString; const ComLine: array of AnsiString; Flags: TExecuteFlags): LongInt;
+var
+    Command: AnsiString;
+    I: Integer;
+begin
+    Command := Path;
+    for I := Low(ComLine) to High(ComLine) do
+        Command := Command + ' ' + ComLine[I];
+    ExecuteProcess := c_system(PAnsiChar(Command));
 end;
 
 procedure FreeAndNil(var Obj: Pointer);

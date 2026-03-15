@@ -1,4 +1,5 @@
 program arcsech_function;
+uses Math;
 var
   r: real;
 begin

@@ -603,6 +603,15 @@ static bool preprocess_buffer_internal(PascalPreprocessor *pp,
         } else {
             /* Content is being skipped - mark that we need a line directive when we resume */
             need_line_directive = true;
+            /* Emit newlines even for skipped content to keep line numbers in sync.
+             * Without this, ifdef'd-out lines shrink the preprocessed output and
+             * cause line number drift in the main file (depth 0) where {#line}
+             * directives are not emitted. */
+            if (c == '\n') {
+                if (!string_builder_append_char(output, '\n')) {
+                    return set_error(error_message, "out of memory");
+                }
+            }
         }
         
         // Track line numbers for ALL newlines
@@ -670,6 +679,7 @@ static bool handle_directive(PascalPreprocessor *pp,
     bool branch_active = current_branch_active(conditions);
     bool handled = false;
     bool is_io_check_directive = false;
+    bool skip_trailing_newline = false;
 
     if (strcmp(keyword, "I") == 0) {
         const char *cursor = rest;
@@ -833,7 +843,15 @@ static bool handle_directive(PascalPreprocessor *pp,
             free(path_token);
             free(keyword);
             free(content);
+            skip_trailing_newline = true;
             *index = directive_end;
+            if (skip_trailing_newline && *index + 1 < length && input[*index + 1] == '\n')
+                (*index)++;
+            else if (skip_trailing_newline && *index + 1 < length && input[*index + 1] == '\r') {
+                (*index)++;
+                if (*index + 1 < length && input[*index + 1] == '\n')
+                    (*index)++;
+            }
             return ok;
         }
 
@@ -937,6 +955,7 @@ static bool handle_directive(PascalPreprocessor *pp,
                     free(path_token);
                     free(keyword);
                     free(content);
+                    *index = paren_style ? end + 1 : end;
                     return true;
                 }
                 // If not recognized, fall through to try as a file
@@ -994,6 +1013,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             /* Emit line directive returning to parent file */
             if (ok) {
                 emit_line_directive(output, current_line + 1, filename);
+                skip_trailing_newline = true;
             }
 
             free(include_buffer);
@@ -1341,6 +1361,20 @@ static bool handle_directive(PascalPreprocessor *pp,
         *index = end;
     }
 
+    /* After an include with a {#line} directive, skip the trailing newline
+     * of the include directive line. The {#line} directive already accounts
+     * for the line transition, so emitting this newline would cause an
+     * off-by-one in line tracking. */
+    if (skip_trailing_newline) {
+        if (*index + 1 < length && input[*index + 1] == '\n')
+            (*index)++;
+        else if (*index + 1 < length && input[*index + 1] == '\r') {
+            (*index)++;
+            if (*index + 1 < length && input[*index + 1] == '\n')
+                (*index)++;
+        }
+    }
+
     return true;
 }
 
@@ -1374,6 +1408,90 @@ static bool read_file_contents(const char *filename, char **buffer, size_t *leng
         return set_error(error_message, "failed to read '%s'", filename);
     }
     data[read] = '\0';
+
+    {
+        int line = 1;
+        int in_brace_comment = 0;
+        int in_paren_comment = 0;
+        const char *cursor = data;
+        while (*cursor != '\0')
+        {
+            const char *line_start = cursor;
+            const char *line_end = cursor;
+            while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r')
+                ++line_end;
+
+            const char *p = line_start;
+            while (p < line_end)
+            {
+                if (in_brace_comment)
+                {
+                    if (*p == '}')
+                        in_brace_comment = 0;
+                    ++p;
+                    continue;
+                }
+                if (in_paren_comment)
+                {
+                    if ((p + 1) < line_end && p[0] == '*' && p[1] == ')')
+                    {
+                        in_paren_comment = 0;
+                        p += 2;
+                        continue;
+                    }
+                    ++p;
+                    continue;
+                }
+
+                if (*p == ' ' || *p == '\t')
+                {
+                    ++p;
+                    continue;
+                }
+                if ((p + 1) < line_end && p[0] == '/' && p[1] == '/')
+                    break;
+                if (*p == '{')
+                {
+                    in_brace_comment = 1;
+                    ++p;
+                    continue;
+                }
+                if ((p + 1) < line_end && p[0] == '(' && p[1] == '*')
+                {
+                    in_paren_comment = 1;
+                    p += 2;
+                    continue;
+                }
+
+                {
+                    size_t remaining = (size_t)(line_end - p);
+                    int is_conflict_marker =
+                        (remaining == 7 && strncmp(p, "=======", 7) == 0) ||
+                        (remaining >= 7 &&
+                         ((strncmp(p, "<<<<<<<", 7) == 0) ||
+                          (strncmp(p, ">>>>>>>", 7) == 0)) &&
+                         (remaining == 7 || p[7] == ' ' || p[7] == '\t'));
+                    if (is_conflict_marker)
+                    {
+                        free(data);
+                        return set_error(error_message,
+                            "merge conflict marker found in '%s' at line %d",
+                            filename, line);
+                    }
+                }
+
+                break;
+            }
+
+            cursor = line_end;
+            if (*cursor == '\r' && cursor[1] == '\n')
+                ++cursor;
+            if (*cursor != '\0')
+                ++cursor;
+            ++line;
+        }
+    }
+
     if (buffer) {
         *buffer = data;
     }

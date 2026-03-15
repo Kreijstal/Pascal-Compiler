@@ -194,6 +194,14 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         if (alias->base_type != UNKNOWN_TYPE)
             *out_type = alias->base_type;
 
+        if (alias->target_type_ref != NULL)
+        {
+            HashNode_t *target_node = semcheck_find_preferred_type_node_with_ref(symtab,
+                alias->target_type_ref, alias->target_type_id);
+            if (target_node != NULL)
+                set_type_from_hashtype(out_type, target_node);
+        }
+
         if (alias->target_type_id != NULL)
         {
             HashNode_t *target_node = NULL;
@@ -201,6 +209,12 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
                 target_node != NULL)
             {
                 set_type_from_hashtype(out_type, target_node);
+            }
+            else
+            {
+                target_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
+                if (target_node != NULL)
+                    set_type_from_hashtype(out_type, target_node);
             }
         }
 
@@ -214,7 +228,7 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
             *out_type = FILE_TYPE;
     }
 
-    if (getenv("KGPC_DEBUG_TYPEID") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TYPEID") != NULL &&
         (pascal_identifier_equals(type_id, "qword") ||
          pascal_identifier_equals(type_id, "int64") ||
          pascal_identifier_equals(type_id, "cint64")))
@@ -239,6 +253,26 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
     /* Try KgpcType first if available */
     if (hash_node->type != NULL)
     {
+        /* Check actual kind FIRST for record/pointer/procedure types.
+         * type_alias overrides are only safe for primitive types; for records
+         * and pointers the type_alias may carry stale base_type (e.g. STRING_TYPE
+         * on a class-typed variable's pointer KgpcType). */
+        if (hash_node->type->kind == TYPE_KIND_POINTER)
+        {
+            *type = POINTER_TYPE;
+            return 0;
+        }
+        if (hash_node->type->kind == TYPE_KIND_RECORD)
+        {
+            struct RecordType *rec = kgpc_type_get_record(hash_node->type);
+            if (rec != NULL && rec->is_interface)
+            {
+                *type = POINTER_TYPE;
+                return 0;
+            }
+            *type = RECORD_TYPE;
+            return 0;
+        }
         if (hash_node->type->type_alias != NULL)
         {
             int base = hash_node->type->type_alias->base_type;
@@ -271,16 +305,6 @@ int set_type_from_hashtype(int *type, HashNode_t *hash_node)
         if (hash_node->type->kind == TYPE_KIND_PRIMITIVE)
         {
             *type = kgpc_type_get_primitive_tag(hash_node->type);
-            return 0;
-        }
-        else if (hash_node->type->kind == TYPE_KIND_POINTER)
-        {
-            *type = POINTER_TYPE;
-            return 0;
-        }
-        else if (hash_node->type->kind == TYPE_KIND_RECORD)
-        {
-            *type = RECORD_TYPE;
             return 0;
         }
         else if (hash_node->type->kind == TYPE_KIND_PROCEDURE)

@@ -11,6 +11,11 @@
 static const char *registry[MAX_UNIT_NAMES]; /* index 0 unused (means "no unit") */
 static int count = 0;
 
+/* Dependency tracking: deps[i] is a bitmask of unit indices that unit i uses.
+ * With MAX_UNIT_NAMES=256, we need 256/64=4 uint64_t per unit. */
+#define DEP_WORDS ((MAX_UNIT_NAMES + 63) / 64)
+static unsigned long long deps[MAX_UNIT_NAMES][DEP_WORDS];
+
 int unit_registry_add(const char *name)
 {
     if (name == NULL || name[0] == '\0')
@@ -37,6 +42,32 @@ const char *unit_registry_get(int index)
     return registry[index];
 }
 
+int unit_registry_contains(const char *name)
+{
+    if (name == NULL || name[0] == '\0')
+        return 0;
+    for (int i = 1; i <= count; i++)
+    {
+        if (pascal_identifier_equals(registry[i], name))
+            return 1;
+    }
+    return 0;
+}
+
+void unit_registry_add_dep(int unit_idx, int dep_idx)
+{
+    if (unit_idx <= 0 || unit_idx >= MAX_UNIT_NAMES) return;
+    if (dep_idx <= 0 || dep_idx >= MAX_UNIT_NAMES) return;
+    deps[unit_idx][dep_idx / 64] |= (1ULL << (dep_idx % 64));
+}
+
+int unit_registry_is_dep(int unit_idx, int dep_idx)
+{
+    if (unit_idx <= 0 || unit_idx >= MAX_UNIT_NAMES) return 0;
+    if (dep_idx <= 0 || dep_idx >= MAX_UNIT_NAMES) return 0;
+    return (deps[unit_idx][dep_idx / 64] & (1ULL << (dep_idx % 64))) != 0;
+}
+
 void unit_registry_reset(void)
 {
     for (int i = 1; i <= count; i++)
@@ -44,5 +75,6 @@ void unit_registry_reset(void)
         free((char *)registry[i]);
         registry[i] = NULL;
     }
+    memset(deps, 0, sizeof(deps));
     count = 0;
 }

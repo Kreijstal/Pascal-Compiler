@@ -67,6 +67,7 @@ StackNode_t *add_l_t_bytes(char *label, int size);
 StackNode_t *add_l_x(char *, int size);
 void remove_last_l_x(char *label);
 StackNode_t *add_l_z(char *);
+StackNode_t *add_l_z_bytes(char *label, int size);
 StackNode_t *add_q_z(char *);
 void reserve_z_offset(int size);
 void unreserve_z_offset(void);

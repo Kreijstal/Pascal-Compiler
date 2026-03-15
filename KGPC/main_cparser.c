@@ -60,6 +60,9 @@ static int unsetenv(const char *name)
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 #ifndef R_OK
 #define R_OK 4
 #endif
@@ -79,7 +82,6 @@ size_t preprocessed_length = 0;
 char *preprocessed_path = NULL;
 static UnitSearchPaths g_unit_paths;
 static bool g_skip_stdlib = false;
-static int g_requires_pthread = 0;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
 
@@ -131,6 +133,7 @@ static void print_usage(const char *prog_name)
     fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
     fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
     fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
+    fprintf(stderr, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
     fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
     fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
     fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
@@ -196,7 +199,7 @@ static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
 
 static char *resolve_stdlib_path(const char *argv0)
 {
-    const char *env = getenv("KGPC_STDLIB");
+    const char *env = kgpc_getenv("KGPC_STDLIB");
     if (env != NULL && access(env, R_OK) == 0)
     {
         char *dup = strdup(env);
@@ -323,6 +326,21 @@ static unsigned g_count_parse_stdlib = 0;
 static unsigned g_count_parse_user = 0;
 static unsigned g_count_parse_units = 0;
 
+static int profile_pipeline_flag(void)
+{
+    static int initialized = 0;
+    static int enabled = 0;
+
+    if (!initialized)
+    {
+        const char *value = kgpc_getenv("KGPC_PROFILE_PIPELINE");
+        enabled = (value != NULL && value[0] != '\0' && strcmp(value, "0") != 0);
+        initialized = 1;
+    }
+
+    return enabled;
+}
+
 static double current_time_seconds(void)
 {
 #ifdef _WIN32
@@ -337,6 +355,13 @@ static double current_time_seconds(void)
         return ts.tv_sec + ts.tv_nsec / 1e9;
     return (double)clock() / CLOCKS_PER_SEC;
 #endif
+}
+
+static void emit_profile_stage(const char *stage, double elapsed_seconds)
+{
+    if (!profile_pipeline_flag())
+        return;
+    fprintf(stderr, "[profile] %s: %.3fs\n", stage, elapsed_seconds);
 }
 
 static void emit_timing_summary(void)
@@ -491,6 +516,10 @@ static void set_flags(char **optional_args, int count)
         {
             g_skip_stdlib = true;
         }
+        else if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
+        {
+            pascal_frontend_set_ast_cache_dir(&arg[15]);
+        }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
         {
             /* Define: -DSYMBOL or -DSYMBOL=VALUE */
@@ -527,11 +556,12 @@ static void set_flags(char **optional_args, int count)
             /* FPC lowercase -d: define symbol (same as -D) */
             pascal_frontend_add_define(&arg[2]);
         }
-        else
+        else if (arg[0] == '-')
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
             exit(1);
         }
+        /* else: positional argument (input/output file), skip silently */
 
         --count;
         ++i;
@@ -807,6 +837,30 @@ static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
                 if (unit_index > 0 && sub->tree_data.subprogram_data.source_unit_index == 0)
                     sub->tree_data.subprogram_data.source_unit_index = unit_index;
+                /* Also mark formal parameters so type resolution (e.g. TSize)
+                 * picks the correct unit-specific type during overload matching,
+                 * even before semcheck_subprogram processes this function. */
+                ListNode_t *arg = sub->tree_data.subprogram_data.args_var;
+                while (arg != NULL)
+                {
+                    if (arg->type == LIST_TREE && arg->cur != NULL)
+                    {
+                        Tree_t *arg_tree = (Tree_t *)arg->cur;
+                        if (arg_tree->type == TREE_VAR_DECL)
+                        {
+                            arg_tree->tree_data.var_decl_data.defined_in_unit = 1;
+                            if (unit_index > 0 && arg_tree->tree_data.var_decl_data.source_unit_index == 0)
+                                arg_tree->tree_data.var_decl_data.source_unit_index = unit_index;
+                        }
+                        else if (arg_tree->type == TREE_ARR_DECL)
+                        {
+                            arg_tree->tree_data.arr_decl_data.defined_in_unit = 1;
+                            if (unit_index > 0 && arg_tree->tree_data.arr_decl_data.source_unit_index == 0)
+                                arg_tree->tree_data.arr_decl_data.source_unit_index = unit_index;
+                        }
+                    }
+                    arg = arg->next;
+                }
             }
         }
         node = node->next;
@@ -827,13 +881,20 @@ static void mark_unit_type_decls(ListNode_t *type_list, int is_public, int unit_
                 decl->tree_data.type_decl_data.unit_is_public = is_public ? 1 : 0;
                 if (unit_index > 0 && decl->tree_data.type_decl_data.source_unit_index == 0)
                     decl->tree_data.type_decl_data.source_unit_index = unit_index;
+                /* Propagate unit index to the RecordType so field type lookups
+                   can prefer the defining unit's types. */
+                if (unit_index > 0 &&
+                    decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                    decl->tree_data.type_decl_data.info.record != NULL &&
+                    decl->tree_data.type_decl_data.info.record->source_unit_index == 0)
+                    decl->tree_data.type_decl_data.info.record->source_unit_index = unit_index;
             }
         }
         node = node->next;
     }
 }
 
-static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
+static void mark_unit_const_decls(ListNode_t *const_list, int is_public, int unit_index)
 {
     ListNode_t *node = const_list;
     while (node != NULL)
@@ -845,13 +906,15 @@ static void mark_unit_const_decls(ListNode_t *const_list, int is_public)
             {
                 decl->tree_data.const_decl_data.defined_in_unit = 1;
                 decl->tree_data.const_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.const_decl_data.source_unit_index == 0)
+                    decl->tree_data.const_decl_data.source_unit_index = unit_index;
             }
         }
         node = node->next;
     }
 }
 
-static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
+static void mark_unit_var_decls(ListNode_t *var_list, int is_public, int unit_index)
 {
     ListNode_t *node = var_list;
     while (node != NULL)
@@ -863,11 +926,19 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
             {
                 decl->tree_data.var_decl_data.defined_in_unit = 1;
                 decl->tree_data.var_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.var_decl_data.source_unit_index == 0)
+                    decl->tree_data.var_decl_data.source_unit_index = unit_index;
             }
             else if (decl->type == TREE_ARR_DECL)
             {
                 decl->tree_data.arr_decl_data.defined_in_unit = 1;
                 decl->tree_data.arr_decl_data.unit_is_public = is_public ? 1 : 0;
+                if (unit_index > 0 && decl->tree_data.arr_decl_data.source_unit_index == 0)
+                    decl->tree_data.arr_decl_data.source_unit_index = unit_index;
+            }
+            else
+            {
+                /* Other declaration types don't need marking */
             }
         }
         node = node->next;
@@ -950,7 +1021,7 @@ static int type_list_contains(ListNode_t *list, const char *type_id)
 
 static void debug_check_type_presence(Tree_t *target)
 {
-    const char *check_id = getenv("KGPC_DEBUG_CHECK_TYPE");
+    const char *check_id = kgpc_getenv("KGPC_DEBUG_CHECK_TYPE");
     if (check_id == NULL || check_id[0] == '\0' || target == NULL)
         return;
 
@@ -1001,6 +1072,50 @@ static ListNode_t *merge_unit_type_decls_before_locals(ListNode_t *head, ListNod
     return head;
 }
 
+/* Detach and return only public interface subprogram declarations from a unit subprogram list.
+ * Non-public implementation subprogram nodes remain in *list for the caller to dispose with the unit tree. */
+static ListNode_t *extract_public_unit_subprograms(ListNode_t **list)
+{
+    if (list == NULL || *list == NULL)
+        return NULL;
+
+    ListNode_t *public_head = NULL;
+    ListNode_t **public_tail = &public_head;
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = *list;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        int take = 0;
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)cur->cur;
+            if (sub->type == TREE_SUBPROGRAM &&
+                sub->tree_data.subprogram_data.unit_is_public)
+            {
+                take = 1;
+            }
+        }
+
+        if (take)
+        {
+            if (prev != NULL)
+                prev->next = next;
+            else
+                *list = next;
+            cur->next = NULL;
+            *public_tail = cur;
+            public_tail = &cur->next;
+        }
+        else
+        {
+            prev = cur;
+        }
+        cur = next;
+    }
+    return public_head;
+}
+
 /* Merges a loaded unit's declarations into the target tree.
  * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
 static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
@@ -1023,7 +1138,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
 
     int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
     mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
         while (dbg != NULL) {
             if (dbg->type == LIST_TREE) {
@@ -1045,8 +1160,8 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
         unit_tree->tree_data.unit_data.interface_type_decls);
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
-    if (getenv("KGPC_DEBUG_CONST") != NULL) {
+    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
+    if (kgpc_getenv("KGPC_DEBUG_CONST") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
         while (dbg != NULL) {
             if (dbg->type == LIST_TREE) {
@@ -1068,45 +1183,56 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
     unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
+    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1, unit_idx);
     *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
     unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
-                    decl->tree_data.type_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
-                            decl->tree_data.type_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+    if (target->type == TREE_PROGRAM_TYPE)
+    {
+        mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
+            ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+            while (dbg != NULL) {
+                if (dbg->type == LIST_TREE) {
+                    Tree_t *decl = (Tree_t *)dbg->cur;
+                    if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                        decl->tree_data.type_decl_data.id != NULL)
+                    {
+                        fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                                decl->tree_data.type_decl_data.id,
+                                unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                    unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                    }
                 }
+                dbg = dbg->next;
             }
-            dbg = dbg->next;
         }
+        /* Append implementation types to keep dependencies ahead of targets. */
+        *type_list = merge_unit_type_decls_before_locals(*type_list,
+            unit_tree->tree_data.unit_data.implementation_type_decls);
+        unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
+        /* Append implementation constants to keep dependencies ahead of targets. */
+        *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
+        unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
+        *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
+        unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
+        unit_tree->tree_data.unit_data.subprograms = NULL;
     }
-    /* Append implementation types to keep dependencies ahead of targets. */
-    *type_list = merge_unit_type_decls_before_locals(*type_list,
-        unit_tree->tree_data.unit_data.implementation_type_decls);
-    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
-
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    /* Append implementation constants to keep dependencies ahead of targets. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
-    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
-
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
-    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
-
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
-    *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
-    unit_tree->tree_data.unit_data.subprograms = NULL;
+    else
+    {
+        /* When compiling a unit, only interface declarations from used units are visible.
+         * Keep implementation declarations private to their original unit tree. */
+        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        ListNode_t *public_subs = extract_public_unit_subprograms(&unit_tree->tree_data.unit_data.subprograms);
+        *sub_list = ConcatList(*sub_list, public_subs);
+    }
 
     /* Only programs accumulate initialization/finalization */
     if (target->type == TREE_PROGRAM_TYPE) {
@@ -1115,6 +1241,10 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
 
         // Prepend finalization to the list (for LIFO execution order)
         if (unit_tree->tree_data.unit_data.finalization != NULL && final_list != NULL) {
+            /* Tag the finalization statement with its unit index so error
+             * reporting can show the correct unit name instead of the
+             * main program file. */
+            unit_tree->tree_data.unit_data.finalization->source_unit_index = unit_idx;
             ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
             if (final_node != NULL) {
                 final_node->next = *final_list;
@@ -1132,6 +1262,49 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 }
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
+
+static int source_file_mentions_objpas_qualified(const char *path)
+{
+    if (path == NULL)
+        return 0;
+
+    FILE *f = fopen(path, "rb");
+    if (f == NULL)
+        return 0;
+
+    int found = 0;
+    char buf[8192 + 1];
+    size_t carry = 0;
+    while (!found)
+    {
+        size_t n = fread(buf + carry, 1, sizeof(buf) - 1 - carry, f);
+        if (n == 0 && carry == 0)
+            break;
+        n += carry;
+        buf[n] = '\0';
+        for (size_t i = 0; i + 6 < n; ++i)
+        {
+            if ((buf[i] == 'O' || buf[i] == 'o') &&
+                (buf[i + 1] == 'B' || buf[i + 1] == 'b') &&
+                (buf[i + 2] == 'J' || buf[i + 2] == 'j') &&
+                (buf[i + 3] == 'P' || buf[i + 3] == 'p') &&
+                (buf[i + 4] == 'A' || buf[i + 4] == 'a') &&
+                (buf[i + 5] == 'S' || buf[i + 5] == 's') &&
+                buf[i + 6] == '.')
+            {
+                found = 1;
+                break;
+            }
+        }
+        if (found || feof(f))
+            break;
+        carry = (n >= 6) ? 6 : n;
+        memmove(buf, buf + n - carry, carry);
+    }
+
+    fclose(f);
+    return found;
+}
 
 static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
 {
@@ -1157,8 +1330,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (normalized == NULL)
         return;
 
-    if (strcmp(normalized, "cthreads") == 0)
-        g_requires_pthread = 1;
     if (strcmp(normalized, "gmp") == 0)
         g_requires_gmp = 1;
 
@@ -1171,10 +1342,12 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
+    int wants_objpas = source_file_mentions_objpas_qualified(path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
     bool track_time = time_passes_flag();
+    double profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     if (track_time)
         start_time = current_time_seconds();
     bool ok = parse_pascal_file(path, &unit_tree, true);
@@ -1203,8 +1376,62 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         exit(1);
     }
 
+    if (profile_pipeline_flag())
+    {
+        char stage[512];
+        snprintf(stage, sizeof(stage), "load unit %s", unit_name);
+        emit_profile_stage(stage, current_time_seconds() - profile_start);
+    }
+
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+
+    /* Imported units that explicitly reference ObjPas-qualified names need
+     * ObjPas loaded before merge/semcheck, otherwise aliases like
+     * ObjPas.TEndian can bind to unrelated visible types. Keep this narrow. */
+    if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id, "objpas") &&
+        wants_objpas)
+    {
+        load_unit(program, "objpas", visited);
+        int has_objpas = 0;
+        for (ListNode_t *cur = unit_tree->tree_data.unit_data.interface_uses;
+             cur != NULL; cur = cur->next)
+        {
+            if (cur->type == LIST_STRING && cur->cur != NULL &&
+                pascal_identifier_equals((const char *)cur->cur, "ObjPas"))
+            {
+                has_objpas = 1;
+                break;
+            }
+        }
+        if (!has_objpas)
+        {
+            ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
+            if (objpas_node != NULL)
+            {
+                objpas_node->next = unit_tree->tree_data.unit_data.interface_uses;
+                unit_tree->tree_data.unit_data.interface_uses = objpas_node;
+            }
+        }
+    }
+
+    /* Record dependency edges: this unit depends on each unit it uses */
+    {
+        int this_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+        ListNode_t *dep;
+        for (dep = unit_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
+        {
+            if (dep->type == LIST_STRING && dep->cur != NULL)
+                unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
+        }
+        for (dep = unit_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
+        {
+            if (dep->type == LIST_STRING && dep->cur != NULL)
+                unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
+        }
+        /* Every unit implicitly depends on System (Input, Output, etc.) */
+        unit_registry_add_dep(this_idx, unit_registry_add("System"));
+    }
 
     merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);
@@ -1234,10 +1461,9 @@ static void emit_link_args(void)
         used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lm");
     }
 
-    if (g_requires_pthread && !target_windows_flag())
-    {
-        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
-    }
+    /* Runtime requires pthread (thread manager in runtime_fpc_assign.c).
+     * On MSYS2/Windows, winpthreads provides this. */
+    used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lpthread");
 
     if (g_requires_gmp)
     {
@@ -1258,27 +1484,75 @@ int main(int argc, char **argv)
     arena_t* arena = arena_create(1024 * 1024);
     arena_set_global(arena);
 
-    if (argc < 3)
+    /* Process ALL arguments through set_flags first, then extract positional args.
+     * This allows flags like --no-stdlib to appear anywhere in the command line. */
+    unit_search_paths_init(&g_unit_paths);
+    if (argc > 1)
+        set_flags(argv + 1, argc - 1);
+
+    /* Extract positional arguments (non-flag args) as input and output files */
+    const char *input_file = NULL;
+    const char *output_file = NULL;
+    for (int i = 1; i < argc; ++i)
+    {
+        const char *a = argv[i];
+        /* Skip flags and their consumed arguments */
+        if (a[0] == '-')
+        {
+            /* Skip flags that consume the next argument */
+            if ((strcmp(a, "--target") == 0 || strcmp(a, "-target") == 0 ||
+                 strcmp(a, "--dump-ast") == 0 || strcmp(a, "-dump-ast") == 0 ||
+                 strcmp(a, "--target-abi") == 0) && i + 1 < argc)
+                ++i;
+            continue;
+        }
+        if (input_file == NULL)
+            input_file = a;
+        else if (output_file == NULL)
+            output_file = a;
+    }
+
+    if (input_file == NULL)
     {
         print_usage(argv[0]);
         clear_dump_ast_path();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
-    const char *input_file = argv[1];
-    file_to_parse = (char *)input_file;  /* Set global for error reporting */
-    unit_search_paths_init(&g_unit_paths);
-    unit_search_paths_set_user(&g_unit_paths, input_file);
-    const char *output_file = argv[2];
+    /* If no output file given, derive from input file (replace extension with .s) */
+    char derived_output[PATH_MAX];
+    if (output_file == NULL)
+    {
+        const char *dot = strrchr(input_file, '.');
+        const char *slash = strrchr(input_file, '/');
+        if (dot != NULL && (slash == NULL || dot > slash))
+        {
+            size_t base_len = (size_t)(dot - input_file);
+            if (base_len + 3 < sizeof(derived_output))
+            {
+                memcpy(derived_output, input_file, base_len);
+                memcpy(derived_output + base_len, ".s", 3);
+                output_file = derived_output;
+            }
+        }
+        if (output_file == NULL)
+        {
+            fprintf(stderr, "Error: Could not derive output file name from '%s'.\n", input_file);
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
+    }
 
-    int optional_count = argc - 3;
-    if (optional_count > 0)
-        set_flags(argv + 3, optional_count);
+    file_to_parse = (char *)input_file;  /* Set global for error reporting */
+    unit_search_paths_set_user(&g_unit_paths, input_file);
 
     if (time_passes_flag())
         atexit(emit_timing_summary);
 
     pascal_frontend_reset_objfpc_mode();
+    double pipeline_total_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
 
     bool use_stdlib = !g_skip_stdlib;
     char *prelude_path = NULL;
@@ -1304,12 +1578,14 @@ int main(int argc, char **argv)
     bool track_time = time_passes_flag();
     {
         double stdlib_start = track_time ? current_time_seconds() : 0.0;
+        double stdlib_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         bool parsed_stdlib = parse_pascal_file(prelude_path, &prelude_tree, convert_to_tree);
         if (track_time)
         {
             g_time_parse_stdlib += current_time_seconds() - stdlib_start;
             ++g_count_parse_stdlib;
         }
+        emit_profile_stage(use_stdlib ? "parse stdlib/prelude" : "parse prelude", current_time_seconds() - stdlib_profile_start);
         if (!parsed_stdlib)
         {
             if (prelude_tree != NULL)
@@ -1329,6 +1605,7 @@ int main(int argc, char **argv)
 
     Tree_t *user_tree = NULL;
     double user_start = track_time ? current_time_seconds() : 0.0;
+    double user_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     from_cparser_enable_pending_specializations();
     bool parsed_user = parse_pascal_file(input_file, &user_tree, convert_to_tree);
     from_cparser_disable_pending_specializations();
@@ -1337,6 +1614,7 @@ int main(int argc, char **argv)
         g_time_parse_user += current_time_seconds() - user_start;
         ++g_count_parse_user;
     }
+    emit_profile_stage("parse user source", current_time_seconds() - user_profile_start);
     if (!parsed_user)
     {
         if (prelude_tree != NULL)
@@ -1463,25 +1741,28 @@ int main(int argc, char **argv)
                 clear_prelude_subprograms(prelude_tree);
             }
 
-            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.) */
+            /* Skip merging prelude types/consts/vars when compiling the System unit itself,
+             * since System defines its own core types and constants. */
+            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
+
+            /* Merge prelude types into unit for FPC compatibility (SizeInt, PAnsiChar, etc.).
+             * For System itself, keep prelude types unmarked so real System declarations
+             * take precedence while still providing missing core aliases (e.g. Currency). */
             ListNode_t *prelude_types = get_prelude_type_decls(prelude_tree);
             if (prelude_types != NULL)
             {
-                mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
+                if (!is_system_unit)
+                    mark_unit_type_decls(prelude_types, 1, unit_registry_add("System"));
                 user_tree->tree_data.unit_data.interface_type_decls =
                     ConcatList(prelude_types, user_tree->tree_data.unit_data.interface_type_decls);
                 clear_prelude_type_decls(prelude_tree);
             }
 
-            /* Skip merging prelude constants/vars when compiling the System unit itself,
-             * since System defines its own DirectorySeparator, IsLibrary, etc. */
-            int is_system_unit = pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System");
-
             /* Merge prelude constants into unit for FPC compatibility (fmClosed, fmInput, etc.) */
             ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
             if (prelude_consts != NULL && !is_system_unit)
             {
-                mark_unit_const_decls(prelude_consts, 1);  /* Mark as exported from unit */
+                mark_unit_const_decls(prelude_consts, 1, unit_registry_add("System"));  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_const_decls =
                     ConcatList(prelude_consts, user_tree->tree_data.unit_data.interface_const_decls);
                 clear_prelude_const_decls(prelude_tree);
@@ -1491,7 +1772,7 @@ int main(int argc, char **argv)
             ListNode_t *prelude_vars = get_prelude_var_decls(prelude_tree);
             if (prelude_vars != NULL && !is_system_unit)
             {
-                mark_unit_var_decls(prelude_vars, 1);  /* Mark as exported from unit */
+                mark_unit_var_decls(prelude_vars, 1, unit_registry_add("System"));  /* Mark as exported from unit */
                 user_tree->tree_data.unit_data.interface_var_decls =
                     ConcatList(prelude_vars, user_tree->tree_data.unit_data.interface_var_decls);
                 clear_prelude_var_decls(prelude_tree);
@@ -1501,6 +1782,7 @@ int main(int argc, char **argv)
         /* Load used units */
         UnitSet visited_units;
         unit_set_init(&visited_units);
+        double unit_import_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
 
         /* Mark the current unit as visited so circular dependencies
          * (e.g. types.pp → Math → types.pp) don't re-import it. */
@@ -1519,16 +1801,23 @@ int main(int argc, char **argv)
         if (!use_stdlib &&
             !pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System"))
         {
+            double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
             load_unit(user_tree, "System", &visited_units);
+            emit_profile_stage("unit compile: auto-load System", current_time_seconds() - system_load_start);
         }
+        double interface_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
+        emit_profile_stage("unit compile: load interface uses", current_time_seconds() - interface_uses_start);
+        double implementation_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        emit_profile_stage("unit compile: load implementation uses", current_time_seconds() - implementation_uses_start);
         
         /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
          * This makes types like TEndian available without explicit 'uses objpas'.
          * Also add ObjPas to the uses list so that unit-qualified references work. */
         if (pascal_frontend_is_objfpc_mode())
         {
+            double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
             load_unit(user_tree, "objpas", &visited_units);
             /* Add ObjPas to interface_uses for semcheck_is_unit_name to recognize it */
             ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
@@ -1537,9 +1826,11 @@ int main(int argc, char **argv)
                 objpas_node->next = user_tree->tree_data.unit_data.interface_uses;
                 user_tree->tree_data.unit_data.interface_uses = objpas_node;
             }
+            emit_profile_stage("unit compile: auto-load ObjPas", current_time_seconds() - objpas_start);
         }
         
         debug_check_type_presence(user_tree);
+        emit_profile_stage("unit compile: total imports", current_time_seconds() - unit_import_start);
         unit_set_destroy(&visited_units);
 
         if (saved_preprocessed_source != NULL)
@@ -1564,10 +1855,12 @@ int main(int argc, char **argv)
 
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
+        double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
+        emit_profile_stage("unit compile: semantic analysis", current_time_seconds() - sem_profile_start);
         
         if (sem_result > 0)
         {
@@ -1614,9 +1907,11 @@ int main(int argc, char **argv)
         ctx.loop_capacity = 0;
         
         double codegen_start = track_time ? current_time_seconds() : 0.0;
+        double codegen_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         codegen_unit(user_tree, input_file, &ctx, symtab);
         if (track_time)
             g_time_codegen += current_time_seconds() - codegen_start;
+        emit_profile_stage("unit compile: code generation", current_time_seconds() - codegen_profile_start);
         
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
@@ -1653,6 +1948,7 @@ int main(int argc, char **argv)
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
         arena_destroy(arena);
+        emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
         return 0;
     }
 
@@ -1669,6 +1965,7 @@ int main(int argc, char **argv)
     user_tree->tree_data.program_data.var_declaration = NULL;
     if (prelude_tree != NULL)
     {
+        double prelude_merge_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         prelude_subs = get_prelude_subprograms(prelude_tree);
         if (prelude_subs != NULL)
             mark_stdlib_var_params(prelude_subs);
@@ -1700,6 +1997,7 @@ int main(int argc, char **argv)
         ListNode_t *prelude_consts = get_prelude_const_decls(prelude_tree);
         if (prelude_consts != NULL)
         {
+            mark_unit_const_decls(prelude_consts, 1, unit_registry_add("System"));
             user_tree->tree_data.program_data.const_declaration =
                 ConcatList(prelude_consts, user_tree->tree_data.program_data.const_declaration);
             clear_prelude_const_decls(prelude_tree);
@@ -1711,17 +2009,24 @@ int main(int argc, char **argv)
         {
             /* Mark prelude vars as coming from a unit, so they're recognized
              * as available for const expressions like Ord(DirectorySeparator) */
-            mark_unit_var_decls(prelude_vars, 1);
+            mark_unit_var_decls(prelude_vars, 1, unit_registry_add("System"));
             user_tree->tree_data.program_data.var_declaration =
                 ConcatList(prelude_vars, user_tree->tree_data.program_data.var_declaration);
             clear_prelude_var_decls(prelude_tree);
         }
 
         load_prelude_uses(user_tree, prelude_tree, &visited_units);
+        emit_profile_stage("program: merge prelude and prelude uses", current_time_seconds() - prelude_merge_start);
     }
     if (!use_stdlib)
+    {
+        double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         load_unit(user_tree, "System", &visited_units);
+        emit_profile_stage("program: auto-load System", current_time_seconds() - system_load_start);
+    }
+    double uses_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    emit_profile_stage("program: load uses units", current_time_seconds() - uses_load_start);
     
     /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
      * This makes types like TEndian available without explicit 'uses objpas'.
@@ -1729,6 +2034,7 @@ int main(int argc, char **argv)
      * like ObjPas.TEndian work correctly. */
     if (pascal_frontend_is_objfpc_mode())
     {
+        double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         load_unit(user_tree, "objpas", &visited_units);
         /* Add ObjPas to uses list for semcheck_is_unit_name to recognize it */
         ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
@@ -1737,6 +2043,7 @@ int main(int argc, char **argv)
             objpas_node->next = user_tree->tree_data.program_data.uses_units;
             user_tree->tree_data.program_data.uses_units = objpas_node;
         }
+        emit_profile_stage("program: auto-load ObjPas", current_time_seconds() - objpas_start);
     }
 
     if (saved_preprocessed_source != NULL)
@@ -1760,15 +2067,24 @@ int main(int argc, char **argv)
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
     
     debug_check_type_presence(user_tree);
+    double merge_user_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     user_tree->tree_data.program_data.type_declaration =
         ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);
     user_tree->tree_data.program_data.const_declaration =
         ConcatList(user_tree->tree_data.program_data.const_declaration, user_consts);
     user_tree->tree_data.program_data.var_declaration =
         ConcatList(user_tree->tree_data.program_data.var_declaration, user_vars);
+    emit_profile_stage("program: merge user declarations", current_time_seconds() - merge_user_start);
+    double generic_alias_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     resolve_pending_generic_aliases(user_tree);
+    emit_profile_stage("program: resolve generic aliases", current_time_seconds() - generic_alias_start);
+    from_cparser_resolve_deferred_arrays(user_tree);
+    double generic_method_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     append_generic_method_clones(user_tree);
+    emit_profile_stage("program: append generic method clones", current_time_seconds() - generic_method_start);
+    double generic_sub_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     resolve_pending_generic_subprograms(user_tree);
+    emit_profile_stage("program: resolve generic subprograms", current_time_seconds() - generic_sub_start);
 
     unit_set_destroy(&visited_units);
 
@@ -1777,10 +2093,15 @@ int main(int argc, char **argv)
     
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
-    unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
+    double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
+    /* Note: KGPC_SKIP_IMPORTED_IMPL_BODIES can be set externally to skip
+     * semantic checking of imported unit implementation bodies.  This is
+     * safe when the program has errors (codegen is skipped anyway) and
+     * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
+    emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);
 
     /* Add frontend errors to semantic result */
     sem_result += frontend_errors;
@@ -1816,16 +2137,24 @@ int main(int argc, char **argv)
 
         /* Mark which functions are actually used (dead code elimination) */
         extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        double mark_used_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         mark_used_functions(user_tree, symtab);
+        emit_profile_stage("program: mark used functions (pass 1)", current_time_seconds() - mark_used_start);
+        double mark_program_subs_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         mark_program_subs_used(user_tree);
+        emit_profile_stage("program: mark program subprograms", current_time_seconds() - mark_program_subs_start);
         /* Run mark_used again to discover functions called by newly-marked subprograms
          * (e.g., inherited methods in specialized generics) */
+        double mark_used_second_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         mark_used_functions(user_tree, symtab);
+        emit_profile_stage("program: mark used functions (pass 2)", current_time_seconds() - mark_used_second_start);
 
         double codegen_start = track_time ? current_time_seconds() : 0.0;
+        double codegen_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab);
         if (track_time)
             g_time_codegen += current_time_seconds() - codegen_start;
+        emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
         if (codegen_failed)
@@ -1870,5 +2199,6 @@ int main(int argc, char **argv)
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
     arena_destroy(arena);
+    emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;
 }

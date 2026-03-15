@@ -117,6 +117,12 @@ static inline int codegen_target_is_windows(void)
     return g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS;
 }
 
+/* Use .globl for class vars and aliases that need external linkage. */
+static inline const char *codegen_weak_or_globl(void)
+{
+    return ".globl";
+}
+
 static inline const char *codegen_readonly_section_directive(void)
 {
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
@@ -125,6 +131,12 @@ static inline const char *codegen_readonly_section_directive(void)
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1
+
+/* Unsigned relop variants for jb/jbe/ja/jae instead of jl/jle/jg/jge */
+#define LT_U  100
+#define LE_U  101
+#define GT_U  102
+#define GE_U  103
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -220,6 +232,7 @@ typedef struct {
     const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
     const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
+    int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.
@@ -293,6 +306,7 @@ void codegen_register_static_link_proc(CodeGenContext *ctx, const char *mangled_
 int codegen_proc_requires_static_link(const CodeGenContext *ctx, const char *mangled_name);
 int codegen_proc_static_link_depth(const CodeGenContext *ctx, const char *mangled_name, int *out_depth);
 
+void codegen_reset_static_link_cache(CodeGenContext *ctx);
 void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);

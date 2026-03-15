@@ -1,4 +1,5 @@
 program arccot_function;
+uses Math;
 var
   r: real;
 begin

@@ -51,11 +51,11 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
     // Must start with letter, underscore, or non-ASCII (UTF-8 byte)
     if (c == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
     if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
 
     // Continue with alphanumeric or underscore
@@ -78,7 +78,7 @@ static ParseResult pascal_identifier_fn(input_t* in, void* args, char* parser_na
     if (!escaped && is_pascal_keyword(text)) {
         free(text);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Identifier cannot be a reserved keyword"), NULL);
+        return make_failure_static(in, "Identifier cannot be a reserved keyword");
     }
 
     // Create AST node for valid identifier (following original cident_fn pattern)
@@ -125,11 +125,11 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
     // Must start with letter or underscore
     if (c == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
     if (c != '_' && !(isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
 
     // Continue with alphanumeric or underscore
@@ -152,7 +152,7 @@ static ParseResult pascal_expression_identifier_fn(input_t* in, void* args, char
     if (!escaped && is_pascal_keyword(text) && !pascal_keyword_allowed_in_expression(text)) {
         free(text);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Identifier cannot be a reserved keyword"), NULL);
+        return make_failure_static(in, "Identifier cannot be a reserved keyword");
     }
 
     // Create AST node for valid identifier
@@ -189,7 +189,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
     char c = read1(in);
     if (!isdigit((unsigned char)c)) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected digit"), NULL);
+        return make_failure_static(in, "Expected digit");
     }
 
     while ((c = read1(in)) != EOF) {
@@ -207,7 +207,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         c = read1(in);
         if (!isdigit((unsigned char)c)) {
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected digit after decimal point"), NULL);
+            return make_failure_static(in, "Expected digit after decimal point");
         }
 
         while ((c = read1(in)) != EOF) {
@@ -230,7 +230,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
             // Must have at least one digit after E/e
             if (!isdigit((unsigned char)c)) {
                 restore_input_state(in, &state);
-                return make_failure_v2(in, parser_name, strdup("Expected digit after exponent"), NULL);
+                return make_failure_static(in, "Expected digit after exponent");
             }
 
             // Parse remaining exponent digits
@@ -253,7 +253,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
 
         if (!isdigit((unsigned char)c)) {
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected digit after exponent"), NULL);
+            return make_failure_static(in, "Expected digit after exponent");
         }
 
         while ((c = read1(in)) != EOF) {
@@ -265,7 +265,7 @@ static ParseResult real_fn(input_t* in, void* args, char* parser_name) {
         if (c != EOF) in->start--; // Back up one if not EOF
     } else {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected decimal point or exponent"), NULL);
+        return make_failure_static(in, "Expected decimal point or exponent");
     }
 
     // Create AST node with the real number value
@@ -307,7 +307,7 @@ static ParseResult hex_integer_fn(input_t* in, void* args, char* parser_name) {
     // Must start with $
     if (c != '$') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '$' for hex literal"), NULL);
+        return make_failure_static(in, "Expected '$' for hex literal");
     }
 
     // Must have at least one hex digit after $
@@ -315,13 +315,13 @@ static ParseResult hex_integer_fn(input_t* in, void* args, char* parser_name) {
     bool saw_hex_digit = false;
     if (c == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+        return make_failure_static(in, "Expected hex digit after '$'");
     }
     if (isxdigit(c)) {
         saw_hex_digit = true;
     } else if (c != '_') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+        return make_failure_static(in, "Expected hex digit after '$'");
     }
 
     // Continue reading hex digits (allow underscores)
@@ -338,7 +338,7 @@ static ParseResult hex_integer_fn(input_t* in, void* args, char* parser_name) {
     if (c != EOF) in->start--;
     if (!saw_hex_digit) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected hex digit after '$'"), NULL);
+        return make_failure_static(in, "Expected hex digit after '$'");
     }
 
     // Extract the hex text (including the $)
@@ -381,7 +381,7 @@ static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name)
     // Must start with %
     if (c != '%') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '%' for binary literal"), NULL);
+        return make_failure_static(in, "Expected '%' for binary literal");
     }
 
     // Must have at least one binary digit after %
@@ -389,13 +389,13 @@ static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name)
     bool saw_bin_digit = false;
     if (c == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+        return make_failure_static(in, "Expected binary digit after '%'");
     }
     if (c == '0' || c == '1') {
         saw_bin_digit = true;
     } else if (c != '_') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+        return make_failure_static(in, "Expected binary digit after '%'");
     }
 
     // Continue reading binary digits (allow underscores)
@@ -412,7 +412,7 @@ static ParseResult binary_integer_fn(input_t* in, void* args, char* parser_name)
     if (c != EOF) in->start--;
     if (!saw_bin_digit) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected binary digit after '%'"), NULL);
+        return make_failure_static(in, "Expected binary digit after '%'");
     }
 
     // Extract the binary text (including the %)
@@ -455,14 +455,14 @@ static ParseResult octal_integer_fn(input_t* in, void* args, char* parser_name) 
     // Must start with &
     if (c != '&') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '&' for octal literal"), NULL);
+        return make_failure_static(in, "Expected '&' for octal literal");
     }
 
     // Must have at least one octal digit after &
     c = read1(in);
     if (c == EOF || c < '0' || c > '7') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected octal digit after '&'"), NULL);
+        return make_failure_static(in, "Expected octal digit after '&'");
     }
 
     // Continue reading octal digits
@@ -506,20 +506,20 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
     // Must start with single quote
     if (read1(in) != '\'') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected single quote"), NULL);
+        return make_failure_static(in, "Expected single quote");
     }
 
     // Must have at least one character
     char char_value = read1(in);
     if (char_value == EOF) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Unterminated character literal"), NULL);
+        return make_failure_static(in, "Unterminated character literal");
     }
 
     // Must end with single quote
     if (read1(in) != '\'') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected closing single quote"), NULL);
+        return make_failure_static(in, "Expected closing single quote");
     }
 
     // Check for the escaped single-quote character literal: ''''
@@ -553,7 +553,7 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
         }
         // Could not form a valid '''' literal
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected single character literal"), NULL);
+        return make_failure_static(in, "Expected single character literal");
     }
 
     // A doubled quote means we're looking at the start of a Pascal string
@@ -564,7 +564,7 @@ static ParseResult char_fn(input_t* in, void* args, char* parser_name) {
     char lookahead = read1(in);
     if (lookahead == '\'') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected single character literal"), NULL);
+        return make_failure_static(in, "Expected single character literal");
     }
     if (lookahead != EOF) {
         in->start--;
@@ -602,13 +602,13 @@ static ParseResult control_char_fn(input_t* in, void* args, char* parser_name) {
 
     if (read1(in) != '^') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '^' for control character"), NULL);
+        return make_failure_static(in, "Expected '^' for control character");
     }
 
     char c = read1(in);
     if (c == EOF || c == '\n' || c == '\r') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected character after '^'"), NULL);
+        return make_failure_static(in, "Expected character after '^'");
     }
 
     unsigned char raw = (unsigned char)c;
@@ -646,7 +646,7 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
 
     if (read1(in) != '#') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '#' for character code"), NULL);
+        return make_failure_static(in, "Expected '#' for character code");
     }
 
     int literal_start = state.start;
@@ -659,7 +659,7 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
         c = read1(in);
         if (c == EOF || !isxdigit((unsigned char)c)) {
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected hex digits after '#$'"), NULL);
+            return make_failure_static(in, "Expected hex digits after '#$'");
         }
         value = (isdigit(c) ? c - '0' : tolower(c) - 'a' + 10);
         while ((c = read1(in)) != EOF && isxdigit((unsigned char)c)) {
@@ -675,7 +675,7 @@ static ParseResult char_code_fn(input_t* in, void* args, char* parser_name) {
         } while (c != EOF && isdigit((unsigned char)c));
     } else {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected digits after '#'"), NULL);
+        return make_failure_static(in, "Expected digits after '#'");
     }
     
     if (c != EOF && in->start > 0) {
@@ -717,7 +717,7 @@ static ParseResult range_fn(input_t* in, void* args, char* parser_name) {
     // We just need to consume the ".." token
     if (read1(in) != '.' || read1(in) != '.') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '..'"), NULL);
+        return make_failure_static(in, "Expected '..'");
     }
 
     // Create a placeholder AST node - the actual range will be built by the expression parser
@@ -750,7 +750,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
     // Must start with '['
     if (read1(in) != '[') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '['"), NULL);
+        return make_failure_static(in, "Expected '['");
     }
 
     ast_t* set_node = new_ast();
@@ -785,7 +785,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
             free_ast(set_node);
             free_combinator(expr_parser);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected set element"), NULL);
+            return make_failure_static(in, "Expected set element");
         }
 
         // Add element to set
@@ -811,7 +811,7 @@ static ParseResult set_fn(input_t* in, void* args, char* parser_name) {
             free_ast(set_node);
             free_combinator(expr_parser);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected ',' or ']'"), NULL);
+            return make_failure_static(in, "Expected ',' or ']'");
         }
     }
 
@@ -839,7 +839,7 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
     // Must start with '('
     if (read1(in) != '(') {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '('"), NULL);
+        return make_failure_static(in, "Expected '('");
     }
 
     ast_t* record_node = new_ast();
@@ -877,7 +877,7 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             free_combinator(expr_parser);
             free_combinator(field_name_parser);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected field name"), NULL);
+            return make_failure_static(in, "Expected field name");
         }
 
         // Skip layout
@@ -890,7 +890,7 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             free_combinator(field_name_parser);
             free_ast(field_result.value.ast);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected ':' after field name"), NULL);
+            return make_failure_static(in, "Expected ':' after field name");
         }
         // Skip layout
         in->start = skip_pascal_layout_preview(in, in->start);
@@ -903,7 +903,7 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             free_combinator(field_name_parser);
             free_ast(field_result.value.ast);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected field value expression"), NULL);
+            return make_failure_static(in, "Expected field value expression");
         }
 
         // Create field assignment node
@@ -946,7 +946,7 @@ static ParseResult record_constructor_fn(input_t* in, void* args, char* parser_n
             free_ast(record_node);
             free_combinator(expr_parser);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected ';' or ')'"), NULL);
+            return make_failure_static(in, "Expected ';' or ')'");
         }
     }
 
@@ -1161,7 +1161,7 @@ static ParseResult implicit_string_concat_fn(input_t* in, void* args, char* pars
     if (!first.is_success) {
         discard_failure(first);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected string or char"), NULL);
+        return make_failure_static(in, "Expected string or char");
     }
     
     ast_t* result = first.value.ast;
@@ -1284,10 +1284,10 @@ static ParseResult reject_shift_ops_fn(input_t* in, void* args, char* parser_nam
     }
     // Not a shift token here; do not consume and just fail so other alts can try
     restore_input_state(in, &state);
-    return make_failure_v2(in, parser_name, strdup("No shift token here."), NULL);
+    return make_failure_static(in, "No shift token here.");
 }
 
-void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
+static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** stmt_parser, int skip_relational) {
     // Pascal identifier parser - use expression identifier that allows some keywords in expression contexts
     combinator_t* identifier = token(pascal_expression_identifier(PASCAL_T_IDENTIFIER));
     // Function name: use a simple identifier and let member access handle dotted calls
@@ -1366,7 +1366,7 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         optional(sep_by(lazy(p), token(match(","))))
     );
     combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
-        token(keyword_ci("inherited")),
+        token(create_keyword_parser("inherited", PASCAL_T_IDENTIFIER)),
         optional(token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER))),
         optional(inherited_arg_list),
         NULL
@@ -1476,10 +1476,15 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         pnot(match(">")),
         NULL
     );
-    expr_insert(*p, 0, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
+    // In type-expression mode, exclude '=' to avoid consuming const declaration '='
+    if (!skip_relational)
+        expr_insert(*p, 0, PASCAL_T_EQ, EXPR_INFIX, ASSOC_LEFT, token(match("=")));
+    else
+        expr_insert(*p, 0, PASCAL_T_LT, EXPR_INFIX, ASSOC_LEFT, token(single_lt));
     // Try rejecting '<<'/'>>' before any relational operator gets a chance
     expr_altern(*p, 0, PASCAL_T_NONE, token(reject_shift_ops));
-    expr_altern(*p, 0, PASCAL_T_LT, token(single_lt));
+    if (!skip_relational)
+        expr_altern(*p, 0, PASCAL_T_LT, token(single_lt));
     expr_altern(*p, 0, PASCAL_T_GT, token(single_gt));
     expr_altern(*p, 0, PASCAL_T_IN, token(keyword_ci("in")));
     expr_altern(*p, 0, PASCAL_T_IS, token(keyword_ci("is")));
@@ -1525,7 +1530,8 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
     // Field width operator for formatted output: expression:width
     // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
     // rather than `(x:Width) - 2`. Multiple colons like `x:10:2` work via left-assoc.
-    expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
+    if (!skip_relational)
+        expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
 
     // Precedence 5: Member access (highest precedence for infix)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
@@ -1557,6 +1563,14 @@ void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser)
         combinator_t* postfix_array = map(postfix_index, wrap_array_suffix);
         expr_insert(*p, 7, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, postfix_array);
     }
+}
+
+void init_pascal_expression_parser(combinator_t** p, combinator_t** stmt_parser) {
+    init_pascal_expression_parser_ex(p, stmt_parser, 0);
+}
+
+void init_pascal_type_expression_parser(combinator_t** p) {
+    init_pascal_expression_parser_ex(p, NULL, 1);
 }
 
 // --- Utility Functions ---
@@ -1806,7 +1820,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
     
     if (!func_res.is_success) {
         discard_failure(func_res);
-        return make_failure_v2(in, parser_name, strdup("Expected 'function'"), NULL);
+        return make_failure_static(in, "Expected 'function'");
     }
     free_ast(func_res.value.ast);
 
@@ -1831,7 +1845,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
         if (params_ast != NULL) free_ast(params_ast);
         discard_failure(colon_res);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected ':' for function return type"), NULL);
+        return make_failure_static(in, "Expected ':' for function return type");
     }
     free_ast(colon_res.value.ast);
 
@@ -1844,7 +1858,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
         if (params_ast != NULL) free_ast(params_ast);
         discard_failure(type_res);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected return type"), NULL);
+        return make_failure_static(in, "Expected return type");
     }
     
     ast_t* return_type_ast = new_ast();
@@ -1865,7 +1879,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
             free_ast(return_type_ast);
             discard_failure(body_res);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Failed to parse anonymous function body"), NULL);
+            return make_failure_static(in, "Failed to parse anonymous function body");
         }
         
         body_ast = body_res.value.ast;
@@ -1880,7 +1894,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
             free_ast(return_type_ast);
             discard_failure(begin_res);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected 'begin' for function body"), NULL);
+            return make_failure_static(in, "Expected 'begin' for function body");
         }
         free_ast(begin_res.value.ast);
 
@@ -1889,7 +1903,7 @@ static ParseResult anonymous_function_fn(input_t* in, void* args, char* parser_n
             if (params_ast != NULL) free_ast(params_ast);
             free_ast(return_type_ast);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous function"), NULL);
+            return make_failure_static(in, "Unmatched 'begin' in anonymous function");
         }
     }
 
@@ -1933,7 +1947,7 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
     
     if (!proc_res.is_success) {
         discard_failure(proc_res);
-        return make_failure_v2(in, parser_name, strdup("Expected 'procedure'"), NULL);
+        return make_failure_static(in, "Expected 'procedure'");
     }
     free_ast(proc_res.value.ast);
 
@@ -1962,7 +1976,7 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
             if (params_ast != NULL) free_ast(params_ast);
             discard_failure(body_res);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Failed to parse anonymous procedure body"), NULL);
+            return make_failure_static(in, "Failed to parse anonymous procedure body");
         }
         
         body_ast = body_res.value.ast;
@@ -1976,7 +1990,7 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
             if (params_ast != NULL) free_ast(params_ast);
             discard_failure(begin_res);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Expected 'begin' for procedure body"), NULL);
+            return make_failure_static(in, "Expected 'begin' for procedure body");
         }
         free_ast(begin_res.value.ast);
 
@@ -1984,7 +1998,7 @@ static ParseResult anonymous_procedure_fn(input_t* in, void* args, char* parser_
         if (skip_anonymous_body(in) != 0) {
             if (params_ast != NULL) free_ast(params_ast);
             restore_input_state(in, &state);
-            return make_failure_v2(in, parser_name, strdup("Unmatched 'begin' in anonymous procedure"), NULL);
+            return make_failure_static(in, "Unmatched 'begin' in anonymous procedure");
         }
     }
 

@@ -22,6 +22,7 @@ typedef struct SymTab
 {
     ListNode_t *stack_head;
     HashTable_t *builtins;
+    int unit_context;  /* Active unit index for unit-aware resolution (0 = program) */
 } SymTab_t;
 
 /* Initializes the SymTab with stack_head pointing to NULL */
@@ -97,6 +98,10 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Returns >= 0 tells what scope level it was found at */
 int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
+/* Like FindIdent but uses unit-aware resolution.
+ * Prefers symbols from caller_unit_index, then program-local, then any. */
+int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
+
 /* Searches for any identifier starting with the given prefix */
 /* Returns -1 and sets hash_return to NULL if not found */
 /* Returns >= 0 tells what scope level it was found at */
@@ -119,6 +124,10 @@ void DestroySymTab(SymTab_t *symtab);
 
 /* Prints the table for debugging */
 void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent);
+
+/* Find an identifier in the current (top) scope only, bypassing unit-aware resolution.
+ * Use after pushing an entry to get the just-added node reliably. */
+HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id);
 
 /* Move a hash node to the back of its bucket list in the nearest scope */
 void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
