@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: system.pp compiles with 0 errors (158 warnings); next blocker is sysutils.pp (syssb.inc record access)
+## Status: pp.pas compiles with 5 semantic errors; next blockers are undefined constants and DirectorySeparator
 
 ## Prerequisites
 
@@ -173,11 +173,36 @@ ordering issues.
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-## Units with Compilation Errors
+### pp.pas (5 errors)
+```bash
+./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
+  -DCPU64 -DCPUX86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -Sg \
+  -IFPCSource/rtl/objpas \
+  -IFPCSource/rtl/objpas/sysutils \
+  -IFPCSource/rtl/objpas/classes \
+  -IFPCSource/rtl/linux \
+  -IFPCSource/rtl/unix \
+  -IFPCSource/rtl/inc \
+  -IFPCSource/rtl/x86_64 \
+  -IFPCSource/rtl/linux/x86_64 \
+  -IFPCSource/rtl/unix/x86_64 \
+  -IFPCSource/compiler \
+  -FuFPCSource/rtl/unix \
+  -FuFPCSource/rtl/linux \
+  -FuFPCSource/rtl/objpas \
+  -FuFPCSource/rtl/inc \
+  -FuFPCSource/rtl/objpas/sysutils \
+  -FuFPCSource/rtl/objpas/classes \
+  -FuFPCSource/compiler
+```
 
-- `sysutils.pp` - **record access/type mismatch** in `rtl/objpas/sysutils/syssb.inc`:
-  - `Result.FCurrentPosition := StartPosition;`
-  - `Result.FEndPosition := StartPosition + Length;`
+Remaining errors:
+1. `constant first_int_imreg is undefined or not a const` — CPU-specific constant
+2. `constant tmpmaxcpufpuintreg is undefined or not a const` — CPU-specific constant
+3. `constant DirectorySeparator is undefined or not a string const` (×2) — sysutils typed constant not recognized
+4. `WITH context must be a record or pointer to a record` — WITH on unresolved type
+
+## Remaining Blockers
 
 ## Flags
 
