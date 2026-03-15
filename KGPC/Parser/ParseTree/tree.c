@@ -2508,7 +2508,12 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     if (range_str != NULL) {
         const char *sep = strstr(range_str, "..");
         if (sep != NULL) {
-            new_tree->tree_data.arr_decl_data.range_start_str = strndup(range_str, (size_t)(sep - range_str));
+            {
+                size_t len = (size_t)(sep - range_str);
+                char *s = (char *)malloc(len + 1);
+                if (s != NULL) { memcpy(s, range_str, len); s[len] = '\0'; }
+                new_tree->tree_data.arr_decl_data.range_start_str = s;
+            }
             new_tree->tree_data.arr_decl_data.range_end_str = strdup(sep + 2);
         }
     }
