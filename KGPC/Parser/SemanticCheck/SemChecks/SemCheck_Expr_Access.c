@@ -1116,36 +1116,6 @@ static int semcheck_detach_unary_not_from_receiver(struct Expression *receiver_e
     return 0;
 }
 
-static int semcheck_funccall_id_is_operator_dispatch(const char *id)
-{
-    if (id == NULL)
-        return 0;
-    if (strcmp(id, "+") == 0 || strcmp(id, "-") == 0 ||
-        strcmp(id, "*") == 0 || strcmp(id, "/") == 0 ||
-        strcmp(id, "=") == 0 || strcmp(id, "<>") == 0 ||
-        strcmp(id, "<") == 0 || strcmp(id, ">") == 0 ||
-        strcmp(id, "<=") == 0 || strcmp(id, ">=") == 0 ||
-        strcmp(id, "**") == 0 || strcmp(id, ":=") == 0 ||
-        strcasecmp(id, "div") == 0 || strcasecmp(id, "mod") == 0 ||
-        strcasecmp(id, "and") == 0 || strcasecmp(id, "or") == 0 ||
-        strcasecmp(id, "not") == 0 || strcasecmp(id, "xor") == 0 ||
-        strcasecmp(id, "shl") == 0 || strcasecmp(id, "shr") == 0 ||
-        strcasecmp(id, "in") == 0 || strcasecmp(id, "is") == 0 ||
-        strcasecmp(id, "as") == 0 ||
-        strcasecmp(id, "Implicit") == 0 || strcasecmp(id, "Explicit") == 0 ||
-        strcasecmp(id, "Equal") == 0 || strcasecmp(id, "NotEqual") == 0 ||
-        strcasecmp(id, "GreaterThan") == 0 ||
-        strcasecmp(id, "GreaterThanOrEqual") == 0 ||
-        strcasecmp(id, "LessThan") == 0 ||
-        strcasecmp(id, "LessThanOrEqual") == 0)
-        return 1;
-    if (strncmp(id, "op_", 3) == 0)
-        return 1;
-    /* Mangled operator names contain __op_ (e.g. TVariant__op_assign).
-     * This is a naming convention check that should ideally use a
-     * structural is_operator flag after symbol resolution. */
-    return strstr(id, "__op_") != NULL;
-}
 
 int resolve_param_type(Tree_t *decl, SymTab_t *symtab)
 {
@@ -1681,7 +1651,18 @@ int semcheck_funccall(int *type_return,
 
     args_given = expr->expr_data.function_call_data.args_expr;
     int injected_self = 0;
-    int is_operator_dispatch = semcheck_funccall_id_is_operator_dispatch(id);
+    /* Detect operator dispatch calls.  The id may be a mangled name like
+     * TVariant__op_assign that hasn't been resolved to a HashNode yet,
+     * so we check known operator name patterns. */
+    int is_operator_dispatch = (id != NULL &&
+        (strncmp(id, "op_", 3) == 0 || strstr(id, "__op_") != NULL ||
+         strcmp(id, "+") == 0 || strcmp(id, "-") == 0 ||
+         strcmp(id, "*") == 0 || strcmp(id, "/") == 0 ||
+         strcmp(id, "=") == 0 || strcmp(id, "<>") == 0 ||
+         strcmp(id, "<") == 0 || strcmp(id, ">") == 0 ||
+         strcmp(id, "<=") == 0 || strcmp(id, ">=") == 0 ||
+         strcmp(id, "**") == 0 || strcmp(id, ":=") == 0 ||
+         strcasecmp(id, "Implicit") == 0 || strcasecmp(id, "Explicit") == 0));
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
@@ -5792,26 +5773,6 @@ method_call_resolved:
             {
                 const char *cm_class = best_match->owner_class;
                 const char *cm_method = best_match->method_name;
-                /* Fallback: extract class/method from mangled id convention
-                 * (e.g. "TObject__ClassName" → class="TObject", method="ClassName").
-                 * This should be eliminated by ensuring owner_class is always set
-                 * during subprogram predeclaration. */
-                char cm_class_buf[128];
-                if (cm_class == NULL && best_match->id != NULL)
-                {
-                    const char *sep = strstr(best_match->id, "__");
-                    if (sep != NULL && sep > best_match->id)
-                    {
-                        size_t class_len = sep - best_match->id;
-                        if (class_len < sizeof(cm_class_buf))
-                        {
-                            memcpy(cm_class_buf, best_match->id, class_len);
-                            cm_class_buf[class_len] = '\0';
-                            cm_class = cm_class_buf;
-                            cm_method = sep + 2;
-                        }
-                    }
-                }
                 if (cm_class != NULL && cm_method != NULL)
                 {
                     struct RecordType *check_record = semcheck_lookup_record_type(symtab, cm_class);
@@ -6410,7 +6371,7 @@ skip_overload_resolution:
                 ++return_val;
             expr->expr_data.function_call_data.args_expr = args_given;
         }
-        if (!semcheck_funccall_id_is_operator_dispatch(id) &&
+        if (!is_operator_dispatch &&
             injected_self && hash_return != NULL && hash_return->type != NULL &&
             hash_return->type->kind == TYPE_KIND_PROCEDURE)
         {

@@ -4744,6 +4744,10 @@ static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
     if (subprogram->tree_data.subprogram_data.defined_in_unit)
         node->defined_in_unit = 1;
 
+    /* Propagate method identity so consumers can use structural fields
+     * instead of parsing mangled identifiers. */
+    copy_method_identity_to_node(node, subprogram);
+
     if (node->type != NULL &&
         node->type->kind == TYPE_KIND_PROCEDURE &&
         subprogram->tree_data.subprogram_data.statement_list != NULL)
@@ -11810,8 +11814,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
     if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
-        tree->tree_data.const_decl_data.id != NULL &&
-        strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+        tree->tree_data.const_decl_data.id != NULL)
     {
         fprintf(stderr, "[KGPC] const decl %s value_expr=%p type=%d\n",
             tree->tree_data.const_decl_data.id,
@@ -12473,8 +12476,7 @@ static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
         if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
-            tree->tree_data.const_decl_data.id != NULL &&
-            strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
+            tree->tree_data.const_decl_data.id != NULL)
         {
             fprintf(stderr, "[KGPC] local const seen: %s (defined_in_unit=%d)\n",
                 tree->tree_data.const_decl_data.id,
@@ -17224,11 +17226,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs/defined_in_unit/internproc_id flags to the hash node */
-        if (func_return == 0 &&
-            (subprogram->tree_data.subprogram_data.is_varargs ||
-             subprogram->tree_data.subprogram_data.defined_in_unit ||
-             subprogram->tree_data.subprogram_data.internproc_id != NULL)) {
+        /* Propagate flags and method identity to the hash node */
+        if (func_return == 0) {
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
@@ -17239,6 +17238,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
                 }
+                copy_method_identity_to_node(node, subprogram);
             }
         }
         if (func_return == 0)
@@ -17284,11 +17284,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate varargs/defined_in_unit/internproc_id flags to the hash node */
-        if (func_return == 0 &&
-            (subprogram->tree_data.subprogram_data.is_varargs ||
-             subprogram->tree_data.subprogram_data.defined_in_unit ||
-             subprogram->tree_data.subprogram_data.internproc_id != NULL)) {
+        /* Propagate flags and method identity to the hash node */
+        if (func_return == 0) {
             HashNode_t *node = NULL;
             if (FindIdent(&node, symtab, id_to_use_for_lookup) == 0 && node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
@@ -17299,6 +17296,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
                 }
+                copy_method_identity_to_node(node, subprogram);
             }
         }
         if (func_return == 0)
