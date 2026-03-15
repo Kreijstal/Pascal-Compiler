@@ -130,6 +130,7 @@ typedef struct Tree
             int is_static_method;         /* 1 if method is static (no implicit Self) */
             int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
             int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
+            int is_operator;              /* 1 if declared with operator keyword (class operator, global operator) */
             char *internproc_id;          /* FPC [INTERNPROC: name] identifier (e.g. "fpc_in_Rewrite_TypedFile") */
             struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
         } subprogram_data;

@@ -1078,18 +1078,15 @@ static int semcheck_overload_symbol_is_assign_operator(HashNode_t *cand)
 {
     if (cand == NULL)
         return 0;
-    if (cand->id != NULL &&
+    if (cand->is_operator &&
+        cand->id != NULL &&
         (pascal_identifier_equals(cand->id, ":=") ||
          pascal_identifier_equals(cand->id, "op_assign")))
         return 1;
-    if (cand->mangled_id != NULL)
-    {
-        char *mangled_lower = pascal_identifier_lower_dup(cand->mangled_id);
-        int is_assign = (mangled_lower != NULL &&
-            strstr(mangled_lower, "__op_assign") != NULL);
-        free(mangled_lower);
-        return is_assign;
-    }
+    if (cand->method_name != NULL &&
+        (pascal_identifier_equals(cand->method_name, "op_assign") ||
+         pascal_identifier_equals(cand->method_name, ":=")))
+        return 1;
     return 0;
 }
 

@@ -1141,6 +1141,9 @@ static int semcheck_funccall_id_is_operator_dispatch(const char *id)
         return 1;
     if (strncmp(id, "op_", 3) == 0)
         return 1;
+    /* Mangled operator names contain __op_ (e.g. TVariant__op_assign).
+     * This is a naming convention check that should ideally use a
+     * structural is_operator flag after symbol resolution. */
     return strstr(id, "__op_") != NULL;
 }
 

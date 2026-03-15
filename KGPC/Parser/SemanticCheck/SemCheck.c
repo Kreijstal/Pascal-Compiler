@@ -2528,7 +2528,7 @@ static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_
  * static methods which have no implicit Self parameter.
  */
 static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
-    const char *owner, const char *method_name)
+    const char *owner, const char *method_name, int is_operator)
 {
     if (symtab == NULL || owner == NULL || method_name == NULL || method_name[0] == '\0')
         return;
@@ -2550,32 +2550,10 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
      * not have owner fields injected into local scope. Their parameters often
      * intentionally reuse field names (e.g. "a"), and injected fields would
      * shadow those parameters. */
-    if (method_name != NULL)
+    if (is_operator)
     {
-        if (strstr(method_name, "op_") != NULL ||
-            strcmp(method_name, ":=") == 0 ||
-            strcmp(method_name, "+") == 0 ||
-            strcmp(method_name, "-") == 0 ||
-            strcmp(method_name, "*") == 0 ||
-            strcmp(method_name, "/") == 0 ||
-            strcmp(method_name, "=") == 0 ||
-            strcmp(method_name, "<>") == 0 ||
-            strcmp(method_name, "<") == 0 ||
-            strcmp(method_name, ">") == 0 ||
-            strcmp(method_name, "<=") == 0 ||
-            strcmp(method_name, ">=") == 0 ||
-            strcasecmp(method_name, "Implicit") == 0 ||
-            strcasecmp(method_name, "Explicit") == 0 ||
-            strcasecmp(method_name, "Equal") == 0 ||
-            strcasecmp(method_name, "NotEqual") == 0 ||
-            strcasecmp(method_name, "GreaterThan") == 0 ||
-            strcasecmp(method_name, "GreaterThanOrEqual") == 0 ||
-            strcasecmp(method_name, "LessThan") == 0 ||
-            strcasecmp(method_name, "LessThanOrEqual") == 0)
-        {
-            free(class_name);
-            return;
-        }
+        free(class_name);
+        return;
     }
 
     /* Only add class fields for static methods. Non-static methods
@@ -2842,7 +2820,8 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
         return;
     add_class_vars_to_method_scope_impl(symtab,
         subprogram->tree_data.subprogram_data.owner_class,
-        subprogram->tree_data.subprogram_data.method_name);
+        subprogram->tree_data.subprogram_data.method_name,
+        subprogram->tree_data.subprogram_data.is_operator);
 }
 
 static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
@@ -2851,7 +2830,8 @@ static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subpr
         return;
     add_class_vars_to_method_scope_impl(symtab,
         subprogram->tree_data.subprogram_data.owner_class_outer,
-        subprogram->tree_data.subprogram_data.method_name);
+        subprogram->tree_data.subprogram_data.method_name,
+        subprogram->tree_data.subprogram_data.is_operator);
 }
 
 /**
@@ -3031,6 +3011,8 @@ static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
         node->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
     if (node->owner_class_outer == NULL && subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
         node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
+    if (subprogram->tree_data.subprogram_data.is_operator)
+        node->is_operator = 1;
 }
 
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)

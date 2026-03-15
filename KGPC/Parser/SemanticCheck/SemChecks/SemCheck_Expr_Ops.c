@@ -1552,31 +1552,6 @@ int semcheck_addop(int *type_return,
                         fprintf(stderr,
                             "[SemCheck] addop prefix miss key=%s\n",
                             operator_method);
-                        for (ListNode_t *scope = symtab != NULL ? symtab->stack_head : NULL;
-                             scope != NULL; scope = scope->next)
-                        {
-                            HashTable_t *table = (HashTable_t *)scope->cur;
-                            if (table == NULL)
-                                continue;
-                            for (int bucket = 0; bucket < TABLE_SIZE; bucket++)
-                            {
-                                for (ListNode_t *node_cur = table->table[bucket];
-                                     node_cur != NULL; node_cur = node_cur->next)
-                                {
-                                    HashNode_t *cand = (HashNode_t *)node_cur->cur;
-                                    if (cand != NULL && cand->id != NULL &&
-                                        strstr(cand->id, "constexprint") != NULL)
-                                    {
-                                        fprintf(stderr,
-                                            "[SemCheck] addop nearby id=%s mangled=%s src_unit=%d defined_in_unit=%d\n",
-                                            cand->id,
-                                            cand->mangled_id != NULL ? cand->mangled_id : "<null>",
-                                            cand->source_unit_index,
-                                            cand->defined_in_unit);
-                                    }
-                                }
-                            }
-                        }
                     }
                     if (operator_node == NULL)
                     {

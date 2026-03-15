@@ -17277,6 +17277,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
         tree->tree_data.subprogram_data.is_constructor = is_constructor;
         tree->tree_data.subprogram_data.is_static_method = is_static_method;
+        tree->tree_data.subprogram_data.is_operator = method_declares_operator;
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);
         if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
