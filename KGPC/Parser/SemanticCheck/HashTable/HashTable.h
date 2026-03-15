@@ -94,6 +94,7 @@ typedef struct HashNode
     int defined_in_unit;
     int unit_is_public;
     int source_unit_index; /* Unit registry index (0 = local/unknown) */
+    int is_nested_scope;   /* 1 if mangled name indicates nested/qualified scope (e.g. parent$child) */
 
     char *method_name;    /* Bare method name (NULL for non-methods) */
     char *owner_class;    /* Owning class name (NULL for non-methods) */

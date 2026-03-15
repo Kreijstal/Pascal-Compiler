@@ -3013,6 +3013,8 @@ static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
         node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
     if (subprogram->tree_data.subprogram_data.is_operator)
         node->is_operator = 1;
+    if (subprogram->tree_data.subprogram_data.is_nested_scope)
+        node->is_nested_scope = 1;
 }
 
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
@@ -4743,6 +4745,8 @@ static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
         node->is_varargs = 1;
     if (subprogram->tree_data.subprogram_data.defined_in_unit)
         node->defined_in_unit = 1;
+    if (subprogram->tree_data.subprogram_data.is_nested_scope)
+        node->is_nested_scope = 1;
 
     /* Propagate method identity so consumers can use structural fields
      * instead of parsing mangled identifiers. */
@@ -17120,6 +17124,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 snprintf(nested_mangled, len, "%s$%s", parent_mangled, base_mangled);
                 free(base_mangled);
                 subprogram->tree_data.subprogram_data.mangled_id = nested_mangled;
+                subprogram->tree_data.subprogram_data.is_nested_scope = 1;
             } else {
                 subprogram->tree_data.subprogram_data.mangled_id = base_mangled;
             }
@@ -17201,6 +17206,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
+                if (subprogram->tree_data.subprogram_data.is_nested_scope)
+                    node->is_nested_scope = 1;
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
@@ -17259,6 +17266,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
                     node->defined_in_unit = 1;
+                if (subprogram->tree_data.subprogram_data.is_nested_scope)
+                    node->is_nested_scope = 1;
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
