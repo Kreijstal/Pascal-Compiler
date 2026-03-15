@@ -9035,10 +9035,10 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     ListNode_t *class_methods = NULL;
     int method_count = 0;
     get_class_methods(class_name, &class_methods, &method_count);
-    if (method_count == 0) {
-        const char *dot = strrchr(class_name, '.');
-        if (dot != NULL)
-            get_class_methods(dot + 1, &class_methods, &method_count);
+    if (method_count == 0 && record_info->type_id != NULL) {
+        /* For nested types (e.g. TMarshaller.TDeferBase), methods may be
+         * registered under the unqualified type_id. */
+        get_class_methods(record_info->type_id, &class_methods, &method_count);
     }
 
     /* Start with parent's VMT if this class has a parent */

@@ -5792,7 +5792,10 @@ method_call_resolved:
             {
                 const char *cm_class = best_match->owner_class;
                 const char *cm_method = best_match->method_name;
-                /* Fallback: extract class/method from id (e.g. "TObject__ClassName") */
+                /* Fallback: extract class/method from mangled id convention
+                 * (e.g. "TObject__ClassName" → class="TObject", method="ClassName").
+                 * This should be eliminated by ensuring owner_class is always set
+                 * during subprogram predeclaration. */
                 char cm_class_buf[128];
                 if (cm_class == NULL && best_match->id != NULL)
                 {
