@@ -7683,6 +7683,20 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
         }
         else if (expr_is_real || expr_type == POINTER_TYPE)
         {
+            /* Extended sret function calls leave the buffer ADDRESS in the
+             * register.  Convert to double bits for kgpc_write_real. */
+            if (expr_is_real && expr_returns_sret(expr) &&
+                codegen_expr_involves_extended(expr))
+            {
+                const char *arg1_64 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, arg1_64);
+                inst_list = add_inst(inst_list, buffer);
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                free_arg_regs();
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
             /* REAL_TYPE and POINTER_TYPE are 64-bit - use movq */
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", value_reg->bit_64, value_dest64);
             inst_list = add_inst(inst_list, buffer);
