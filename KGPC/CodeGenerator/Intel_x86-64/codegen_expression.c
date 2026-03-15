@@ -33,6 +33,9 @@
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
@@ -2547,7 +2550,7 @@ KgpcType* expr_get_kgpc_type(const struct Expression *expr)
                 
                 /* If return_type is NULL, check return_type_id using type lookup */
                 const char *ret_id = call_type->info.proc_info.return_type_id;
-                if (getenv("KGPC_DEBUG_CODEGEN") != NULL && ret_id != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL && ret_id != NULL) {
                     fprintf(stderr, "[CodeGen] expr_get_kgpc_type: EXPR_FUNCTION_CALL return_type_id='%s'\n", ret_id);
                 }
                 if (ret_id != NULL && kgpc_type_id_uses_qword(ret_id, NULL))
@@ -2949,7 +2952,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (expr->type == EXPR_POINTER_DEREF)
     {
         const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
-        if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ARRAY_ACCESS] pointer_deref base_type=%d ptr_subtype=%d ptr_subtype_id=%s ptr_kgpc=%s%s%s\n",
@@ -3077,7 +3080,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             struct RecordField *field = codegen_lookup_record_field_expr((struct Expression *)lookup_expr, ctx);
             if (field != NULL)
             {
-                if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
                 {
                     fprintf(stderr,
                         "[KGPC_DEBUG_ARRAY_ACCESS] record field=%s is_pointer=%d is_array=%d pointer_type=%d pointer_type_id=%s array_elem_type=%d array_elem_type_id=%s\n",
@@ -3583,7 +3586,7 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         return 1;
     }
 
-    if (getenv("KGPC_DEBUG_CG_ERR"))
+    if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
     {
         fprintf(stderr, "[codegen-debug] size-fail: type_tag=%d type_id=%s record_type=%p\n", type_tag, type_id ? type_id : "<null>", (void*)record_type);
         /* Print stack trace */
@@ -3927,7 +3930,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
         return 0;
     }
 
-    if (getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
     {
         KgpcType *dbg_type = expr_get_kgpc_type(expr);
         struct RecordType *dbg_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
@@ -4141,7 +4144,7 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
     struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
     if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
         record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
-    if (record == NULL && getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+    if (record == NULL && kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
     {
         struct Expression *rec_expr = record_access_expr->expr_data.record_access_data.record_expr;
         fprintf(stderr,
@@ -4286,7 +4289,7 @@ static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
 {
     if (ctx == NULL || field_id == NULL || ctx->with_depth <= 0)
         return NULL;
-    if (getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
     {
         fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] lookup field=%s depth=%d\n",
             field_id, ctx->with_depth);
@@ -6268,7 +6271,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
                 array_expr->array_element_record_type,
                 &element_size_ll, 0) != 0 || element_size_ll <= 0)
         {
-            if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_ARRAY_ACCESS] elem size fail: expr_type=%d tag=%d array_elem_type=%d elem_id=%s is_array=%d dyn=%d\n",
@@ -6623,7 +6626,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     if (!base_is_array && !base_is_string && !base_is_pointer)
     {
-        if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",

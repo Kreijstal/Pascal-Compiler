@@ -59,6 +59,9 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../../Parser/SemanticCheck/NameMangling.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
@@ -2016,14 +2019,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (expr->expr_data.function_call_data.is_call_info_valid)
         {
             func_type = expr->expr_data.function_call_data.call_kgpc_type;
-            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+            if (func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                 fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=1 but call_kgpc_type is NULL for id='%s'\n",
                     expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
             }
         }
         else if (ctx != NULL && ctx->symtab != NULL)
         {
-            if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                 fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=0 for id='%s', doing symbol lookup\n",
                     expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
             }
@@ -2041,7 +2044,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 func_type = func_node->type;
             }
-            if (func_type == NULL && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+            if (func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                 fprintf(stderr, "[CodeGen] expr_tree: func_type lookup FAILED for id='%s' mangled='%s'\n",
                     expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
                     expr->expr_data.function_call_data.mangled_id ? expr->expr_data.function_call_data.mangled_id : "(null)");
@@ -2262,7 +2265,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 CODEGEN_DEBUG("DEBUG Constructor: class_record=%p, is_class=%d, properties=%p\n",
                     (void *)class_record, class_record->is_class, (void *)class_record->properties);
                 
-                if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                     struct Expression *cexpr = (struct Expression*)expr->expr_data.function_call_data.args_expr->cur;
                     fprintf(stderr, "[CodeGen] gencode_case0: Checking class_record %p from class_expr %p (type=%d line=%d)\n", 
                         class_record, (void*)cexpr, cexpr->type, cexpr->line_num);
@@ -2413,7 +2416,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
 
-        if (is_constructor && getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+        if (is_constructor && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
             int args_count = 0;
             for (ListNode_t *c = args_to_pass; c != NULL; c = c->next) args_count++;
             fprintf(stderr, "[CodeGen] Constructor %s args=%d arg_start=%d\n",
@@ -2855,7 +2858,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 {
                     KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
                     KgpcType *ret_type = kgpc_type_get_return_type(call_type);
-                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                         fprintf(stderr, "[CodeGen] gencode_case0: is_procedural_var_call=1, call_type=%p, ret_type=%p, return_type_id=%s\n",
                             (void*)call_type, (void*)ret_type,
                             call_type->info.proc_info.return_type_id ? call_type->info.proc_info.return_type_id : "(null)");

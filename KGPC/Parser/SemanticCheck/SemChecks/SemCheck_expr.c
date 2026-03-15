@@ -483,7 +483,7 @@ int semcheck_expr(SymTab_t *symtab, struct Expression *expr,
     if (expr == NULL)
         return 0;
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] Checking expr type=%d\n", expr->type);
         if (expr->type == EXPR_VAR_ID) {
             fprintf(stderr, "[SemCheck]   Identifier: %s\n", expr->expr_data.id);
@@ -543,7 +543,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (expr->expr_data.id != NULL &&
                 FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
             {
-                if (getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
                     pascal_identifier_equals(expr->expr_data.id, "Ctr"))
                 {
                     fprintf(stderr,
@@ -600,7 +600,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
         
         case EXPR_FUNCTION_CALL:
         {
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
                 strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
                 fprintf(stderr, "[SemCheck] semcheck_resolve_expression_kgpc_type for Create:\n");
                 fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
@@ -613,7 +613,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             /* First, try the cached resolved_kgpc_type if available */
             if (expr->resolved_kgpc_type != NULL)
             {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
                     strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
                     fprintf(stderr, "[SemCheck]   Returning cached resolved_kgpc_type\n");
                 }
@@ -622,7 +622,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 return expr->resolved_kgpc_type;
             }
             
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr->expr_data.function_call_data.id != NULL &&
                 strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
                 fprintf(stderr, "[SemCheck]   resolved_kgpc_type is NULL, trying other paths\n");
             }
@@ -873,7 +873,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
 
                                     /* Return the field type */
                                     if (field_type == NULL &&
-                                        getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL &&
+                                        kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL &&
                                         (pascal_identifier_equals(field_name, "UC") ||
                                          pascal_identifier_equals(field_name, "LC")))
                                     {
@@ -914,7 +914,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             struct Expression *array_expr = expr->expr_data.array_access_data.array_expr;
             const char *alias_id = NULL;
             int debug_fstd = 0;
-            if (getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL &&
                 array_expr != NULL &&
                 array_expr->type == EXPR_VAR_ID &&
                 array_expr->expr_data.id != NULL &&
@@ -947,7 +947,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (alias_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] Resolving array element type alias: %s\n", alias_id);
                 }
                 if (FindIdent(&type_node, symtab, alias_id) != -1 &&
@@ -1281,7 +1281,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 {
     int type_tag = UNKNOWN_TYPE;
     int *type_return = &type_tag;
-    if (expr != NULL && expr->type == EXPR_VAR_ID && getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (expr != NULL && expr->type == EXPR_VAR_ID && kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_expr_main: Checking identifier: %s\n", expr->expr_data.id);
         HashNode_t *ident_node = NULL;
         int index = FindIdent(&ident_node, symtab, expr->expr_data.id);
@@ -1297,7 +1297,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
 
     semcheck_set_error_context(expr->line_num, expr->col_num, expr->source_index);
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_expr_main: expr type=%d\n", expr->type);
         if (expr->type == EXPR_VAR_ID) {
             fprintf(stderr, "[SemCheck]   Identifier: %s\n", expr->expr_data.id);
@@ -1360,7 +1360,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             break;
 
         case EXPR_RECORD_ACCESS:
-            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 struct Expression *ra = expr->expr_data.record_access_data.record_expr;
                 const char *rid = NULL;
@@ -1376,7 +1376,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                     rid != NULL ? rid : "(null)");
             }
             return_val += semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
-            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_RECORD_ACCESS] expr_main: after recordaccess expr=%p type=%d return_val=%d type_return=%d\n",
@@ -1544,7 +1544,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             if (expr->array_element_type == UNKNOWN_TYPE &&
                 expr->array_element_type_id == NULL)
             {
-                if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
                 {
                     fprintf(stderr,
                         "[KGPC] array literal unresolved @ line %d: element_count=%d\n",

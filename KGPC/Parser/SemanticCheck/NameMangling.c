@@ -13,6 +13,9 @@
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/ident_ref.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 static const char *g_mangle_caller_name = NULL; /* debug only */
 
 // Helper to create a lowercase copy of a string (for case-insensitive mangling)
@@ -820,7 +823,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                 /* Check type_alias for STRING_TYPE to distinguish between
                  * RawByteString and UnicodeString. With the fix in commit 868406b,
                  * type_alias is now owned by KgpcType and should be valid. */
-                if (type_tag == STRING_TYPE && getenv("KGPC_DEBUG_MANGLE"))
+                if (type_tag == STRING_TYPE && kgpc_getenv("KGPC_DEBUG_MANGLE"))
                 {
                     fprintf(stderr, "[MANGLE] STRING_TYPE arg for %s: type_alias=%s, kind=%d, expr_type=%d, line=%d",
                         g_mangle_caller_name ? g_mangle_caller_name : "?",
@@ -869,7 +872,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     {
                         HashNode_t *func_node = NULL;
                         int find_result = FindIdent(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
-                        if (getenv("KGPC_DEBUG_MANGLE"))
+                        if (kgpc_getenv("KGPC_DEBUG_MANGLE"))
                             fprintf(stderr, "[MANGLE] fallback lookup '%s': find=%d node=%p hash_type=%d type=%p kind=%d ret_id=%s\n",
                                 arg_expr->expr_data.function_call_data.id,
                                 find_result,
@@ -950,7 +953,7 @@ char* MangleFunctionNameFromCallSite(const char* original_name, ListNode_t* args
     ListNode_t* type_list = GetFlatTypeListFromCallSite(args_expr, symtab, max_scope_lev);
     g_mangle_caller_name = NULL;
     char *result = MangleNameFromTypeList(original_name, type_list);
-    if (getenv("KGPC_DEBUG_MANGLE") &&
+    if (kgpc_getenv("KGPC_DEBUG_MANGLE") &&
         (strcasecmp(original_name, "FileExists") == 0 ||
          strcasecmp(original_name, "DirectoryExists") == 0))
         fprintf(stderr, "[MANGLE] MangleFunctionNameFromCallSite('%s') => '%s'\n",

@@ -63,7 +63,7 @@ int semcheck_expr_is_char_like(struct Expression *expr);
 int semcheck_class_type_ids_compatible(SymTab_t *symtab,
     const char *formal_id, const char *actual_id);
 
-#define SEMSTMT_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
+#define SEMSTMT_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_SEMSTMT_TIMINGS") != NULL)
 
 static double semstmt_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
@@ -1021,7 +1021,7 @@ static int param_has_default_value(Tree_t *decl)
     if (decl->type == TREE_VAR_DECL)
     {
         /* Default value is stored in the initializer field */
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[SemCheck] param_has_default_value: TREE_VAR_DECL, initializer=%p\n",
                 (void*)decl->tree_data.var_decl_data.initializer);
         }
@@ -1029,7 +1029,7 @@ static int param_has_default_value(Tree_t *decl)
     }
     else if (decl->type == TREE_ARR_DECL)
     {
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[SemCheck] param_has_default_value: TREE_ARR_DECL, initializer=%p\n",
                 (void*)decl->tree_data.arr_decl_data.initializer);
         }
@@ -1217,7 +1217,7 @@ static struct Expression *copy_default_expr(struct Expression *src)
         default:
             /* For complex expressions, we can't easily copy them.
              * Return NULL and let the caller handle the error. */
-            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
                 fprintf(stderr, "[SemCheck] copy_default_expr: unsupported expr type %d\n", src->type);
             }
             break;
@@ -1397,7 +1397,7 @@ static struct Expression *make_tfpglist_ctor_expr(struct RecordType *record, int
         strcat(mangled_name, "__Create_u");
         call->expr_data.function_call_data.mangled_id = mangled_name;
         
-        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
         {
             fprintf(stderr, "[KGPC] TFPG ctor: set mangled_id to %s\n", mangled_name);
         }
@@ -1417,7 +1417,7 @@ static int rewrite_tfpglist_constructor_if_needed(SymTab_t *symtab,
 {
     if (symtab == NULL || lhs == NULL || rhs_ptr == NULL || *rhs_ptr == NULL)
         return 0;
-    const char *debug_env = getenv("KGPC_DEBUG_GENERIC_CLONES");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES");
 
     struct RecordType *lhs_record = resolve_tfpglist_record_from_lhs(symtab, lhs);
     if (lhs_record == NULL || lhs_record->type_id == NULL)
@@ -3276,7 +3276,7 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
-    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    if (ret > 0 && kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_ERRORS] stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
@@ -3289,7 +3289,7 @@ int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
-    if (ret > 0 && getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
+    if (ret > 0 && kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_ERRORS] func_stmt_error type=%d line=%d col=%d src=%d ret=%d\n",
@@ -3337,16 +3337,16 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     static int semcheck_stmt_log_enabled = -1;
     static int semcheck_stmt_verbose = -1;
     if (!semcheck_stmt_limit_inited) {
-        const char *limit_env = getenv("KGPC_DEBUG_SEMSTMT_LIMIT");
+        const char *limit_env = kgpc_getenv("KGPC_DEBUG_SEMSTMT_LIMIT");
         if (limit_env != NULL)
             semcheck_stmt_limit = atol(limit_env);
         semcheck_stmt_limit_inited = 1;
     }
     if (semcheck_stmt_log_enabled == -1) {
-        semcheck_stmt_log_enabled = getenv("KGPC_DEBUG_SEMSTMT") != NULL;
+        semcheck_stmt_log_enabled = kgpc_getenv("KGPC_DEBUG_SEMSTMT") != NULL;
     }
     if (semcheck_stmt_verbose == -1) {
-        semcheck_stmt_verbose = getenv("KGPC_DEBUG_SEMSTMT_VERBOSE") != NULL;
+        semcheck_stmt_verbose = kgpc_getenv("KGPC_DEBUG_SEMSTMT_VERBOSE") != NULL;
     }
     semcheck_stmt_counter++;
     if (semcheck_stmt_verbose) {
@@ -3670,7 +3670,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (stmt->stmt_data.inherited_data.call_expr != NULL)
             {
                 struct Expression *call_expr = stmt->stmt_data.inherited_data.call_expr;
-                if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL)
                 {
                     const char *cid = NULL;
                     if (call_expr->type == EXPR_FUNCTION_CALL)
@@ -3741,7 +3741,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (current_class != NULL)
                             {
                                 parent_class_name = current_class->parent_class_name;
-                                if (getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
+                                if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
                                     strcasecmp(method_name, "Create") == 0)
                                 {
                                     fprintf(stderr,
@@ -3755,7 +3755,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                     (strcasecmp(method_name, "Create") == 0 || strcasecmp(method_name, "Destroy") == 0))
                                 {
                                     /* No parent class - convert to empty compound statement (no-op) */
-                                    if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                                    if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL)
                                     {
                                         fprintf(stderr, "[KGPC] Inherited %s with no parent class - converting to no-op\n",
                                                 method_name);
@@ -3782,7 +3782,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                     parent_class_name = current_class->parent_class_name;
                             }
                         }
-                        if (getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL && method_name != NULL &&
                             strcasecmp(method_name, "Create") == 0)
                         {
                             fprintf(stderr,
@@ -3882,7 +3882,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 return ++return_val;
                             }
 
-                            if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL)
                             {
                                 fprintf(stderr, "[INHERITED] Looking for parent method: %s, found: %s\n",
                                     parent_mangled, parent_method_node != NULL ? "YES" : "NO");
@@ -4074,7 +4074,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
         fprintf(stderr, "[timing] varassign lhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
-        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
@@ -4086,7 +4086,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     } else {
         int before_lhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_first, symtab, var, max_scope_lev, MUTATE);
-        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_lhs && var != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ERRORS] varassign_lhs_error line=%d expr_type=%d\n",
@@ -4323,7 +4323,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
         fprintf(stderr, "[timing] varassign rhs semcheck_stmt_expr_tag: %.2f ms (line=%d)\n",
                 semstmt_now_ms() - t0, stmt->line_num);
-        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
@@ -4338,7 +4338,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
     } else {
         int before_rhs = return_val;
         return_val += semcheck_stmt_expr_tag(&type_second, symtab, expr, INT_MAX, NO_MUTATE);
-        if (getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && return_val > before_rhs && expr != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_ERRORS] varassign_rhs_error line=%d expr_type=%d\n",
@@ -4352,7 +4352,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         }
     }
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
         expr->expr_data.function_call_data.id != NULL &&
         strcasecmp(expr->expr_data.function_call_data.id, "Create") == 0) {
         fprintf(stderr, "[SemCheck] semcheck_varassign calling semcheck_resolve_expression_kgpc_type:\n");
@@ -4360,7 +4360,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
         fprintf(stderr, "[SemCheck]   expr->resolved_kgpc_type=%p\n", (void*)expr->resolved_kgpc_type);
     }
     
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_RECORD_ACCESS) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && expr != NULL && expr->type == EXPR_RECORD_ACCESS) {
         fprintf(stderr, "[SemCheck] semcheck_varassign: expr is EXPR_RECORD_ACCESS\n");
         fprintf(stderr, "[SemCheck]   expr=%p\n", (void*)expr);
         fprintf(stderr, "[SemCheck]   expr->resolved_kgpc_type=%p\n", (void*)expr->resolved_kgpc_type);
@@ -4434,7 +4434,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             }
         }
 
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] Type compatibility check:\n");
             fprintf(stderr, "[SemCheck]   lhs_kgpctype=%p kind=%d\n", (void*)lhs_kgpctype, lhs_kgpctype->kind);
             fprintf(stderr, "[SemCheck]   rhs_kgpctype=%p kind=%d\n", (void*)rhs_kgpctype, rhs_kgpctype->kind);
@@ -4550,7 +4550,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             {
                 elem_type_id = lhs_elem->info.record_info->type_id;
             }
-            if (getenv("KGPC_DEBUG_ARRAY_ASSIGN") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ASSIGN") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] array assign @ line %d: elem_tag=%d elem_id=%s\n",
@@ -4657,7 +4657,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (allow_string_to_pchar)
                 goto assignment_types_ok;
 
-            if (getenv("KGPC_DEBUG_RESULT") != NULL && var != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_RESULT") != NULL && var != NULL &&
                 var->type == EXPR_VAR_ID && var->expr_data.id != NULL &&
                 pascal_identifier_equals(var->expr_data.id, "Result"))
             {
@@ -4681,7 +4681,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
-            if (getenv("KGPC_DEBUG_ASSIGN") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_ASSIGN] line=%d col=%d lhs=%s lhs_type=%s rhs_type=%s\n",
@@ -4858,7 +4858,7 @@ assignment_types_ok:
 
         if (!types_compatible)
         {
-            if (getenv("KGPC_DEBUG_ASSIGN") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_ASSIGN] legacy mismatch line=%d col=%d lhs_type=%d rhs_type=%d lhs_expr_type=%d rhs_expr_type=%d\n",
@@ -6810,7 +6810,7 @@ skip_type_receiver_rewrite:
                 }
 
                 if (class_name == NULL && record_type != NULL && record_type->type_id != NULL) {
-                    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
                         fprintf(stderr, "[SemCheck] method placeholder: resolved helper record %s for %s\n",
                             record_type->type_id, method_name != NULL ? method_name : "<null>");
                     }
@@ -7183,7 +7183,7 @@ skip_type_receiver_rewrite:
             char *method_name = strdup(parent_lookup_node->method_name);
 
             if (class_name != NULL && method_name != NULL) {
-                if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL)
                 {
                     fprintf(stderr, "[KGPC] Trying to resolve inherited call: class=%s method=%s\n",
                             class_name, method_name);
@@ -7196,7 +7196,7 @@ skip_type_receiver_rewrite:
                         goto proccall_parent_resolve_done;
                     char *parent_class_name = record_info->parent_class_name;
                     
-                    if (getenv("KGPC_DEBUG_INHERITED") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_INHERITED") != NULL)
                     {
                         fprintf(stderr, "[KGPC]   Found class %s, parent_class_name=%s\n",
                                 class_name, parent_class_name ? parent_class_name : "<NULL>");
@@ -7678,7 +7678,7 @@ proccall_parent_resolve_done:
                                 args_tail = new_arg;
                             }
                             
-                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
                                 fprintf(stderr, "[SemCheck] Added default arg %d for %s\n", 
                                     arg_index, proc_id != NULL ? proc_id : "(null)");
                             }
@@ -8093,7 +8093,7 @@ proccall_parent_resolve_done:
                 int expected_type_owned = 0;
                 KgpcType *expected_kgpc_type = resolve_param_type_with_owner(arg_decl, symtab,
                     callee_owner_full, callee_owner_outer, &expected_type_owned);
-                if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
                     strcasecmp(proc_id, "FmtStr") == 0)
                 {
                     if (arg_decl->type == TREE_VAR_DECL)
@@ -8146,7 +8146,7 @@ proccall_parent_resolve_done:
                 {
                     arg_kgpc_type = semcheck_resolve_expression_kgpc_type(symtab, arg_expr, INT_MAX, mutate_flag, &arg_type_owned);
                 }
-                if (getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_FMTSTR") != NULL && proc_id != NULL &&
                     strcasecmp(proc_id, "FmtStr") == 0)
                 {
                     fprintf(stderr,
@@ -8350,7 +8350,7 @@ proccall_parent_resolve_done:
 
                 if (!types_match)
                 {
-                    if (getenv("KGPC_DEBUG_SYMCREAT_INSERTSYM") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_INSERTSYM") != NULL &&
                         proc_id != NULL &&
                         pascal_identifier_equals(proc_id, "TSymtable__insertsym"))
                     {
@@ -8365,7 +8365,7 @@ proccall_parent_resolve_done:
                             (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
                                 ? arg_expr->pointer_subtype_id : "<null>");
                     }
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
                         fprintf(stderr,
                             "[SemCheck] proccall %s arg %d mismatch: expected=%s actual=%s\n",

@@ -12,7 +12,7 @@
 #include <time.h>
 #include <ctype.h>
 
-#define FUNCCALL_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_FUNCCALL_TIMINGS") != NULL)
+#define FUNCCALL_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_FUNCCALL_TIMINGS") != NULL)
 
 static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
@@ -259,7 +259,7 @@ static void semcheck_compute_array_linearization(SymTab_t *symtab,
     expr->expr_data.array_access_data.linear_lowers = lowers;
     expr->expr_data.array_access_data.linear_info_valid = 1;
 
-    if (getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
     {
         fprintf(stderr, "[SemCheck] array linearization: indices=%d elem_size=%lld\n",
             index_count, info.element_size);
@@ -896,7 +896,7 @@ int semcheck_arrayaccess(int *type_return,
     /* Type-check extra indices for multi-dimensional arrays */
     if (expr->expr_data.array_access_data.extra_indices != NULL)
     {
-        if (getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ARRAY_LINEAR") != NULL)
         {
             fprintf(stderr, "[SemCheck] array access has extra indices\n");
         }
@@ -1317,7 +1317,7 @@ int semcheck_funccall(int *type_return,
             }
         }
     }
-    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
         fprintf(stderr,
@@ -1596,7 +1596,7 @@ int semcheck_funccall(int *type_return,
         {
             KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
             KgpcType *ret_type = NULL;
-            if (getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
                 expr->expr_data.function_call_data.id != NULL &&
                 pascal_identifier_equals(expr->expr_data.function_call_data.id, "Ctr"))
             {
@@ -1703,11 +1703,11 @@ int semcheck_funccall(int *type_return,
             expr->expr_data.function_call_data.call_qualifier = NULL;
         }
     }
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_funccall: id='%s' expr=%p resolved_func=%p\n", 
             id != NULL ? id : "(null)", (void*)expr, (void*)expr->expr_data.function_call_data.resolved_func);
     }
-    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
         pascal_identifier_equals(id, "CheckObserving"))
     {
         int arg_count = 0;
@@ -1719,7 +1719,7 @@ int semcheck_funccall(int *type_return,
             expr->expr_data.function_call_data.is_method_call_placeholder,
             was_unit_qualified, arg_count);
     }
-    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Format"))
     {
         int arg_count = 0;
@@ -1743,7 +1743,7 @@ int semcheck_funccall(int *type_return,
                 first_id != NULL ? first_id : "(null)");
         }
     }
-    if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Trim"))
     {
         int arg_count = 0;
@@ -1765,7 +1765,7 @@ int semcheck_funccall(int *type_return,
                 first_id != NULL ? first_id : "(null)");
         }
     }
-    if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
         pascal_identifier_equals(id, "IsDirectory"))
     {
         int arg_count = 0;
@@ -1961,7 +1961,7 @@ int semcheck_funccall(int *type_return,
      * For expressions like ObjPas.TEndian(0), the parser creates a method call
      * with ObjPas as the receiver and TEndian as the function name.
      * If ObjPas is a unit name, strip it and check if this is a typecast. */
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && args_given != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         fprintf(stderr, "[SemCheck] funccall id='%s' is_method_call_placeholder=%d first_arg_type=%d first_arg_id=%s\n",
             id ? id : "(null)",
@@ -1975,7 +1975,7 @@ int semcheck_funccall(int *type_return,
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
             int is_unit_qualifier = semcheck_is_unit_name(first_arg->expr_data.id);
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {
                 fprintf(stderr, "[SemCheck] funccall unit-qual check: receiver=%s is_unit=%d\n",
                     first_arg->expr_data.id, is_unit_qualifier);
@@ -2052,7 +2052,7 @@ int semcheck_funccall(int *type_return,
             }
     if (is_unit_qualifier)
     {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                 {
                     fprintf(stderr, "[SemCheck] funccall unit-qual strip: receiver=%s id=%s\n",
                         first_arg->expr_data.id, id != NULL ? id : "(null)");
@@ -2103,7 +2103,7 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Format"))
     {
         fprintf(stderr,
@@ -2153,7 +2153,7 @@ int semcheck_funccall(int *type_return,
                         if (first_is_self)
                             goto skip_self_injection;
                     }
-                    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                         pascal_identifier_equals(id, "CheckObserving"))
                     {
                         fprintf(stderr,
@@ -2163,7 +2163,7 @@ int semcheck_funccall(int *type_return,
                 }
                 else
                 {
-                if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                     pascal_identifier_equals(id, "CheckObserving"))
                 {
                     fprintf(stderr,
@@ -2173,7 +2173,7 @@ int semcheck_funccall(int *type_return,
                         global_node->method_name != NULL ? global_node->method_name : "(null)",
                         global_node->owner_class_full != NULL ? global_node->owner_class_full : "(null)");
                 }
-                if (getenv("KGPC_DEBUG_TRIM") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_TRIM") != NULL &&
                     pascal_identifier_equals(id, "Trim"))
                 {
                     fprintf(stderr,
@@ -2189,7 +2189,7 @@ int semcheck_funccall(int *type_return,
                 self_found = 1;
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 int self_is_helper = 0;
-                if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
                     pascal_identifier_equals(id, "Trim"))
                 {
                     fprintf(stderr,
@@ -2338,7 +2338,7 @@ int semcheck_funccall(int *type_return,
                                     int candidate_compatible = semcheck_method_accepts_arg_count(candidate_params,
                                         args_count, &candidate_expects_self, candidate->is_varargs);
                                     
-                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                         fprintf(stderr, "[SemCheck] Method overload check: candidate=%s params=%d args=%d compatible=%d\n",
                                             candidate->mangled_id ? candidate->mangled_id : candidate->id,
                                             semcheck_count_total_params(candidate_params), args_count, candidate_compatible);
@@ -2374,7 +2374,7 @@ int semcheck_funccall(int *type_return,
                                 method_node = NULL;
                         }
                         
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck] Method check (fallback): method_node=%p method_params_len=%d\n",
                                 (void*)method_node, method_params_len);
                         }
@@ -2475,12 +2475,12 @@ int semcheck_funccall(int *type_return,
                         }
                     }
                     
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] Self injection: Self found, self_record=%s, method=%s, method_node=%p expects_self=%d\n",
                             self_record->type_id ? self_record->type_id : "(null)",
                             id ? id : "(null)", (void*)method_node, expects_self);
                     }
-                    if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                         pascal_identifier_equals(id, "CheckObserving"))
                     {
                         fprintf(stderr,
@@ -2524,7 +2524,7 @@ int semcheck_funccall(int *type_return,
                         {
                             expects_self = 0;
                         }
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                         {
                             fprintf(stderr, "[SemCheck] Implicit Self injection? method_params_len=%d mangled=%s\n",
                                 semcheck_count_total_params(method_params),
@@ -2552,7 +2552,7 @@ int semcheck_funccall(int *type_return,
                                 self_arg_name = self_record->type_id;
                             }
                             struct Expression *self_expr = mk_varid(expr->line_num, strdup(self_arg_name));
-                            if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                            if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                                 pascal_identifier_equals(id, "CheckObserving"))
                             {
                                 fprintf(stderr,
@@ -2567,7 +2567,7 @@ int semcheck_funccall(int *type_return,
                             {
                                 HashNode_t *base_node = semcheck_find_preferred_type_node(symtab,
                                     self_record->helper_base_type_id);
-                                if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                                     pascal_identifier_equals(id, "Format"))
                                 {
                                     fprintf(stderr,
@@ -2595,7 +2595,7 @@ int semcheck_funccall(int *type_return,
                                         destroy_kgpc_type(self_record_type);
                                     }
                                 }
-                                if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+                                if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                                     pascal_identifier_equals(id, "CheckObserving"))
                                 {
                                     fprintf(stderr,
@@ -2608,7 +2608,7 @@ int semcheck_funccall(int *type_return,
                             expr->expr_data.function_call_data.args_expr = self_arg;
                             args_given = self_arg;
                             injected_self = 1;
-                            if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                            if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                                 pascal_identifier_equals(id, "Format"))
                             {
                                 fprintf(stderr,
@@ -2616,7 +2616,7 @@ int semcheck_funccall(int *type_return,
                                     id,
                                     method_owner_name != NULL ? method_owner_name : "(null)");
                             }
-                            if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+                            if (kgpc_getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
                                 pascal_identifier_equals(id, "Trim"))
                             {
                                 fprintf(stderr,
@@ -2721,7 +2721,7 @@ int semcheck_funccall(int *type_return,
                         }
                     }
             }
-            else if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+            else if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
                      pascal_identifier_equals(id, "CheckObserving"))
             {
                 const char *owner = semcheck_get_current_method_owner();
@@ -2828,7 +2828,7 @@ int semcheck_funccall(int *type_return,
 
                 if (is_proc_field)
                 {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] treating %s.%s as procedural field call\n",
                             receiver_expr->type == EXPR_VAR_ID ? receiver_expr->expr_data.id : "<expr>", id);
                     }
@@ -3083,7 +3083,7 @@ int semcheck_funccall(int *type_return,
         !expr->expr_data.function_call_data.is_method_call_placeholder &&
         expr->expr_data.function_call_data.call_qualifier == NULL;
 
-    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
         fprintf(stderr,
@@ -3574,7 +3574,7 @@ int semcheck_funccall(int *type_return,
                             {
                                 HashNode_t *base_node = semcheck_find_preferred_type_node(symtab,
                                     record_for_mangling->helper_base_type_id);
-                                if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                                if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                                     pascal_identifier_equals(id, "Format"))
                                 {
                                     fprintf(stderr,
@@ -3607,13 +3607,13 @@ int semcheck_funccall(int *type_return,
                             args_given = self_node;
                             expr->expr_data.function_call_data.args_expr = args_given;
                             injected_self = 1;
-                            if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                            if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                                 pascal_identifier_equals(id, "Format"))
                             {
                                 fprintf(stderr,
                                     "[KGPC_DEBUG_FORMAT] injected Self (overload match)\n");
                             }
-                            if (getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
+                            if (kgpc_getenv("KGPC_DEBUG_TRIM") != NULL && id != NULL &&
                                 pascal_identifier_equals(id, "Trim"))
                             {
                                 fprintf(stderr,
@@ -3770,7 +3770,7 @@ int semcheck_funccall(int *type_return,
     /* Check for method call with unresolved name (member-access placeholder) where first arg is the type/instance. */
     if (!was_unit_qualified &&
         expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL) {
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
         {
             fprintf(stderr, "[SemCheck] funccall method-placeholder: id=%s was_unit_qualified=%d\n",
                 id != NULL ? id : "(null)", was_unit_qualified);
@@ -4017,7 +4017,7 @@ int semcheck_funccall(int *type_return,
                     /* Check if this is a static method */
                     int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
                 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
                         record_info->type_id, method_name, is_static);
                 }
@@ -4045,7 +4045,7 @@ int semcheck_funccall(int *type_return,
                                 effective_record = (actual_method_owner != NULL) ?
                                     actual_method_owner : helper_record;
                                 is_static = from_cparser_is_method_static(helper_record->type_id, method_name);
-                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                     fprintf(stderr, "[SemCheck] semcheck_funccall: Found method %s via record helper %s\n",
                                         method_name, helper_record->type_id);
                                 }
@@ -4165,7 +4165,7 @@ int semcheck_funccall(int *type_return,
                             old_head->next = NULL;  /* Detach to prevent dangling reference */
                             args_given = expr->expr_data.function_call_data.args_expr;
 
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                 fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
                             }
                         }
@@ -4478,7 +4478,7 @@ int semcheck_funccall(int *type_return,
                     } else if (from_cparser_is_method_class_method(
                                    record_info->type_id, id)) {
                         is_potential_class_method_call = 1;
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck] semcheck_funccall: detected class/static method call %s.%s\n",
                                 record_info->type_id, id);
                         }
@@ -4499,7 +4499,7 @@ int semcheck_funccall(int *type_return,
         first_arg_type_tag = semcheck_tag_from_kgpc(first_arg_kgpc_type_ctor);
         (void)first_arg_type_tag; /* Variable is used for potential debugging */
         
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
              fprintf(stderr, "[SemCheck] semcheck_funccall: first_arg=%p type=%d id=%s resolved_kgpc_type=%p\n",
                  (void*)first_arg, first_arg->type, 
                  (first_arg->type == EXPR_VAR_ID) ? first_arg->expr_data.id : "N/A",
@@ -4602,7 +4602,7 @@ int semcheck_funccall(int *type_return,
             }
         }
 
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr,
                 "[SemCheck] ctor resolve: record_info=%s owner_type=%p kind=%d\n",
                 (record_info != NULL && record_info->type_id != NULL) ? record_info->type_id : "<null>",
@@ -4674,7 +4674,7 @@ int semcheck_funccall(int *type_return,
                             snprintf(candidate_name, class_len + 2 + method_len + 1,
                                 "%s__%s", owner_for_mangle->type_id, id);
                             ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
-                            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                 fprintf(stderr, "[SemCheck] semcheck_funccall: helper '%s' found %d candidates\n",
                                     candidate_name, ListLength(candidates));
                             }
@@ -4708,7 +4708,7 @@ int semcheck_funccall(int *type_return,
                              method_owner->type_id, id);
 
                     ListNode_t *candidates = FindAllIdents(symtab, candidate_name);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Looking for '%s' found %d candidates\n",
                             candidate_name, ListLength(candidates));
                     }
@@ -4727,13 +4727,13 @@ int semcheck_funccall(int *type_return,
 
             if (method_candidates != NULL && mangled_method_name != NULL) {
                 /* Found at least one method overload */
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: Found constructor/method %s in class\n", id);
                 }
 
                 /* Check if this is a static method (class function with static modifier) */
                 int is_static_method = from_cparser_is_method_static(method_owner->type_id, id);
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_funccall: is_static_method=%d for %s.%s\n",
                         is_static_method, method_owner->type_id, id);
                 }
@@ -4840,7 +4840,7 @@ int semcheck_funccall(int *type_return,
                     }
                 }
                 if (method_is_declared_constructor && owner_type != NULL) {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
                     }
                     expr->expr_data.function_call_data.is_constructor_call = 1;
@@ -4870,7 +4870,7 @@ int semcheck_funccall(int *type_return,
 
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, ctor_return_type);
                     *type_return = semcheck_tag_from_kgpc(ctor_return_type);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         struct RecordType *debug_record = NULL;
                         if (ctor_return_type != NULL &&
                             ctor_return_type->kind == TYPE_KIND_POINTER &&
@@ -4899,7 +4899,7 @@ int semcheck_funccall(int *type_return,
     }
 
     /* If constructor was already resolved above, skip overload resolution */
-    if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_CALL_TYPES") != NULL && id != NULL &&
         pascal_identifier_equals(id, "IsDirectory"))
     {
         fprintf(stderr, "[KGPC_DEBUG_CALL_TYPES] IsDirectory resolved_func=%p mangled=%s\n",
@@ -5177,7 +5177,7 @@ int semcheck_funccall(int *type_return,
             }
         }
     }
-    if (getenv("KGPC_DEBUG_PROC_VAR") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Ctr"))
     {
         HashNode_t *cand = (overload_candidates != NULL) ? (HashNode_t *)overload_candidates->cur : NULL;
@@ -5413,7 +5413,7 @@ method_call_resolved:
 
     if (best_match == NULL)
     {
-        if (getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_CHECKOBS") != NULL && id != NULL &&
             pascal_identifier_equals(id, "CheckObserving"))
         {
             int idx = 0;
@@ -5932,7 +5932,7 @@ method_call_resolved:
         
         /* Build detailed error message with argument types and available overloads */
         {
-            if (getenv("KGPC_DEBUG_OVERLOAD_FAIL") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_FAIL") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_OVERLOAD_FAIL] call=%s line=%d col=%d args=%d\n",
@@ -6107,7 +6107,7 @@ method_call_resolved:
     }
     else
     {
-        const char *ambig_env = getenv("KGPC_DEBUG_AMBIGUOUS");
+        const char *ambig_env = kgpc_getenv("KGPC_DEBUG_AMBIGUOUS");
         if (ambig_env != NULL && overload_candidates != NULL)
         {
             fprintf(stderr, "[KGPC] Ambiguous call to %s, %d best matches with score %d:\n",
@@ -6152,7 +6152,7 @@ skip_overload_resolution:
         set_hash_meta(hash_return, mutating);
         if(scope_return > max_scope_lev)
         {
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_funccall: scope_return (%d) > max_scope_lev (%d)\n",
                     scope_return, max_scope_lev);
             }
@@ -6217,7 +6217,7 @@ skip_overload_resolution:
                 }
             }
         }
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && id != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && id != NULL &&
             (pascal_identifier_equals(id, "GetAnsiString") ||
              pascal_identifier_equals(id, "GetString")))
         {
@@ -6315,7 +6315,7 @@ skip_overload_resolution:
             }
             if (return_type != NULL)
             {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] Overwriting resolved_kgpc_type from hash_return return_type\n");
                     fprintf(stderr, "[SemCheck]   return_type kind=%d\n", return_type->kind);
                 }
@@ -6405,7 +6405,7 @@ skip_overload_resolution:
                     const char *first_id = (const char *)first_param->tree_data.var_decl_data.ids->cur;
                     if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
                         resolved_expects_self = 1;
-                    if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                         pascal_identifier_equals(id, "Format"))
                     {
                         fprintf(stderr,
@@ -6430,7 +6430,7 @@ skip_overload_resolution:
                         destroy_expr(first_arg);
                         free(first_arg_node);
                         args_given = expr->expr_data.function_call_data.args_expr;
-                        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
                             pascal_identifier_equals(id, "Format"))
                         {
                             fprintf(stderr,
@@ -6440,7 +6440,7 @@ skip_overload_resolution:
                 }
             }
         }
-        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
             pascal_identifier_equals(id, "Format"))
         {
             const char *owner = hash_return != NULL ? hash_return->owner_class : NULL;
@@ -6462,11 +6462,11 @@ skip_overload_resolution:
         ListNode_t *args_to_validate = args_given;
         ListNode_t *true_args_to_validate = true_args;
         
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] Constructor %s: args_given=%d, true_args=%d\n",
                 id, ListLength(args_given), ListLength(true_args));
         }
-        if (getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL && id != NULL &&
             pascal_identifier_equals(id, "Format"))
         {
             fprintf(stderr,
@@ -6508,14 +6508,14 @@ skip_overload_resolution:
         {
             /* If lengths match, we assume first arg is class type and first param is Self -> skip both */
             if (ListLength(args_given) == ListLength(true_args)) {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping both Self and Class Type\n");
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping both Self and Class Type\n");
                 args_to_validate = args_given->next;
                 if (true_args_to_validate != NULL)
                     true_args_to_validate = true_args_to_validate->next;
             }
             /* If args_given is one less, we assume class type is implicit but Self is explicit in params -> skip Self only */
             else if (ListLength(args_given) == ListLength(true_args) - 1) {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping Self only\n");
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) fprintf(stderr, "[SemCheck] Skipping Self only\n");
                 if (true_args_to_validate != NULL)
                     true_args_to_validate = true_args_to_validate->next;
             }
@@ -6544,7 +6544,7 @@ skip_overload_resolution:
             }
         }
             
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 int args_given_count = 0;
                 int true_args_count = 0;
                 int args_to_validate_count = 0;
@@ -6555,7 +6555,7 @@ skip_overload_resolution:
                     id, args_given_count, true_args_count, args_to_validate_count);
             }
         
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] Before validation loop: true_args len=%d, args_given len=%d\n", 
                 ListLength(true_args), ListLength(args_given));
             
@@ -6586,7 +6586,7 @@ skip_overload_resolution:
         
         while(true_args_to_validate != NULL && args_to_validate != NULL)
         {
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] validation loop: arg %d\n", cur_arg);
                 fprintf(stderr, "[SemCheck]   true_args_to_validate=%p next=%p\n", 
                     (void*)true_args_to_validate, (void*)true_args_to_validate->next);
@@ -6732,7 +6732,7 @@ skip_overload_resolution:
             }
             if (named_arg_mismatch)
                 arg_type = UNKNOWN_TYPE;
-            if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL &&
                 id != NULL && pascal_identifier_equals(id, "Format"))
             {
                 const char *kgpc_str = "<null>";
@@ -6747,7 +6747,7 @@ skip_overload_resolution:
                 if (current_arg_expr != NULL)
                     semcheck_debug_expr_brief(current_arg_expr, "format arg");
             }
-            if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                 id != NULL &&
                 (pascal_identifier_equals(id, "FileDateToDateTime") ||
                  pascal_identifier_equals(id, "FileDateToUniversal")))
@@ -6759,7 +6759,7 @@ skip_overload_resolution:
                 if (current_arg_expr != NULL)
                     semcheck_debug_expr_brief(current_arg_expr, "call arg");
             }
-            if (getenv("KGPC_DEBUG_COMPAREMEM") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_COMPAREMEM") != NULL &&
                 id != NULL && pascal_identifier_equals(id, "CompareMem"))
             {
                 const char *kgpc_str = "<null>";
@@ -6806,7 +6806,7 @@ skip_overload_resolution:
                     if (owns_formal_probe && formal_probe != NULL)
                         destroy_kgpc_type(formal_probe);
                 }
-                if (getenv("KGPC_DEBUG_FORMAT") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_FORMAT") != NULL &&
                     id != NULL && pascal_identifier_equals(id, "Format"))
                 {
                     fprintf(stderr,
@@ -7061,14 +7061,14 @@ skip_overload_resolution:
                     
                     if (!type_compatible)
                     {
-                        if (getenv("KGPC_ASSERT_STRING_LITERAL_TYPED") != NULL &&
+                        if (kgpc_getenv("KGPC_ASSERT_STRING_LITERAL_TYPED") != NULL &&
                             current_arg_expr != NULL &&
                             current_arg_expr->type == EXPR_STRING)
                         {
                             assert(arg_type != UNKNOWN_TYPE &&
                                    "string literal should have a resolved type before call validation");
                         }
-                        if (getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_CALL_TYPES") != NULL &&
                             id != NULL &&
                             (pascal_identifier_equals(id, "FileDateToDateTime") ||
                              pascal_identifier_equals(id, "FileDateToUniversal") ||
@@ -7101,7 +7101,7 @@ skip_overload_resolution:
 
                             if (new_arg_type == POINTER_TYPE)
                             {
-                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                                     fprintf(stderr, "[SemCheck] Auto-fixing missing @ for CompareMem argument\n");
                                 args_to_validate->cur = addr_expr;
                                 current_arg_expr = addr_expr;
@@ -7144,7 +7144,7 @@ skip_overload_resolution:
                                 if (new_arg_type == POINTER_TYPE)
                                 {
                                     /* Fix applied */
-                                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                                         fprintf(stderr, "[SemCheck] Auto-fixing missing @ for PChar argument\n");
                                         
                                     /* Update list node */

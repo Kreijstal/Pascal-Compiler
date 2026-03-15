@@ -62,6 +62,33 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
+/* Cached getenv() for KGPC_* environment variables.
+ * getenv() does a linear scan of the environment on each call; with hundreds of
+ * debug checks in hot loops, this was consuming 9% of total CPU time.
+ * Uses a simple linear-probe cache (env var names are always string literals). */
+#define KGPC_ENV_CACHE_SIZE 128
+static struct {
+    const char *name;   /* pointer to string literal (identity comparison) */
+    const char *value;  /* cached getenv result (NULL or pointer) */
+} g_env_cache[KGPC_ENV_CACHE_SIZE];
+static int g_env_cache_count = 0;
+
+const char *kgpc_getenv(const char *name) {
+    /* Linear search — fast for <100 unique names with pointer identity */
+    for (int i = 0; i < g_env_cache_count; i++) {
+        if (g_env_cache[i].name == name)
+            return g_env_cache[i].value;
+    }
+    /* Cache miss — do the real getenv and store */
+    const char *val = getenv(name);
+    if (g_env_cache_count < KGPC_ENV_CACHE_SIZE) {
+        g_env_cache[g_env_cache_count].name = name;
+        g_env_cache[g_env_cache_count].value = val;
+        g_env_cache_count++;
+    }
+    return val;
+}
+
 #ifdef _WIN32
 /* Windows CRT does not provide strndup; caller owns returned buffer. */
 static char* strndup(const char* s, size_t n)
@@ -1280,7 +1307,7 @@ static void print_error_context(int line_num, int col_num, int source_index, con
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
@@ -1901,7 +1928,7 @@ static int semcheck_debug_errors_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
-        cached = (getenv("KGPC_DEBUG_ERRORS") != NULL);
+        cached = (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL);
     return cached;
 }
 
@@ -2138,7 +2165,7 @@ static void v_semcheck_format_error_with_context(
             context_buf = g_semcheck_source_buffer;
             context_buf_len = g_semcheck_source_length;
         }
-        if (getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
@@ -2506,7 +2533,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     if (symtab == NULL || owner == NULL || method_name == NULL || method_name[0] == '\0')
         return;
 
-    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
         fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] owner=%s method=%s\n", owner, method_name);
 
     char *class_name = strdup(owner);
@@ -2609,7 +2636,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         free(class_name);
         return;
     }
-    if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
     {
         fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] class=%s static=%d has_class_vars=%d\n",
             class_name ? class_name : "<null>", is_static, has_class_vars);
@@ -2628,7 +2655,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         if (field != NULL && field->name != NULL && field->name[0] != '\0')
         {
             int allow_all_fields = (record_type_is_class(record_info) && is_static && !has_class_vars);
-            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL)
             {
                 fprintf(stderr, "[KGPC_DEBUG_CLASS_VAR] field=%s class_var=%d allow_all=%d\n",
                     field->name ? field->name : "<null>",
@@ -2639,7 +2666,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 field_node = field_node->next;
                 continue;
             }
-            if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                 pascal_identifier_equals(field->name, "FStandardEncodings"))
             {
                 fprintf(stderr,
@@ -2697,7 +2724,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                             elem_type = elem_node->type;
                             kgpc_type_retain(elem_type);
                         }
-                        else if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                        else if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                             pascal_identifier_equals(field->name, "FStandardEncodings"))
                         {
                             fprintf(stderr,
@@ -2719,7 +2746,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                     }
                     if (elem_type != NULL)
                     {
-                        if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                             pascal_identifier_equals(field->name, "FStandardEncodings"))
                         {
                             fprintf(stderr,
@@ -2732,7 +2759,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 }
                 
                 /* Push onto scope - using typed variant */
-                if (getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR") != NULL &&
                     pascal_identifier_equals(field->name, "FStandardEncodings"))
                 {
                     fprintf(stderr,
@@ -2867,14 +2894,14 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     struct MethodTemplate *template = from_cparser_get_method_template(record_info, method_name);
     if (template == NULL || template->params_ast == NULL)
     {
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
             fprintf(stderr, "[copy_method_decl_defaults] No method template found for %s.%s\n",
                 class_name, method_name);
         free(class_name);
         return;
     }
     
-    if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
         fprintf(stderr, "[copy_method_decl_defaults] Found template for %s.%s, params_ast=%p typ=%d\n",
             class_name, method_name, (void*)template->params_ast, template->params_ast->typ);
     
@@ -2908,7 +2935,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     while (param_cursor != NULL && impl_param != NULL)
     {
         ast_t *decl_param = param_cursor;
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
             fprintf(stderr, "[copy_method_decl_defaults] Processing decl_param typ=%d\n", decl_param->typ);
         
         if (decl_param->typ == PASCAL_T_PARAM)
@@ -2919,7 +2946,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
             
             for (ast_t *child = decl_param->child; child != NULL; child = child->next)
             {
-                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                     fprintf(stderr, "[copy_method_decl_defaults]   child typ=%d\n", child->typ);
                 if (child->typ == PASCAL_T_TYPE_SPEC)
                     type_spec = child;
@@ -2934,7 +2961,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
                 default_value = type_spec->next;
             }
             
-            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                 fprintf(stderr, "[copy_method_decl_defaults] type_spec=%p default_value=%p\n",
                     (void*)type_spec, (void*)default_value);
             
@@ -2942,7 +2969,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
             {
                 /* Get the implementation parameter */
                 Tree_t *impl_decl = (Tree_t *)impl_param->cur;
-                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                     fprintf(stderr, "[copy_method_decl_defaults] impl_decl=%p type=%d\n",
                         (void*)impl_decl, impl_decl ? impl_decl->type : -1);
                 
@@ -2953,14 +2980,14 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
                     {
                         /* Convert default_value->child to Expression and wrap in initializer */
                         ast_t *expr_node = default_value->child;
-                        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                             fprintf(stderr, "[copy_method_decl_defaults] expr_node=%p typ=%d\n",
                                 (void*)expr_node, expr_node ? expr_node->typ : -1);
                         
                         if (expr_node != NULL)
                         {
                             struct Expression *default_expr = from_cparser_convert_expression(expr_node);
-                            if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                                 fprintf(stderr, "[copy_method_decl_defaults] default_expr=%p\n",
                                     (void*)default_expr);
 
@@ -2968,12 +2995,12 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
                             {
                                 impl_decl->tree_data.var_decl_data.initializer =
                                     mk_varassign(default_value->line, 0, NULL, default_expr);
-                                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                                if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                                     fprintf(stderr, "[copy_method_decl_defaults] COPIED default value!\n");
                             }
                         }
                     }
-                    else if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
+                    else if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL)
                     {
                         fprintf(stderr, "[copy_method_decl_defaults] impl already has initializer\n");
                     }
@@ -3276,7 +3303,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     int best_scope_level = INT_MAX / 2;
     int best_same_unit = 0;
     int best_is_forward_stub = 1;
-    int debug_tsize = (getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
+    int debug_tsize = (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
                        pascal_identifier_equals(rendered, "TSize"));
     ListNode_t *cur = matches;
     while (cur != NULL)
@@ -3295,7 +3322,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             {
                 const char *unit_name = unit_registry_get(node->source_unit_index);
                 int allowed = (unit_name == NULL) ? 1 : semcheck_is_unit_name(unit_name);
-                if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL && lookup_id != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL && lookup_id != NULL)
                 {
                     if (pascal_identifier_equals(lookup_id, "TFloatFormatProfile") ||
                         pascal_identifier_equals(lookup_id, "TFloatSpecial") ||
@@ -3340,7 +3367,7 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 node->source_unit_index == effective_unit_index)
                 same_unit = 1;
 
-            if (debug_tsize || (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+            if (debug_tsize || (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
                 lookup_id != NULL && pascal_identifier_equals(lookup_id, "TSize")))
             {
                 const char *uname = unit_registry_get(node->source_unit_index);
@@ -3901,7 +3928,7 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                     }
                 }
 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.ids != NULL)
                 {
                     const char *first_id = NULL;
                     if (tree->type == TREE_VAR_DECL)
@@ -4043,7 +4070,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
-    const char *debug_env = getenv("KGPC_DEBUG_RETURN_TYPE");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_RETURN_TYPE");
     KgpcType *builtin_return = NULL;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
@@ -5083,7 +5110,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
         if (type_node == NULL)
             type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
 
-        if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
         {
             fprintf(stderr, "[resolve_type] '%s' initial lookup node=%p (%s)\n",
                 input_name, (void*)type_node, lookup_name != NULL ? lookup_name : "<null>");
@@ -5097,7 +5124,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
             {
                 lookup_name = last;
                 type_node = semcheck_find_preferred_type_node(symtab, lookup_name);
-                if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' unqualified '%s' node=%p\n",
                         input_name, lookup_name, (void*)type_node);
@@ -5109,7 +5136,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
 
         if (type_node != NULL)
         {
-            if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
             {
                 fprintf(stderr, "[resolve_type] '%s' hash_type=%d type=%p\n",
                     input_name, type_node->hash_type, (void*)type_node->type);
@@ -5140,7 +5167,7 @@ static const char *resolve_type_to_base_name(SymTab_t *symtab,
                     }
                     free(qualified);
                 }
-                if (getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_RESOLVE_TYPE") != NULL)
                 {
                     fprintf(stderr, "[resolve_type] '%s' kgpc_type kind=%d alias=%p\n",
                         input_name, kgpc_type->kind, (void*)alias);
@@ -5691,7 +5718,7 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, l
             const char *id = NULL;
             if (expr->expr_data.typecast_data.target_type_id != NULL)
                 id = semcheck_base_type_name(expr->expr_data.typecast_data.target_type_id);
-            if (getenv("KGPC_DEBUG_CONST_CAST") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CONST_CAST") != NULL)
             {
                 fprintf(stderr, "[KGPC] const cast id=%s target_type=%d inner=%lld\n",
                     id != NULL ? id : "<null>", target_type, inner_value);
@@ -6810,23 +6837,23 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
 
     symtab = InitSymTab();
     PushScope(symtab);  /* Push global scope for built-in constants and types */
-    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
-    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL) {
         double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
         fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
     }
     /*PrintSymTab(symtab, stderr, 0);*/
 
-    if (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     if (parse_tree->type == TREE_UNIT) {
         return_val = semcheck_unit(symtab, parse_tree);
     } else {
         return_val = semcheck_program(symtab, parse_tree);
     }
-    if (getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL) {
         double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
         fprintf(stderr, "[timing] semcheck_program/unit: %.2f ms\n", t1 - t0);
     }
@@ -6952,7 +6979,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                 struct TypeAlias *alias_info = &tree->tree_data.type_decl_data.info.alias;
                 if (alias_info != NULL && alias_info->is_enum && alias_info->enum_literals != NULL)
                 {
-                    if (getenv("KGPC_DEBUG_ENUM_LITERALS") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_ENUM_LITERALS") != NULL)
                     {
                         fprintf(stderr, "[KGPC] enum predeclare %s scoped=%d line=%d\n",
                             tree->tree_data.type_decl_data.id != NULL ? tree->tree_data.type_decl_data.id : "<anon>",
@@ -7227,7 +7254,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 }
                 
                 /* Debug: print predeclare order */
-                if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                 {
                     fprintf(stderr, "[predeclare] type '%s' unit=%d",
                         type_id, tree->tree_data.type_decl_data.defined_in_unit);
@@ -7242,14 +7269,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Check if already declared (e.g., from a previous pass or builtin) */
                 HashNode_t *existing = NULL;
                 int scope_level = FindIdent(&existing, symtab, type_id);
-                if (getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_TFLOAT") != NULL && type_id != NULL &&
                     pascal_identifier_equals(type_id, "TFloatFormatProfile"))
                 {
                     fprintf(stderr, "[TFLOAT] predeclare existing scope=%d node=%p kind=%d\n",
                         scope_level, (void *)existing,
                         tree->tree_data.type_decl_data.kind);
                 }
-                if (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
                     pascal_identifier_equals(type_id, "TSize"))
                 {
                     fprintf(stderr, "[TSIZE-FLOW] tree: defined_in_unit=%d src_unit=%d kind=%d | existing=%p scope=%d",
@@ -7670,14 +7697,14 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         }
 
                         int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
-                        if (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
                             pascal_identifier_equals(type_id, "TSize"))
                         {
                             fprintf(stderr, "[TSIZE-PUSH] push result=%d tree_defined_in_unit=%d tree_src_unit=%d\n",
                                 result, tree->tree_data.type_decl_data.defined_in_unit,
                                 tree->tree_data.type_decl_data.source_unit_index);
                         }
-                        if (getenv("KGPC_DEBUG_FORWARD_CLASS") && record_info != NULL && record_info->is_class)
+                        if (kgpc_getenv("KGPC_DEBUG_FORWARD_CLASS") != NULL && record_info != NULL && record_info->is_class)
                         {
                             fprintf(stderr, "[FWD-PRE] type='%s' push_result=%d fields=%p\n",
                                 type_id, result, (void *)record_info->fields);
@@ -7703,7 +7730,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             {
                                 HashNode_t *existing = NULL;
                                 int find_result = FindIdent(&existing, symtab, type_id);
-                                if (getenv("KGPC_DEBUG_FORWARD_CLASS"))
+                                if (kgpc_getenv("KGPC_DEBUG_FORWARD_CLASS") != NULL)
                                     fprintf(stderr, "[FWD] type='%s' find=%d existing=%p hash_type=%d\n",
                                         type_id, find_result, (void*)existing,
                                         existing ? existing->hash_type : -1);
@@ -8062,7 +8089,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
                         if (kgpc_type != NULL)
                         {
-                            if (getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
                             {
                                 fprintf(stderr, "[KGPC] predeclare pointer alias %s: ptr_type=%d ptr_id=%s kind=%d\n",
                                     type_id,
@@ -8369,7 +8396,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     
                     if (kgpc_type != NULL)
                     {
-                        if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                         {
                             fprintf(stderr, "[predeclare] SUCCESS type '%s' kgpc_type=%p kind=%d reusing=%d\n",
                                 type_id, (void*)kgpc_type, kgpc_type->kind, reusing_existing);
@@ -8416,7 +8443,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Release creator's reference */
                         destroy_kgpc_type(kgpc_type);
                     }
-                    else if (getenv("KGPC_DEBUG_PREDECLARE") != NULL)
+                    else if (kgpc_getenv("KGPC_DEBUG_PREDECLARE") != NULL)
                     {
                         fprintf(stderr, "[predeclare] SKIP type '%s' - kgpc_type is NULL\n", type_id);
                     }
@@ -10014,7 +10041,7 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                 {
                     strncpy(start_str, dim_str, start_len);
                     start_str[start_len] = '\0';
-                    if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
                         fprintf(stderr, "[KGPC] array dim raw='%s' start='%s' end='%s'\n",
                             dim_str, start_str, end_str);
                     
@@ -10165,7 +10192,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        const char *debug_pss = getenv("KGPC_DEBUG_PSHORTSTRING");
+        const char *debug_pss = kgpc_getenv("KGPC_DEBUG_PSHORTSTRING");
         if (debug_pss != NULL &&
             tree->tree_data.type_decl_data.id != NULL &&
             pascal_identifier_equals(tree->tree_data.type_decl_data.id, "PShortString"))
@@ -10178,7 +10205,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 a->pointer_type_id ? a->pointer_type_id : "<null>",
                 a->target_type_id ? a->target_type_id : "<null>");
         }
-        if (getenv("KGPC_DEBUG_TFLOAT") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_TFLOAT") != NULL &&
             tree->tree_data.type_decl_data.id != NULL &&
             pascal_identifier_equals(tree->tree_data.type_decl_data.id, "TFloatFormatProfile"))
         {
@@ -10192,7 +10219,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             tree->tree_data.type_decl_data.kind);
 #endif
 
-        const char *debug_env_check = getenv("KGPC_DEBUG_TFPG");
+        const char *debug_env_check = kgpc_getenv("KGPC_DEBUG_TFPG");
         if (debug_env_check != NULL)
         {
             fprintf(stderr, "[KGPC] semcheck_type_decls processing: id=%s kind=%d return_val=%d\n",
@@ -10290,7 +10317,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     int already_registered = 0;
                                     if (bindings != NULL)
                                     {
-                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Checking %d existing methods for %s\n",
                                                 method_count, tree->tree_data.type_decl_data.id);
                                         }
@@ -10300,7 +10327,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
                                             if (binding != NULL && binding->method_name != NULL)
                                             {
-                                                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                                     fprintf(stderr, "[SemCheck] Existing method: %s.%s\n",
                                                         binding->class_name, binding->method_name);
                                                 }
@@ -10315,7 +10342,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     }
                                     else
                                     {
-                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] No existing methods found for %s\n",
                                                 tree->tree_data.type_decl_data.id);
                                         }
@@ -10333,7 +10360,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             tmpl->is_static,
                                             from_cparser_count_params_ast(tmpl->params_ast));
 
-                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Registered method template: %s.%s (virtual=%d, override=%d, static=%d)\n",
                                                 tree->tree_data.type_decl_data.id,
                                                 tmpl->name,
@@ -10452,7 +10479,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             if (owner_outer != NULL)
                                                 free(owner_outer);
                                         }
-                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
+                                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
                                             (strcasecmp(tmpl->name, "GetAnsiString") == 0 ||
                                              strcasecmp(tmpl->name, "GetString") == 0))
                                         {
@@ -10522,7 +10549,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             destroy_kgpc_type(proc_type);
                                         free(overload_mangled);
 
-                                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
                                                 tmpl->name, mangled);
                                         }
@@ -10761,7 +10788,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             fprintf(stderr, "DEBUG: semcheck_compute_record_size FAILED for %s: result=%d\n",
                                 tree->tree_data.type_decl_data.id, size_result);
 #endif
-                            if (getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
                             {
                                 fprintf(stderr, "[SemCheck] record size failed for %s (line %d)\n",
                                         tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
@@ -10851,7 +10878,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         tree->tree_data.type_decl_data.kgpc_type->info.points_to = pointee_node->type;
                     }
                 }
-                if (getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_PROC_TYPE") != NULL &&
                     tree->tree_data.type_decl_data.id != NULL &&
                     pascal_identifier_equals(tree->tree_data.type_decl_data.id, "TCreateEncodingProc"))
                 {
@@ -11094,7 +11121,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         
                         if (!is_unspecialized_generic)
                         {
-                            const char *debug_env3 = getenv("KGPC_DEBUG_TFPG");
+                            const char *debug_env3 = kgpc_getenv("KGPC_DEBUG_TFPG");
                             if (debug_env3 != NULL)
                             {
                                 fprintf(stderr, "[KGPC] Computing size for alias %s, generic_decl=%p num_args=%d\n",
@@ -11112,7 +11139,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     fprintf(stderr, "[KGPC] Size computation FAILED for %s\n",
                                         tree->tree_data.type_decl_data.id);
                                 }
-                                if (getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
+                                if (kgpc_getenv("KGPC_DEBUG_SEMSTEPS") != NULL)
                                 {
                                     fprintf(stderr, "[SemCheck] alias record size failed for %s (line %d)\n",
                                             tree->tree_data.type_decl_data.id ? tree->tree_data.type_decl_data.id : "<null>",
@@ -11129,7 +11156,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                 }
 
-                const char *debug_alias = getenv("KGPC_DEBUG_GENERIC_CLONES");
+                const char *debug_alias = kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES");
                 if (debug_alias != NULL && tree->tree_data.type_decl_data.id != NULL)
                 {
                     fprintf(stderr, "[KGPC] semcheck alias %s: base_type=%d target=%s kgpc_type=%p kind=%d\n",
@@ -11148,7 +11175,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Register generic type declaration in the generic registry */
                 struct GenericDecl *generic_info = &tree->tree_data.type_decl_data.info.generic;
                 
-                const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+                const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
                 if (debug_env != NULL)
                 {
                     fprintf(stderr, "[KGPC] semcheck TYPE_DECL_GENERIC: id=%s num_params=%d\n",
@@ -11206,7 +11233,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 tree->tree_data.type_decl_data.kind, before_switch_errors, return_val);
         }
 
-        const char *debug_env2 = getenv("KGPC_DEBUG_TFPG");
+        const char *debug_env2 = kgpc_getenv("KGPC_DEBUG_TFPG");
         int before_symtab_errors = return_val;
 
         KgpcType *kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
@@ -11543,7 +11570,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && kgpc_type->kind == TYPE_KIND_RECORD)
                 kgpc_type->info.record_info = record_info;
             
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] Pushing type '%s' onto scope, kgpc_type=%p kind=%d\n", 
                     tree->tree_data.type_decl_data.id, (void*)kgpc_type, kgpc_type ? kgpc_type->kind : -1);
             }
@@ -11715,7 +11742,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         cur = cur->next;
     }
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (debug_env != NULL && return_val > 0)
     {
         fprintf(stderr, "[KGPC] semcheck_type_decls returning error count: %d\n", return_val);
@@ -11746,7 +11773,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     }
 
     struct Expression *value_expr = tree->tree_data.const_decl_data.value;
-    if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
         tree->tree_data.const_decl_data.id != NULL &&
         strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
     {
@@ -11806,7 +11833,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     HashNode_t *const_node = NULL;
                     if (FindIdent(&const_node, symtab, tree->tree_data.const_decl_data.id) != -1 && const_node != NULL)
                     {
-                        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
                         {
                             fprintf(stderr, "[KGPC] const pushed: %s\n",
                                 tree->tree_data.const_decl_data.id);
@@ -12409,7 +12436,7 @@ static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
         assert(cur->type == LIST_TREE);
         Tree_t *tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_CONST_DECL);
-        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL &&
             tree->tree_data.const_decl_data.id != NULL &&
             strstr(tree->tree_data.const_decl_data.id, "DefaultCapacity") != NULL)
         {
@@ -13399,7 +13426,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
 }
 
 /* Semantic check for a program */
-#define SEMCHECK_TIMINGS_ENABLED() (getenv("KGPC_DEBUG_TIMINGS") != NULL)
+#define SEMCHECK_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
 
 static double semcheck_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
@@ -13456,7 +13483,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     /* Predeclare subprograms so they can be referenced in const initializers. */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     semcheck_timing_step("predeclare subprograms", &t0);
-    if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
     {
         ListNode_t *debug_cur = tree->tree_data.program_data.type_declaration;
         while (debug_cur != NULL)
@@ -13557,7 +13584,18 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         while (final_node != NULL) {
             if (final_node->type == LIST_STMT && final_node->cur != NULL) {
                 struct Statement *final_stmt = (struct Statement *)final_node->cur;
+                /* Set unit error context so errors show the correct unit
+                 * instead of the main program file. */
+                int saved_suppress = g_semcheck_error_suppress_source_index;
+                const char *saved_unit_ctx = g_semcheck_error_unit_context;
+                if (final_stmt->source_unit_index > 0) {
+                    const char *uname = unit_registry_get(final_stmt->source_unit_index);
+                    g_semcheck_error_unit_context = uname ? uname : "<unit>";
+                    g_semcheck_error_suppress_source_index = 1;
+                }
                 return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
+                g_semcheck_error_suppress_source_index = saved_suppress;
+                g_semcheck_error_unit_context = saved_unit_ctx;
             }
             final_node = final_node->next;
         }
@@ -13566,7 +13604,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     if(optimize_flag() > 0 && return_val == 0)
     {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] Before optimize: body_statement = %p\n", 
                     (void*)tree->tree_data.program_data.body_statement);
             if (tree->tree_data.program_data.body_statement != NULL) {
@@ -13579,7 +13617,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             }
         }
         optimize(symtab, tree);
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] After optimize: body_statement = %p\n", 
                     (void*)tree->tree_data.program_data.body_statement);
         }
@@ -13594,7 +13632,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
-    const char *debug_steps = getenv("KGPC_DEBUG_SEMSTEPS");
+    const char *debug_steps = kgpc_getenv("KGPC_DEBUG_SEMSTEPS");
     assert(tree != NULL);
     assert(symtab != NULL);
     assert(tree->type == TREE_UNIT);
@@ -13649,7 +13687,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     before = return_val;
 
     /* Debug: dump subprograms list before predeclaration */
-    if (getenv("KGPC_DEBUG_SUBPROGRAMS_LIST") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_SUBPROGRAMS_LIST") != NULL)
     {
         fprintf(stderr, "[SUBPROGRAMS_LIST] Dumping subprograms list for unit:\n");
         ListNode_t *debug_cur = tree->tree_data.unit_data.subprograms;
@@ -13914,7 +13952,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         }
         if (tree->type == TREE_VAR_DECL && decl_type_id != NULL)
         {
-            if (getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
                 pascal_identifier_equals(decl_type_id, "pshortstring"))
             {
                 int count = 0;
@@ -13935,7 +13973,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     DestroyList(matches);
                 fprintf(stderr, "[PShortString] lookup total matches=%d\n", count);
             }
-            if (getenv("KGPC_DEBUG_TFLOAT") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_TFLOAT") != NULL &&
                 (pascal_identifier_equals(decl_type_id, "TFloatFormatProfile") ||
                  pascal_identifier_equals(decl_type_id, "TReal_Type")))
             {
@@ -13975,7 +14013,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     int closest_idx = 0;
                     ListNode_t *candidates = FindAllIdents(symtab, decl_type_id);
                     ListNode_t *c = candidates;
-                    int debug_imported = (getenv("KGPC_DEBUG_TSIZE") != NULL &&
+                    int debug_imported = (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
                                          pascal_identifier_equals(decl_type_id, "TSize"));
                     if (debug_imported)
                         fprintf(stderr, "[IMPORTED_DECL] TSize lookup, imported_unit_idx=%d\n",
@@ -14152,7 +14190,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             /* Note: If cached_kgpc_type is already set (e.g., for inline procedure types from parser),
              * preserve it rather than destroying it. */
             /* AUDIT: Log when KgpcType is missing for a type_id */
-            if (getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
+            if (kgpc_getenv("KGPC_AUDIT_TYPES") != NULL && tree->tree_data.var_decl_data.type_id != NULL)
             {
                 const char *var_name = (ids_head && ids_head->cur) ? (char*)ids_head->cur : "<unknown>";
                 const char *type_id = tree->tree_data.var_decl_data.type_id;
@@ -14202,14 +14240,14 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 if (tree->tree_data.var_decl_data.type_id != NULL)
                 {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.is_typed_const)
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && tree->tree_data.var_decl_data.is_typed_const)
                         fprintf(stderr, "[SemCheck] Typed const with type_id: %s, var: %s\n",
                             tree->tree_data.var_decl_data.type_id,
                             ids && ids->cur ? (char*)ids->cur : "<null>");
                     HashNode_t *type_node = resolved_type;
                     const char *type_id = tree->tree_data.var_decl_data.type_id;
                     int declared_type = tree->tree_data.var_decl_data.type;
-                    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
+                    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
                         pascal_identifier_equals((char*)ids->cur, "Self"))
                     {
                         fprintf(stderr, "[KGPC] semcheck_decls Self: type_id=%s declared_type=%d type_node=%p type_node->type=%p kind=%d\n",
@@ -14217,7 +14255,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             type_node && type_node->type ? (void*)type_node->type : NULL,
                             type_node && type_node->type ? type_node->type->kind : -1);
                     }
-                    if (getenv("KGPC_DEBUG_VAR_TYPES") != NULL && ids && ids->cur)
+                    if (kgpc_getenv("KGPC_DEBUG_VAR_TYPES") != NULL && ids && ids->cur)
                     {
                         fprintf(stderr,
                             "[KGPC] semcheck_decls var=%s type_id=%s declared_type=%d type_node=%p type_node->type=%p cached=%p cached_kind=%d\n",
@@ -14344,7 +14382,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     /* Check if it's a builtin type even if not in symbol table */
                     if (type_node == NULL)
                     {
-                        if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur)
+                        if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur)
                             fprintf(stderr, "[KGPC] semcheck_decls: %s has type_id=%s but type_node is NULL\n",
                                 (char*)ids->cur, type_id);
                         /* Use the central type-name mapper first */
@@ -14649,7 +14687,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             
                             /* Always use _Typed variant, even if KgpcType is NULL (UNTYPED) */
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
-                            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
+                            if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && ids && ids->cur &&
                                 pascal_identifier_equals((char*)ids->cur, "Self"))
                                 fprintf(stderr, "[KGPC] semcheck_decls: PushVarOntoScope_Typed for Self returned %d\n", func_return);
                         }
@@ -14754,7 +14792,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     else if (tree->tree_data.var_decl_data.inline_type_alias != NULL &&
                              tree->tree_data.var_decl_data.inline_type_alias->is_array)
                     {
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                             fprintf(stderr, "[SemCheck] Processing inline array for var: %s\n",
                                 ids && ids->cur ? (char*)ids->cur : "<null>");
                         struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
@@ -14931,7 +14969,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
             else
             {
                 assert(tree->type == TREE_ARR_DECL);
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Processing TREE_ARR_DECL: %s is_typed_const=%d\n",
                         ids && ids->cur ? (char*)ids->cur : "<null>",
                         tree->tree_data.arr_decl_data.is_typed_const);
@@ -14949,7 +14987,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                 /* If type_id is specified, resolve it to get the element type */
                 const TypeRef *element_type_ref = tree->tree_data.arr_decl_data.type_ref;
-                if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_TZINFO") != NULL &&
                     ids != NULL && ids->cur != NULL &&
                     (pascal_identifier_equals((const char *)ids->cur, "CurrentTZinfo") ||
                      pascal_identifier_equals((const char *)ids->cur, "CurrentTzinfoEx")))
@@ -14964,7 +15002,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     !is_array_of_const &&
                     (tree->tree_data.arr_decl_data.type_id != NULL || element_type_ref != NULL))
                 {
-                    if (getenv("KGPC_DEBUG_TFLOAT") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_TFLOAT") != NULL)
                     {
                         const char *arr_type_id = tree->tree_data.arr_decl_data.type_id;
                         if (arr_type_id == NULL && element_type_ref != NULL)
@@ -15032,7 +15070,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                 DestroyList(matches);
                         }
                     }
-                    if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
                     {
                         const char *check_id = tree->tree_data.arr_decl_data.type_id;
                         if (check_id == NULL && element_type_ref != NULL)
@@ -15066,7 +15104,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             }
                         }
                     }
-                    if (getenv("KGPC_DEBUG_TZINFO") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_TZINFO") != NULL &&
                         ids != NULL && ids->cur != NULL &&
                         (pascal_identifier_equals((const char *)ids->cur, "CurrentTZinfo") ||
                          pascal_identifier_equals((const char *)ids->cur, "CurrentTzinfoEx")))
@@ -15102,7 +15140,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             const char *missing_id = tree->tree_data.arr_decl_data.type_id;
                             if (missing_id == NULL && element_type_ref != NULL)
                                 missing_id = type_ref_base_name(element_type_ref);
-                            if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
                             {
                                 fprintf(stderr, "[MISSING_TYPE] array elem unresolved id=%s line=%d\n",
                                     missing_id ? missing_id : "<null>", tree->line_num);
@@ -15115,7 +15153,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     HashNode_t *n = (HashNode_t *)m->cur;
                                     if (n != NULL && n->hash_type == HASHTYPE_TYPE)
                                     {
-                                        if (getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
+                                        if (kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL)
                                         {
                                             fprintf(stderr,
                                                 "[MISSING_TYPE]   match id=%s type=%p defined_in_unit=%d source_unit_index=%d\n",
@@ -15354,7 +15392,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     temp_alias.array_dimensions = NULL;
                 }
                 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] Pushing array: %s, array_type=%p kind=%d elem_kind=%d\n",
                         ids && ids->cur ? (char*)ids->cur : "<null>",
                         (void*)array_type, array_type ? array_type->kind : -1,
@@ -15362,7 +15400,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             array_type->info.array_info.element_type->kind : -1);
                 func_return = PushArrayOntoScope_Typed(symtab, (char *)ids->cur, array_type);
                 destroy_kgpc_type(array_type);  /* Release creator's ref */
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     fprintf(stderr, "[SemCheck] PushArrayOntoScope_Typed returned: %d\n", func_return);
             }
 
@@ -16106,7 +16144,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (subprogram->tree_data.subprogram_data.mangled_id == NULL) {
         static int debug_external = -1;
         if (debug_external == -1)
-            debug_external = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+            debug_external = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
         const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
         if (explicit_name != NULL) {
             char *overload_mangled = MangleFunctionName(
@@ -16165,7 +16203,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 id_to_use_for_lookup,
                 subprogram->tree_data.subprogram_data.mangled_id);
 
-            if (getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_MATCH") != NULL)
             {
                 ListNode_t *all_matches = FindAllIdents(symtab, id_to_use_for_lookup);
                 fprintf(stderr, "[KGPC] Matching impl %s mangled=%s\n",
@@ -16439,7 +16477,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         }
 
         PushScope(symtab);
-        if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             fprintf(stderr, "[KGPC] semcheck_subprogram (func): PushScope for %s\n",
                 subprogram->tree_data.subprogram_data.id);
 
@@ -16466,7 +16504,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (return_kgpc_type != NULL)
                 kgpc_type_retain(return_kgpc_type);
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
-            if (getenv("KGPC_DEBUG_RESULT") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RESULT") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] add Result alias for %s type=%s\n",
@@ -16475,7 +16513,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     kgpc_type_to_string(return_kgpc_type));
             }
         }
-        else if (getenv("KGPC_DEBUG_RESULT") != NULL)
+        else if (kgpc_getenv("KGPC_DEBUG_RESULT") != NULL)
         {
             fprintf(stderr,
                 "[KGPC] Result alias already exists for %s existing_type=%s\n",
@@ -16564,7 +16602,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     /* These arguments are themselves like declarations */
-    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL) {
         ListNode_t *arg_debug = subprogram->tree_data.subprogram_data.args_var;
         fprintf(stderr, "[KGPC] semcheck_subprogram: %s args:\n", subprogram->tree_data.subprogram_data.id);
         while (arg_debug != NULL) {
@@ -16645,7 +16683,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (subprogram->tree_data.subprogram_data.defined_in_unit)
         {
             g_semcheck_imported_decl_unit_index = subprogram->tree_data.subprogram_data.source_unit_index;
-            if (getenv("KGPC_DEBUG_TSIZE") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL)
             {
                 /* Check if any arg has TSize type_id */
                 ListNode_t *a = subprogram->tree_data.subprogram_data.args_var;
@@ -16745,7 +16783,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Ensure methods always have an implicit Self in scope when missing.
      * This is critical for record/class method bodies that access bare fields
      * (e.g. cx/cy) and for helper methods with expanded signatures. */
-    if (getenv("KGPC_ASSERT_STATIC_SELF") != NULL)
+    if (kgpc_getenv("KGPC_ASSERT_STATIC_SELF") != NULL)
     {
         if (subprogram->tree_data.subprogram_data.is_static_method)
         {
@@ -17035,7 +17073,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     return_val += semcheck_id_not_main(subprogram->tree_data.subprogram_data.id);
 
     /* Debug output for procedure predeclaration */
-    if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
     {
         fprintf(stderr, "[PREDECLARE_PROC] %s (line %d) parent=%s\n",
                 subprogram->tree_data.subprogram_data.id,
@@ -17083,7 +17121,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         }
     }
 
-    if (getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PREDECLARE_PROC") != NULL)
     {
         fprintf(stderr, "[PREDECLARE_PROC]   -> mangled_id=%s\n",
                 subprogram->tree_data.subprogram_data.mangled_id);
@@ -17321,6 +17359,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
 #endif
 
     /* Pass 2: Process full semantic checking including bodies */
+    int skip_imported_bodies = (kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL);
     cur = subprograms;
     while(cur != NULL)
     {
@@ -17330,7 +17369,7 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
         if (child != NULL &&
             child->tree_data.subprogram_data.defined_in_unit &&
             child->tree_data.subprogram_data.statement_list != NULL &&
-            getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL)
+            skip_imported_bodies)
         {
             /* Imported unit implementation bodies are not part of the consumer
              * unit's semantic pass. Keep declarations (pass 1) but skip bodies. */

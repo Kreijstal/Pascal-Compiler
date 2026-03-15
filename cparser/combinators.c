@@ -92,7 +92,7 @@ static ParseResult pnot_fn(input_t * in, void * args, char* parser_name) {
     restore_input_state(in, &state);
     if (res.is_success) {
         free_ast(res.value.ast);
-        return make_failure_v2(in, parser_name, strdup("not combinator failed."), NULL);
+        return make_failure_static(in, "not combinator failed.");
     }
     // The error from the inner parse is consumed and we return success.
     free_error(res.value.error);
@@ -527,7 +527,7 @@ static ParseResult multi_fn(input_t * in, void * args, char* parser_name) {
     }
 
     if (!has_best) {
-        return make_failure(in, strdup("multi parser had no valid failure to report"));
+        return make_failure_static(in, "multi parser had no valid failure to report");
     }
 
     return best_res;

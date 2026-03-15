@@ -275,7 +275,7 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
              * - generic templates to be processed without full instantiation
              * - FPC bootstrap where nested types (Public type ...) aren't supported yet
              * Nested procedural types and class references are typically pointer-sized */
-            const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+            const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
             if (debug_env != NULL)
             {
                 fprintf(stderr, "[KGPC] SizeOf: unknown type %s at line %d (may be unresolved generic parameter or nested type)\n",
@@ -289,7 +289,7 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
 
     /* If both type_tag and type_id are unspecified, we can't compute size.
      * This might happen for generic type parameters - don't print error, just fail gracefully */
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (debug_env != NULL)
     {
         fprintf(stderr, "[KGPC] SizeOf: unable to resolve type at line %d (unspecified type_tag and type_id)\n",
@@ -362,7 +362,7 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
     *size_out = computed_size;
     if (computed_size > 1000000)
     {
-        const char *debug_env = getenv("KGPC_DEBUG_SIZE");
+        const char *debug_env = kgpc_getenv("KGPC_DEBUG_SIZE");
         if (debug_env != NULL)
             fprintf(stderr, "[KGPC_SIZE] Large class/record size: %lld for type_id=%s is_class=%d parent=%s\n",
                 computed_size, record->type_id ? record->type_id : "<null>",
@@ -505,7 +505,7 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
         return 0;
     }
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (debug_env != NULL && field->name != NULL) {
         fprintf(stderr, "[KGPC] compute_field_size: field=%s type=%d type_id=%s is_array=%d\n",
             field->name, field->type, field->type_id ? field->type_id : "<null>", field->is_array);
@@ -527,7 +527,7 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
 
     if (field->is_array)
     {
-        const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+        const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
         if (debug_env != NULL && field->name != NULL) {
             fprintf(stderr, "[KGPC] compute_field_size array: field=%s is_open=%d start=%d end=%d\n",
                 field->name, field->array_is_open, field->array_start, field->array_end);

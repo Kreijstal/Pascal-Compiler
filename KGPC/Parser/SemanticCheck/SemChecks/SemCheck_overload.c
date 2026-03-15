@@ -501,7 +501,7 @@ int semcheck_count_required_params(ListNode_t *params)
     {
         Tree_t *param_decl = (Tree_t *)cur->cur;
         int has_default = param_has_default_value(param_decl);
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             const char *param_id = "?";
             if (param_decl && param_decl->type == TREE_VAR_DECL && param_decl->tree_data.var_decl_data.ids)
                 param_id = (char *)param_decl->tree_data.var_decl_data.ids->cur;
@@ -2120,7 +2120,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         int allow_implicit_leading_self = 0;
         int allow_implicit_leading_type_qualifier = 0;
 
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_resolve_overload: candidate %s args=%d required=%d given=%d\n",
                 candidate->id, total_params, required_params, given_count);
         }
@@ -2639,7 +2639,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 else
                 {
                     int is_integer_literal = (arg_expr != NULL && arg_expr->type == EXPR_INUM);
-                    if (getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
                     {
                         const char *formal_id_dbg = semcheck_get_param_type_id(formal_decl);
                         int formal_ptr_sub = (formal_kgpc != NULL &&
@@ -2960,7 +2960,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int missing_args = total_params - given_count;
-        if (getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
         {
             fprintf(stderr, "[KGPC] candidate %s (%s) qualities:",
                 candidate->id ? candidate->id : "<null>",

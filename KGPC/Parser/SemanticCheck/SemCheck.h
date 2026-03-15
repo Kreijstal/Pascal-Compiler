@@ -81,4 +81,10 @@ ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self);
 int semcheck_save_unit_context(void);
 void semcheck_restore_unit_context(int saved);
 
+/* Cached getenv() for KGPC_* environment variables.
+ * getenv() does a linear scan of the environment on each call; with hundreds of
+ * debug checks in hot loops, this was consuming 9% of total CPU time.
+ * This function caches the result of the first lookup for each variable name. */
+const char *kgpc_getenv(const char *name);
+
 #endif

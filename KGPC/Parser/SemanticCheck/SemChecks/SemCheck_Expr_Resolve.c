@@ -228,7 +228,7 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
             *out_type = FILE_TYPE;
     }
 
-    if (getenv("KGPC_DEBUG_TYPEID") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TYPEID") != NULL &&
         (pascal_identifier_equals(type_id, "qword") ||
          pascal_identifier_equals(type_id, "int64") ||
          pascal_identifier_equals(type_id, "cint64")))

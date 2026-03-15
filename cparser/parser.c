@@ -575,20 +575,38 @@ ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char*
     err->col = in ? in->col : 0;
     err->index = in ? in->start : -1;
     err->message = message;
-    err->parser_name = parser_name ? strdup(parser_name) : NULL;
+    err->parser_name = parser_name;  /* Borrowed reference — caller must ensure lifetime */
     err->unexpected = unexpected;
     // Don't create context here - it's expensive and most errors are discarded during backtracking
     // Context will be created on-demand when error is displayed
     err->context = NULL;
-    err->source_filename = (in && in->source_filename) ? strdup(in->source_filename) : NULL;
+    err->source_filename = NULL;  /* Deferred — set on-demand when error is displayed */
     err->cause = NULL;
     err->partial_ast = NULL;
     err->committed = false;
+    err->static_strings = false;  /* message is owned, parser_name is borrowed */
     return (ParseResult){ .is_success = false, .value.error = err };
 }
 
 ParseResult make_failure(input_t* in, char* message) {
     return make_failure_v2(in, NULL, message, NULL);
+}
+
+/* Fast-path failure with static (non-owned) message string — no allocation for message */
+ParseResult make_failure_static(input_t* in, const char* message) {
+    ParseError* err = allocate_parse_error();
+    err->line = in ? in->line : 0;
+    err->col = in ? in->col : 0;
+    err->index = in ? in->start : -1;
+    err->message = (char*)message;
+    err->parser_name = NULL;
+    err->unexpected = NULL;
+    err->context = NULL;
+    err->source_filename = NULL;
+    err->cause = NULL;
+    err->committed = false;
+    err->static_strings = true;
+    return (ParseResult){ .is_success = false, .value.error = err };
 }
 
 ParseResult make_failure_with_ast(input_t* in, char* message, ast_t* partial_ast) {
@@ -615,11 +633,11 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     
     // Validate input parameters
     if (original_result.value.error == NULL) {
-        return make_failure(in, "Cannot wrap NULL error");
+        return make_failure_static(in, "Cannot wrap NULL error");
     }
     
     if (message == NULL) {
-        return make_failure(in, "Cannot wrap with NULL message");
+        return make_failure_static(in, "Cannot wrap with NULL message");
     }
     
     ParseError* original_error = original_result.value.error;
@@ -631,14 +649,14 @@ ParseResult wrap_failure_with_ast(input_t* in, char* message, ParseResult origin
     new_err->message = strdup(message);
     if (new_err->message == NULL) {
         recycle_parse_error(new_err);
-        return make_failure(in, "Memory allocation failed for error message");
+        return make_failure_static(in, "Memory allocation failed for error message");
     }
     new_err->cause = original_error;
     new_err->partial_ast = partial_ast;
     new_err->parser_name = NULL;
     new_err->unexpected = NULL;
-    new_err->context = original_error->context ? strdup(original_error->context) : NULL;
-    new_err->source_filename = original_error->source_filename ? strdup(original_error->source_filename) : NULL;
+    new_err->context = NULL;  /* Deferred — computed on demand */
+    new_err->source_filename = NULL;  /* Inherited via cause chain */
     new_err->committed = original_error->committed;  // Preserve commit status
 
     return (ParseResult){ .is_success = false, .value.error = new_err };
@@ -666,7 +684,7 @@ ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseRes
     err->message = message;
     err->cause = cause.value.error;
     err->partial_ast = NULL;
-    err->parser_name = parser_name ? strdup(parser_name) : NULL;
+    err->parser_name = parser_name;  /* Borrowed reference */
     err->unexpected = NULL; // The unexpected token is now part of the message in expect_fn
     return (ParseResult){ .is_success = false, .value.error = err };
 }
@@ -783,8 +801,13 @@ static ParseError* clone_parse_error(const ParseError* original) {
     copy->line = original->line;
     copy->col = original->col;
     copy->index = original->index;
-    copy->message = original->message ? strdup(original->message) : NULL;
-    copy->parser_name = original->parser_name ? strdup(original->parser_name) : NULL;
+    copy->static_strings = original->static_strings;
+    if (original->static_strings) {
+        copy->message = original->message;
+    } else {
+        copy->message = original->message ? strdup(original->message) : NULL;
+    }
+    copy->parser_name = original->parser_name;  /* Borrowed reference */
     copy->unexpected = original->unexpected ? strdup(original->unexpected) : NULL;
     copy->context = original->context ? strdup(original->context) : NULL;
     copy->source_filename = original->source_filename ? strdup(original->source_filename) : NULL;
@@ -1064,7 +1087,7 @@ static ParseResult match_ci_fn(input_t * in, void * args, char* parser_name) {
         in->start = pos + slen;
         return make_success(ensure_ast_nil_initialized());
     }
-    return make_failure(in, strdup("Expected token (case-insensitive)"));
+    return make_failure_static(in, "Expected token (case-insensitive)");
 }
 
 static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
@@ -1083,11 +1106,7 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
         in->start = start + slen;
         return make_success(ensure_ast_nil_initialized());
     }
-    /* Failure — include the expected token in the message */
-    char* err_msg;
-    if (asprintf(&err_msg, "Expected '%s'", str) < 0)
-        err_msg = strdup("Expected token");
-    return make_failure(in, err_msg);
+    return make_failure_static(in, "Expected token");
 }
 
 static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
@@ -1096,7 +1115,7 @@ static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
    int pos = in->start;
    int blen = in->length;
    if (pos >= blen || !isdigit((unsigned char)buf[pos])) {
-       return make_failure(in, strdup("Expected a digit."));
+       return make_failure_static(in, "Expected a digit.");
    }
    pos++;
    while (pos < blen && (isdigit((unsigned char)buf[pos]) || buf[pos] == '_')) {
@@ -1123,7 +1142,7 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    int blen = in->length;
 
    if (pos >= blen) {
-       return make_failure(in, strdup("Expected identifier."));
+       return make_failure_static(in, "Expected identifier.");
    }
 
    int start_pos = pos;
@@ -1133,7 +1152,7 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
    if (uc == '&') {
        pos++;
        if (pos >= blen) {
-           return make_failure(in, strdup("Expected identifier."));
+           return make_failure_static(in, "Expected identifier.");
        }
        start_pos = pos;
        uc = (unsigned char)buf[pos];
@@ -1141,7 +1160,7 @@ static ParseResult cident_fn(input_t * in, void * args, char* parser_name) {
 
    /* First char must be alpha, underscore, or high byte */
    if (uc != '_' && !(isalpha(uc) || uc >= 0x80)) {
-       return make_failure(in, strdup("Expected identifier."));
+       return make_failure_static(in, "Expected identifier.");
    }
    pos++;
 
@@ -1235,11 +1254,11 @@ static ParseResult any_char_fn(input_t * in, void * args, char* parser_name) {
 static ParseResult satisfy_fn(input_t * in, void * args, char* parser_name) {
     satisfy_args* sargs = (satisfy_args*)args;
     if (in->start >= in->length) {
-        return make_failure(in, strdup("Predicate not satisfied."));
+        return make_failure_static(in, "Predicate not satisfied.");
     }
     char c = in->buffer[in->start];
     if (!sargs->pred(c)) {
-        return make_failure(in, strdup("Predicate not satisfied."));
+        return make_failure_static(in, "Predicate not satisfied.");
     }
     /* Advance position */
     in->start++;
@@ -1770,11 +1789,13 @@ combinator_t * lazy_owned(combinator_t** parser_ptr) {
 
 void free_error(ParseError* err) {
     if (err == NULL) return;
-    if (err->parser_name) free(err->parser_name);
+    if (!err->static_strings) {
+        free(err->message);
+    }
+    /* parser_name is always a borrowed reference — never free it */
     if (err->unexpected) free(err->unexpected);
     if (err->context) free(err->context);
     if (err->source_filename) free(err->source_filename);
-    free(err->message);
     ParseError* nested = err->cause;
     err->parser_name = NULL;
     err->unexpected = NULL;
@@ -1782,6 +1803,7 @@ void free_error(ParseError* err) {
     err->source_filename = NULL;
     err->message = NULL;
     err->cause = NULL;
+    err->static_strings = false;
     if (nested) {
         free_error(nested);
     }
@@ -1903,6 +1925,8 @@ static void free_ast_internal(ast_t* ast, AstVisitSet *visited)
 }
 
 void free_ast(ast_t* ast) {
+    /* Fast path: ast_nil and NULL are the most common cases (e.g., layout results) */
+    if (ast == NULL || ast == ast_nil) return;
     AstVisitSet visited;
     ast_visit_set_init(&visited, 1024);
     free_ast_internal(ast, &visited);

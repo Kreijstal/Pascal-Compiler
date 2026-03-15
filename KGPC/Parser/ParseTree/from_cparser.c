@@ -28,6 +28,9 @@ static char* strndup(const char* s, size_t n)
 #include "from_cparser.h"
 #include "../../string_intern.h"
 
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
+
 #include "../List/List.h"
 #include "tree.h"
 #include "tree_types.h"
@@ -67,7 +70,7 @@ static int kgpc_debug_subprog_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
-        cached = (getenv("KGPC_DEBUG_SUBPROG") != NULL) ? 1 : 0;
+        cached = (kgpc_getenv("KGPC_DEBUG_SUBPROG") != NULL) ? 1 : 0;
     return cached;
 }
 
@@ -75,7 +78,7 @@ static int kgpc_debug_decl_scan_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
-        cached = (getenv("KGPC_DEBUG_DECL_SCAN") != NULL) ? 1 : 0;
+        cached = (kgpc_getenv("KGPC_DEBUG_DECL_SCAN") != NULL) ? 1 : 0;
     return cached;
 }
 
@@ -1221,7 +1224,7 @@ static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
     entry->type_args = type_info->generic_type_args;
     entry->next = g_pending_generic_aliases;
     g_pending_generic_aliases = entry;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL &&
         decl->tree_data.type_decl_data.id != NULL &&
         entry->base_name != NULL)
     {
@@ -1489,7 +1492,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
     node->next = class_method_bindings;
     class_method_bindings = node;
     
-    if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr,
             "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
             class_name, method_name, is_virtual, is_override, is_static, is_class_method,
@@ -2014,7 +2017,7 @@ static char *dup_first_identifier_in_node(ast_t *node)
     node = unwrap_pascal_node(node);
     if (node == NULL)
         return NULL;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] inspect node typ=%d (%s) sym=%s\n",
             node->typ, pascal_tag_to_string(node->typ),
             (node->sym != NULL && node->sym->name != NULL) ? node->sym->name : "<null>");
@@ -2034,7 +2037,7 @@ static char *dup_first_identifier_in_node(ast_t *node)
 }
 
 static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
             (void *)args_node,
             args_node != NULL ? args_node->typ : -1,
@@ -2060,12 +2063,12 @@ static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
              node->typ == PASCAL_T_QUALIFIED_IDENTIFIER))
         {
             char *dup = dup_first_identifier_in_node(node);
-            if (getenv("KGPC_DEBUG_TFPG") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] collect args extracted=%s\n", dup != NULL ? dup : "<null>");
             if (dup != NULL)
             {
                 ListNode_t *append_node = list_builder_append(&builder, dup, LIST_STRING);
-                if (getenv("KGPC_DEBUG_TFPG") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                     fprintf(stderr, "[KGPC] appended type_arg node=%p type=%d\n",
                         (void *)append_node, append_node != NULL ? append_node->type : -1);
             }
@@ -2097,7 +2100,7 @@ static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out,
         name_node = name_node->child;
     if (name_node == NULL)
         return 0;
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
     {
         fprintf(stderr, "[KGPC] constructed type base node typ=%d (%s) sym=%s next_typ=%d (%s)\n",
             name_node->typ,
@@ -2228,7 +2231,7 @@ static void substitute_record_field(struct RecordField *field, GenericTypeDecl *
     if (field == NULL)
         return;
     
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (debug_env != NULL && field->name != NULL)
     {
         fprintf(stderr, "[KGPC] substitute_record_field BEFORE: name=%s is_array=%d type_id=%s array_element_type_id=%s\n",
@@ -2285,7 +2288,7 @@ static struct RecordType *instantiate_generic_record(const char *base_name, List
     if (base_name == NULL)
         return NULL;
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     GenericTypeDecl *generic = generic_registry_find_decl(base_name);
     if (generic == NULL || generic->record_template == NULL) {
         if (debug_env != NULL)
@@ -2474,7 +2477,7 @@ static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_ar
     if (result_out != NULL)
         *result_out = UNKNOWN_TYPE;
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     GenericTypeDecl *generic = generic_registry_find_decl(base_name);
     Tree_t *generic_decl_tree = generic != NULL ? generic->original_decl : NULL;
     ast_t *generic_ast = generic_decl_tree != NULL ?
@@ -2542,7 +2545,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
 
     GenericTypeDecl *generic = generic_registry_find_decl(class_name);
     if (generic == NULL || generic->record_template == NULL) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && class_name != NULL)
             fprintf(stderr, "[KGPC] record_generic_method_impl: no generic decl for %s\n", class_name);
         return;
     }
@@ -2557,7 +2560,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
                 strcasecmp(template->name, method_name) == 0)
             {
                 template->method_impl_ast = copy_ast(method_ast);
-                if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
                     fprintf(stderr, "[KGPC] recorded method implementation for %s.%s\n", class_name, method_name);
                 break;
             }
@@ -2903,7 +2906,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
             if (target_id != NULL &&
                 parse_generic_mangled_id(target_id, &base, &args, &argc))
             {
-                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                     fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
                         target_id, base ? base : "<null>", argc);
                 ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
@@ -2917,7 +2920,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
                             strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
                         {
-                            if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
                                     sub->tree_data.subprogram_data.id);
                             if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
@@ -3185,22 +3188,22 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
     if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
         return;
 
-    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
         fprintf(stderr, "[KGPC] resolve_pending_generic_subprograms\n");
 
     ListNode_t *sub = program_tree->tree_data.program_data.subprograms;
-    if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL && sub == NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL && sub == NULL)
         fprintf(stderr, "[KGPC] program has no subprograms\n");
     while (sub != NULL)
     {
-        if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
             fprintf(stderr, "[KGPC] subprogram node type=%d\n", sub->type);
         if (sub->type == LIST_TREE && sub->cur != NULL)
         {
             Tree_t *sub_tree = (Tree_t *)sub->cur;
             if (sub_tree->type == TREE_SUBPROGRAM)
             {
-                if (getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL &&
                     sub_tree->tree_data.subprogram_data.id != NULL)
                 {
                     fprintf(stderr, "[KGPC] subprogram %s generic_params=%d\n",
@@ -3444,7 +3447,7 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
         record->generic_decl == NULL || record->generic_args == NULL ||
         record->num_generic_args <= 0)
     {
-        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
             record != NULL && record->type_id != NULL)
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
@@ -3452,7 +3455,7 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
     if (record->method_clones_emitted)
         return;
 
-    const char *debug_env = getenv("KGPC_DEBUG_GENERIC_CLONES");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES");
     int appended_any = 0;
     ListNode_t *cur = record->method_templates;
     while (cur != NULL)
@@ -3522,7 +3525,7 @@ static void clone_nested_types_for_specialization(
         specialized_name == NULL || type_list_out == NULL)
         return;
 
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     const char *generic_name = generic_decl->name;
     size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
 
@@ -3745,7 +3748,7 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
     g_pending_generic_aliases = NULL;
     ListNode_t **clone_dest = NULL;
     ListNode_t **type_list = NULL;
-    const char *debug_env = getenv("KGPC_DEBUG_TFPG");
+    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
     if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
         clone_dest = &program_tree->tree_data.program_data.subprograms;
         type_list = &program_tree->tree_data.program_data.type_declaration;
@@ -3885,7 +3888,7 @@ static ListNode_t *collect_specialize_type_args(ast_t *args_node) {
     }
 
     ListNode_t *result = list_builder_finish(&builder);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] collect_constructed_type_args result=%p\n", (void *)result);
     return result;
 }
@@ -4334,7 +4337,7 @@ static int tuple_is_record_constructor(ast_t *tuple_node)
 
     int has_fields = 0;
     int has_record_like = 0;
-    int debug_tuple = (getenv("KGPC_DEBUG_RECORD_TUPLE") != NULL);
+    int debug_tuple = (kgpc_getenv("KGPC_DEBUG_RECORD_TUPLE") != NULL);
     int debug_this = debug_tuple && tuple_node->line >= 2165 && tuple_node->line <= 2175;
     if (debug_this)
     {
@@ -5831,7 +5834,7 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
     /* Simple identifier or literal with a symbol */
     if (expr->sym != NULL && expr->sym->name != NULL) {
         if (strcasecmp(expr->sym->name, "sizeof") == 0 &&
-            getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+            kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC] sizeof node typ=%d child=%p child_typ=%d child_sym=%s next_typ=%d\n",
@@ -5944,7 +5947,7 @@ static char *serialize_expr_to_string_internal(ast_t *expr, int parent_prec) {
             ast_t *arg_node = expr->child->child;
             if (arg_node == NULL)
                 arg_node = expr->child->next;
-            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] sizeof wrapper typ=%d arg_typ=%d arg_sym=%s\n",
@@ -6078,7 +6081,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
     if (spec_node == NULL)
         return UNKNOWN_TYPE;
 
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] convert_type_spec node typ=%d (%s) sym=%s\n",
             spec_node->typ,
             pascal_tag_to_string(spec_node->typ),
@@ -6263,7 +6266,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 type_info->type_ref = type_ref_from_name_and_args(base_name, type_args);
 
             if (record != NULL) {
-                if (getenv("KGPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL && specialized_name != NULL)
                 {
                     fprintf(stderr, "[KGPC] convert_type_spec generic %s -> record=%p type_info_ptr=%p record_out_ptr=%p\n",
                         specialized_name, (void *)record, (void *)type_info, (void *)record_out);
@@ -6389,7 +6392,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             while (element_node != NULL && element_node->next != NULL)
                 element_node = element_node->next;
 
-            if (getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL) {
                 fprintf(stderr, "[KGPC] array type children:");
                 for (ast_t *dim = child; dim != NULL; dim = dim->next) {
                     fprintf(stderr, " %d(%s)", dim->typ, pascal_tag_to_string(dim->typ));
@@ -6438,7 +6441,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     }
 
                     if ((lower_str == NULL || upper_str == NULL) &&
-                        getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
+                        kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
                     {
                         fprintf(stderr,
                             "[KGPC] array bounds serialize failed: lower typ=%d (%s) upper typ=%d (%s)\n",
@@ -6884,7 +6887,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
     if (spec_node == NULL)
         return NULL;
 
-    if (getenv("KGPC_DEBUG_TFPG") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] convert_type_spec_to_kgpctype node typ=%d sym=%s\n",
             spec_node->typ,
             (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
@@ -7520,7 +7523,7 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     ast_t *cursor = property_node->child;
     if (cursor != NULL && cursor->typ == PASCAL_T_NONE && cursor->child != NULL)
         cursor = cursor->child;
-    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
     {
         fprintf(stderr, "[KGPC] property decl child list:\n");
         for (ast_t *dbg = cursor; dbg != NULL; dbg = dbg->next)
@@ -7685,7 +7688,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
     if (prop == NULL)
         return;
 
-    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
     {
         fprintf(stderr,
             "[KGPC] module property name=%s type=%d type_id=%s read=%s write=%s\n",
@@ -7784,7 +7787,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
                                         prop->type_ref != NULL ? type_ref_clone(prop->type_ref)
                                                                : type_ref_from_single_name(return_type_id);
                                     append_subprogram_node(subprograms, func_tree);
-                                    if (getenv("KGPC_DEBUG_PROPERTY") != NULL)
+                                    if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL)
                                     {
                                         fprintf(stderr, "[KGPC] Created synthetic function '%s' for module property\n", prop->name);
                                     }
@@ -8078,7 +8081,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
     while (cursor != NULL) {
         ast_t *unwrapped = unwrap_pascal_node(cursor);
         if (unwrapped != NULL) {
-            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                 fprintf(stderr, "[KGPC] collect_class_members: node typ=%d (%s) raw_typ=%d sym=%s in %s\n",
                     unwrapped->typ, pascal_tag_to_string(unwrapped->typ),
                     cursor->typ,
@@ -8176,7 +8179,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
             case PASCAL_T_VAR_SECTION: {
                 /* Handle var / class var sections inside classes. */
                 int is_class_var_section = 0;
-                if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
                 {
                     fprintf(stderr, "[KGPC] class var section nodes:");
                     for (ast_t *dbg = unwrapped->child; dbg != NULL; dbg = dbg->next)
@@ -8227,7 +8230,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 if (template == NULL)
                     break;
 
-                if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && template->name != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && template->name != NULL)
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
@@ -8258,7 +8261,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                 if (nested_type_builder != NULL) {
                     /* Store a pointer to the AST node for later processing */
                     list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
-                    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                         fprintf(stderr, "[KGPC] collect_class_members: found NESTED_TYPE_SECTION in %s at line %d\n",
                             class_name ? class_name : "<unknown>", unwrapped->line);
                 }
@@ -8288,7 +8291,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     if (nested_types_out != NULL)
         *nested_types_out = NULL;
 
-    if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL && class_name != NULL)
         fprintf(stderr, "[KGPC] convert_class_type %s\n", class_name);
 
     ListBuilder field_builder;
@@ -8332,7 +8335,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         body_start = scan;
     }
 
-    if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_class_type: processing class %s\n", class_name ? class_name : "<null>");
         if (body_start != NULL) {
             fprintf(stderr, "[KGPC]   body_start type: %d\n", body_start->typ);
@@ -8592,7 +8595,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
     int is_class_var = 0;
     int saw_class = 0;
     int saw_var = 0;
-    if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
     {
         fprintf(stderr, "[KGPC] field_decl identifiers:");
         for (ast_t *dbg = field_decl_node->child; dbg != NULL; dbg = dbg->next)
@@ -8958,7 +8961,7 @@ static void convert_record_members(ast_t *node, ListBuilder *builder,
             /* Handle var / class var / class threadvar sections inside objects.
              * The VAR_SECTION wraps keyword nodes and FIELD_DECL children. */
             int is_class_var_section = 0;
-            if (getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CLASS_VAR_PARSE") != NULL)
             {
                 fprintf(stderr, "[KGPC] var section nodes:");
                 for (ast_t *dbg = cur->child; dbg != NULL; dbg = dbg->next)
@@ -9041,7 +9044,7 @@ static void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_bu
             /* Found a nested type section */
             if (nested_type_builder != NULL) {
                 list_builder_append(nested_type_builder, unwrapped, LIST_UNSPECIFIED);
-                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                     fprintf(stderr, "[KGPC] collect_record_nested_types: found NESTED_TYPE_SECTION at line %d\n",
                         unwrapped->line);
             }
@@ -9347,7 +9350,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
         } else {
             default_value_node = find_ast_node_type(param_node, PASCAL_T_DEFAULT_VALUE);
         }
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[convert_param] type_node=%p type_node->next=%p next_typ=%d\n",
                 (void*)type_node, 
                 (void*)(type_node ? type_node->next : NULL),
@@ -9360,7 +9363,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
     if (default_value_node != NULL) {
         /* PASCAL_T_DEFAULT_VALUE's child IS the expression (no "=" token since match returns ast_nil) */
         ast_t *expr_node = default_value_node->child;
-        if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
             fprintf(stderr, "[convert_param] default_value_node=%p expr_node=%p\n",
                 (void*)default_value_node, (void*)expr_node);
         }
@@ -9370,7 +9373,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
                 /* Wrap expression in a var_assign statement with NULL var for storage */
                 default_init = mk_varassign(default_value_node->line, default_value_node->col, 
                                             NULL, default_expr);
-                if (getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_DEFAULT_PARAMS") != NULL) {
                     fprintf(stderr, "[convert_param] Created default_init=%p\n", (void*)default_init);
                 }
             }
@@ -9424,7 +9427,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
             /* Set var parameter flag on array declaration */
             if (is_var_param && param_decl != NULL)
                 param_decl->tree_data.arr_decl_data.type = var_type; // Store this for compatibility
-            if (getenv("KGPC_DEBUG_ARRAY_PARAM") != NULL && param_decl != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_PARAM") != NULL && param_decl != NULL)
             {
                 fprintf(stderr,
                     "[KGPC] array param %s: element_type=%d element_id=%s is_array_of_const=%d\n",
@@ -9996,7 +9999,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     char *absolute_target = NULL;
     {
         ast_t *abs_node = decl_node->child;
-        if (getenv("KGPC_DEBUG_ABSOLUTE") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_ABSOLUTE") != NULL) {
             int idx = 0;
             for (ast_t *dbg = abs_node; dbg != NULL; dbg = dbg->next) {
                 fprintf(stderr, "[KGPC] absolute scan %d: typ=%d sym=%s\n",
@@ -11300,7 +11303,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                             struct RecordField *field_desc =
                                 find_record_field_by_name(record_info, field_name);
                             if (field_desc != NULL && field_desc->is_array) {
-                                if (getenv("KGPC_DEBUG_RECORD_CONST") != NULL)
+                                if (kgpc_getenv("KGPC_DEBUG_RECORD_CONST") != NULL)
                                 {
                                     fprintf(stderr,
                                         "[KGPC] record const %s.%s array elem type=%d id=%s\n",
@@ -11598,7 +11601,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     ast_t *interface_spec = NULL;
     ListNode_t *nested_type_sections = NULL;
     if (spec_node != NULL) {
-        if (getenv("KGPC_DEBUG_TFPG") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
             fprintf(stderr, "[KGPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
                 spec_node->typ,
                 (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>",
@@ -11617,7 +11620,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             ast_t *target_name = class_of_node->child;
             while (target_name != NULL && target_name->typ != PASCAL_T_IDENTIFIER)
                 target_name = target_name->next;
-            if (target_name != NULL && getenv("KGPC_DEBUG_TFPG") != NULL) {
+            if (target_name != NULL && kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
                 fprintf(stderr, "[KGPC] convert_type_decl: class of target=%s for id=%s\n",
                     (target_name->sym && target_name->sym->name) ? target_name->sym->name : "<null>",
                     id);
@@ -11660,7 +11663,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         /* Recursively process this nested type section */
                         append_type_decls_from_section(type_section_ast, nested_type_decls_out,
                             NULL, NULL, NULL, id);
-                        if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                             fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for class %s\n", id);
                     }
                     section_cursor = section_cursor->next;
@@ -11693,7 +11696,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                         if (type_section_ast != NULL) {
                             append_type_decls_from_section(type_section_ast, nested_type_decls_out,
                                 NULL, NULL, NULL, id);
-                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
+                            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL)
                                 fprintf(stderr, "[KGPC] convert_type_decl: processed nested TYPE_SECTION for record %s\n", id);
                         }
                         section_cursor = section_cursor->next;
@@ -11736,7 +11739,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             }
         }
             }
-            if (getenv("KGPC_DEBUG_TFPG") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
                 fprintf(stderr, "[KGPC] convert_type_decl after convert_type_spec id=%s mapped=%d type_id=%s record_type=%p type_info.record=%p\n",
                     id, mapped_type,
                     type_id != NULL ? type_id : "<null>",
@@ -11767,7 +11770,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (record_type->is_type_helper && record_type->helper_base_type_id != NULL &&
             record_type->type_id != NULL)
         {
-            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
                 fprintf(stderr, "[KGPC] Registering type helper mapping: %s -> %s\n",
                     record_type->type_id, record_type->helper_base_type_id);
             register_type_helper_mapping(record_type->type_id, record_type->helper_base_type_id);
@@ -11793,7 +11796,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                                 template->is_class_method,
                                 param_count, param_sig);
                         }
-                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered record method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
                         destroy_method_template_instance(template);
@@ -11823,7 +11826,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                                 template->is_class_method,
                                 param_count, param_sig);
                         }
-                        if (getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
                             fprintf(stderr, "[KGPC] Registered helper method %s.%s (static=%d)\n",
                                 id, template->name, template->is_static);
                     }
@@ -11859,7 +11862,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     if (decl != NULL)
     {
         decl->tree_data.type_decl_data.kgpc_type = kgpc_type;
-        if (getenv("KGPC_DEBUG_TFPG") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL &&
             decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             decl->tree_data.type_decl_data.id != NULL)
         {
@@ -12011,7 +12014,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
 
     ast_t *param_list = id_node->next;
     ast_t *type_spec_node = param_list != NULL ? param_list->next : NULL;
-    if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
         fprintf(stderr, "[KGPC] convert_generic_type_decl %s (type_spec_node=%p typ=%d)\n",
             id, (void *)type_spec_node, type_spec_node != NULL ? type_spec_node->typ : -1);
     struct RecordType *record_template = NULL;
@@ -12070,7 +12073,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
             if (spec_body->typ == PASCAL_T_CLASS_TYPE)
             {
                 ListNode_t *nested_type_sections = NULL;
-                if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
                     fprintf(stderr, "[KGPC] generic class decl %s\n", id);
                 record_template = convert_class_type_ex(id, spec_body, &nested_type_sections);
                 /* Convert nested type sections into type declarations for later specialization */
@@ -12121,7 +12124,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     GenericTypeDecl *generic_decl = generic_registry_add_decl(id, param_names, param_count, decl);
     if (generic_decl != NULL && generic_nested_types != NULL) {
         generic_decl->nested_type_decls = generic_nested_types;
-        if (getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL) {
             int count = 0;
             ListNode_t *cur = generic_nested_types;
             while (cur != NULL) { count++; cur = cur->next; }
@@ -12160,7 +12163,7 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
         if (node != NULL) {
             switch (node->typ) {
             case PASCAL_T_TYPE_SECTION:
-                if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                     fprintf(stderr, "[KGPC] convert_routine_body TYPE_SECTION at line=%d\n", node->line);
                 }
                 if (type_decl_list != NULL)
@@ -13000,7 +13003,7 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
         if (!is_const_section)
             continue;
 
-        if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
             fprintf(stderr, "[KGPC] class const section in %s at line %d\n",
                 class_id, node != NULL ? node->line : -1);
         }
@@ -13017,7 +13020,7 @@ static void append_class_const_decls_from_type_decl(ast_t *type_decl_node,
             if (decl != NULL && decl->type == TREE_CONST_DECL &&
                 decl->tree_data.const_decl_data.id != NULL)
             {
-                if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL) {
                     fprintf(stderr, "[KGPC]   class const %s.%s\n",
                         class_id, decl->tree_data.const_decl_data.id);
                 }
@@ -13411,7 +13414,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
     while (*tail != NULL)
         tail = &(*tail)->next;
 
-    if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
         fprintf(stderr, "[KGPC] append_type_decls_from_section: type_section->typ=%d child=%p line=%d parent=%s\n",
                 type_section->typ, (void*)type_section->child, type_section->line,
                 parent_type_name ? parent_type_name : "<none>");
@@ -13434,7 +13437,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         if (unwrapped == NULL)
             unwrapped = type_decl;
 
-        if (getenv("KGPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL && unwrapped != NULL) {
             char *name = dup_first_identifier_in_node(unwrapped);
             fprintf(stderr, "[KGPC] type-section decl tag=%d (%s) name=%s\n",
                     unwrapped->typ,
@@ -13459,7 +13462,7 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         }
 
         if (treat_as_generic && unwrapped != NULL) {
-            if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
                 char *type_name = dup_first_identifier_in_node(unwrapped);
                 if (type_name != NULL) {
                     fprintf(stderr, "[KGPC] append_type_decls_from_section saw generic-like %s (tag=%d)\n",
@@ -13977,7 +13980,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
     case PASCAL_T_FUNC_CALL: {
         ast_t *child = expr_node->child;
         char *id = NULL;
-        if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
         {
             fprintf(stderr, "[KGPC_DEBUG_SPECIALIZE_CALLS] FUNC_CALL line=%d child_typ=%d(%s)\n",
                 expr_node->line,
@@ -14235,7 +14238,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
     ast_t *original_node = expr_node;  /* Save for source_index */
     expr_node = unwrap_pascal_node(expr_node);
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_expression: typ=%d line=%d\n", expr_node->typ, expr_node->line);
         if (expr_node->next != NULL) {
             fprintf(stderr, "[KGPC] convert_expression: has next sibling typ=%d\n", expr_node->next->typ);
@@ -14317,7 +14320,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         memset(&type_info, 0, sizeof(TypeInfo));
         TypeRef *type_ref_local = NULL;
         
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_expression IS: value_node=%p type_node=%p\n", value_node, type_node);
             if (type_node) fprintf(stderr, "[KGPC]   type_node typ=%d\n", type_node->typ);
         }
@@ -14326,7 +14329,7 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         {
             target_type = convert_type_spec(type_node, &target_type_id, &inline_record, &type_info);
             
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   convert_type_spec result: type=%d id=%s\n", target_type, target_type_id ? target_type_id : "<null>");
             }
             
@@ -14487,12 +14490,12 @@ tuple_cleanup:
         ast_t *unwrapped_type = unwrap_pascal_node(type_node);
         if (unwrapped_type != NULL)
         {
-            if (getenv("KGPC_DEBUG_BODY") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
                 fprintf(stderr, "[KGPC] TYPECAST handler: type_node typ=%d unwrapped typ=%d\n",
                     type_node ? type_node->typ : -1, unwrapped_type->typ);
             target_type = convert_type_spec(unwrapped_type, &target_type_id,
                 &record_type, &type_info);
-            if (getenv("KGPC_DEBUG_BODY") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
                 fprintf(stderr, "[KGPC] TYPECAST handler: after convert_type_spec target_type=%d target_type_id=%s\n",
                     target_type, target_type_id ? target_type_id : "(null)");
             type_ref_local = type_ref_from_info_or_id(&type_info, target_type_id);
@@ -15126,7 +15129,7 @@ static struct Expression *convert_member_access(ast_t *node) {
     ast_t *base_node = node->child;
     ast_t *field_node = (base_node != NULL) ? base_node->next : NULL;
     ast_t *args_node = (field_node != NULL) ? field_node->next : NULL;
-    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
         node != NULL && (node->line == 255 || node->line == 256))
     {
         fprintf(stderr,
@@ -15155,7 +15158,7 @@ static struct Expression *convert_member_access(ast_t *node) {
                 it->child != NULL ? pascal_tag_to_string(it->child->typ) : "<null>");
         }
     }
-    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL)
     {
         const char *field_sym = (field_node != NULL && field_node->sym != NULL &&
                                  field_node->sym->name != NULL)
@@ -15187,7 +15190,7 @@ static struct Expression *convert_member_access(ast_t *node) {
         }
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_member_access: base=%d field=%d args=%d\n",
             base_node ? base_node->typ : -1,
             field_node ? field_node->typ : -1,
@@ -15196,7 +15199,7 @@ static struct Expression *convert_member_access(ast_t *node) {
 
     /* Check for function call (MEMBER_ACCESS with ARG_LIST as 3rd child) */
     if (args_node != NULL && args_node->typ == PASCAL_T_ARG_LIST) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access: detected ARG_LIST child, converting to function call\n");
         }
         
@@ -15254,7 +15257,7 @@ static struct Expression *convert_member_access_chain(int line,
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_member_access_chain: field_node typ=%d, has_next=%d\n",
             field_node->typ, field_node->next != NULL);
         if (field_node->next != NULL) {
@@ -15274,7 +15277,7 @@ static struct Expression *convert_member_access_chain(int line,
 
     /* Check if this is PASCAL_T_FUNC_CALL (type 43) */
     if (unwrapped != NULL && unwrapped->typ == PASCAL_T_FUNC_CALL) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access_chain: detected FUNC_CALL, converting to method call\n");
         }
         
@@ -15287,7 +15290,7 @@ static struct Expression *convert_member_access_chain(int line,
             ast_t *method_unwrapped = unwrap_pascal_node(method_id_node);
             if (method_unwrapped == NULL)
                 method_unwrapped = method_id_node;
-            if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
                 method_unwrapped != NULL &&
                 method_unwrapped->typ == PASCAL_T_IDENTIFIER &&
                 method_unwrapped->sym != NULL &&
@@ -15412,7 +15415,7 @@ static struct Expression *convert_member_access_chain(int line,
 
     /* Check if field_node has ARG_LIST as sibling (method call) */
     if (unwrapped != NULL && unwrapped->next != NULL && unwrapped->next->typ == PASCAL_T_ARG_LIST) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_member_access_chain: detected ARG_LIST sibling, converting to function call\n");
         }
         
@@ -15670,7 +15673,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
-    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL && right == NULL)
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL && right == NULL)
     {
         ast_t *u_rhs = unwrap_pascal_node(rhs);
         ast_t *dbg_rhs = (u_rhs != NULL) ? u_rhs : rhs;
@@ -15686,7 +15689,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
             (dbg_rhs != NULL && dbg_rhs->child != NULL)
                 ? pascal_tag_to_string(dbg_rhs->child->typ) : "<null>");
     }
-    if (getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL &&
         assign_node != NULL && assign_node->line == 256)
     {
         ast_t *u_rhs = unwrap_pascal_node(rhs);
@@ -15726,7 +15729,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
 }
 
 static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_proc_call: typ=%d line=%d\n",
             call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
         if (call_node && call_node->child) {
@@ -15738,18 +15741,18 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     char *id = NULL;
 
     if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   Handling MEMBER_ACCESS\n");
         }
         ast_t *args_node = child->next;
         struct Statement *method_stmt = convert_method_call_statement(child, args_node);
         if (method_stmt != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   convert_method_call_statement returned statement\n");
             }
             return method_stmt;
         }
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   convert_method_call_statement returned NULL\n");
         }
     }
@@ -15794,7 +15797,7 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
         }
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC]   id=%s\n", id ? id : "(null)");
     }
 
@@ -15935,7 +15938,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
     {
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_statement: stmt_node NULL after unwrap\n");
         return NULL;
     }
@@ -16002,7 +16005,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return convert_statement(inner);
     }
     case PASCAL_T_FUNC_CALL:
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_statement: FUNC_CALL at line %d\n", stmt_node->line);
         return convert_proc_call(stmt_node, true);
     case PASCAL_T_MEMBER_ACCESS: {
@@ -16403,7 +16406,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_statement_list: starting, stmt_list_node=%p\n", (void*)stmt_list_node);
     }
     
@@ -16427,7 +16430,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
             continue;
         }
 
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_statement_list: processing stmt %d, typ=%d line=%d\n", 
                     stmt_count, unwrapped->typ, unwrapped->line);
             fprintf(stderr, "[KGPC]   calling convert_statement...\n");
@@ -16436,18 +16439,18 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 
         struct Statement *stmt = convert_statement(unwrapped);
         
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   convert_statement returned: %p\n", (void*)stmt);
             fflush(stderr);
         }
         
         if (stmt != NULL) {
             list_builder_append(&builder, stmt, LIST_STMT);
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC]   -> converted successfully\n");
                 fflush(stderr);
             }
-        } else if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        } else if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   -> convert_statement returned NULL, dropped statement typ=%d line=%d\n",
                 unwrapped->typ, unwrapped->line);
             fflush(stderr);
@@ -16456,7 +16459,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
         stmt_count++;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_statement_list: processed %d statements\n", stmt_count);
     }
 
@@ -16467,12 +16470,12 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
 static struct Statement *convert_block(ast_t *block_node) {
     if (block_node == NULL)
     {
-        if (getenv("KGPC_DEBUG_BODY") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
             fprintf(stderr, "[KGPC] convert_block: block_node is NULL\n");
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_block: typ=%d line=%d\n", block_node->typ, block_node->line);
         if (block_node->child) {
             fprintf(stderr, "[KGPC]   child typ=%d line=%d\n", 
@@ -16488,13 +16491,13 @@ static struct Statement *convert_block(ast_t *block_node) {
 
     ast_t *stmts = block_node->child;
     if (stmts == ast_nil) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] convert_block: stmts is ast_nil, treating as NULL\n");
         }
         stmts = NULL;
     }
     ListNode_t *list = convert_statement_list(stmts);
-    if (list == NULL && getenv("KGPC_DEBUG_BODY") != NULL)
+    if (list == NULL && kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
         fprintf(stderr, "[KGPC] convert_block: statement list is NULL\n");
     return mk_compoundstatement(block_node->line, list);
 }
@@ -16580,7 +16583,7 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
 }
 
 static Tree_t *convert_method_impl(ast_t *method_node) {
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
     }
 
@@ -16606,7 +16609,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
     ast_t *qualified = unwrap_pascal_node(cur);
 
-    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
         fprintf(stderr, "[Operator] convert_method_impl: cur=%p qualified=%p\n", (void*)cur, (void*)qualified);
         if (qualified != NULL) {
             fprintf(stderr, "[Operator]   qualified->typ=%d\n", qualified->typ);
@@ -16629,13 +16632,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
         if (should_parse_standalone_operator) {
             /* This is a standalone operator - qualified is the operator symbol directly */
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] Detected operator symbol: encoded=%s\n", encoded_op);
             }
             /* Get the param list to determine the type.
              * The next node could be PASCAL_T_PARAM_LIST or directly a PASCAL_T_PARAM */
             ast_t *param_node = qualified->next;
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] param_node=%p typ=%d (PARAM_LIST=%d, PARAM=%d)\n",
                     (void*)param_node, param_node ? param_node->typ : -1,
                     PASCAL_T_PARAM_LIST, PASCAL_T_PARAM);
@@ -16665,7 +16668,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                         if (mangled_name != NULL) {
                             snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
 
-                            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
                             }
 
@@ -16721,7 +16724,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                     snprintf(new_name, new_len, "%s_%s", mangled_name, ret_suffix);
                                     free(mangled_name);
                                     mangled_name = new_name;
-                                    if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+                                    if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                         fprintf(stderr, "[Operator] Standalone operator (with rettype): %s\n", mangled_name);
                                     }
                                 }
@@ -16777,7 +16780,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
 
     if (qualified == NULL || qualified->typ != PASCAL_T_QUALIFIED_IDENTIFIER) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: cur=%p typ=%d\n",
                     (void*)cur, cur ? cur->typ : -1);
             if (cur && cur->sym && cur->sym->name) {
@@ -16818,7 +16821,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         if (cursor->typ == PASCAL_T_TYPE_PARAM_LIST) {
             pending_type_param_list = cursor;
         }
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: child typ=%d (%s) name=%s\n",
                     cursor->typ, pascal_tag_to_string(cursor->typ),
                     (cursor->sym && cursor->sym->name) ? cursor->sym->name : "<null>");
@@ -16900,7 +16903,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         }
     }
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[FromCParser] convert_method_impl: class_name=%s method_name=%s effective_class=%s effective_class_full=%s\n",
             class_name ? class_name : "<null>",
             method_name ? method_name : "<null>",
@@ -16937,7 +16940,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     /* A non-static class method (class function) has Self = VMT, so don't skip it */
     else if (is_class_method_impl && !is_static_method)
         is_static_method = 0;
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s is_static=%d\n",
                 effective_class ? effective_class : "<null>", 
                 method_name ? method_name : "<null>",
@@ -17020,12 +17023,12 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 
     const char *helper_base = (effective_class != NULL) ? lookup_type_helper_base(effective_class) : NULL;
     int is_helper_method = (helper_base != NULL);
-    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && effective_class != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && effective_class != NULL)
         fprintf(stderr, "[KGPC] convert_method_impl: looking up helper base for %s -> %s\n",
             effective_class, helper_base ? helper_base : "(not found)");
 
     /* Add Self parameter only for instance methods, not for class operators or static methods */
-    if (getenv("KGPC_ASSERT_STATIC_SELF") != NULL && is_static_method) {
+    if (kgpc_getenv("KGPC_ASSERT_STATIC_SELF") != NULL && is_static_method) {
         assert(!is_class_operator && "static method should not be class operator");
         assert(method_param_sig != NULL || method_param_count >= 0);
     }
@@ -17097,7 +17100,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             break;
         }
         case PASCAL_T_TYPE_SECTION:
-            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                 fprintf(stderr, "[KGPC] convert_function TYPE_SECTION at line=%d\n", node->line);
             }
             append_type_decls_from_section(node, &type_decls, &nested_subs,
@@ -17314,7 +17317,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
      * to prevent adding this to the subprograms list. */
     GenericTypeDecl *generic_decl = generic_registry_find_decl(effective_class);
     if (generic_decl != NULL && generic_decl->record_template != NULL) {
-        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
             fprintf(stderr, "[KGPC] convert_method_impl: recorded template for %s.%s, not generating concrete impl\n", 
                     effective_class, method_name);
         }
@@ -17330,7 +17333,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL && effective_class != NULL && method_name != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl: class=%s method=%s\n", effective_class, method_name);
     }
 
@@ -17449,7 +17452,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     char *id = NULL;
     static int debug_external_nodes = -1;
     if (debug_external_nodes == -1)
-        debug_external_nodes = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+        debug_external_nodes = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
 
     while (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER &&
            cur->sym != NULL && cur->sym->name != NULL &&
@@ -17513,7 +17516,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     ListNode_t *type_decls = NULL;
 
     while (cur != NULL) {
-        if (getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
             fprintf(stderr, "[KGPC] convert_procedure directive node: typ=%d sym=%s child_typ=%d\n",
                 cur->typ,
                 (cur->sym != NULL && cur->sym->name != NULL) ? cur->sym->name : "<null>",
@@ -17699,7 +17702,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_standalone_operator = 0;
     static int debug_external_nodes = -1;
     if (debug_external_nodes == -1)
-        debug_external_nodes = (getenv("KGPC_DEBUG_EXTERNAL") != NULL);
+        debug_external_nodes = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
 
     while (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER &&
            cur->sym != NULL && cur->sym->name != NULL &&
@@ -17761,7 +17764,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
         /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
         Tree_t *first_param = (Tree_t *)params->cur;
-        if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
             fprintf(stderr, "[Operator] is_standalone_operator=%d operator_symbol=%s\n",
                 is_standalone_operator, operator_symbol);
         }
@@ -17818,7 +17821,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                 snprintf(mangled_name, name_len, "%s__%s",
                     deferred_param_type_id, deferred_encoded_op);
             }
-            if (getenv("KGPC_DEBUG_OPERATOR") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
             }
             free(id);
@@ -18049,13 +18052,13 @@ static ast_t *find_node_by_type(ast_t *node, int target_type) {
         return NULL;
     }
     
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] find_node_by_type: visiting node typ=%d, looking for typ=%d\n", 
                 node->typ, target_type);
     }
     
     if (node->typ == target_type) {
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] find_node_by_type: FOUND target typ=%d\n", target_type);
         }
         return node;
@@ -18210,7 +18213,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         return NULL;
     }
 
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] tree_from_pascal_ast: root typ=%d\n", cur->typ);
     }
     
@@ -18224,7 +18227,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
          * We need to check if the first child is a PASCAL_T_PROGRAM_HEADER.
          */
         ast_t *first_child = cur->child;
-        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC] tree_from_pascal_ast: program block entered. first_child=%p\n", first_child);
             if (first_child) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: first_child->typ=%d\n", first_child->typ);
@@ -18321,7 +18324,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         /* Start iterating from the first child, or the node after the program header */
         ast_t *section = program_header_node != NULL ? program_header_node->next : first_child;
         while (section != NULL) {
-            if (getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_PROGRAM_SECTIONS") != NULL) {
                 fprintf(stderr, "[kgpc program] section typ=%d (%s) line=%d\n",
                     section->typ, pascal_tag_to_string(section->typ), section->line);
             }
@@ -18331,7 +18334,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             }
             
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
             }
             
@@ -18375,7 +18378,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             }
             case PASCAL_T_BEGIN_BLOCK:
             case PASCAL_T_MAIN_BLOCK: {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found block type %d\n", section->typ);
                 }
                 struct Statement *candidate_body = convert_block(section);
@@ -18392,7 +18395,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     body = candidate_body;
                     body_line = section->line;
                 }
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: body assigned, body=%p\n", body);
                 }
                 break;
@@ -18405,12 +18408,12 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                  * They should be children of VAR_SECTION, TYPE_SECTION, or CONST_SECTION.
                  * If we encounter them here, it means the AST structure is malformed,
                  * but we can safely skip them to continue parsing. */
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Skipping declaration component type %d (should be child of section)\n", section->typ);
                 }
                 break;
             default:
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Skipping unknown node type %d\n", section->typ);
                 }
                 break;
@@ -18422,64 +18425,64 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
          * This handles the case where the parser's seq() and many() combinators
          * don't properly link subsequent children in the sibling chain. */
         if (body == NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Main block not found in sibling chain, searching recursively\n");
             }
             
             /* Search for VAR_SECTION */
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Searching for VAR_SECTION (typ=%d)\n", PASCAL_T_VAR_SECTION);
             }
             ast_t* var_section_node = find_node_by_type(cur->child, PASCAL_T_VAR_SECTION);
             if (var_section_node != NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found VAR_SECTION via recursive search\n");
                 }
                 list_builder_extend(&var_decls_builder, convert_var_section(var_section_node));
             }
             
             /* Search for MAIN_BLOCK */
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Searching for MAIN_BLOCK (typ=%d)\n", PASCAL_T_MAIN_BLOCK);
             }
             ast_t* main_block_node = find_last_node_by_type(cur->child, PASCAL_T_MAIN_BLOCK);
             if (main_block_node == NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found, searching for BEGIN_BLOCK (typ=%d)\n", PASCAL_T_BEGIN_BLOCK);
                 }
                 main_block_node = find_last_node_by_type(cur->child, PASCAL_T_BEGIN_BLOCK);
             }
             /* Also try typ=112 which appears in the AST */
             if (main_block_node == NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: BEGIN_BLOCK not found, trying typ=112\n");
                 }
                 main_block_node = find_last_node_by_type(cur->child, 112);
             }
             if (main_block_node != NULL) {
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK via recursive search (typ=%d)\n", main_block_node->typ);
                 }
                 body = convert_block(main_block_node);
             } else {
                 /* MAIN_BLOCK not found directly. Check if there's a typ=100 node that contains it */
-                if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found directly, searching for typ=100 wrapper\n");
                 }
                 ast_t* wrapper_node = find_last_node_by_type(cur->child, 100);
                 if (wrapper_node != NULL && wrapper_node->child != NULL) {
-                    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                         fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found typ=100 wrapper, checking its children\n");
                     }
                     /* Check if the wrapper's child is a MAIN_BLOCK or BEGIN_BLOCK */
                     ast_t* child = wrapper_node->child;
                     int child_count = 0;
                     while (child != NULL) {
-                        if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                             fprintf(stderr, "[KGPC] tree_from_pascal_ast: typ=100 child[%d] has typ=%d\n", child_count, child->typ);
                         }
                         if (child->typ == PASCAL_T_MAIN_BLOCK || child->typ == PASCAL_T_BEGIN_BLOCK) {
-                            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Found MAIN_BLOCK (typ=%d) inside typ=100 wrapper\n", child->typ);
                             }
                             main_block_node = child;
@@ -18491,7 +18494,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                 }
                 
-                if (body == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
+                if (body == NULL && kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: MAIN_BLOCK not found via recursive search\n");
                     fprintf(stderr, "[KGPC] tree_from_pascal_ast: PASCAL_T_MAIN_BLOCK=%d, PASCAL_T_BEGIN_BLOCK=%d\n", 
                             PASCAL_T_MAIN_BLOCK, PASCAL_T_BEGIN_BLOCK);
@@ -18506,7 +18509,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         
         /* If no main block was found, create an empty one to avoid NULL body */
         if (body == NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: No main block found, creating empty body\\n");
             }
             body = mk_compoundstatement(cur->line, NULL);
@@ -18558,7 +18561,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         }
 
         while (section != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting section type %d\n", section->typ);
             }
             /* Check for circular reference */
@@ -18569,17 +18572,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             
             if (section->typ == PASCAL_T_INTERFACE_SECTION) {
                 interface_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] interface at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
                 implementation_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] implementation at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_INITIALIZATION_SECTION) {
                 initialization_node = section;
-                if (getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_UNIT_SECTIONS") != NULL) {
                     fprintf(stderr, "[UNIT_SECTIONS] initialization at line %d\n", section->line);
                 }
             } else if (section->typ == PASCAL_T_FINALIZATION_SECTION) {
@@ -18601,7 +18604,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
             } else {
                 ast_t *section = interface_node->child;
                 while (section != NULL) {
-            if (getenv("KGPC_DEBUG_BODY") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
                 fprintf(stderr, "[KGPC] tree_from_pascal_ast: Visiting PROGRAM section type %d\n", section->typ);
             }
             /* Check for circular reference */
@@ -18612,7 +18615,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     
                     ast_t *node_cursor = unwrap_pascal_node(section);
                     if (node_cursor != NULL) {
-                        if (getenv("KGPC_DEBUG_PROPERTY") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_PROPERTY") != NULL) {
                             fprintf(stderr, "[KGPC] interface node typ=%d (%s)\n",
                                 node_cursor->typ, pascal_tag_to_string(node_cursor->typ));
                         }
@@ -18621,7 +18624,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             append_uses_from_section(node_cursor, &interface_uses);
                             break;
                         case PASCAL_T_TYPE_SECTION:
-                            if (getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
+                            if (kgpc_getenv("KGPC_DEBUG_TYPE_SECTION") != NULL) {
                                 fprintf(stderr, "[KGPC] interface TYPE_SECTION at line=%d\n", node_cursor->line);
                             }
                             interface_type_section_ast = node_cursor;  /* Save for const array enum resolution */
@@ -18690,7 +18693,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
 
         if (implementation_node != NULL && implementation_node->typ == PASCAL_T_IMPLEMENTATION_SECTION) {
             /* Debug: count implementation section nodes */
-            if (getenv("KGPC_DEBUG_IMPL_SECTION") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_IMPL_SECTION") != NULL) {
                 ast_t *dbg = implementation_node->child;
                 int count = 0;
                 int max_line = 0;
@@ -18721,7 +18724,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         continue;
                     }
 
-                    if (getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_IMPL_NONE") != NULL &&
                         definition->typ == PASCAL_T_NONE &&
                         definition->child == NULL &&
                         definition->sym != NULL &&
@@ -18731,7 +18734,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                     ast_t *node_cursor = unwrap_pascal_node(definition);
                     if (node_cursor != NULL) {
-                        if (getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }
                         switch (node_cursor->typ) {
@@ -18754,7 +18757,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node_cursor);
-                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
+                            if (kgpc_debug_subprog_enabled() || kgpc_getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *proc_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] impl convert_procedure(%s) line=%d => %p\n", proc_id, node_cursor->line, (void*)proc);
                                 free(proc_id);
@@ -18764,7 +18767,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                         }
                         case PASCAL_T_FUNCTION_DECL: {
                             Tree_t *func = convert_function(node_cursor);
-                            if (kgpc_debug_subprog_enabled() || getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
+                            if (kgpc_debug_subprog_enabled() || kgpc_getenv("KGPC_DEBUG_IMPL_PROCS") != NULL) {
                                 char *func_id = (node_cursor->child != NULL) ? dup_symbol(node_cursor->child) : strdup("?");
                                 fprintf(stderr, "[KGPC] impl convert_function(%s) line=%d => %p\n", func_id, node_cursor->line, (void*)func);
                                 free(func_id);
@@ -18818,7 +18821,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
              * 2. The first statement directly (if the wrapper was optimized away)
              * We handle both cases by checking if child is PASCAL_T_NONE. */
             ast_t *stmt_list_seq = initialization_node->child;
-            if (getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_UNIT_INIT") != NULL) {
                 fprintf(stderr, "[KGPC] initialization_node: typ=%d line=%d\n", 
                         initialization_node->typ, initialization_node->line);
                 if (stmt_list_seq != NULL) {

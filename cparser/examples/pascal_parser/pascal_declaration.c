@@ -389,7 +389,7 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
     int length = resolve_input_length_local(in);
     int pos = skip_pascal_layout_preview(in, in->start);
     if (pos >= length) {
-        return make_failure_v2(in, parser_name, strdup("Unexpected end of input while parsing type"), NULL);
+        return make_failure_static(in, "Unexpected end of input while parsing type");
     }
     unsigned char ch = (unsigned char)buffer[pos];
 
@@ -537,7 +537,7 @@ static ParseResult type_definition_dispatch_fn(input_t* in, void* args, char* pa
         return run_type_branch(in, dispatch->identifier_parser);
     }
 
-    return make_failure_v2(in, parser_name, strdup("Unable to classify type definition"), NULL);
+    return make_failure_static(in, "Unable to classify type definition");
 }
 
 static ast_t* discard_ast(ast_t* ast) {
@@ -1034,7 +1034,7 @@ static ParseResult operator_name_fn(input_t* in, void* args, char* parser_name) 
     
     discard_failure(ident_res);
     restore_input_state(in, &state);
-    return make_failure_v2(in, parser_name, strdup("Expected operator name or symbol"), NULL);
+    return make_failure_static(in, "Expected operator name or symbol");
 }
 
 combinator_t* operator_name(tag_t tag) {

@@ -167,7 +167,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     if (expr == NULL || expr->type != EXPR_ARRAY_LITERAL)
         return 0;
 
-    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
     {
         fprintf(stderr,
             "[KGPC] typecheck array literal @ line %d: expected_type=%d expected_id=%s\n",
@@ -300,7 +300,7 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
 
             if (!compatible)
             {
-                if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL)
                 {
                     fprintf(stderr,
                         "[KGPC] array literal mismatch @ line %d index %d: expected=%d (%s) got=%d\n",
@@ -414,7 +414,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
         }
     }
 
-    if (getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
+    if (kgpc_getenv("KGPC_DEBUG_ARRAY_LITERAL") != NULL && arg_expr->type == EXPR_ARRAY_LITERAL)
     {
         fprintf(stderr,
             "[KGPC] array literal @ line %d: formal_decl=%s expected_type=%d expected_id=%s array_of_const=%d\n",

@@ -21,6 +21,9 @@
 #include "../../List/List.h"
 #include "HashTable.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 /* Forward declarations for internal helper functions */
 static HashNode_t* create_hash_node(char* id, char* mangled_id, 
                                    enum HashType hash_type,
@@ -451,7 +454,7 @@ void DestroyHashTable(HashTable_t *table)
             hash_node = (HashNode_t *)cur->cur;
             if (hash_node->type != NULL)
             {
-                if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_TYPE_FREE") != NULL)
                 {
                     fprintf(stderr,
                         "[KgpcType] hashnode '%s' (type=%d) destroy type=%p ref=%d\n",

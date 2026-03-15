@@ -238,6 +238,9 @@ const char *pascal_frontend_current_path(void)
 #include "../../cparser/parser.h"
 #include "../../cparser/examples/pascal_parser/pascal_peek.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 extern ast_t *ast_nil;
 
 static int find_conflict_marker_line(const char *buffer)
@@ -1026,7 +1029,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     pascal_preprocessor_free(preprocessor);
 
     /* Temp debug: dump preprocessed output for system.pp */
-    if (getenv("KGPC_DUMP_PP") != NULL && path != NULL && strstr(path, "system.pp") != NULL) {
+    if (kgpc_getenv("KGPC_DUMP_PP") != NULL && path != NULL && strstr(path, "system.pp") != NULL) {
         FILE *dump = fopen("/tmp/system_pp_preprocessed.txt", "w");
         if (dump != NULL) {
             fwrite(preprocessed_buffer, 1, preprocessed_length, dump);
@@ -1063,7 +1066,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     from_cparser_set_source_offset(src_offset);
 
     /* Debug: dump full preprocessed buffer */
-    if (getenv("KGPC_DUMP_PREPROC")) {
+    if (kgpc_getenv("KGPC_DUMP_PREPROC")) {
         char dumppath[256];
         const char *base = strrchr(path, '/');
         base = base ? base + 1 : path;
@@ -1082,7 +1085,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (detect_objfpc_mode(buffer, length))
         g_objfpc_mode_detected = true;
 
-    const char *dump_path = getenv("KGPC_DUMP_PREPROCESSED");
+    const char *dump_path = kgpc_getenv("KGPC_DUMP_PREPROCESSED");
     if (dump_path != NULL && dump_path[0] != '\0')
     {
         /* Append file name to dump path to distinguish multiple parses */
@@ -1115,7 +1118,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     ParseResult result = parse(input, parser);
 
-    if (getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TFPG_AST") != NULL && result.is_success && result.value.ast != NULL)
     {
         fprintf(stderr, "==== Raw cparser AST for %s ====\n", path);
         print_pascal_ast(result.value.ast);

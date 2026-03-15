@@ -149,7 +149,7 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
                 return owner_record;
         }
     }
-    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
     {
         fprintf(stderr,
             "[KGPC] lookup_type_helper: base_type_tag=%d type_name=%s\n",
@@ -162,7 +162,7 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
         TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
         if (entry != NULL)
         {
-            if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC]   helper_entry: base_type_tag=%d base_type_id=%s helper=%s\n",

@@ -70,6 +70,7 @@ typedef struct ParseError {
     struct ParseError* cause;
     ast_t* partial_ast;
     bool committed;  // If true, prevents backtracking in multi combinator
+    bool static_strings;  // If true, message/parser_name are static — do not free
 } ParseError;
 
 struct ParseResult {
@@ -245,6 +246,7 @@ void restore_input_state(input_t* in, InputState* state);
 ParseResult make_success(ast_t* ast);
 ParseResult make_failure(input_t* in, char* message);
 ParseResult make_failure_v2(input_t* in, char* parser_name, char* message, char* unexpected);
+ParseResult make_failure_static(input_t* in, const char* message);
 ParseResult wrap_failure(input_t* in, char* message, char* parser_name, ParseResult cause);
 
 typedef struct for_init_dispatch_args {

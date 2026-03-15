@@ -101,7 +101,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     if (symtab == NULL || record_info == NULL || property_name == NULL)
         return NULL;
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_find_class_property: searching for '%s' in record_info=%p\n",
             property_name, record_info);
         fprintf(stderr, "[SemCheck]   record_info->properties=%p\n", record_info->properties);
@@ -110,7 +110,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
-        if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
             (pascal_identifier_equals(property_name, "is_registered") ||
              pascal_identifier_equals(property_name, "forwarddef") ||
              pascal_identifier_equals(property_name, "realname")))
@@ -139,7 +139,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                 if (node->type == LIST_CLASS_PROPERTY && node->cur != NULL)
                 {
                     struct ClassProperty *property = (struct ClassProperty *)node->cur;
-                    if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
                         (pascal_identifier_equals(property_name, "is_registered") ||
                          pascal_identifier_equals(property_name, "forwarddef") ||
                          pascal_identifier_equals(property_name, "realname")))
@@ -152,7 +152,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                             property->write_accessor != NULL ? property->write_accessor : "<null>");
                     }
 
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck]   Found property: '%s'\n",
                             property->name ? property->name : "<null>");
                     }
@@ -160,7 +160,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                     if (property->name != NULL &&
                         pascal_identifier_equals(property->name, property_name))
                     {
-                        if (getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
+                        if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_PROPS") != NULL &&
                             (pascal_identifier_equals(property_name, "is_registered") ||
                              pascal_identifier_equals(property_name, "forwarddef") ||
                              pascal_identifier_equals(property_name, "realname")))
@@ -173,7 +173,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                                 property->write_accessor != NULL ? property->write_accessor : "<null>");
                         }
 
-                        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                             fprintf(stderr, "[SemCheck]   MATCHED property '%s'!\n", property->name);
                         }
                         if (owner_out != NULL)
@@ -183,13 +183,13 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                 }
                 node = node->next;
             }
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck]   Searched %d properties (pass %d) in this record, no match\n", prop_count, pass);
             }
         }
         current = semcheck_lookup_parent_record(symtab, current);
     }
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck]   Property '%s' NOT FOUND\n", property_name);
     }
     return NULL;
@@ -207,7 +207,7 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
     struct RecordType *current = record_info;
     while (current != NULL)
     {
-        if (getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
             field_name != NULL &&
             (pascal_identifier_equals(field_name, "deflist") ||
              pascal_identifier_equals(field_name, "forwarddef") ||
@@ -224,7 +224,7 @@ static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
         field = semcheck_find_field_in_members(current->fields, field_name, include_hidden);
         if (field != NULL)
         {
-            if (getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_FIELDS") != NULL &&
                 field_name != NULL &&
                 (pascal_identifier_equals(field_name, "deflist") ||
                  pascal_identifier_equals(field_name, "forwarddef") ||
@@ -287,7 +287,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
             const char *class_id = current->type_id;
             snprintf(mangled_name, sizeof(mangled_name), "%s__%s", class_id, method_name);
 
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_find_class_method: Searching for '%s' (mangled: '%s') in class '%s'\n",
                     method_name, mangled_name, class_id);
             }
@@ -341,7 +341,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 if (method_node == NULL)
                     goto next_class;
 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_find_class_method: Found '%s' in class '%s'\n", 
                         method_name, current->type_id);
                 }
@@ -360,7 +360,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 struct RecordType *parent_helper = get_record_type_from_node(parent_node);
                 if (parent_helper != NULL && parent_helper->is_type_helper)
                 {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_find_class_method: Walking up helper parent chain to '%s'\n", 
                             current->helper_parent_id);
                     }

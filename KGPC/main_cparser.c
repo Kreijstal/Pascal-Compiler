@@ -60,6 +60,9 @@ static int unsetenv(const char *name)
 #ifdef _WIN32
 #include <windows.h>
 #include <io.h>
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 #ifndef R_OK
 #define R_OK 4
 #endif
@@ -196,7 +199,7 @@ static ssize_t get_executable_path(char *buffer, size_t size, const char *argv0)
 
 static char *resolve_stdlib_path(const char *argv0)
 {
-    const char *env = getenv("KGPC_STDLIB");
+    const char *env = kgpc_getenv("KGPC_STDLIB");
     if (env != NULL && access(env, R_OK) == 0)
     {
         char *dup = strdup(env);
@@ -330,7 +333,7 @@ static int profile_pipeline_flag(void)
 
     if (!initialized)
     {
-        const char *value = getenv("KGPC_PROFILE_PIPELINE");
+        const char *value = kgpc_getenv("KGPC_PROFILE_PIPELINE");
         enabled = (value != NULL && value[0] != '\0' && strcmp(value, "0") != 0);
         initialized = 1;
     }
@@ -1017,7 +1020,7 @@ static int type_list_contains(ListNode_t *list, const char *type_id)
 
 static void debug_check_type_presence(Tree_t *target)
 {
-    const char *check_id = getenv("KGPC_DEBUG_CHECK_TYPE");
+    const char *check_id = kgpc_getenv("KGPC_DEBUG_CHECK_TYPE");
     if (check_id == NULL || check_id[0] == '\0' || target == NULL)
         return;
 
@@ -1134,7 +1137,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
 
     int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
     mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
-    if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
         while (dbg != NULL) {
             if (dbg->type == LIST_TREE) {
@@ -1157,7 +1160,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
     mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
-    if (getenv("KGPC_DEBUG_CONST") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CONST") != NULL) {
         ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
         while (dbg != NULL) {
             if (dbg->type == LIST_TREE) {
@@ -1186,7 +1189,7 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
     if (target->type == TREE_PROGRAM_TYPE)
     {
         mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
-        if (getenv("KGPC_DEBUG_TFPG") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
             ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
             while (dbg != NULL) {
                 if (dbg->type == LIST_TREE) {
@@ -1237,6 +1240,10 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
 
         // Prepend finalization to the list (for LIFO execution order)
         if (unit_tree->tree_data.unit_data.finalization != NULL && final_list != NULL) {
+            /* Tag the finalization statement with its unit index so error
+             * reporting can show the correct unit name instead of the
+             * main program file. */
+            unit_tree->tree_data.unit_data.finalization->source_unit_index = unit_idx;
             ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
             if (final_node != NULL) {
                 final_node->next = *final_list;
@@ -2039,7 +2046,10 @@ int main(int argc, char **argv)
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
+    /* Note: KGPC_SKIP_IMPORTED_IMPL_BODIES can be set externally to skip
+     * semantic checking of imported unit implementation bodies.  This is
+     * safe when the program has errors (codegen is skipped anyway) and
+     * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
     SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;

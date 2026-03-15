@@ -1235,7 +1235,7 @@ int semcheck_addop(int *type_return,
         }
         semcheck_error_with_context("Error on line %d, expected boolean or integer operands for OR expression!\n\n",
             expr->line_num);
-        if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] OR mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
@@ -1383,7 +1383,7 @@ int semcheck_addop(int *type_return,
         else if (type_second == RECORD_TYPE && right_type_name != NULL)
             record_type_name = right_type_name;
 
-        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] addop record branch line %d: lhs_type_name=%s rhs_type_name=%s chosen=%s op=%d\n",
@@ -1416,7 +1416,7 @@ int semcheck_addop(int *type_return,
 
                     HashNode_t *operator_node = NULL;
                     ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
-                    if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                     {
                         fprintf(stderr,
                             "[SemCheck] addop operator key=%s candidates=%d unit_ctx=%d lookup_unit=%d\n",
@@ -1532,7 +1532,7 @@ int semcheck_addop(int *type_return,
                         operator_node != NULL)
                     {
                         /* fallback for return-type-disambiguated names not indexed by base id */
-                        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+                        if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                         {
                             fprintf(stderr,
                                 "[SemCheck] addop prefix hit key=%s node=%s mangled=%s\n",
@@ -1541,7 +1541,7 @@ int semcheck_addop(int *type_return,
                                 operator_node->mangled_id != NULL ? operator_node->mangled_id : "<null>");
                         }
                     }
-                    else if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+                    else if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                     {
                         fprintf(stderr,
                             "[SemCheck] addop prefix miss key=%s\n",
@@ -1582,7 +1582,7 @@ int semcheck_addop(int *type_return,
                             if (FindIdentInUnit(&operator_node, symtab, operator_exact,
                                     semcheck_operator_lookup_unit_index(symtab)) >= 0 &&
                                 operator_node != NULL &&
-                                getenv("KGPC_DEBUG_ADDOP") != NULL)
+                                kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                             {
                                 fprintf(stderr,
                                     "[SemCheck] addop exact-return hit key=%s node=%s mangled=%s\n",
@@ -1677,7 +1677,7 @@ int semcheck_addop(int *type_return,
     if(!types_numeric_compatible(type_first, type_second))
     {
         semantic_error(expr->line_num, expr->col_num, "type mismatch on addop");
-        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] addop mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
@@ -1692,7 +1692,7 @@ int semcheck_addop(int *type_return,
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
         semantic_error(expr->line_num, expr->col_num, "expected int/real on both sides of addop");
-        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] addop non-numeric at line %d: lhs=%s(%d) rhs=%s(%d)\n",
@@ -1790,7 +1790,7 @@ int semcheck_mulop(int *type_return,
         /* Invalid operand types for AND/XOR */
         semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
-        if (getenv("KGPC_DEBUG_ANDOR") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
             fprintf(stderr,
                 "[SemCheck] %s mismatch at line %d: lhs=%s(%d) rhs=%s(%d)\n",
@@ -2008,7 +2008,7 @@ static struct RecordType *semcheck_resolve_helper_self_record(SymTab_t *symtab,
         if (helper_record != NULL)
         {
             self_record = helper_record;
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] varid fallback: Using type helper %s for Self\n",
                     helper_record->type_id ? helper_record->type_id : "(null)");
             }
@@ -2145,7 +2145,7 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
     struct RecordType *field_owner = NULL;
     struct RecordField *field = semcheck_find_class_field_including_hidden(symtab,
         self_record, id, &field_owner);
-    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
     {
         fprintf(stderr,
@@ -2243,7 +2243,7 @@ int semcheck_varid(int *type_return,
             }
         }
     }
-    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
         fprintf(stderr, "[KGPC_DEBUG_EOF] varid EOF: mutating=%d scope=%d\n",
@@ -2251,7 +2251,7 @@ int semcheck_varid(int *type_return,
     }
 
     struct Expression *with_expr = NULL;
-    if (getenv("KGPC_DEBUG_WITH") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_WITH") != NULL &&
         (pascal_identifier_equals(id, "BufPtr") ||
          pascal_identifier_equals(id, "Bytes") ||
          pascal_identifier_equals(id, "Chars")))
@@ -2260,14 +2260,14 @@ int semcheck_varid(int *type_return,
             id != NULL ? id : "(null)", with_context_count, expr->line_num);
     }
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
-    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
     {
         fprintf(stderr,
             "[KGPC_DEBUG_MONITOR] varid=%s line=%d with_status=%d with_expr=%p\n",
             id, expr->line_num, with_status, (void *)with_expr);
     }
-    if (getenv("KGPC_DEBUG_WITH") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_WITH") != NULL &&
         (pascal_identifier_equals(id, "BufPtr") ||
          pascal_identifier_equals(id, "Bytes") ||
          pascal_identifier_equals(id, "Chars")))
@@ -2277,7 +2277,7 @@ int semcheck_varid(int *type_return,
     }
     if (with_status == 0 && with_expr != NULL)
     {
-        if (getenv("KGPC_DEBUG_FIELD") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_FIELD") != NULL) {
             fprintf(stderr, "[SemCheck] WITH resolved '%s' at line %d, with_expr->type=%d\n",
                 id, expr->line_num, with_expr->type);
         }
@@ -2290,7 +2290,7 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    if (getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
         fprintf(stderr,
@@ -2298,7 +2298,7 @@ int semcheck_varid(int *type_return,
             scope_return, (void *)hash_return,
             hash_return != NULL ? hash_return->hash_type : -1);
     }
-    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
     {
         fprintf(stderr,
@@ -2315,7 +2315,7 @@ int semcheck_varid(int *type_return,
             snprintf(mangled, sizeof(mangled), "%s__%s", owner, id);
             HashNode_t *class_const = NULL;
             int class_const_scope = FindIdent(&class_const, symtab, mangled);
-            if (getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
             {
                 fprintf(stderr, "[KGPC] class const lookup %s -> scope=%d node=%p\n",
                     mangled, class_const_scope, (void*)class_const);
@@ -2536,7 +2536,7 @@ int semcheck_varid(int *type_return,
         }
 resolved:;
     }
-    if (getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_RESULT") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Result"))
     {
         fprintf(stderr,
@@ -2558,7 +2558,7 @@ resolved:;
             scope_return = value_scope;
         }
     }
-    if (getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && id != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL && id != NULL &&
         pascal_identifier_equals(id, "Self"))
     {
         fprintf(stderr, "[KGPC] semcheck_varid: FindIdent Self scope_return=%d hash_return=%p kind=%d\n",
@@ -2684,7 +2684,7 @@ resolved:;
                 self_record = semcheck_resolve_helper_self_record(symtab,
                     helper_self_node, helper_self_record);
             }
-            if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+            if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
                 id != NULL && pascal_identifier_equals(id, "_MonitorData"))
             {
                 fprintf(stderr,
@@ -2716,7 +2716,7 @@ resolved:;
                     snprintf(getter_id, id_len + 4, "Get%s", id);
                     HashNode_t *getter_node = NULL;
                     int getter_found = (FindIdent(&getter_node, symtab, getter_id) != -1);
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
                         fprintf(stderr, "[SemCheck] varid fallback: id=%s getter=%s found=%d hash=%d\n",
                             id, getter_id, getter_found,
@@ -2744,7 +2744,7 @@ resolved:;
                 {
                     struct RecordType *self_record = semcheck_resolve_helper_self_record(symtab,
                         self_node, helper_self_record);
-                    if (getenv("KGPC_DEBUG_MONITOR") != NULL &&
+                    if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
                         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
                     {
                         fprintf(stderr,
@@ -2927,7 +2927,7 @@ resolved:;
             semcheck_set_result_expr_metadata(expr, symtab, hash_return->type);
             return return_val;
         }
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL &&
             id != NULL && strcmp(id, "DefaultComparer") == 0)
         {
             fprintf(stderr,
@@ -3188,7 +3188,7 @@ resolved:;
             /* Keep as EXPR_VAR_ID so it can be used as a procedure value */
             set_hash_meta(hash_return, mutating);
             set_type_from_hashtype(type_return, hash_return);
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {
                 fprintf(stderr,
                     "[SemCheck] semcheck_varid: proc value id=%s type=%p kind=%d\n",
@@ -3221,7 +3221,7 @@ resolved:;
         semcheck_mark_static_link_needed(scope_return, hash_return);
         if(scope_return > max_scope_lev)
         {
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_varid: scope_return=%d max_scope_lev=%d\n", scope_return, max_scope_lev);
             }
             if (mutating != NO_MUTATE &&
@@ -3260,7 +3260,7 @@ resolved:;
             {
                 node_is_array = hashnode_is_array(hash_return);
             }
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                 fprintf(stderr, "[SemCheck] semcheck_varid: id=%s hash_type=%d node_type=%p kind=%d node_is_array=%d defined_in_unit=%d source_unit=%d\n",
                     id ? id : "<null>", hash_return->hash_type,
                     (void*)hash_return->type,
@@ -3318,7 +3318,7 @@ resolved:;
             semcheck_expr_set_resolved_kgpc_type_shared(expr, effective_type);
         }
 
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] semcheck_varid: expr=%p, id=%s, type_return=%d\n", (void*)expr, id, *type_return);
         }
 
@@ -3466,7 +3466,7 @@ resolved:;
                 }
             }
             
-            if (subtype == UNKNOWN_TYPE && type_id == NULL && getenv("KGPC_DEBUG_CG_ERR"))
+            if (subtype == UNKNOWN_TYPE && type_id == NULL && kgpc_getenv("KGPC_DEBUG_CG_ERR"))
             {
                 fprintf(stderr, "[semcheck-debug] varid pointer UNKNOWN: id=%s line=%d hash_type=%d\n",
                     id, expr->line_num, hash_return->hash_type);
@@ -3534,7 +3534,7 @@ resolved:;
                         destroy_kgpc_type(resolved_points_to);
                 }
             }
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {
                 fprintf(stderr,
                     "[SemCheck] semcheck_varid: id=%s pointer_subtype=%d subtype_id=%s\n",
@@ -3544,14 +3544,14 @@ resolved:;
             if (hash_return->type != NULL && kgpc_type_is_pointer(hash_return->type))
             {
                 KgpcType *points_to = hash_return->type->info.points_to;
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_varid: id=%s, points_to=%p\n", id, points_to);
                     if (points_to) {
                          fprintf(stderr, "[SemCheck] semcheck_varid: points_to->kind=%d\n", points_to->kind);
                     }
                 }
                 if (points_to != NULL && kgpc_type_is_record(points_to) &&
-                    getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_varid: id=%s, type=POINTER, points_to_record=%p\n",
                         id, (void *)kgpc_type_get_record(points_to));
                 }

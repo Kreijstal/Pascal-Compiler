@@ -32,6 +32,9 @@
 #include "../SemanticCheck/HashTable/HashTable.h"
 #include "../SemanticCheck/SymTab/SymTab.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -600,7 +603,7 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
     
     KgpcType *result = NULL;
 
-    if (getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_PSHORTSTRING") != NULL &&
         alias->alias_name != NULL &&
         pascal_identifier_equals(alias->alias_name, "PShortString"))
     {
@@ -849,7 +852,7 @@ void destroy_kgpc_type(KgpcType *type) {
      * Instead of crashing, we log a warning and return safely. */
     if (type->ref_count <= 0) {
         static int warn_once = 0;
-        if (getenv("KGPC_DEBUG_TYPE_FREE") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_TYPE_FREE") != NULL) {
             fprintf(stderr,
                 "[KgpcType] destroy_kgpc_type ref_count=%d type=%p kind=%d",
                 type->ref_count, (void *)type, type->kind);

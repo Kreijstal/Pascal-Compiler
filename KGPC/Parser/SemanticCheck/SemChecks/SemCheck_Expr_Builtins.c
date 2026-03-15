@@ -472,7 +472,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL)
     {
-        if (getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
             fprintf(stderr, "[KGPC] Length args count=0\n");
         semcheck_error_with_context("Error on line %d, Length expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
@@ -480,7 +480,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     }
     if (args->next != NULL)
     {
-        if (getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
         {
             fprintf(stderr, "[KGPC] Length args count=%d\n", ListLength(args));
             for (ListNode_t *cur = args; cur != NULL; cur = cur->next)
@@ -593,7 +593,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     }
     else if (error_count == 0)
     {
-        if (getenv("KGPC_DEBUG_LENGTH") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_LENGTH") != NULL)
         {
             semcheck_debug_expr_brief(arg_expr, "Length arg");
             fprintf(stderr,
@@ -1330,7 +1330,7 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
         if (arg_expr->source_index >= 0)
             err_source_index = arg_expr->source_index;
     }
-    if (getenv("KGPC_DEBUG_ASSIGNED") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_ASSIGNED") != NULL)
     {
         const char *arg_id = NULL;
         if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
@@ -3360,7 +3360,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         if (arg != NULL && arg->resolved_kgpc_type != NULL)
         {
             long long size = kgpc_type_sizeof(arg->resolved_kgpc_type);
-            if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_ERRORS] sizeof kgpc_size=%lld\n",
@@ -3373,7 +3373,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             }
             else
             {
-                if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL)
                     fprintf(stderr, "[KGPC_DEBUG_ERRORS] sizeof fallback path\n");
                 KgpcType *arg_kgpc_type = NULL;
                 error_count += semcheck_expr_with_type(&arg_kgpc_type, symtab, arg, max_scope_lev, NO_MUTATE);
@@ -3510,7 +3510,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    if (getenv("KGPC_DEBUG_ERRORS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL)
     {
         const char *arg_type_str = "<null>";
         if (arg != NULL && arg->resolved_kgpc_type != NULL)

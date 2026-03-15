@@ -48,6 +48,9 @@ static int codegen_statement_return_storage_size(KgpcType *return_type)
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
@@ -893,7 +896,7 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     }
     if (record_type == NULL)
     {
-        if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
         {
             const char *fid = record_access_expr->expr_data.record_access_data.field_id;
             fprintf(stderr, "[codegen] lookup_record_field FAIL: field=%s base_type=%d rec_type=%p\n",
@@ -1336,7 +1339,7 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
     if (value_reg == NULL)
     {
-        if (getenv("KGPC_DEBUG_CG_ERR"))
+        if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
             fprintf(stderr, "[codegen-debug] condition_expr: value_reg NULL for expr type=%d line=%d\n",
                 (int)expr->type, expr->line_num);
         if (relop_type != NULL)
@@ -2467,7 +2470,7 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
                 KgpcType *elem_type = kgpc_type_get_array_element_type(node->type);
                 if (elem_type != NULL)
                 {
-                    if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+                    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
                     {
                         fprintf(stderr, "[codegen] checking shortstring: base=%s elem_type->kind=%d\n",
                             base_expr->expr_data.id, elem_type->kind);
@@ -2627,7 +2630,7 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
         {
             /* Look up the record field to check if it's a char array */
             struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
-            if (getenv("KGPC_DEBUG_CHARARRAY") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_CHARARRAY") != NULL)
             {
                 const char *fid = expr->expr_data.record_access_data.field_id;
                 fprintf(stderr, "[CHARARRAY] field_lookup=%p name=%s is_array=%d elem_type=%d type=%d\n",
@@ -4664,13 +4667,13 @@ static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_li
     CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmts == NULL) {
-        if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
             fprintf(stderr, "[CodeGen] codegen_statement_list: stmts is NULL\n");
         }
         return inst_list;
     }
 
-    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
         fprintf(stderr, "[CodeGen] codegen_statement_list: starting\n");
     }
 
@@ -4681,7 +4684,7 @@ static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_li
         {
             struct Statement *stmt = (struct Statement *)node->cur;
             if (stmt != NULL) {
-                if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
                     fprintf(stderr, "[CodeGen]   generating statement type=%d line=%d\n", stmt->type, stmt->line_num);
                 }
                 inst_list = codegen_stmt(stmt, inst_list, ctx, symtab);
@@ -4690,7 +4693,7 @@ static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_li
         node = node->next;
     }
     
-    if (getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
         fprintf(stderr, "[CodeGen] codegen_statement_list: finished\n");
     }
 
@@ -6959,7 +6962,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     {
         if (codegen_sizeof_pointer_target(ctx, target_expr, &pointer_step) != 0 || pointer_step <= 0)
         {
-            if (getenv("KGPC_DEBUG_CG_ERR"))
+            if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
             {
                 fprintf(stderr, "[codegen-debug] Inc/Dec pointer target size fail: target type=%d line=%d",
                     (int)target_expr->type, target_expr->line_num);
@@ -8579,7 +8582,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     else if (var_expr->type == EXPR_RECORD_ACCESS)
     {
         struct RecordField *field = codegen_lookup_record_field(var_expr);
-        if (getenv("KGPC_DEBUG_CODEGEN") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
         {
             const char *fid = var_expr->expr_data.record_access_data.field_id;
             fprintf(stderr, "[codegen] static_array_check: field=%s found=%p is_array=%d\n",
@@ -8928,7 +8931,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (target_field != NULL && target_field->type == SHORTSTRING_TYPE)
                 record_targets_shortstring = 1;
         }
-        if (getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_ARRAY_ACCESS)
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_ARRAY_ACCESS)
         {
             struct Expression *base = var_expr->expr_data.array_access_data.array_expr;
             fprintf(stderr, "[codegen] var_assignment: var_type=%d, targets_shortstring=%d, assign_type=%d",
@@ -9611,7 +9614,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int rec_arr_lower = 0, rec_arr_upper = -1, rec_arr_is_short = 0;
         int rec_field_is_char_array = codegen_get_char_array_bounds(var_expr, ctx,
             &rec_arr_lower, &rec_arr_upper, &rec_arr_is_short);
-        if (getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_RECORD_ACCESS)
         {
             const char *fid = var_expr->expr_data.record_access_data.field_id;
             fprintf(stderr, "[codegen] RECORD char_array_check: field=%s found=%d lower=%d upper=%d is_short=%d\n",
@@ -9796,7 +9799,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
         {
-            if (getenv("KGPC_DEBUG_CG_ERR"))
+            if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
             {
                 fprintf(stderr, "[codegen-debug] pointer-assign reg fail: pointer_expr type=%d line=%d",
                     (int)pointer_expr->type, pointer_expr->line_num);
@@ -12340,7 +12343,7 @@ static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, C
         struct RecordType *record_type = codegen_resolve_with_record_type(context_expr, symtab);
         if (record_type != NULL)
             pushed = codegen_with_push(ctx, context_expr, record_type);
-        if (getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
         {
             fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] with push=%d record=%s\n",
                 pushed, (record_type != NULL && record_type->type_id != NULL) ? record_type->type_id : "<null>");

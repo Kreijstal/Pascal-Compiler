@@ -123,12 +123,22 @@ static void advance_input_pos(input_t* in, int old_pos, int new_pos) {
 // --- Helper Functions ---
 /* Fast layout consumer: processes all whitespace and comments in one go
  * without calling read1() per character. Updates line/col in bulk. */
+/* Cache: last position where layout was already consumed.
+ * If layout is called at this same position, it's a no-op. */
+static int g_layout_clean_pos = -1;
+static const char* g_layout_clean_buf = NULL;
+
 static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     (void)parser_name;
     const char* buf = in->buffer;
     int pos = in->start;
     int len = in->length;
+
+    /* Fast path: if we already consumed layout at this position, skip entirely */
+    if (pos == g_layout_clean_pos && buf == g_layout_clean_buf) {
+        return make_success(ast_nil);
+    }
 
     for (;;) {
         /* Skip whitespace in bulk */
@@ -190,6 +200,9 @@ static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) 
     if (pos != in->start) {
         advance_input_pos(in, in->start, pos);
     }
+    /* Mark this position as layout-clean so redundant calls are no-ops */
+    g_layout_clean_pos = in->start;
+    g_layout_clean_buf = buf;
     return make_success(ast_nil);
 }
 
@@ -224,7 +237,7 @@ static ParseResult pascal_qualified_identifier_fn(input_t* in, void* args, char*
 
     if (c == EOF || !(c == '_' || isalpha(uc) || uc >= 0x80)) {
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier"), NULL);
+        return make_failure_static(in, "Expected identifier");
     }
 
     /* Build the normalized identifier text (without whitespace around dots)

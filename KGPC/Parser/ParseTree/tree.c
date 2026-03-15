@@ -14,6 +14,9 @@
 #include <string.h>
 #include <assert.h>
 
+
+/* Cached getenv() — defined in SemCheck.c */
+extern const char *kgpc_getenv(const char *name);
 extern void free_ast(struct ast_t *ast);
 extern struct ast_t *copy_ast(struct ast_t *orig);
 
@@ -2178,7 +2181,7 @@ Tree_t *mk_program(int line_num, char *id, ListNode_t *args, ListNode_t *uses,
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.subprograms = subprograms;
     new_tree->tree_data.program_data.body_statement = compound_statement;
-    if (getenv("KGPC_DEBUG_BODY") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] mk_program: body_statement=%p\n", compound_statement);
     }
     new_tree->tree_data.program_data.finalization_statements = NULL;

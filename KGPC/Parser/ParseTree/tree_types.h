@@ -247,6 +247,7 @@ struct Statement
     int line_num;
     int col_num;
     int source_index;  /* Byte offset in preprocessed buffer for accurate error context (-1 if unknown) */
+    int source_unit_index; /* Unit registry index for error context (0 = local/program) */
     enum StmtType type;
     union stmt_data
     {

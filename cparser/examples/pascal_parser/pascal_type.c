@@ -100,7 +100,7 @@ static inline void discard_failure(ParseResult result) {
 
 static ParseResult fail_with_message(const char* message, input_t* in, InputState* state, char* parser_name) {
     restore_input_state(in, state);
-    return make_failure_v2(in, parser_name, strdup(message), NULL);
+    return make_failure_static(in, message);
 }
 
 static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parser_name) {
@@ -115,7 +115,7 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
     int length = in->length > 0 ? in->length : (int)strlen(buffer);
     int pos = skip_pascal_layout_preview(in, in->start);
     if (pos >= length) {
-        return make_failure_v2(in, parser_name, strdup("Unexpected end of input inside class member"), NULL);
+        return make_failure_static(in, "Unexpected end of input inside class member");
     }
 
     int word_start = 0;
@@ -124,7 +124,7 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
         if (dispatch->field_parser != NULL) {
             return parse(in, dispatch->field_parser);
         }
-        return make_failure_v2(in, parser_name, strdup("Unable to determine class member kind"), NULL);
+        return make_failure_static(in, "Unable to determine class member kind");
     }
 
     pos = skip_pascal_layout_preview(in, word_start + (int)word_len);
@@ -136,7 +136,7 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
             if (dispatch->field_parser != NULL) {
                 return parse(in, dispatch->field_parser);
             }
-            return make_failure_v2(in, parser_name, strdup("Expected keyword after 'generic'"), NULL);
+            return make_failure_static(in, "Expected keyword after 'generic'");
         }
         pos = skip_pascal_layout_preview(in, word_start + (int)word_len);
         keyword_start = buffer + word_start;
@@ -148,7 +148,7 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
             if (dispatch->field_parser != NULL) {
                 return parse(in, dispatch->field_parser);
             }
-            return make_failure_v2(in, parser_name, strdup("Expected keyword after 'class'"), NULL);
+            return make_failure_static(in, "Expected keyword after 'class'");
         }
         keyword_start = buffer + word_start;
         keyword_len = word_len;
@@ -177,7 +177,7 @@ static ParseResult class_member_dispatch_fn(input_t* in, void* args, char* parse
         return parse(in, dispatch->field_parser);
     }
 
-    return make_failure_v2(in, parser_name, strdup("No matching class member parser"), NULL);
+    return make_failure_static(in, "No matching class member parser");
 }
 
 // Range type parser: reuse expression parser and re-tag range AST nodes
@@ -1615,7 +1615,7 @@ static ParseResult variant_part_fn(input_t* in, void* args, char* parser_name) {
     if (!case_res.is_success) {
         discard_failure(case_res);
         restore_input_state(in, &start_state);
-        return make_failure_v2(in, parser_name, strdup("variant part"), NULL);
+        return make_failure_static(in, "variant part");
     }
     free_ast(case_res.value.ast);
 

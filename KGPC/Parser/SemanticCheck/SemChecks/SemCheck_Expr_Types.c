@@ -922,7 +922,7 @@ int semcheck_typecast(int *type_return,
             }
             if (target_node != NULL)
             {
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                 {
                     fprintf(stderr, "[SemCheck] typecast record target=%s node=%p kgpc_kind=%d\n",
                         expr->expr_data.typecast_data.target_type_id,
@@ -1112,7 +1112,7 @@ int semcheck_is_expr(int *type_return,
         target_record = semcheck_lookup_record_type(symtab,
             expr->expr_data.is_data.target_type_id);
             
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] is_expr: lookup '%s' -> %p\n", 
                 expr->expr_data.is_data.target_type_id, target_record);
             if (target_record) {
@@ -2022,7 +2022,7 @@ int semcheck_recordaccess(int *type_return,
                 }
             }
         }
-        if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
             fprintf(stderr, "[SemCheck] enum const expr: T=%s found=%d type_node=%p\n",
                 record_expr->expr_data.id, type_node != NULL, (void *)type_node);
         }
@@ -2199,19 +2199,19 @@ int semcheck_recordaccess(int *type_return,
         if (!unit_is_qualifier && find_result == -1 && unit_registry_contains(unit_id))
         {
             unit_is_qualifier = 1;
-            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_RECORD_ACCESS] unit-qualifier registry fallback: unit=%s field=%s\n",
                     unit_id != NULL ? unit_id : "(null)",
                     field_id != NULL ? field_id : "(null)");
             }
-            if (getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
+            if (kgpc_getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
                 assert(find_result == -1 && "unit-qualifier registry fallback requires unresolved name");
         }
         if (unit_is_qualifier)
         {
-            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 fprintf(stderr,
                     "[KGPC_DEBUG_RECORD_ACCESS] unit-qualifier resolve: unit=%s field=%s\n",
@@ -2558,7 +2558,7 @@ int semcheck_recordaccess(int *type_return,
                 }
             }
 
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] enum alias fallback failed for %s\n", unit_id);
             }
         }
@@ -2586,7 +2586,7 @@ int semcheck_recordaccess(int *type_return,
         semcheck_is_unit_name(record_expr->expr_data.id) &&
         !semcheck_has_value_ident(symtab, record_expr->expr_data.id))
     {
-        if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_RECORD_ACCESS] unit-name branch: id=%s field=%s\n",
@@ -2614,7 +2614,7 @@ int semcheck_recordaccess(int *type_return,
             *type_return = semcheck_tag_from_kgpc(resolved_kgpc);
             return result;
         }
-        if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_RECORD_ACCESS] unit-name no symbol: id=%s field=%s\n",
@@ -2656,7 +2656,7 @@ int semcheck_recordaccess(int *type_return,
      * indexed property returns a class reference whose member is assigned. */
     error_count += semcheck_expr_with_type(&record_kgpc_type, symtab, record_expr, max_scope_lev, NO_MUTATE);
     record_type = semcheck_tag_from_kgpc(record_kgpc_type);
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
     {
         const char *type_str = NULL;
         if (record_kgpc_type != NULL)
@@ -2788,7 +2788,7 @@ SKIP_SELF_FIELD_REWRITE:
         }
     }
 
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck] semcheck_recordaccess: field_id=%s, record_type=%d\n",
             field_id, record_type);
     }
@@ -2802,7 +2802,7 @@ SKIP_SELF_FIELD_REWRITE:
         {
             record_info = kgpc_type_get_record(record_kgpc_type);
         }
-        if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
         {
             fprintf(stderr,
                 "[KGPC_DEBUG_RECORD_ACCESS] record_info=%p from_kgpc=%d\n",
@@ -3159,7 +3159,7 @@ SKIP_SELF_FIELD_REWRITE:
             }
             else
             {
-            if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
+            if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
             {
                 const char *rec_id = NULL;
                 if (record_expr != NULL && record_expr->type == EXPR_VAR_ID)
@@ -3386,7 +3386,7 @@ SKIP_SELF_FIELD_REWRITE:
                     return error_count + 1;
                 }
 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck]   Property read_accessor='%s'\n",
                         property->read_accessor ? property->read_accessor : "<null>");
                 }
@@ -3394,7 +3394,7 @@ SKIP_SELF_FIELD_REWRITE:
                 struct RecordField *read_field =
                     semcheck_find_class_field_including_hidden(symtab,
                         record_info, property->read_accessor, NULL);
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck]   Found read_field=%p\n", read_field);
                 }
                 if (read_field != NULL &&
@@ -3402,7 +3402,7 @@ SKIP_SELF_FIELD_REWRITE:
                         &field_desc, &field_offset, expr->line_num, 0) == 0 &&
                     field_desc != NULL)
                 {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck]   Transforming property '%s' to field '%s'\n",
                             field_id, property->read_accessor);
                     }
@@ -3564,7 +3564,7 @@ SKIP_SELF_FIELD_REWRITE:
         if (method_node != NULL)
         {
             /* Found a method/constructor */
-            if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found method %s\n", field_id);
             }
                 
@@ -3807,7 +3807,7 @@ SKIP_SELF_FIELD_REWRITE:
                 
                 *type_return = POINTER_TYPE;
                 
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_recordaccess: Transformed '%s.%s' to __kgpc_default_create(%lld, %s) call\n",
                         expr_name, field_id, class_size, is_type ? "(static VMT)" : "(runtime VMT)");
                 }
@@ -3830,7 +3830,7 @@ SKIP_SELF_FIELD_REWRITE:
             if (method_node != NULL)
             {
                 /* Found a method on an advanced record */
-                if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found advanced record method %s\n", field_id);
                 }
 
@@ -3844,7 +3844,7 @@ SKIP_SELF_FIELD_REWRITE:
                         is_static_method = from_cparser_is_method_static(type_name, field_id);
                     }
                     
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_recordaccess: type=%s method=%s is_static=%d\n",
                             type_name ? type_name : "<null>", field_id, is_static_method);
                     }
@@ -3905,7 +3905,7 @@ SKIP_SELF_FIELD_REWRITE:
                     helper_record, field_id, NULL);
                 if (method_node != NULL)
                 {
-                    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found record helper method %s on %s\n",
                             field_id, helper_record->type_id);
                     }
@@ -4203,7 +4203,7 @@ FIELD_RESOLVED:
     /* Procedural fields (function/procedure pointers) */
     if (field_desc->proc_type != NULL)
         field_type = PROCEDURE;
-    if (getenv("KGPC_DEBUG_PROC_FIELD") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_PROC_FIELD") != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_PROC_FIELD] field=%s type=%d raw_type=%d type_id=%s proc_type=%p\n",
@@ -4213,7 +4213,7 @@ FIELD_RESOLVED:
             field_desc->type_id != NULL ? field_desc->type_id : "<null>",
             (void *)field_desc->proc_type);
     }
-    if (getenv("KGPC_DEBUG_POINTER_FIELD") != NULL && field_id != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_POINTER_FIELD") != NULL && field_id != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_POINTER_FIELD] field=%s type=%d is_pointer=%d pointer_type=%d pointer_type_id=%s\n",
@@ -4223,7 +4223,7 @@ FIELD_RESOLVED:
             field_desc->pointer_type,
             field_desc->pointer_type_id ? field_desc->pointer_type_id : "<null>");
     }
-    if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
         (pascal_identifier_equals(field_id, "st_ctime") ||
          pascal_identifier_equals(field_id, "st_mtime") ||
@@ -4237,7 +4237,7 @@ FIELD_RESOLVED:
             field_desc->type_id ? field_desc->type_id : "<null>",
             (void *)field_desc->nested_record);
     }
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_RECORD_ACCESS] field=%s type=%d type_id=%s record=%p resolved=%s is_array=%d elem_type=%d elem_type_id=%s elem_record=%p elem_kgpc=%p is_pointer=%d\n",
@@ -4446,7 +4446,7 @@ FIELD_RESOLVED:
             }
             if (elem_type != NULL)
             {
-                if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL &&
+                if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL &&
                     pascal_identifier_equals(field_id, "FArr"))
                 {
                     fprintf(stderr,
@@ -4617,7 +4617,7 @@ FIELD_RESOLVED:
         }
     }
 
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_RECORD_ACCESS] resolved field=%s type=%d type_id=%s record=%p\n",
@@ -5090,7 +5090,7 @@ FIELD_RESOLVED:
             }
         }
     }
-    if (getenv("KGPC_DEBUG_BUFPTR") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_BUFPTR") != NULL &&
         field_id != NULL && pascal_identifier_equals(field_id, "bufptr"))
     {
         fprintf(stderr, "[KGPC_DEBUG_BUFPTR] field=%s type=%d resolved=%s kind=%d\n",
@@ -5230,7 +5230,7 @@ FIELD_RESOLVED:
     if (!preserve_resolved_kgpc)
         semcheck_expr_set_resolved_type(expr, field_type);
     *type_return = field_type;
-    if (getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL && field_id != NULL)
     {
         fprintf(stderr,
             "[KGPC_DEBUG_RECORD_ACCESS] final field=%s type=%d resolved=%s\n",
@@ -5238,7 +5238,7 @@ FIELD_RESOLVED:
             field_type,
             expr->resolved_kgpc_type ? kgpc_type_to_string(expr->resolved_kgpc_type) : "<null>");
     }
-    if (getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_RECORD_FIELD") != NULL &&
         field_id != NULL &&
         (pascal_identifier_equals(field_id, "st_ctime") ||
          pascal_identifier_equals(field_id, "st_mtime") ||
@@ -5267,7 +5267,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
         return 0;
     if (pascal_identifier_equals(id, "Create"))
         return 0;
-    if (getenv("KGPC_DEBUG_TYPECAST") != NULL &&
+    if (kgpc_getenv("KGPC_DEBUG_TYPECAST") != NULL &&
         pascal_identifier_equals(id, "TextRec"))
     {
         fprintf(stderr, "[SemCheck] try_typecast TextRec at line %d\n", expr->line_num);
@@ -5343,14 +5343,14 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
         (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) ||
         (target_type != UNKNOWN_TYPE) ||
         is_unaligned_cast;
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
     {
         fprintf(stderr, "[SemCheck] try_typecast id=%s type_node=%p hash_type=%d target_type=%d\n",
             id, (void *)type_node, type_node != NULL ? type_node->hash_type : -1, target_type);
     }
     if (!is_type_identifier)
     {
-        if (getenv("KGPC_DEBUG_TYPECAST") != NULL &&
+        if (kgpc_getenv("KGPC_DEBUG_TYPECAST") != NULL &&
             pascal_identifier_equals(id, "TextRec"))
         {
             fprintf(stderr, "[SemCheck] try_typecast TextRec: not a type identifier (node=%p hash=%d target_type=%d)\n",
@@ -5362,7 +5362,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
 
     /* Require exactly one argument for a typecast */
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (getenv("KGPC_DEBUG_SEMCHECK") != NULL)
+    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
     {
         fprintf(stderr, "[SemCheck] try_typecast id=%s args=%d\n",
             id, args != NULL ? ListLength(args) : 0);
@@ -5701,7 +5701,7 @@ int semcheck_addressof(int *type_return,
     int inner_type = UNKNOWN_TYPE;
     int treated_as_proc_ref = 0;
     HashNode_t *resolved_proc_symbol = NULL;
-    int dbg_specialize_addr = getenv("KGPC_DEBUG_ADDR_SPECIALIZE") != NULL;
+    int dbg_specialize_addr = kgpc_getenv("KGPC_DEBUG_ADDR_SPECIALIZE") != NULL;
 
     if (dbg_specialize_addr && expr->line_num == 256)
     {
@@ -6149,7 +6149,7 @@ int semcheck_addressof(int *type_return,
     if (inner != NULL && inner->resolved_kgpc_type != NULL &&
         kgpc_type_is_array(inner->resolved_kgpc_type))
     {
-        if (getenv("KGPC_ASSERT_ADDROF_ARRAY") != NULL)
+        if (kgpc_getenv("KGPC_ASSERT_ADDROF_ARRAY") != NULL)
             assert(kgpc_type_is_array(inner->resolved_kgpc_type));
         KgpcType *array_type = inner->resolved_kgpc_type;
         KgpcType *element_type = kgpc_type_get_array_element_type_resolved(array_type, symtab);

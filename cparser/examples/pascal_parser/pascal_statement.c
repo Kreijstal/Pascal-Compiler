@@ -250,7 +250,7 @@ static bool case_branch_should_stop(input_t* in, combinator_t* case_label_list) 
 static ParseResult case_branch_stmt_list_fn(input_t* in, void* args, char* parser_name) {
     case_stmt_list_args* clargs = (case_stmt_list_args*)args;
     if (clargs == NULL || clargs->stmt_parser == NULL || *clargs->stmt_parser == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Invalid case branch parser state"), NULL);
+        return make_failure_static(in, "Invalid case branch parser state");
     }
 
     InputState state;
@@ -343,8 +343,7 @@ static bool next_non_layout_is_comma(input_t* in) {
 static ParseResult with_context_comma_guard_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     if (next_non_layout_is_comma(in)) {
-        return make_failure_v2(in, parser_name,
-            strdup("Expected expression in WITH context list"), NULL);
+        return make_failure_static(in, "Expected expression in WITH context list");
     }
     return make_success(ast_nil);
 }
@@ -429,7 +428,7 @@ static ParseResult case_allowed_call_name_fn(input_t* in, void* args, char* pars
     if (!case_call_name_allowed(case_last_segment(name))) {
         free_ast(ast);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected allowed case function name"), NULL);
+        return make_failure_static(in, "Expected allowed case function name");
     }
     return make_success(ast);
 }
@@ -458,7 +457,7 @@ static ParseResult case_typecast_name_fn(input_t* in, void* args, char* parser_n
     if (!case_typecast_name_allowed(name)) {
         free_ast(ast);
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected case typecast name"), NULL);
+        return make_failure_static(in, "Expected case typecast name");
     }
     return make_success(ast);
 }
@@ -500,7 +499,7 @@ static bool case_label_has_disallowed_call(ast_t* node) {
 static ParseResult case_label_guard_fn(input_t* in, void* args, char* parser_name) {
     combinator_t* inner = (combinator_t*)args;
     if (inner == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Internal case label guard error"), NULL);
+        return make_failure_static(in, "Internal case label guard error");
     }
     int start = in->start;
     ParseResult res = parse(in, inner);
@@ -510,8 +509,7 @@ static ParseResult case_label_guard_fn(input_t* in, void* args, char* parser_nam
     if (case_label_has_disallowed_call(res.value.ast)) {
         free_ast(res.value.ast);
         in->start = start;
-        return make_failure_v2(in, parser_name,
-            strdup("Function calls are not valid case labels"), NULL);
+        return make_failure_static(in, "Function calls are not valid case labels");
     }
     return res;
 }
@@ -701,10 +699,10 @@ static ast_t* make_empty_statement_node(input_t* in) {
 static ParseResult empty_statement_fn(input_t* in, void* args, char* parser_name) {
     (void)args;
     if (in == NULL) {
-        return make_failure_v2(NULL, parser_name, strdup("Empty statement parser requires input"), NULL);
+        return make_failure_static(NULL, "Empty statement parser requires input");
     }
     if (!is_statement_boundary_token(in)) {
-        return make_failure_v2(in, parser_name, strdup("Empty statement can only appear before boundary tokens (end, else, until, except, finally)"), NULL);
+        return make_failure_static(in, "Empty statement can only appear before boundary tokens (end, else, until, except, finally)");
     }
     return make_success(make_empty_statement_node(in));
 }
@@ -716,7 +714,7 @@ typedef struct {
 static ParseResult statement_list_with_empty_fn(input_t* in, void* args, char* parser_name) {
     stmt_list_args* slargs = (stmt_list_args*)args;
     if (slargs == NULL || slargs->stmt_parser == NULL || *slargs->stmt_parser == NULL) {
-        return make_failure_v2(in, parser_name, strdup("Statement list parser misconfigured"), NULL);
+        return make_failure_static(in, "Statement list parser misconfigured");
     }
 
     ast_t* head = NULL;
@@ -836,12 +834,12 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
     const char* buffer = in->buffer;
     int length = in->length > 0 ? in->length : (int)strlen(buffer);
     if (length <= 0) {
-        return make_failure_v2(in, parser_name, strdup("Empty input while parsing statement"), NULL);
+        return make_failure_static(in, "Empty input while parsing statement");
     }
 
     int pos = skip_pascal_layout_preview(in, in->start);
     if (pos >= length) {
-        return make_failure_v2(in, parser_name, strdup("Unexpected end of input while parsing statement"), NULL);
+        return make_failure_static(in, "Unexpected end of input while parsing statement");
     }
 
     const char* slice = buffer + pos;
@@ -926,7 +924,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         }
 
         if (reserved_keyword && !keyword_allowed_as_expr) {
-            return make_failure_v2(in, parser_name, strdup("Reserved keyword cannot start a statement here"), NULL);
+            return make_failure_static(in, "Reserved keyword cannot start a statement here");
         }
 
         // NOTE: Do NOT use speculative assignment parsing here (trying assignment even without `:=`).
@@ -940,7 +938,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
             return parse(in, dispatch->expr_parser);
         }
 
-        return make_failure_v2(in, parser_name, strdup("Unable to dispatch identifier-led statement"), NULL);
+        return make_failure_static(in, "Unable to dispatch identifier-led statement");
     }
 
     if (starts_digit) {
@@ -950,7 +948,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         if (dispatch->expr_parser != NULL) {
             return parse(in, dispatch->expr_parser);
         }
-        return make_failure_v2(in, parser_name, strdup("Unable to dispatch numeric-led statement"), NULL);
+        return make_failure_static(in, "Unable to dispatch numeric-led statement");
     }
 
     if (dispatch->assignment_parser != NULL && peek_assignment_operator(in)) {
@@ -961,7 +959,7 @@ static ParseResult statement_dispatch_fn(input_t* in, void* args, char* parser_n
         return parse(in, dispatch->expr_parser);
     }
 
-    return make_failure_v2(in, parser_name, strdup("No matching statement parser"), NULL);
+    return make_failure_static(in, "No matching statement parser");
 }
 
 static ParseResult for_init_dispatch_fn(input_t* in, void* args, char* parser_name) {
@@ -1085,7 +1083,7 @@ static ParseResult expr_lvalue_fn(input_t* in, void* args, char* parser_name) {
         if (res.value.ast != NULL && res.value.ast != ast_nil) {
             free_ast(res.value.ast);
         }
-        return make_failure_v2(in, parser_name, strdup("Expected lvalue expression"), NULL);
+        return make_failure_static(in, "Expected lvalue expression");
     }
 
     return res;
@@ -1181,7 +1179,7 @@ static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) 
             free_error(dot_res.value.error);
         }
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected '.' in member access"), NULL);
+        return make_failure_static(in, "Expected '.' in member access");
     }
     free_ast(dot_res.value.ast);
 
@@ -1193,7 +1191,7 @@ static ParseResult member_suffix_fn(input_t* in, void* args, char* parser_name) 
             free_error(ident_res.value.error);
         }
         restore_input_state(in, &state);
-        return make_failure_v2(in, parser_name, strdup("Expected identifier after '.'"), NULL);
+        return make_failure_static(in, "Expected identifier after '.'");
     }
 
     ast_t* ident_ast = ident_res.value.ast;
