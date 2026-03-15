@@ -3286,6 +3286,8 @@ int expr_returns_sret(const struct Expression *expr)
                 if (ret_size > 0)
                     return ret_size > 8;
             }
+            if (kgpc_type_is_extended(ret_type))
+                return 1;
             return 0;
         }
     }
@@ -3313,6 +3315,13 @@ int expr_returns_sret(const struct Expression *expr)
 
     /* Also check for shortstring type aliases */
     if (type != NULL && type->type_alias != NULL && type->type_alias->is_shortstring)
+        return 1;
+
+    /* Extended (10 bytes) is returned via hidden sret pointer, matching
+     * the callee convention which copies the result through kgpc_move.
+     * Only applies to function calls — variables are not sret. */
+    if (type != NULL && kgpc_type_is_extended(type) &&
+        expr->type == EXPR_FUNCTION_CALL)
         return 1;
 
     return 0;
@@ -9690,6 +9699,25 @@ pass_value_arg:
                 if (expected_type == REAL_TYPE)
                     inst_list = codegen_expr_maybe_convert_int_like_to_real(expected_type,
                         arg_expr, top_reg, inst_list);
+
+                /* Extended sret function calls leave the buffer ADDRESS in the
+                 * register.  Convert to double bits for callees expecting a
+                 * regular double argument (e.g. kgpc_trunc). */
+                if (expected_type == REAL_TYPE &&
+                    expr_returns_sret(arg_expr) &&
+                    codegen_expr_involves_extended(arg_expr))
+                {
+                    if (codegen_target_is_windows())
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", top_reg->bit_64);
+                    else
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_vect_reg(inst_list, 0);
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+                    free_arg_regs();
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", top_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
 
                 /* Promote char arguments to strings when the formal parameter expects string,
                  * unless the semantic checker already rewrote the call to a runtime

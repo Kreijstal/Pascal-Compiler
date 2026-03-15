@@ -812,6 +812,7 @@ static ParseError* clone_parse_error(const ParseError* original) {
     copy->context = original->context ? strdup(original->context) : NULL;
     copy->source_filename = original->source_filename ? strdup(original->source_filename) : NULL;
     copy->committed = original->committed;
+    copy->format_arg = original->format_arg;
     copy->partial_ast = copy_ast(original->partial_ast);
     copy->cause = clone_parse_error(original->cause);
     return copy;
@@ -1106,7 +1107,11 @@ static ParseResult match_fn(input_t * in, void * args, char* parser_name) {
         in->start = start + slen;
         return make_success(ensure_ast_nil_initialized());
     }
-    return make_failure_static(in, "Expected token");
+    {
+        ParseResult r = make_failure_static(in, "Expected '%s'");
+        r.value.error->format_arg = str;
+        return r;
+    }
 }
 
 static ParseResult integer_fn(input_t * in, void * args, char* parser_name) {
@@ -1786,6 +1791,22 @@ combinator_t * lazy_owned(combinator_t** parser_ptr) {
 //=============================================================================
 // MEMORY MANAGEMENT
 //=============================================================================
+
+const char* parse_error_get_message(ParseError* err) {
+    if (err == NULL) return NULL;
+    if (err->format_arg != NULL) {
+        /* Lazily materialize the formatted message */
+        char* formatted = NULL;
+        if (asprintf(&formatted, err->message, err->format_arg) >= 0) {
+            if (!err->static_strings)
+                free(err->message);
+            err->message = formatted;
+            err->static_strings = false;  /* now owns the formatted string */
+            err->format_arg = NULL;
+        }
+    }
+    return err->message;
+}
 
 void free_error(ParseError* err) {
     if (err == NULL) return;

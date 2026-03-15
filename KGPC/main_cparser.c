@@ -556,11 +556,12 @@ static void set_flags(char **optional_args, int count)
             /* FPC lowercase -d: define symbol (same as -D) */
             pascal_frontend_add_define(&arg[2]);
         }
-        else
+        else if (arg[0] == '-')
         {
             fprintf(stderr, "ERROR: Unrecognized flag: %s\n", arg);
             exit(1);
         }
+        /* else: positional argument (input/output file), skip silently */
 
         --count;
         ++i;
@@ -1483,22 +1484,69 @@ int main(int argc, char **argv)
     arena_t* arena = arena_create(1024 * 1024);
     arena_set_global(arena);
 
-    if (argc < 3)
+    /* Process ALL arguments through set_flags first, then extract positional args.
+     * This allows flags like --no-stdlib to appear anywhere in the command line. */
+    unit_search_paths_init(&g_unit_paths);
+    if (argc > 1)
+        set_flags(argv + 1, argc - 1);
+
+    /* Extract positional arguments (non-flag args) as input and output files */
+    const char *input_file = NULL;
+    const char *output_file = NULL;
+    for (int i = 1; i < argc; ++i)
+    {
+        const char *a = argv[i];
+        /* Skip flags and their consumed arguments */
+        if (a[0] == '-')
+        {
+            /* Skip flags that consume the next argument */
+            if ((strcmp(a, "--target") == 0 || strcmp(a, "-target") == 0 ||
+                 strcmp(a, "--dump-ast") == 0 || strcmp(a, "-dump-ast") == 0 ||
+                 strcmp(a, "--target-abi") == 0) && i + 1 < argc)
+                ++i;
+            continue;
+        }
+        if (input_file == NULL)
+            input_file = a;
+        else if (output_file == NULL)
+            output_file = a;
+    }
+
+    if (input_file == NULL)
     {
         print_usage(argv[0]);
         clear_dump_ast_path();
+        unit_search_paths_destroy(&g_unit_paths);
         return 1;
     }
 
-    const char *input_file = argv[1];
-    file_to_parse = (char *)input_file;  /* Set global for error reporting */
-    unit_search_paths_init(&g_unit_paths);
-    unit_search_paths_set_user(&g_unit_paths, input_file);
-    const char *output_file = argv[2];
+    /* If no output file given, derive from input file (replace extension with .s) */
+    char derived_output[PATH_MAX];
+    if (output_file == NULL)
+    {
+        const char *dot = strrchr(input_file, '.');
+        const char *slash = strrchr(input_file, '/');
+        if (dot != NULL && (slash == NULL || dot > slash))
+        {
+            size_t base_len = (size_t)(dot - input_file);
+            if (base_len + 3 < sizeof(derived_output))
+            {
+                memcpy(derived_output, input_file, base_len);
+                memcpy(derived_output + base_len, ".s", 3);
+                output_file = derived_output;
+            }
+        }
+        if (output_file == NULL)
+        {
+            fprintf(stderr, "Error: Could not derive output file name from '%s'.\n", input_file);
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            return 1;
+        }
+    }
 
-    int optional_count = argc - 3;
-    if (optional_count > 0)
-        set_flags(argv + 3, optional_count);
+    file_to_parse = (char *)input_file;  /* Set global for error reporting */
+    unit_search_paths_set_user(&g_unit_paths, input_file);
 
     if (time_passes_flag())
         atexit(emit_timing_summary);

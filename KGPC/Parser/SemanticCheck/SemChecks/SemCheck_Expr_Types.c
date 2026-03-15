@@ -2962,16 +2962,22 @@ SKIP_SELF_FIELD_REWRITE:
         if (record_info == NULL)
         {
             /* Check for type helpers on Pointer type before giving up.
-             * Type helpers can be defined for Pointer, PChar, etc. */
-            const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
-                record_type, expr_type_name, field_id);
-            if (helper_record != NULL)
+             * Type helpers can be defined for Pointer, PChar, etc.
+             * Skip when record_type is UNKNOWN_TYPE — the helper lookup
+             * would incorrectly match an unrelated helper (e.g. TLongIntHelper)
+             * and produce cascading "field not found" errors. */
+            if (record_type != UNKNOWN_TYPE)
             {
-                record_type = RECORD_TYPE;
-                record_info = helper_record;
+                const char *expr_type_name = get_expr_type_name(record_expr, symtab);
+                struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                    record_type, expr_type_name, field_id);
+                if (helper_record != NULL)
+                {
+                    record_type = RECORD_TYPE;
+                    record_info = helper_record;
+                }
             }
-            else
+            if (record_info == NULL)
             {
                 semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
                     expr->line_num);
@@ -2982,6 +2988,41 @@ SKIP_SELF_FIELD_REWRITE:
     }
     else
     {
+        /* When the record_expr is a pointer dereference that resolved to a
+         * non-record type (e.g. LongInt instead of the actual record), try
+         * to recover the record info from the pointer's subtype before
+         * falling through to type helper lookups. */
+        if (record_expr->type == EXPR_POINTER_DEREF)
+        {
+            struct Expression *ptr_expr = record_expr->expr_data.pointer_deref_data.pointer_expr;
+            const char *subtype_id = ptr_expr ? ptr_expr->pointer_subtype_id : NULL;
+            if (subtype_id != NULL)
+            {
+                struct RecordType *ptr_rec = semcheck_lookup_record_type(symtab, subtype_id);
+                if (ptr_rec != NULL)
+                {
+                    record_type = RECORD_TYPE;
+                    record_info = ptr_rec;
+                }
+            }
+            if (record_info == NULL && ptr_expr != NULL &&
+                ptr_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+            {
+                KgpcType *pointee = ptr_expr->resolved_kgpc_type->info.points_to;
+                if (pointee != NULL && kgpc_type_is_record(pointee))
+                {
+                    record_type = RECORD_TYPE;
+                    record_info = kgpc_type_get_record(pointee);
+                }
+            }
+        }
+        if (record_type == RECORD_TYPE && record_info != NULL)
+        {
+            /* Successfully recovered record type from pointer dereference */
+        }
+        else
+        {
         const char *expr_type_name = get_expr_type_name(record_expr, symtab);
         /* When the record_expr is literally "Self" inside a type helper
          * method body, use the current method's owning helper type rather
@@ -3004,7 +3045,7 @@ SKIP_SELF_FIELD_REWRITE:
                     helper_record = owner_rec;
             }
         }
-        if (helper_record == NULL)
+        if (helper_record == NULL && record_type != UNKNOWN_TYPE)
             helper_record = semcheck_lookup_type_helper_for_member(symtab,
                 record_type, expr_type_name, field_id);
         if (helper_record == NULL && is_real_family_type(record_type))
@@ -3179,6 +3220,7 @@ SKIP_SELF_FIELD_REWRITE:
             return error_count + 1;
             }
         }
+        } /* close else from pointer deref recovery */
     }
 
 

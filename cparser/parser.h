@@ -71,6 +71,7 @@ typedef struct ParseError {
     ast_t* partial_ast;
     bool committed;  // If true, prevents backtracking in multi combinator
     bool static_strings;  // If true, message/parser_name are static — do not free
+    const char* format_arg;  // Optional: if non-NULL, message is a format template with one %s arg
 } ParseError;
 
 struct ParseResult {
@@ -229,6 +230,8 @@ void parser_walk_ast(ast_t* ast, ast_visitor_fn visitor, void* context);
 ast_t* new_ast();
 void free_ast(ast_t* ast);
 void free_error(ParseError* err);
+/* Lazily format the error message if it has a format_arg. Returns the message. */
+const char* parse_error_get_message(ParseError* err);
 void ensure_parse_error_contexts(ParseError* err, input_t* in);
 ast_t* ast1(tag_t typ, ast_t* a1);
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2);

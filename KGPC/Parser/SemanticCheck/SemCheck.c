@@ -7400,6 +7400,46 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             cur = cur->next;
                             continue;
                         }
+
+                        /* If we already have a non-pointer alias and the new declaration
+                         * is a pointer alias (e.g., punicodemap = ^tunicodemap replacing
+                         * a predeclared punicodemap = Pointer stub), upgrade the existing
+                         * entry to TYPE_KIND_POINTER so pointer dereferences work. */
+                        struct TypeAlias *new_alias_ptr = &tree->tree_data.type_decl_data.info.alias;
+                        struct TypeAlias *existing_alias_ptr = get_type_alias_from_node(existing);
+                        int new_is_pointer = (new_alias_ptr != NULL && new_alias_ptr->is_pointer);
+                        int existing_is_pointer = (existing_alias_ptr != NULL && existing_alias_ptr->is_pointer);
+                        if (new_is_pointer && !existing_is_pointer)
+                        {
+                            KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
+                                new_alias_ptr, symtab,
+                                tree->tree_data.type_decl_data.defined_in_unit);
+                            if (kgpc_type == NULL)
+                            {
+                                /* Fallback: create a basic pointer type */
+                                kgpc_type = create_pointer_type(NULL);
+                                kgpc_type_set_type_alias(kgpc_type, new_alias_ptr);
+                            }
+                            if (kgpc_type != NULL)
+                            {
+                                if (tree->tree_data.type_decl_data.kgpc_type == NULL)
+                                {
+                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+                                    kgpc_type_retain(kgpc_type);
+                                }
+                                if (existing->type != NULL)
+                                    destroy_kgpc_type(existing->type);
+                                kgpc_type_retain(kgpc_type);
+                                existing->type = kgpc_type;
+                                mark_hashnode_unit_info(symtab, existing,
+                                    tree->tree_data.type_decl_data.defined_in_unit,
+                                    tree->tree_data.type_decl_data.unit_is_public);
+                                mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
+                                destroy_kgpc_type(kgpc_type);
+                            }
+                            cur = cur->next;
+                            continue;
+                        }
                     }
 
                     /* Allow record types from different units to coexist as separate entries.
@@ -11251,10 +11291,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         {
             /* Rebuild KgpcType from alias when parser's pre-built type is missing
              * or wrong (e.g., string[3] parsed as primitive SHORTSTRING instead of
-             * array[0..3] of char). */
+             * array[0..3] of char, or pointer alias parsed as primitive). */
             int need_rebuild = (kgpc_type == NULL);
-            if (!need_rebuild && alias_info->is_array &&
-                kgpc_type->kind == TYPE_KIND_PRIMITIVE)
+            if (!need_rebuild && kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                (alias_info->is_array || alias_info->is_pointer))
                 need_rebuild = 1;
             if (need_rebuild)
             {
@@ -14612,10 +14652,25 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         KgpcType *var_kgpc_type = NULL;
                         if (type_node->type != NULL)
                         {
-                            /* Type node already has a KgpcType - reference it (don't clone) */
                             var_kgpc_type = type_node->type;
-                            if (var_kgpc_type != NULL)
+                            /* If the type node has a primitive KgpcType but the alias says
+                             * it's a pointer, rebuild as a proper pointer type so downstream
+                             * pointer dereferences resolve correctly. */
+                            if (var_kgpc_type->kind == TYPE_KIND_PRIMITIVE && alias != NULL &&
+                                alias->is_pointer)
+                            {
+                                var_kgpc_type = create_kgpc_type_from_type_alias(
+                                    alias, symtab, tree->tree_data.var_decl_data.defined_in_unit);
+                                if (var_kgpc_type == NULL)
+                                {
+                                    var_kgpc_type = type_node->type;
+                                    kgpc_type_retain(var_kgpc_type);
+                                }
+                            }
+                            else
+                            {
                                 kgpc_type_retain(var_kgpc_type);
+                            }
                             func_return = PushVarOntoScope_Typed(symtab, (char *)ids->cur, var_kgpc_type);
                         }
                         else

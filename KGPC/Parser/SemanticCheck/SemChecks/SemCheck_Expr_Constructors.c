@@ -376,6 +376,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     int expected_type = UNKNOWN_TYPE;
     const char *expected_type_id = NULL;
     int expected_is_array_of_const = 0;
+    int expected_element_size = 0;
     int is_open_array_param = (formal_decl->type == TREE_ARR_DECL);
     int expected_is_array = is_open_array_param;
     struct TypeAlias *expected_alias = NULL;
@@ -425,6 +426,9 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
                          elem->info.points_to->type_alias != NULL &&
                          elem->info.points_to->type_alias->alias_name != NULL)
                     expected_type_id = strdup(elem->info.points_to->type_alias->alias_name);
+                long long elem_sz = kgpc_type_sizeof(elem);
+                if (elem_sz > 0 && elem_sz <= INT_MAX)
+                    expected_element_size = (int)elem_sz;
             }
         }
         if (owns_expected && expected_kgpc != NULL)
@@ -512,7 +516,7 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     if (expected_type_id != NULL)
         arg_expr->array_element_type_id = strdup(expected_type_id);
     arg_expr->array_element_record_type = NULL;
-    arg_expr->array_element_size = 0;
+    arg_expr->array_element_size = expected_element_size;
     arg_expr->array_lower_bound = 0;
     arg_expr->array_upper_bound = arg_expr->expr_data.array_literal_data.element_count - 1;
     arg_expr->is_array_expr = 1;
