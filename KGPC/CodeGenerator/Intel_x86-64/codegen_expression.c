@@ -4171,13 +4171,10 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
     return NULL;
 }
 
-static struct RecordField *codegen_lookup_record_field(struct RecordType *record,
+static struct RecordField *codegen_lookup_record_field_in_members(ListNode_t *members,
     const char *field_id)
 {
-    if (record == NULL || field_id == NULL)
-        return NULL;
-    ListNode_t *cur = record->fields;
-    while (cur != NULL)
+    for (ListNode_t *cur = members; cur != NULL; cur = cur->next)
     {
         if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
         {
@@ -4185,9 +4182,30 @@ static struct RecordField *codegen_lookup_record_field(struct RecordType *record
             if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
                 return field;
         }
-        cur = cur->next;
+        else if (cur->type == LIST_VARIANT_PART && cur->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)cur->cur;
+            for (ListNode_t *b = variant->branches; b != NULL; b = b->next)
+            {
+                if (b->type != LIST_VARIANT_BRANCH || b->cur == NULL)
+                    continue;
+                struct VariantBranch *branch = (struct VariantBranch *)b->cur;
+                struct RecordField *field =
+                    codegen_lookup_record_field_in_members(branch->members, field_id);
+                if (field != NULL)
+                    return field;
+            }
+        }
     }
     return NULL;
+}
+
+static struct RecordField *codegen_lookup_record_field(struct RecordType *record,
+    const char *field_id)
+{
+    if (record == NULL || field_id == NULL)
+        return NULL;
+    return codegen_lookup_record_field_in_members(record->fields, field_id);
 }
 
 static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
@@ -4983,6 +5001,16 @@ ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list
     inst_list = codegen_record_field_address(expr, inst_list, ctx, &addr_reg);
     if (addr_reg == NULL)
         return inst_list;
+
+    if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+    {
+        char buffer[64];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+            addr_reg->bit_64, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
 
     char buffer[64];
     long long field_size = codegen_record_field_effective_size(expr, ctx);
@@ -6103,14 +6131,22 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 
     if (base_is_pointer)
     {
-        /* For pointers, get the size of what the pointer points to */
-        if (codegen_sizeof_type(ctx, array_expr->pointer_subtype,
-                array_expr->pointer_subtype_id,
-                codegen_expr_record_type(array_expr, ctx != NULL ? ctx->symtab : NULL),
-                &element_size_ll, 0) != 0 || element_size_ll <= 0)
+        /* Plain Pointer arithmetic in FPC is byte-wise. Only attempt pointee-size
+           scaling when the pointer still carries concrete target metadata. */
+        if (array_expr->pointer_subtype == UNKNOWN_TYPE &&
+            array_expr->pointer_subtype_id == NULL &&
+            codegen_expr_record_type(array_expr, ctx != NULL ? ctx->symtab : NULL) == NULL)
         {
-            /* Default to pointer size if we can't determine */
-            element_size_ll = 8;
+            element_size_ll = 1;
+        }
+        else if (codegen_sizeof_type(ctx, array_expr->pointer_subtype,
+                     array_expr->pointer_subtype_id,
+                     codegen_expr_record_type(array_expr, ctx != NULL ? ctx->symtab : NULL),
+                     &element_size_ll, 0) != 0 || element_size_ll <= 0)
+        {
+            /* Typed-pointer metadata was present but incomplete. Fall back to
+               byte-wise arithmetic instead of surfacing a codegen-only error. */
+            element_size_ll = 1;
         }
         *out_size = element_size_ll;
         return 1;

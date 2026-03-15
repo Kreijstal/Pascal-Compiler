@@ -839,12 +839,20 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     KgpcType *substr_kgpc_type = NULL;
     error_count += semcheck_expr_with_type(&substr_kgpc_type, symtab, substr_expr, max_scope_lev, NO_MUTATE);
+
+    int substr_is_char_array = 0;
+    if (substr_expr != NULL && substr_expr->is_array_expr && substr_kgpc_type != NULL)
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(substr_kgpc_type, symtab);
+        substr_is_char_array = (elem_type != NULL && kgpc_type_is_char(elem_type));
+    }
     
     /* Check if substr is a string type, char, or shortstring (array of char) */
     int substr_is_char = kgpc_type_is_char(substr_kgpc_type);
     int is_valid_substr = kgpc_type_is_string(substr_kgpc_type) || substr_is_char ||
                           kgpc_type_is_shortstring(substr_kgpc_type) ||
-                          is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type), substr_expr->is_array_expr);
+                          is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type), substr_expr->is_array_expr) ||
+                          substr_is_char_array;
     
     if (error_count == 0 && !is_valid_substr)
     {
@@ -854,16 +862,25 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
 
     KgpcType *value_kgpc_type = NULL;
     error_count += semcheck_expr_with_type(&value_kgpc_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
+
+    int value_is_char_array = 0;
+    if (value_expr != NULL && value_expr->is_array_expr && value_kgpc_type != NULL)
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(value_kgpc_type, symtab);
+        value_is_char_array = (elem_type != NULL && kgpc_type_is_char(elem_type));
+    }
     
     int value_is_char = kgpc_type_is_char(value_kgpc_type);
     /* Check if value is a string type OR a shortstring (array of char).
      * Allow char targets when the substring is also a string/shortstring/char. */
     int is_valid_value = kgpc_type_is_string(value_kgpc_type) || kgpc_type_is_shortstring(value_kgpc_type) ||
                          is_shortstring_array(semcheck_tag_from_kgpc(value_kgpc_type), value_expr->is_array_expr) ||
+                         value_is_char_array ||
                          (value_is_char && (substr_is_char || kgpc_type_is_string(substr_kgpc_type) ||
                                             kgpc_type_is_shortstring(substr_kgpc_type) ||
                                             is_shortstring_array(semcheck_tag_from_kgpc(substr_kgpc_type),
-                                                substr_expr->is_array_expr)));
+                                                substr_expr->is_array_expr) ||
+                                            substr_is_char_array));
     
     if (error_count == 0 && !is_valid_value)
     {

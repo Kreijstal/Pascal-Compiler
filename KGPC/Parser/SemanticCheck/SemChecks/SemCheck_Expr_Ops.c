@@ -3001,7 +3001,8 @@ resolved:;
             if (getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_varid: scope_return=%d max_scope_lev=%d\n", scope_return, max_scope_lev);
             }
-            if (hash_return->hash_type != HASHTYPE_CONST &&
+            if (mutating != NO_MUTATE &&
+                hash_return->hash_type != HASHTYPE_CONST &&
                 hash_return->hash_type != HASHTYPE_TYPE)
             {
                 semcheck_error_with_context("Error on line %d, cannot change \"%s\", invalid scope!\n",

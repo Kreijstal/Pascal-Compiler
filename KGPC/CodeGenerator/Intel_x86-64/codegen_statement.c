@@ -704,6 +704,38 @@ static struct TypeAlias *codegen_lookup_type_alias(CodeGenContext *ctx, const ch
     return hashnode_get_type_alias(node);
 }
 
+static struct RecordField *codegen_lookup_record_field_in_members(ListNode_t *members,
+    const char *field_name)
+{
+    for (ListNode_t *field_node = members; field_node != NULL; field_node = field_node->next)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (!record_field_is_hidden(field) && field->name != NULL &&
+                strcmp(field->name, field_name) == 0)
+                return field;
+        }
+        else if (field_node->type == LIST_VARIANT_PART && field_node->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)field_node->cur;
+            for (ListNode_t *branch_node = variant->branches; branch_node != NULL;
+                 branch_node = branch_node->next)
+            {
+                if (branch_node->type != LIST_VARIANT_BRANCH || branch_node->cur == NULL)
+                    continue;
+                struct VariantBranch *branch = (struct VariantBranch *)branch_node->cur;
+                struct RecordField *field =
+                    codegen_lookup_record_field_in_members(branch->members, field_name);
+                if (field != NULL)
+                    return field;
+            }
+        }
+    }
+
+    return NULL;
+}
+
 static struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr)
 {
     if (record_access_expr == NULL || record_access_expr->type != EXPR_RECORD_ACCESS)
@@ -759,20 +791,7 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     if (field_name == NULL)
         return NULL;
 
-    ListNode_t *field_node = record_type->fields;
-    while (field_node != NULL)
-    {
-        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
-        {
-            struct RecordField *field = (struct RecordField *)field_node->cur;
-            if (!record_field_is_hidden(field) && field->name != NULL &&
-                strcmp(field->name, field_name) == 0)
-                return field;
-        }
-        field_node = field_node->next;
-    }
-
-    return NULL;
+    return codegen_lookup_record_field_in_members(record_type->fields, field_name);
 }
 
 static int expr_is_static_array_like(const struct Expression *expr, CodeGenContext *ctx)
@@ -8786,6 +8805,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Also check codegen_array_access_targets_shortstring for cases where type info is not available
          * (like auto-generated initializer statements from const arrays) */
         int targets_shortstring = codegen_array_access_targets_shortstring(var_expr, ctx);
+        int record_targets_shortstring = 0;
+        if (var_expr != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            struct RecordField *target_field = codegen_lookup_record_field(var_expr);
+            if (target_field != NULL && target_field->type == SHORTSTRING_TYPE)
+                record_targets_shortstring = 1;
+        }
         if (getenv("KGPC_DEBUG_CODEGEN") != NULL && var_expr->type == EXPR_ARRAY_ACCESS)
         {
             struct Expression *base = var_expr->expr_data.array_access_data.array_expr;
@@ -8795,8 +8821,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 fprintf(stderr, ", base_id=%s", base->expr_data.id);
             fprintf(stderr, "\n");
         }
-        if ((var_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(var_expr) ||
-             targets_shortstring))
+        if ((var_type == SHORTSTRING_TYPE || expr_has_type_tag(var_expr, SHORTSTRING_TYPE) ||
+             codegen_expr_is_shortstring_array(var_expr) ||
+             targets_shortstring || record_targets_shortstring))
         {
             int rhs_lower = 0;
             int rhs_upper = -1;
@@ -8861,8 +8888,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
 
         /* Handle ShortString-to-ShortString assignment (copy 256-byte record). */
-        if ((var_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(var_expr) ||
-             targets_shortstring) &&
+        if ((var_type == SHORTSTRING_TYPE || expr_has_type_tag(var_expr, SHORTSTRING_TYPE) ||
+             codegen_expr_is_shortstring_array(var_expr) ||
+             targets_shortstring || record_targets_shortstring) &&
             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE)
         {
             return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
@@ -9261,6 +9289,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         
         /* Check if target is a shortstring element (e.g., array[...] of string[10]) */
         int targets_shortstring = codegen_array_access_targets_shortstring(var_expr, ctx);
+        int record_targets_shortstring = 0;
+        if (var_expr != NULL && var_expr->type == EXPR_RECORD_ACCESS)
+        {
+            struct RecordField *target_field = codegen_lookup_record_field(var_expr);
+            if (target_field != NULL && target_field->type == SHORTSTRING_TYPE)
+                record_targets_shortstring = 1;
+        }
         
         if (var_type == STRING_TYPE)
         {
@@ -9284,7 +9319,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
-        else if ((var_type == SHORTSTRING_TYPE || targets_shortstring) &&
+        else if ((var_type == SHORTSTRING_TYPE || expr_has_type_tag(var_expr, SHORTSTRING_TYPE) ||
+                  targets_shortstring || record_targets_shortstring) &&
                  expr_get_type_tag(assign_expr) == STRING_TYPE)
         {
             /* Handle shortstring assignment - copy string content to shortstring buffer */
@@ -9498,6 +9534,44 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 else
                     inst_list = codegen_call_string_to_char_array(inst_list, ctx, addr_reload, value_reg, arr_size);
             }
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reload);
+            return inst_list;
+        }
+
+        if ((var_type_2 == SHORTSTRING_TYPE || expr_has_type_tag(var_expr, SHORTSTRING_TYPE)) &&
+            (expr_get_type_tag(assign_expr) == STRING_TYPE ||
+             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+             codegen_expr_is_shortstring_value_local(assign_expr)))
+        {
+            int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+            if (array_size <= 0)
+                array_size = 256;
+
+            if (assign_expr != NULL && assign_expr->type == EXPR_STRING)
+            {
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx,
+                    addr_reload, value_reg, array_size);
+            }
+            else if (codegen_expr_is_shortstring_value_local(assign_expr))
+            {
+                char buf2[128];
+                snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdi\n", addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buf2);
+                snprintf(buf2, sizeof(buf2), "\tmovq\t$%d, %%rsi\n", array_size);
+                inst_list = add_inst(inst_list, buf2);
+                snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buf2);
+                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+                free_arg_regs();
+            }
+            else
+            {
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx,
+                    addr_reload, value_reg, array_size);
+            }
+
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reload);
             return inst_list;

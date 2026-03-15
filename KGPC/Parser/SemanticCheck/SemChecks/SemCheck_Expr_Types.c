@@ -4384,11 +4384,13 @@ FIELD_RESOLVED:
         if (size_status == 0 && computed_size > 0 && computed_size <= INT_MAX)
             expr->array_element_size = (int)computed_size;
 
-        if (expr->array_element_type != UNKNOWN_TYPE)
+        if (expr->array_element_type != UNKNOWN_TYPE &&
+            field_desc->type != SHORTSTRING_TYPE)
             field_type = expr->array_element_type;
         if (expr->array_element_record_type != NULL && field_type == RECORD_TYPE)
             field_record = expr->array_element_record_type;
-        if (expr->resolved_kgpc_type == NULL)
+        if (expr->resolved_kgpc_type == NULL &&
+            field_desc->type != SHORTSTRING_TYPE)
         {
             KgpcType *elem_type = NULL;
             int elem_owned = 0;
@@ -4594,12 +4596,18 @@ FIELD_RESOLVED:
 
         if (field_record != NULL && field_type == UNKNOWN_TYPE)
             field_type = RECORD_TYPE;
-        if (field_is_array_type)
+        if (field_is_array_type && field_desc->type != SHORTSTRING_TYPE)
             field_type = UNKNOWN_TYPE;
-        if (expr->resolved_kgpc_type == NULL &&
-            field_type == SHORTSTRING_TYPE &&
-            !field_is_array_type)
+        if (field_type == SHORTSTRING_TYPE)
         {
+            if (expr->resolved_kgpc_type != NULL &&
+                !kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            {
+                destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = NULL;
+            }
+            field_is_array_type = 0;
+            array_alias = NULL;
             KgpcType *primitive_type = create_primitive_type(field_type);
             if (primitive_type != NULL)
             {
@@ -5181,6 +5189,25 @@ FIELD_RESOLVED:
         {
             semcheck_expr_set_resolved_kgpc_type_shared(expr, record_kgpc);
             destroy_kgpc_type(record_kgpc);
+        }
+    }
+    if (field_desc->type == SHORTSTRING_TYPE)
+    {
+        field_type = SHORTSTRING_TYPE;
+        if (expr->resolved_kgpc_type != NULL &&
+            !kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+        {
+            destroy_kgpc_type(expr->resolved_kgpc_type);
+            expr->resolved_kgpc_type = NULL;
+        }
+        if (expr->resolved_kgpc_type == NULL)
+        {
+            KgpcType *short_type = create_primitive_type(SHORTSTRING_TYPE);
+            if (short_type != NULL)
+            {
+                semcheck_expr_set_resolved_kgpc_type_shared(expr, short_type);
+                destroy_kgpc_type(short_type);
+            }
         }
     }
     int preserve_resolved_kgpc = 0;
