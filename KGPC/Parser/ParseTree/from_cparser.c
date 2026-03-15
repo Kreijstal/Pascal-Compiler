@@ -8658,6 +8658,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
         if (field_desc != NULL) {
             field_desc->name = field_name;
             field_desc->type = field_type;
+            /* string[N] fields are shortstrings (array[0..N] of Char with length byte) */
+            if (field_desc->type == UNKNOWN_TYPE && field_info.is_shortstring)
+                field_desc->type = SHORTSTRING_TYPE;
             field_desc->type_id = type_id_copy;
             field_desc->type_ref = type_ref_from_info_or_id(&field_info, type_id_copy);
             field_desc->nested_record = nested_copy;
