@@ -240,6 +240,90 @@ const char *pascal_frontend_current_path(void)
 
 extern ast_t *ast_nil;
 
+static int find_conflict_marker_line(const char *buffer)
+{
+    int line = 1;
+    int in_brace_comment = 0;
+    int in_paren_comment = 0;
+
+    if (buffer == NULL)
+        return 0;
+
+    for (const char *cursor = buffer; *cursor != '\0'; )
+    {
+        const char *line_start = cursor;
+        const char *line_end = cursor;
+        while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r')
+            ++line_end;
+
+        const char *p = line_start;
+        while (p < line_end)
+        {
+            if (in_brace_comment)
+            {
+                if (*p == '}')
+                    in_brace_comment = 0;
+                ++p;
+                continue;
+            }
+            if (in_paren_comment)
+            {
+                if ((p + 1) < line_end && p[0] == '*' && p[1] == ')')
+                {
+                    in_paren_comment = 0;
+                    p += 2;
+                    continue;
+                }
+                ++p;
+                continue;
+            }
+
+            if (*p == ' ' || *p == '\t')
+            {
+                ++p;
+                continue;
+            }
+            if ((p + 1) < line_end && p[0] == '/' && p[1] == '/')
+                break;
+            if (*p == '{')
+            {
+                in_brace_comment = 1;
+                ++p;
+                continue;
+            }
+            if ((p + 1) < line_end && p[0] == '(' && p[1] == '*')
+            {
+                in_paren_comment = 1;
+                p += 2;
+                continue;
+            }
+
+            {
+                size_t remaining = (size_t)(line_end - p);
+                if ((remaining == 7 && strncmp(p, "=======", 7) == 0) ||
+                    (remaining >= 7 &&
+                     ((strncmp(p, "<<<<<<<", 7) == 0) ||
+                      (strncmp(p, ">>>>>>>", 7) == 0)) &&
+                     (remaining == 7 || p[7] == ' ' || p[7] == '\t')))
+                {
+                    return line;
+                }
+            }
+
+            break;
+        }
+
+        cursor = line_end;
+        if (*cursor == '\r' && cursor[1] == '\n')
+            ++cursor;
+        if (*cursor != '\0')
+            ++cursor;
+        ++line;
+    }
+
+    return 0;
+}
+
 static char *read_file(const char *path, size_t *out_len)
 {
     FILE *fp = fopen(path, "rb");
@@ -291,49 +375,14 @@ static char *read_file(const char *path, size_t *out_len)
     buffer[len] = '\0';
 
     {
-        const char *cursor = buffer;
-        int line = 1;
-        while (*cursor != '\0')
+        int conflict_line = find_conflict_marker_line(buffer);
+        if (conflict_line > 0)
         {
-            const char *line_start = cursor;
-            while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r')
-                ++cursor;
-
-            const char *trimmed = line_start;
-            while (trimmed < cursor && (*trimmed == ' ' || *trimmed == '\t'))
-                ++trimmed;
-
-            size_t trimmed_len = (size_t)(cursor - trimmed);
-            if (trimmed_len >= 7)
-            {
-                int is_conflict_marker = 0;
-                if (strncmp(trimmed, "<<<<<<<", 7) == 0 ||
-                    strncmp(trimmed, ">>>>>>>", 7) == 0)
-                {
-                    if (trimmed_len == 7 || trimmed[7] == ' ' || trimmed[7] == '\t')
-                        is_conflict_marker = 1;
-                }
-                else if (strncmp(trimmed, "=======", 7) == 0)
-                {
-                    if (trimmed_len == 7)
-                        is_conflict_marker = 1;
-                }
-
-                if (is_conflict_marker)
-                {
-                    fprintf(stderr,
-                        "ERROR: Merge conflict marker found in %s at line %d\n",
-                        path, line);
-                    free(buffer);
-                    return NULL;
-                }
-            }
-
-            if (*cursor == '\r' && cursor[1] == '\n')
-                ++cursor;
-            if (*cursor != '\0')
-                ++cursor;
-            ++line;
+            fprintf(stderr,
+                "ERROR: Merge conflict marker found in %s at line %d\n",
+                path, conflict_line);
+            free(buffer);
+            return NULL;
         }
     }
 

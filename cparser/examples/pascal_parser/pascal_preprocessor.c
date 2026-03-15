@@ -1410,43 +1410,80 @@ static bool read_file_contents(const char *filename, char **buffer, size_t *leng
     data[read] = '\0';
 
     {
-        const char *cursor = data;
         int line = 1;
+        int in_brace_comment = 0;
+        int in_paren_comment = 0;
+        const char *cursor = data;
         while (*cursor != '\0')
         {
             const char *line_start = cursor;
-            while (*cursor != '\0' && *cursor != '\n' && *cursor != '\r')
-                ++cursor;
+            const char *line_end = cursor;
+            while (*line_end != '\0' && *line_end != '\n' && *line_end != '\r')
+                ++line_end;
 
-            const char *trimmed = line_start;
-            while (trimmed < cursor && (*trimmed == ' ' || *trimmed == '\t'))
-                ++trimmed;
-
-            size_t trimmed_len = (size_t)(cursor - trimmed);
-            if (trimmed_len >= 7)
+            const char *p = line_start;
+            while (p < line_end)
             {
-                int is_conflict_marker = 0;
-                if (strncmp(trimmed, "<<<<<<<", 7) == 0 ||
-                    strncmp(trimmed, ">>>>>>>", 7) == 0)
+                if (in_brace_comment)
                 {
-                    if (trimmed_len == 7 || trimmed[7] == ' ' || trimmed[7] == '\t')
-                        is_conflict_marker = 1;
+                    if (*p == '}')
+                        in_brace_comment = 0;
+                    ++p;
+                    continue;
                 }
-                else if (strncmp(trimmed, "=======", 7) == 0)
+                if (in_paren_comment)
                 {
-                    if (trimmed_len == 7)
-                        is_conflict_marker = 1;
+                    if ((p + 1) < line_end && p[0] == '*' && p[1] == ')')
+                    {
+                        in_paren_comment = 0;
+                        p += 2;
+                        continue;
+                    }
+                    ++p;
+                    continue;
                 }
 
-                if (is_conflict_marker)
+                if (*p == ' ' || *p == '\t')
                 {
-                    free(data);
-                    return set_error(error_message,
-                        "merge conflict marker found in '%s' at line %d",
-                        filename, line);
+                    ++p;
+                    continue;
                 }
+                if ((p + 1) < line_end && p[0] == '/' && p[1] == '/')
+                    break;
+                if (*p == '{')
+                {
+                    in_brace_comment = 1;
+                    ++p;
+                    continue;
+                }
+                if ((p + 1) < line_end && p[0] == '(' && p[1] == '*')
+                {
+                    in_paren_comment = 1;
+                    p += 2;
+                    continue;
+                }
+
+                {
+                    size_t remaining = (size_t)(line_end - p);
+                    int is_conflict_marker =
+                        (remaining == 7 && strncmp(p, "=======", 7) == 0) ||
+                        (remaining >= 7 &&
+                         ((strncmp(p, "<<<<<<<", 7) == 0) ||
+                          (strncmp(p, ">>>>>>>", 7) == 0)) &&
+                         (remaining == 7 || p[7] == ' ' || p[7] == '\t'));
+                    if (is_conflict_marker)
+                    {
+                        free(data);
+                        return set_error(error_message,
+                            "merge conflict marker found in '%s' at line %d",
+                            filename, line);
+                    }
+                }
+
+                break;
             }
 
+            cursor = line_end;
             if (*cursor == '\r' && cursor[1] == '\n')
                 ++cursor;
             if (*cursor != '\0')
