@@ -5560,8 +5560,10 @@ static char *semcheck_mangle_specialized_type_text(const char *type_text)
 {
     if (type_text == NULL)
         return NULL;
-    /* TODO: Refactor caller to pass structured TypeRef instead of
-     * pre-rendered text, eliminating this string-based generic parsing. */
+    /* Fallback: parse generic type syntax from pre-rendered text.
+     * The parser now handles specialize expressions structurally
+     * (specialize_bare in pascal_expression.c), so this path should
+     * only trigger for edge cases the parser doesn't cover yet. */
     const char *lt = strchr(type_text, '<');
     if (lt == NULL)
         return strdup(type_text);

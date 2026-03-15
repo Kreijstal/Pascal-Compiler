@@ -1419,6 +1419,14 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         NULL
     ), build_array_or_pointer_chain);
 
+    // specialize TypeName<T> without (args) - for @specialize and member access
+    combinator_t* specialize_bare = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(keyword_ci("specialize")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p, stmt_parser)),  // Anonymous functions
         token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p, stmt_parser)), // Anonymous procedures
@@ -1436,6 +1444,7 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
         specialize_typecast_with_suffixes,        // specialize T<T>(x) with suffixes
         specialize_typecast,                      // specialize T<T>(x) without suffixes
+        specialize_bare,                          // specialize T<T> without args (for @specialize, .Method)
         typecast_any_with_suffixes,               // Identifier casts with suffixes (e.g., PAnsiChar(x)^)
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
