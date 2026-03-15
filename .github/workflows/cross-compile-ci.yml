@@ -112,7 +112,7 @@ jobs:
 
     - name: Upload meson logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: meson-logs-cross-${{ matrix.msystem }}
         path: |
@@ -122,7 +122,7 @@ jobs:
 
     - name: Upload core dumps
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: core-dumps-cross-${{ matrix.msystem }}
         path: /tmp/cores/
@@ -130,7 +130,7 @@ jobs:
 
     - name: Upload cross-compiled binaries
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: kgpc-cross-${{ matrix.msystem }}
         path: |

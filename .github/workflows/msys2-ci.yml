@@ -65,7 +65,7 @@ jobs:
 
     - name: Upload meson logs (on failure)
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: meson-logs-${{ matrix.sys }}
         path: |
@@ -76,7 +76,7 @@ jobs:
 
     - name: Upload crash dumps
       if: failure()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: crash-dumps-${{ matrix.sys }}
         path: ${{ github.workspace }}/crashdumps/
