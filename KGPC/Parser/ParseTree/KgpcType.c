@@ -2671,9 +2671,10 @@ int kgpc_type_is_pointer(const KgpcType *type)
 
 int kgpc_type_is_set(const KgpcType *type)
 {
-    return (type != NULL &&
-        type->kind == TYPE_KIND_PRIMITIVE &&
-        type->info.primitive_type_tag == SET_TYPE);
+    if (type == NULL) return 0;
+    if (type->kind == TYPE_KIND_PRIMITIVE && type->info.primitive_type_tag == SET_TYPE) return 1;
+    if (type->type_alias != NULL && type->type_alias->is_set) return 1;
+    return 0;
 }
 
 int kgpc_type_is_record(const KgpcType *type)
