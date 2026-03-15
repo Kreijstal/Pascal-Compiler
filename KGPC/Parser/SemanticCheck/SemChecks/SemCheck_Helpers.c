@@ -285,7 +285,7 @@ void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symta
         if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
         {
             char *dim_str = (char *)first_dim->cur;
-            if (strstr(dim_str, "..") == NULL)
+            if (!alias->array_dims_parsed)
             {
                 if (pascal_identifier_equals(dim_str, "Boolean"))
                 {

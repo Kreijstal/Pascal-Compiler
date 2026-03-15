@@ -177,6 +177,8 @@ typedef struct Tree
             int s_range;
             int e_range;
             char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
+            char *range_start_str; /* Symbolic lower bound (e.g., "1"), NULL if not parsed */
+            char *range_end_str;   /* Symbolic upper bound (e.g., "N"), NULL if not parsed */
             struct Statement *initializer;
             int is_typed_const;
             int is_shortstring;

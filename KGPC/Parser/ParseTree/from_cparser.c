@@ -399,6 +399,9 @@ typedef struct {
     int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
+    char *array_dim_start_str;  /* Symbolic lower bound */
+    char *array_dim_end_str;    /* Symbolic upper bound */
+    int array_dims_parsed;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
@@ -1066,6 +1069,14 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->array_dimensions != NULL) {
         destroy_list(info->array_dimensions);
         info->array_dimensions = NULL;
+    }
+    if (info->array_dim_start_str != NULL) {
+        free(info->array_dim_start_str);
+        info->array_dim_start_str = NULL;
+    }
+    if (info->array_dim_end_str != NULL) {
+        free(info->array_dim_end_str);
+        info->array_dim_end_str = NULL;
     }
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
@@ -6473,6 +6484,10 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                                 end_val = atoi(upper_str);
                             type_info->start = start_val;
                             type_info->end = end_val;
+                            /* Store structured bounds for semcheck */
+                            type_info->array_dim_start_str = strdup(lower_str);
+                            type_info->array_dim_end_str = strdup(upper_str);
+                            type_info->array_dims_parsed = 1;
                         }
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "%s..%s", lower_str, upper_str);
@@ -8396,6 +8411,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
+    record->outer_type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
     record->generic_decl = NULL;
@@ -9255,6 +9271,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
     record->type_id = NULL;
+    record->outer_type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
     record->generic_decl = NULL;
@@ -11900,6 +11917,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (type_info.array_dimensions != NULL) {
             alias->array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;
+        }
+        if (type_info.array_dims_parsed) {
+            alias->array_dim_start_str = type_info.array_dim_start_str;
+            alias->array_dim_end_str = type_info.array_dim_end_str;
+            alias->array_dims_parsed = 1;
+            type_info.array_dim_start_str = NULL;
+            type_info.array_dim_end_str = NULL;
         }
         if (type_info.type_ref != NULL) {
             type_ref_free(alias->target_type_ref);

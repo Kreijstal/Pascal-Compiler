@@ -1327,6 +1327,10 @@ void destroy_tree(Tree_t *tree)
               destroy_record_type(tree->tree_data.arr_decl_data.inline_record_type);
           if (tree->tree_data.arr_decl_data.range_str != NULL)
             free(tree->tree_data.arr_decl_data.range_str);
+          if (tree->tree_data.arr_decl_data.range_start_str != NULL)
+            free(tree->tree_data.arr_decl_data.range_start_str);
+          if (tree->tree_data.arr_decl_data.range_end_str != NULL)
+            free(tree->tree_data.arr_decl_data.range_end_str);
           if (tree->tree_data.arr_decl_data.initializer != NULL)
               destroy_stmt(tree->tree_data.arr_decl_data.initializer);
           if (tree->tree_data.arr_decl_data.static_label != NULL)
@@ -1903,7 +1907,8 @@ void destroy_record_type(struct RecordType *record_type)
     free(record_type->helper_base_type_id);
     free(record_type->helper_parent_id);
     free(record_type->type_id);
-    
+    free(record_type->outer_type_id);
+
     /* Free methods list */
     if (record_type->methods != NULL) {
         ListNode_t *cur = record_type->methods;
@@ -1970,6 +1975,7 @@ struct RecordType *clone_record_type(const struct RecordType *record_type)
     clone->helper_parent_id = record_type->helper_parent_id ?
         strdup(record_type->helper_parent_id) : NULL;
     clone->type_id = record_type->type_id ? strdup(record_type->type_id) : NULL;
+    clone->outer_type_id = record_type->outer_type_id ? strdup(record_type->outer_type_id) : NULL;
     clone->has_cached_size = record_type->has_cached_size;
     clone->cached_size = record_type->cached_size;
     clone->generic_decl = record_type->generic_decl;
@@ -2496,6 +2502,16 @@ Tree_t *mk_arraydecl(int line_num, ListNode_t *ids, int type, char *type_id, int
     new_tree->tree_data.arr_decl_data.s_range = start;
     new_tree->tree_data.arr_decl_data.e_range = end;
     new_tree->tree_data.arr_decl_data.range_str = range_str;
+    /* Pre-split range bounds so semcheck doesn't need to parse ".." */
+    new_tree->tree_data.arr_decl_data.range_start_str = NULL;
+    new_tree->tree_data.arr_decl_data.range_end_str = NULL;
+    if (range_str != NULL) {
+        const char *sep = strstr(range_str, "..");
+        if (sep != NULL) {
+            new_tree->tree_data.arr_decl_data.range_start_str = strndup(range_str, (size_t)(sep - range_str));
+            new_tree->tree_data.arr_decl_data.range_end_str = strdup(sep + 2);
+        }
+    }
     new_tree->tree_data.arr_decl_data.initializer = initializer;
     new_tree->tree_data.arr_decl_data.is_typed_const = 0;
     new_tree->tree_data.arr_decl_data.is_shortstring = 0;

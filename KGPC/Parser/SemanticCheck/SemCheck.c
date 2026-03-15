@@ -7306,7 +7306,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (record_info != NULL)
                         {
                             if (record_info->type_id == NULL)
+                            {
                                 record_info->type_id = strdup(type_id);
+                                /* For nested types like TOuter.TInner, extract outer_type_id */
+                                if (record_info->outer_type_id == NULL && type_id != NULL)
+                                {
+                                    const char *dot = strrchr(type_id, '.');
+                                    if (dot != NULL && dot != type_id)
+                                        record_info->outer_type_id = strndup(type_id, (size_t)(dot - type_id));
+                                }
+                            }
 
                             KgpcType *kgpc_type = create_record_type(record_info);
                             if (record_type_is_class(record_info))
@@ -7705,7 +7714,15 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                     /* Annotate the record with its canonical name if missing */
                     if (record_info != NULL && record_info->type_id == NULL)
+                    {
                         record_info->type_id = strdup(type_id);
+                        if (record_info->outer_type_id == NULL && type_id != NULL)
+                        {
+                            const char *dot = strrchr(type_id, '.');
+                            if (dot != NULL && dot != type_id)
+                                record_info->outer_type_id = strndup(type_id, (size_t)(dot - type_id));
+                        }
+                    }
                     
                     KgpcType *kgpc_type = create_record_type(record_info);
                     if (record_type_is_class(record_info))
@@ -10051,28 +10068,37 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
     /* Check if we have array_dimensions with symbolic bounds */
     if (alias->array_dimensions != NULL)
     {
-        /* Parse the first dimension string (format: "start..end") */
-        ListNode_t *first_dim = alias->array_dimensions;
-        if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
+        /* Use structured bounds from parser if available */
+        const char *start_str_ref = alias->array_dim_start_str;
+        const char *end_str_ref = alias->array_dim_end_str;
+        char *start_str_alloc = NULL;
+        char *end_str_alloc = NULL;
+        if (start_str_ref == NULL || end_str_ref == NULL)
         {
-            char *dim_str = (char *)first_dim->cur;
-            char *separator = strstr(dim_str, "..");
-            
-            if (separator != NULL)
+            /* Fallback: parse from dimension string for legacy data */
+            ListNode_t *first_dim = alias->array_dimensions;
+            if (first_dim != NULL && first_dim->type == LIST_STRING && first_dim->cur != NULL)
             {
-                /* Extract start and end parts */
-                size_t start_len = separator - dim_str;
-                char *start_str = (char *)malloc(start_len + 1);
-                char *end_str = strdup(separator + 2);
-                
-                if (start_str != NULL && end_str != NULL)
+                char *dim_str = (char *)first_dim->cur;
+                char *separator = strstr(dim_str, "..");
+                if (separator != NULL)
                 {
-                    strncpy(start_str, dim_str, start_len);
-                    start_str[start_len] = '\0';
+                    size_t slen = (size_t)(separator - dim_str);
+                    start_str_alloc = strndup(dim_str, slen);
+                    end_str_alloc = strdup(separator + 2);
+                    start_str_ref = start_str_alloc;
+                    end_str_ref = end_str_alloc;
+                }
+            }
+        }
+        if (start_str_ref != NULL && end_str_ref != NULL)
+        {
+            const char *start_str = start_str_ref;
+            const char *end_str = end_str_ref;
                     if (kgpc_getenv("KGPC_DEBUG_ARRAY_BOUNDS") != NULL)
-                        fprintf(stderr, "[KGPC] array dim raw='%s' start='%s' end='%s'\n",
-                            dim_str, start_str, end_str);
-                    
+                        fprintf(stderr, "[KGPC] array dim start='%s' end='%s'\n",
+                            start_str, end_str);
+
                     /* Trim whitespace */
                     while (*start_str == ' ') start_str++;
                     while (*end_str == ' ') end_str++;
@@ -10139,15 +10165,18 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
                         sync_alias_array_bounds(kgpc_type, alias);
                     }
                     
-                    free(start_str);
-                    free(end_str);
-                }
-            }
-            else
-            {
-                /* Single identifier dimension (e.g., array[Boolean] or array[MyEnum]) */
-                HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, dim_str) >= 0 && type_node != NULL &&
+            free(start_str_alloc);
+            free(end_str_alloc);
+        }
+        else
+        {
+            /* Single identifier dimension (e.g., array[Boolean] or array[MyEnum]) */
+            ListNode_t *first_dim = alias->array_dimensions;
+            const char *dim_str = (first_dim != NULL && first_dim->type == LIST_STRING) ?
+                (const char *)first_dim->cur : NULL;
+            HashNode_t *type_node = NULL;
+            if (dim_str != NULL &&
+                FindIdent(&type_node, symtab, dim_str) >= 0 && type_node != NULL &&
                     type_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
@@ -10199,7 +10228,6 @@ static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_ty
             }
         }
     }
-}
 
 int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
@@ -10490,22 +10518,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
                                         if (return_type_id != NULL)
                                         {
-                                            const char *owner_full = NULL;
-                                            char *owner_outer = NULL;
-                                            if (record_info != NULL && record_info->type_id != NULL)
-                                                owner_full = record_info->type_id;
-                                            else if (tree->tree_data.type_decl_data.id != NULL)
-                                                owner_full = tree->tree_data.type_decl_data.id;
+                                            const char *owner_full = (record_info != NULL && record_info->type_id != NULL)
+                                                ? record_info->type_id : tree->tree_data.type_decl_data.id;
+                                            const char *owner_outer = (record_info != NULL) ? record_info->outer_type_id : NULL;
                                             if (owner_full != NULL)
-                                            {
-                                                const char *dot = strrchr(owner_full, '.');
-                                                if (dot != NULL && dot != owner_full)
-                                                    owner_outer = strndup(owner_full, (size_t)(dot - owner_full));
                                                 semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
                                                     &return_type_id, NULL);
-                                            }
-                                            if (owner_outer != NULL)
-                                                free(owner_outer);
                                         }
                                         if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL && tmpl->name != NULL &&
                                             (strcasecmp(tmpl->name, "GetAnsiString") == 0 ||
@@ -10622,22 +10640,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                         }
                                         if (return_type_id != NULL)
                                         {
-                                            const char *owner_full = NULL;
-                                            char *owner_outer = NULL;
-                                            if (record_info != NULL && record_info->type_id != NULL)
-                                                owner_full = record_info->type_id;
-                                            else if (tree->tree_data.type_decl_data.id != NULL)
-                                                owner_full = tree->tree_data.type_decl_data.id;
+                                            const char *owner_full = (record_info != NULL && record_info->type_id != NULL)
+                                                ? record_info->type_id : tree->tree_data.type_decl_data.id;
+                                            const char *owner_outer = (record_info != NULL) ? record_info->outer_type_id : NULL;
                                             if (owner_full != NULL)
-                                            {
-                                                const char *dot = strrchr(owner_full, '.');
-                                                if (dot != NULL && dot != owner_full)
-                                                    owner_outer = strndup(owner_full, (size_t)(dot - owner_full));
                                                 semcheck_maybe_qualify_nested_type(symtab, owner_full, owner_outer,
                                                     &return_type_id, NULL);
-                                            }
-                                            if (owner_outer != NULL)
-                                                free(owner_outer);
                                         }
                                         if (return_type == NULL && return_type_id != NULL)
                                         {
@@ -15305,65 +15313,33 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 int start_bound = tree->tree_data.arr_decl_data.s_range;
                 int end_bound = tree->tree_data.arr_decl_data.e_range;
                 
-                if (tree->tree_data.arr_decl_data.range_str != NULL)
+                /* Use pre-split bounds from parser (avoids strstr on ".." at semcheck time) */
                 {
-                    char *range_str = tree->tree_data.arr_decl_data.range_str;
-                    char *sep = strstr(range_str, "..");
-                    
-                    if (sep != NULL)
+                    const char *s = tree->tree_data.arr_decl_data.range_start_str;
+                    const char *e = tree->tree_data.arr_decl_data.range_end_str;
+                    if (s != NULL && e != NULL)
                     {
-                        /* Parse "start..end" format */
-                        size_t start_len = sep - range_str;
-                        char *start_str = (char *)malloc(start_len + 1);
-                        char *end_str = strdup(sep + 2);
-                        
-                        if (start_str != NULL && end_str != NULL)
-                        {
-                            strncpy(start_str, range_str, start_len);
-                            start_str[start_len] = '\0';
-                            
-                            /* Trim whitespace */
-                            char *s = start_str;
-                            while (*s == ' ' || *s == '\t') s++;
-                            char *e = end_str;
-                            while (*e == ' ' || *e == '\t') e++;
-                            char *p = s + strlen(s) - 1;
-                            while (p > s && (*p == ' ' || *p == '\t')) *p-- = '\0';
-                            p = e + strlen(e) - 1;
-                            while (p > e && (*p == ' ' || *p == '\t')) *p-- = '\0';
-                            
-                            /* Try to resolve start bound as constant */
-                            long long start_val = 0;
-                            if (resolve_const_identifier(symtab, s, &start_val) == 0)
-                            {
-                                start_bound = (int)start_val;
-                            }
-                            else
-                            {
-                                /* Try parsing as integer literal */
-                                char *endptr;
-                                long num = strtol(s, &endptr, 10);
-                                if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                                    start_bound = (int)num;
-                            }
-                            
-                            /* Try to resolve end bound as constant */
-                            long long end_val = 0;
-                            if (resolve_const_identifier(symtab, e, &end_val) == 0)
-                            {
-                                end_bound = (int)end_val;
-                            }
-                            else
-                            {
-                                /* Try parsing as integer literal */
-                                char *endptr;
-                                long num = strtol(e, &endptr, 10);
-                                if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
-                                    end_bound = (int)num;
-                            }
-                            
-                            free(start_str);
-                            free(end_str);
+                        while (*s == ' ' || *s == '\t') s++;
+                        while (*e == ' ' || *e == '\t') e++;
+
+                        long long start_val = 0;
+                        if (resolve_const_identifier(symtab, s, &start_val) == 0)
+                            start_bound = (int)start_val;
+                        else {
+                            char *endptr;
+                            long num = strtol(s, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                start_bound = (int)num;
+                        }
+
+                        long long end_val = 0;
+                        if (resolve_const_identifier(symtab, e, &end_val) == 0)
+                            end_bound = (int)end_val;
+                        else {
+                            char *endptr;
+                            long num = strtol(e, &endptr, 10);
+                            if (*endptr == '\0' && num >= INT_MIN && num <= INT_MAX)
+                                end_bound = (int)num;
                         }
                     }
                 }
