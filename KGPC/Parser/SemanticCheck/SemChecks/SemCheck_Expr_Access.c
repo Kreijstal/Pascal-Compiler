@@ -1388,30 +1388,39 @@ int semcheck_funccall(int *type_return,
                 expr->expr_data.function_call_data.args_expr = remaining_args;
                 args_given = remaining_args;
                 was_unit_qualified = 1;
+                /* Unit-qualified builtins (System.Length) are NOT method calls */
+                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
             }
         }
     }
 
     /* Builtins should resolve before any method/overload handling to avoid
      * accidental mangling into user-defined symbols (e.g., EOF -> eof_void).
-     * If this is a method call placeholder, only resolve builtins when the
-     * identifier is not shadowed by a user-defined symbol. */
+     * If this is a method call placeholder (obj.Method()), never intercept as
+     * a builtin — the method name may collide with a builtin (e.g., Concat)
+     * but method resolution must take priority since methods are stored under
+     * mangled names and FindIdent won't find them.
+     * Also skip builtins if an active WITH context can resolve the name as a
+     * method — e.g., `with LinkScript do Concat(...)` must call the method,
+     * not the built-in string Concat. */
     int allow_early_builtins = 0;
-    if (id != NULL)
+    if (id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
     {
         HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
         if (builtin_node != NULL)
         {
-            if (!expr->expr_data.function_call_data.is_method_call_placeholder)
+            allow_early_builtins = 1;
+            /* Check if an active WITH context provides a method with this name.
+             * If so, the WITH method takes priority over the builtin. */
+            if (with_context_count > 0)
             {
-                allow_early_builtins = 1;
-            }
-            else
-            {
-                HashNode_t *lookup_node = NULL;
-                int lookup_scope = FindIdent(&lookup_node, symtab, id);
-                if (lookup_scope >= 0 && lookup_node == builtin_node)
-                    allow_early_builtins = 1;
+                struct Expression *with_check = NULL;
+                int wm = semcheck_with_try_resolve_method(id, symtab, &with_check, expr->line_num);
+                if ((wm == 0 || wm == 2) && with_check != NULL)
+                {
+                    allow_early_builtins = 0;
+                    destroy_expr(with_check);
+                }
             }
         }
     }

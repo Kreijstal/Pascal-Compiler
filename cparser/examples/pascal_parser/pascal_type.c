@@ -543,12 +543,12 @@ static combinator_t* create_property_decl_parser(void) {
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
+            token(create_keyword_parser("read", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
+            token(create_keyword_parser("write", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
@@ -771,12 +771,12 @@ combinator_t* class_type(tag_t tag) {
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
+            token(create_keyword_parser("read", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
+            token(create_keyword_parser("write", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),
@@ -1211,12 +1211,12 @@ combinator_t* interface_type(tag_t tag) {
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("read")),
+            token(create_keyword_parser("read", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // read field/method (dotted: data.typ)
             NULL
         )),
         optional(seq(new_combinator(), PASCAL_T_NONE,
-            token(keyword_ci("write")),
+            token(create_keyword_parser("write", PASCAL_T_IDENTIFIER)),
             sep_by(token(cident(PASCAL_T_IDENTIFIER)), token(match("."))), // write field/method (dotted)
             NULL
         )),

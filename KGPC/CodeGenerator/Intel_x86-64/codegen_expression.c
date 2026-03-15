@@ -4907,13 +4907,14 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     /* For class types, addr_reg points to the variable holding the pointer when the
-     * record expression is a VAR_ID or a RECORD_ACCESS yielding a class-typed field.
-     * Load the pointer value to get the instance.
-     * Non-var/non-record-access expressions (casts, function calls) already yield
-     * the pointer value. */
+     * record expression is a VAR_ID, RECORD_ACCESS, or ARRAY_ACCESS yielding a
+     * class-typed field/element. Load the pointer value to get the instance.
+     * Non-var/non-record-access/non-array-access expressions (casts, function calls)
+     * already yield the pointer value. */
     int needs_class_deref = (is_class_field && !is_type_ref);
     if (needs_class_deref && record_expr->type != EXPR_VAR_ID &&
-        record_expr->type != EXPR_RECORD_ACCESS)
+        record_expr->type != EXPR_RECORD_ACCESS &&
+        record_expr->type != EXPR_ARRAY_ACCESS)
         needs_class_deref = 0;
     if (needs_class_deref)
     {

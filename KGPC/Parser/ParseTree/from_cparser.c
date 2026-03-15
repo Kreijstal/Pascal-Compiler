@@ -6651,6 +6651,45 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                     else
                         free(dup);
                 }
+                /* Handle subrange as set element type: set of 0..31 */
+                else if (elem->typ == PASCAL_T_RANGE_TYPE) {
+                    ast_t *lower = unwrap_pascal_node(elem->child);
+                    ast_t *upper = (lower != NULL) ? unwrap_pascal_node(lower->next) : NULL;
+                    long long start_value = 0;
+                    long long end_value = 0;
+                    int have_start = 0;
+                    int have_end = 0;
+                    struct Expression *lower_expr = convert_expression(lower);
+                    struct Expression *upper_expr = convert_expression(upper);
+                    if (lower_expr != NULL) {
+                        have_start = (extract_constant_int(lower_expr, &start_value) == 0);
+                        destroy_expr(lower_expr);
+                    }
+                    if (upper_expr != NULL) {
+                        have_end = (extract_constant_int(upper_expr, &end_value) == 0);
+                        destroy_expr(upper_expr);
+                    }
+                    if (!have_start && elem->child != NULL) {
+                        int val = 0;
+                        if (evaluate_const_int_expr(elem->child, &val, 0) == 0) {
+                            start_value = val;
+                            have_start = 1;
+                        }
+                    }
+                    if (!have_end && elem->child != NULL) {
+                        int val = 0;
+                        if (evaluate_const_int_expr(elem->child->next, &val, 0) == 0) {
+                            end_value = val;
+                            have_end = 1;
+                        }
+                    }
+                    if (have_start && have_end) {
+                        type_info->range_known = 1;
+                        type_info->range_start = start_value;
+                        type_info->range_end = end_value;
+                    }
+                    type_info->set_element_type = INT_TYPE;
+                }
                 /* Handle anonymous enum as set element type: set of (val1, val2, ...) */
                 else if (elem->typ == PASCAL_T_ENUMERATED_TYPE) {
                     type_info->is_enum_set = 1;
@@ -7475,6 +7514,8 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     char *write_accessor = NULL;
     int has_indexer = 0;
     int is_default = 0;
+    int next_accessor_is_write = 0; /* set when we see "write" keyword */
+    int next_accessor_is_read = 0;  /* set when we see "read" keyword */
 
     ast_t *cursor = property_node->child;
     if (cursor != NULL && cursor->typ == PASCAL_T_NONE && cursor->child != NULL)
@@ -7542,7 +7583,29 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
                 type_node = unwrapped;
                 free(dup);
             }
-            else if (read_accessor == NULL)
+            else if (strcasecmp(dup, "read") == 0)
+            {
+                next_accessor_is_read = 1;
+                next_accessor_is_write = 0;
+                free(dup);
+            }
+            else if (strcasecmp(dup, "write") == 0)
+            {
+                next_accessor_is_write = 1;
+                next_accessor_is_read = 0;
+                free(dup);
+            }
+            else if (next_accessor_is_read && read_accessor == NULL)
+            {
+                read_accessor = dup;
+                next_accessor_is_read = 0;
+            }
+            else if (next_accessor_is_write && write_accessor == NULL)
+            {
+                write_accessor = dup;
+                next_accessor_is_write = 0;
+            }
+            else if (read_accessor == NULL && !next_accessor_is_write)
             {
                 read_accessor = dup;
             }
@@ -11859,6 +11922,11 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             type_ref_free(alias->set_element_type_ref);
             alias->set_element_type_ref = type_info.set_element_type_ref;
             type_info.set_element_type_ref = NULL;
+        }
+        if (type_info.is_set && type_info.range_known) {
+            alias->range_known = 1;
+            alias->range_start = type_info.range_start;
+            alias->range_end = type_info.range_end;
         }
         alias->is_enum_set = type_info.is_enum_set;
         if (type_info.inline_enum_values != NULL) {

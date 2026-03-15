@@ -501,12 +501,8 @@ static void set_flags(char **optional_args, int count)
         }
         else if (arg[0] == '-' && arg[1] == 'F' && arg[2] == 'u' && arg[3] != '\0')
         {
-            /* Unit search path: -Fu/path/to/units (FPC compatible).
-             * Also register as an include path — FPC's RTL Makefile passes
-             * -Fi for each unit's include directory; since KGPC compiles all
-             * units in a single invocation, -Fu paths double as -Fi paths. */
+            /* Unit search path: -Fu/path/to/units (FPC compatible) */
             unit_search_paths_add_unit_path(&g_unit_paths, &arg[3]);
-            pascal_frontend_add_include_path(&arg[3]);
         }
         else if (strcmp(arg, "--no-vendor-units") == 0)
         {

@@ -5499,6 +5499,21 @@ skip_type_receiver_rewrite:
                     }
                 }
 
+                /* Before treating as a unit qualifier, check if the identifier
+                 * resolves via active WITH contexts.  This prevents
+                 * 'with s do Data.Reset' from being misidentified as a
+                 * unit-qualified call when Data is a WITH-scoped property. */
+                if (!looks_like_self_member && with_context_count > 0)
+                {
+                    struct Expression *with_check = NULL;
+                    int ws = semcheck_with_try_resolve(potential_unit_name,
+                        symtab, &with_check, stmt->line_num);
+                    if (ws == 0 && with_check != NULL)
+                    {
+                        looks_like_self_member = 1; /* not a unit; it's a WITH field */
+                        destroy_expr(with_check);
+                    }
+                }
                 if (!looks_like_self_member)
                     is_unit_qualifier = 1;
             }
@@ -7262,6 +7277,64 @@ proccall_parent_resolve_done:
         }
     }
 
+    /* Before overload resolution, check if WITH context provides a method.
+     * This prevents builtins like Concat from shadowing class methods in
+     * `with obj do Concat(...)` patterns.
+     * However, do NOT intercept if a global procedure/function with the same
+     * name exists — e.g., system Move(src,dst,count) must not be hijacked
+     * by TFPList.Move(curIndex,newIndex) in a WITH block. */
+    if (match_count == 0 && proc_id != NULL && with_context_count > 0 &&
+        !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        /* Skip WITH interception if a non-method symbol with this name exists */
+        HashNode_t *global_proc = NULL;
+        int global_scope = FindIdent(&global_proc, symtab, proc_id);
+        int has_global_proc = (global_scope >= 0 && global_proc != NULL &&
+            (global_proc->hash_type == HASHTYPE_FUNCTION ||
+             global_proc->hash_type == HASHTYPE_PROCEDURE));
+
+        struct Expression *with_expr = NULL;
+        int wm = has_global_proc ? 1 : semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
+        if ((wm == 0 || wm == 2) && with_expr != NULL)
+        {
+            if (wm == 2)
+            {
+                struct Expression *field_access = mk_recordaccess(stmt->line_num,
+                    with_expr, strdup(proc_id));
+                if (field_access != NULL)
+                {
+                    stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                    stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                    stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                    stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                    DestroyList(overload_candidates);
+                    free(mangled_name);
+                    int field_tag = UNKNOWN_TYPE;
+                    return return_val + semcheck_stmt_expr_tag(&field_tag, symtab,
+                        field_access, max_scope_lev, NO_MUTATE);
+                }
+            }
+
+            /* Prepend the WITH context expression as Self argument */
+            ListNode_t *self_node = CreateListNode(with_expr, LIST_EXPR);
+            if (self_node != NULL)
+            {
+                self_node->next = stmt->stmt_data.procedure_call_data.expr_args;
+                stmt->stmt_data.procedure_call_data.expr_args = self_node;
+                stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+                DestroyList(overload_candidates);
+                overload_candidates = NULL;
+                free(mangled_name);
+                mangled_name = NULL;
+                return semcheck_proccall(symtab, stmt, max_scope_lev);
+            }
+            else
+            {
+                destroy_expr(with_expr);
+            }
+        }
+    }
+
     /* If no exact mangled match, choose the best overload deterministically */
     if (match_count == 0 && overload_candidates != NULL)
     {
@@ -8252,6 +8325,112 @@ proccall_parent_resolve_done:
     return return_val;
 }
 
+/* Transform TP-style New(p, Constructor(args)) into New(p) + p^.Constructor(args)
+ * and Dispose(p, Destructor) into p^.Destructor + Dispose(p).
+ * Returns a new statement to insert after (for New) or before (for Dispose) the
+ * current statement in the list, or NULL if no transformation needed. */
+static struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, int *is_dispose)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return NULL;
+
+    char *proc_id = stmt->stmt_data.procedure_call_data.id;
+    if (proc_id == NULL)
+        return NULL;
+
+    int is_new = pascal_identifier_equals(proc_id, "New");
+    int is_disp = pascal_identifier_equals(proc_id, "Dispose");
+    if (!is_new && !is_disp)
+        return NULL;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || (args->next != NULL && args->next->next != NULL))
+        return NULL;  /* Not exactly 2 args */
+
+    if (is_dispose)
+        *is_dispose = is_disp;
+
+    /* Extract the pointer expr (first arg) and ctor/dtor expr (second arg) */
+    struct Expression *ptr_expr = (struct Expression *)args->cur;
+    struct Expression *method_expr = (struct Expression *)args->next->cur;
+
+    /* Strip the second arg from the New/Dispose call, making it single-arg */
+    args->next->cur = NULL;
+    ListNode_t *second_node = args->next;
+    args->next = NULL;
+    free(second_node);
+
+    /* Build the method call statement: p^.Method(args) */
+    if (method_expr == NULL || ptr_expr == NULL)
+        return NULL;
+
+    /* Get the method name and args from the method_expr.
+     * method_expr is either:
+     *   - EXPR_FUNCTION_CALL for Create(42) — id="Create", args=[42]
+     *   - EXPR_VAR_ID for Destroy — id="Destroy"
+     */
+    char *method_name = NULL;
+    ListNode_t *method_args = NULL;
+
+    if (method_expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *fn_id = method_expr->expr_data.function_call_data.id;
+        if (fn_id != NULL)
+            method_name = strdup(fn_id);
+        method_args = method_expr->expr_data.function_call_data.args_expr;
+        /* Detach args from the expression so we can reuse them */
+        method_expr->expr_data.function_call_data.args_expr = NULL;
+        destroy_expr(method_expr);
+    }
+    else if (method_expr->type == EXPR_VAR_ID)
+    {
+        if (method_expr->expr_data.id != NULL)
+            method_name = strdup(method_expr->expr_data.id);
+        destroy_expr(method_expr);
+    }
+    else
+    {
+        destroy_expr(method_expr);
+        return NULL;
+    }
+
+    if (method_name == NULL)
+        return NULL;
+
+    /* Build the placeholder proc name: __MethodName */
+    size_t name_len = strlen(method_name) + 3;
+    char *placeholder_name = (char *)malloc(name_len);
+    if (placeholder_name == NULL)
+    {
+        free(method_name);
+        return NULL;
+    }
+    snprintf(placeholder_name, name_len, "__%s", method_name);
+
+    /* Build the receiver expression: clone of ptr_expr followed by ^ deref */
+    struct Expression *receiver = mk_pointer_deref(stmt->line_num,
+        clone_expression(ptr_expr));
+
+    /* Build the argument list: receiver (self) + method args */
+    ListNode_t *call_args = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+    call_args->type = LIST_EXPR;
+    call_args->cur = receiver;
+    call_args->next = method_args;  /* may be NULL */
+
+    struct Statement *method_call = mk_procedurecall(stmt->line_num, placeholder_name, call_args);
+    if (method_call != NULL)
+    {
+        method_call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+        method_call->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+    }
+    else
+    {
+        free(method_name);
+    }
+
+    return method_call;
+}
+
 /** COMPOUNT_STMT **/
 int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
@@ -8290,6 +8469,31 @@ int semcheck_compoundstmt(SymTab_t *symtab, struct Statement *stmt, int max_scop
 
         if (stmt_list->cur != NULL)
         {
+            /* Transform two-arg New(p,Ctor)/Dispose(p,Dtor) before semcheck */
+            int is_dispose = 0;
+            struct Statement *extra_stmt = transform_two_arg_new_dispose(
+                (struct Statement *)stmt_list->cur, &is_dispose);
+            if (extra_stmt != NULL)
+            {
+                ListNode_t *new_node = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+                new_node->type = LIST_STMT;
+                if (is_dispose)
+                {
+                    /* Dispose: insert destructor call BEFORE Dispose(p) */
+                    new_node->cur = stmt_list->cur;
+                    new_node->next = stmt_list->next;
+                    stmt_list->cur = extra_stmt;
+                    stmt_list->next = new_node;
+                }
+                else
+                {
+                    /* New: insert constructor call AFTER New(p) */
+                    new_node->cur = extra_stmt;
+                    new_node->next = stmt_list->next;
+                    stmt_list->next = new_node;
+                }
+            }
+
             return_val += semcheck_stmt(symtab,
                 (struct Statement *)stmt_list->cur, max_scope_lev);
         }

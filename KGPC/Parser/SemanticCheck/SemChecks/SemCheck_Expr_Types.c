@@ -2964,10 +2964,8 @@ SKIP_SELF_FIELD_REWRITE:
             /* Check for type helpers on Pointer type before giving up.
              * Type helpers can be defined for Pointer, PChar, etc. */
             const char *expr_type_name = get_expr_type_name(record_expr, symtab);
-            struct RecordType *helper_record = NULL;
-            if (record_type != UNKNOWN_TYPE)
-                helper_record = semcheck_lookup_type_helper_for_member(symtab,
-                    record_type, expr_type_name, field_id);
+            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                record_type, expr_type_name, field_id);
             if (helper_record != NULL)
             {
                 record_type = RECORD_TYPE;
@@ -3006,7 +3004,7 @@ SKIP_SELF_FIELD_REWRITE:
                     helper_record = owner_rec;
             }
         }
-        if (helper_record == NULL && record_type != UNKNOWN_TYPE)
+        if (helper_record == NULL)
             helper_record = semcheck_lookup_type_helper_for_member(symtab,
                 record_type, expr_type_name, field_id);
         if (helper_record == NULL && is_real_family_type(record_type))

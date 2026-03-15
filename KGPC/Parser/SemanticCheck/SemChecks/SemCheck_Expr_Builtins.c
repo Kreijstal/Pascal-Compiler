@@ -2538,6 +2538,72 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     have_bounds = 1;
                 }
             }
+            /* Set types: Low/High returns bounds of the element type */
+            if (!have_bounds && alias != NULL && alias->is_set)
+            {
+                /* Check if the set itself has range info (set of 0..31) */
+                if (alias->range_known)
+                {
+                    low = alias->range_start;
+                    high = alias->range_end;
+                    have_bounds = 1;
+                }
+                /* Otherwise resolve from element type */
+                else if (alias->set_element_type == BYTE_TYPE ||
+                         (alias->set_element_type_id != NULL &&
+                          pascal_identifier_equals(alias->set_element_type_id, "Byte")))
+                {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                }
+                else if (alias->set_element_type == CHAR_TYPE ||
+                         (alias->set_element_type_id != NULL &&
+                          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                           pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                    result_type = CHAR_TYPE;
+                }
+                else if (alias->set_element_type == BOOL)
+                {
+                    low = 0;
+                    high = 1;
+                    have_bounds = 1;
+                }
+                else if (alias->set_element_type_id != NULL)
+                {
+                    /* Look up the element type to get its bounds */
+                    HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab,
+                        alias->set_element_type_id);
+                    if (elem_node != NULL && elem_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                        if (elem_alias != NULL && elem_alias->range_known)
+                        {
+                            low = elem_alias->range_start;
+                            high = elem_alias->range_end;
+                            have_bounds = 1;
+                        }
+                        else if (elem_alias != NULL && elem_alias->is_enum &&
+                                 elem_alias->enum_literals != NULL &&
+                                 !elem_alias->enum_has_explicit_values)
+                        {
+                            int count = ListLength(elem_alias->enum_literals);
+                            if (count > 0)
+                            {
+                                low = 0;
+                                high = count - 1;
+                                have_bounds = 1;
+                            }
+                        }
+                    }
+                }
+                if (have_bounds && (low < -2147483648LL || high > 2147483647LL))
+                    result_type = INT64_TYPE;
+            }
             if (!have_bounds && alias != NULL && alias->range_known)
             {
                 low = alias->range_start;
