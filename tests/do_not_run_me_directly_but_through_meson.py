@@ -3375,6 +3375,127 @@ KGPC_ONLY_TESTS = {
     'random_real_function',  # Random(Real) overload is a KGPC extension
 }
 
+# Tests without explicit FPC RTL/package imports are skipped from the FPC RTL
+# suite by default. Add exceptions here if a test intentionally exercises only
+# implicitly included System/ObjPas behavior.
+FPC_RTL_IMPLICIT_UNIT_TESTS = set()
+
+_FPC_RTL_KNOWN_UNITS = None
+
+
+def _collect_pascal_unit_names(root_dir):
+    names = set()
+    if not os.path.isdir(root_dir):
+        return names
+
+    for dirpath, _, filenames in os.walk(root_dir):
+        for filename in filenames:
+            lower = filename.lower()
+            if lower.endswith((".pp", ".p", ".pas")):
+                names.add(os.path.splitext(filename)[0].lower())
+    return names
+
+
+def _get_fpc_rtl_known_units():
+    global _FPC_RTL_KNOWN_UNITS
+    if _FPC_RTL_KNOWN_UNITS is not None:
+        return _FPC_RTL_KNOWN_UNITS
+
+    roots = [
+        FPC_RTL_DIR,
+        os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-objpas", "src"),
+        os.path.join(os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource"), "packages", "rtl-console", "src"),
+    ]
+    unit_names = set()
+    for root in roots:
+        unit_names.update(_collect_pascal_unit_names(root))
+    _FPC_RTL_KNOWN_UNITS = unit_names
+    return _FPC_RTL_KNOWN_UNITS
+
+
+def _strip_pascal_comments(text):
+    result = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            if j == -1:
+                break
+            result.append("\n")
+            i = j + 1
+            continue
+        if text.startswith("{", i):
+            j = text.find("}", i + 1)
+            if j == -1:
+                break
+            i = j + 1
+            continue
+        if text.startswith("(*", i):
+            j = text.find("*)", i + 2)
+            if j == -1:
+                break
+            i = j + 2
+            continue
+        result.append(text[i])
+        i += 1
+    return "".join(result)
+
+
+def _extract_used_units(source_text):
+    cleaned = _strip_pascal_comments(source_text)
+    lower = cleaned.lower()
+    units = set()
+    i = 0
+    while True:
+        idx = lower.find("uses", i)
+        if idx == -1:
+            break
+
+        before_ok = idx == 0 or not (lower[idx - 1].isalnum() or lower[idx - 1] == "_")
+        after_idx = idx + 4
+        after_ok = after_idx >= len(lower) or lower[after_idx].isspace()
+        if not before_ok or not after_ok:
+            i = idx + 4
+            continue
+
+        semi = cleaned.find(";", after_idx)
+        if semi == -1:
+            break
+        clause = cleaned[after_idx:semi]
+        for raw_unit in clause.split(","):
+            token = raw_unit.strip()
+            if not token:
+                continue
+            token = token.split("in", 1)[0].strip()
+            if not token:
+                continue
+            unit_name = token.split(".")[-1].strip().lower()
+            if unit_name:
+                units.add(unit_name)
+        i = semi + 1
+    return units
+
+
+def _should_include_in_fpcrtl(base_name, pascal_file):
+    if base_name in FPC_RTL_IMPLICIT_UNIT_TESTS:
+        return True
+
+    try:
+        source_text = Path(pascal_file).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return True
+
+    used_units = _extract_used_units(source_text)
+    if not used_units:
+        return False
+
+    known_units = _get_fpc_rtl_known_units()
+    for unit_name in used_units:
+        if unit_name in known_units:
+            return True
+    return False
+
 
 def _discover_and_add_fpc_rtl_tests():
     """
@@ -3403,6 +3524,9 @@ def _discover_and_add_fpc_rtl_tests():
 
     for base_name in expected_files:
         if base_name in KGPC_ONLY_TESTS:
+            continue
+        pascal_file = os.path.join(TEST_CASES_DIR, base_name + '.p')
+        if not _should_include_in_fpcrtl(base_name, pascal_file):
             continue
 
         method_name = 'test_fpcrtl_' + base_name.replace('-', '_').replace(' ', '_')
