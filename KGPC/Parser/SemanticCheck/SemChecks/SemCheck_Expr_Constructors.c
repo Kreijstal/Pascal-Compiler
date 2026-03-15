@@ -260,10 +260,26 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
             max_scope_lev, NO_MUTATE);
         int element_type = semcheck_tag_from_kgpc(element_kgpc_type);
 
-        if (error_count == 0 && expected_type != UNKNOWN_TYPE &&
-            element_type != expected_type)
+        if (error_count == 0 &&
+            ((expected_type != UNKNOWN_TYPE && element_type != expected_type) ||
+             (expected_type == UNKNOWN_TYPE && expected_type_id != NULL)))
         {
             int compatible = 0;
+            KgpcType *expected_element_kgpc = NULL;
+            KgpcType *actual_element_kgpc = element_kgpc_type;
+
+            if (expected_type_id != NULL && symtab != NULL)
+            {
+                HashNode_t *expected_type_node = semcheck_find_preferred_type_node(symtab,
+                    expected_type_id);
+                if (expected_type_node != NULL)
+                {
+                    expected_element_kgpc = expected_type_node->type;
+                    if (expected_element_kgpc != NULL)
+                        kgpc_type_retain(expected_element_kgpc);
+                }
+            }
+
             if (is_integer_type(expected_type) && is_integer_type(element_type))
             {
                 if (element_expr->type == EXPR_INUM)
@@ -297,6 +313,15 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
                  * without accepting arbitrary char expressions as strings. */
                 compatible = 1;
             }
+            else if (expected_element_kgpc != NULL && actual_element_kgpc != NULL &&
+                     are_types_compatible_for_assignment(expected_element_kgpc,
+                         actual_element_kgpc, symtab))
+            {
+                compatible = 1;
+            }
+
+            if (expected_element_kgpc != NULL)
+                destroy_kgpc_type(expected_element_kgpc);
 
             if (!compatible)
             {
@@ -389,6 +414,17 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
                 elem->info.primitive_type_tag == ARRAY_OF_CONST_TYPE)
             {
                 expected_is_array_of_const = 1;
+            }
+            else if (elem != NULL)
+            {
+                expected_type = semcheck_tag_from_kgpc(elem);
+                expected_type_id = NULL;
+                if (elem->type_alias != NULL && elem->type_alias->alias_name != NULL)
+                    expected_type_id = strdup(elem->type_alias->alias_name);
+                else if (kgpc_type_is_pointer(elem) && elem->info.points_to != NULL &&
+                         elem->info.points_to->type_alias != NULL &&
+                         elem->info.points_to->type_alias->alias_name != NULL)
+                    expected_type_id = strdup(elem->info.points_to->type_alias->alias_name);
             }
         }
         if (owns_expected && expected_kgpc != NULL)

@@ -5225,9 +5225,18 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 }
                 else
                 {
-                    codegen_report_error(ctx,
-                        "ERROR: Unable to determine size for record return value of %s.", func->id);
-                    record_return_size = 0;
+                    long long fallback_size = kgpc_type_sizeof(return_type);
+                    if (fallback_size > 0 && fallback_size <= INT_MAX)
+                    {
+                        record_return_size = fallback_size;
+                        has_record_return = (record_return_size > 8);
+                    }
+                    else
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to determine size for record return value of %s.", func->id);
+                        record_return_size = 0;
+                    }
                 }
             }
             else if (return_type->kind == TYPE_KIND_ARRAY)
@@ -5268,9 +5277,18 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     &record_return_size) != 0 || record_return_size <= 0 ||
                 record_return_size > INT_MAX)
             {
-                codegen_report_error(ctx,
-                    "ERROR: Unable to determine size for record return value of %s.", func->id);
-                record_return_size = 0;
+                long long fallback_size = kgpc_type_sizeof(func_node->type);
+                if (fallback_size > 0 && fallback_size <= INT_MAX)
+                {
+                    record_return_size = fallback_size;
+                    has_record_return = (record_return_size > 8);
+                }
+                else
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to determine size for record return value of %s.", func->id);
+                    record_return_size = 0;
+                }
             }
             else
             {
@@ -5300,6 +5318,16 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
                 {
                     CODEGEN_DEBUG("DEBUG: Setting has_record_return=1, size=%lld\n", record_return_size);
                     has_record_return = (record_return_size > 8);
+                }
+            }
+            else if (return_type_node->type != NULL &&
+                     return_type_node->type->kind != TYPE_KIND_ARRAY)
+            {
+                long long value_size = kgpc_type_sizeof(return_type_node->type);
+                if (value_size > 0 && value_size <= INT_MAX)
+                {
+                    has_record_return = (value_size > 8);
+                    record_return_size = value_size;
                 }
             }
             else if (return_type_node->type != NULL &&
@@ -5336,11 +5364,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         func->inline_return_type->base_type == RECORD_TYPE)
     {
         struct RecordType *inline_record = NULL;
+        KgpcType *inline_kgpc = func->inline_return_type->kgpc_type;
 
-        if (func->inline_return_type->kgpc_type != NULL &&
-            kgpc_type_is_record(func->inline_return_type->kgpc_type))
+        if (inline_kgpc != NULL && kgpc_type_is_record(inline_kgpc))
         {
-            inline_record = kgpc_type_get_record(func->inline_return_type->kgpc_type);
+            inline_record = kgpc_type_get_record(inline_kgpc);
         }
 
         if (inline_record == NULL &&
@@ -5359,6 +5387,15 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_size > 0 && record_return_size <= INT_MAX)
         {
             has_record_return = (record_return_size > 8);
+        }
+        else if (inline_kgpc != NULL)
+        {
+            long long inline_size = kgpc_type_sizeof(inline_kgpc);
+            if (inline_size > 0 && inline_size <= INT_MAX)
+            {
+                record_return_size = inline_size;
+                has_record_return = (record_return_size > 8);
+            }
         }
     }
 

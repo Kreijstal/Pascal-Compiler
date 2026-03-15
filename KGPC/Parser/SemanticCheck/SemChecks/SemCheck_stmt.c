@@ -8213,6 +8213,25 @@ proccall_parent_resolve_done:
                 {
                     types_match = are_types_compatible_for_assignment(expected_kgpc_type, arg_kgpc_type, symtab);
                     if (!types_match && expected_kgpc_type != NULL && arg_kgpc_type != NULL &&
+                        expected_kgpc_type->kind == TYPE_KIND_ARRAY &&
+                        arg_kgpc_type->kind == TYPE_KIND_ARRAY)
+                    {
+                        KgpcType *expected_elem = kgpc_type_get_array_element_type_resolved(expected_kgpc_type, symtab);
+                        KgpcType *arg_elem = kgpc_type_get_array_element_type_resolved(arg_kgpc_type, symtab);
+                        if (expected_elem != NULL && arg_elem != NULL)
+                        {
+                            if (kgpc_type_equals(expected_elem, arg_elem) ||
+                                are_types_compatible_for_assignment(expected_elem, arg_elem, symtab) ||
+                                (kgpc_type_is_pointer(expected_elem) &&
+                                 kgpc_type_equals_tag(arg_elem, POINTER_TYPE)) ||
+                                (kgpc_type_is_pointer(arg_elem) &&
+                                 kgpc_type_equals_tag(expected_elem, POINTER_TYPE)))
+                            {
+                                types_match = 1;
+                            }
+                        }
+                    }
+                    if (!types_match && expected_kgpc_type != NULL && arg_kgpc_type != NULL &&
                         arg_expr != NULL &&
                         expected_kgpc_type->kind == TYPE_KIND_POINTER &&
                         expected_kgpc_type->info.points_to != NULL &&

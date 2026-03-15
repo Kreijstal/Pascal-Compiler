@@ -6869,6 +6869,13 @@ skip_overload_resolution:
                                          arg_elem->kind == TYPE_KIND_PRIMITIVE &&
                                          expected_elem->info.primitive_type_tag == arg_elem->info.primitive_type_tag)
                                     array_compatible = 1;
+                                else if ((kgpc_type_is_pointer(expected_elem) &&
+                                          kgpc_type_equals_tag(arg_elem, POINTER_TYPE)) ||
+                                         (kgpc_type_is_pointer(arg_elem) &&
+                                          kgpc_type_equals_tag(expected_elem, POINTER_TYPE)))
+                                    array_compatible = 1;
+                                else if (are_types_compatible_for_assignment(expected_elem, arg_elem, symtab))
+                                    array_compatible = 1;
                             }
                         }
                     }
@@ -7016,6 +7023,19 @@ skip_overload_resolution:
                                         kgpc_type_is_shortstring(arg_elem))
                                     {
                                         /* Allow ShortString elements to match Char arrays (FPC open-array behavior). */
+                                        type_compatible = 1;
+                                    }
+                                    else if (expected_elem != NULL && arg_elem != NULL &&
+                                             ((kgpc_type_is_pointer(expected_elem) &&
+                                               kgpc_type_equals_tag(arg_elem, POINTER_TYPE)) ||
+                                              (kgpc_type_is_pointer(arg_elem) &&
+                                               kgpc_type_equals_tag(expected_elem, POINTER_TYPE))))
+                                    {
+                                        type_compatible = 1;
+                                    }
+                                    else if (expected_elem != NULL && arg_elem != NULL &&
+                                             are_types_compatible_for_assignment(expected_elem, arg_elem, symtab))
+                                    {
                                         type_compatible = 1;
                                     }
                                 }

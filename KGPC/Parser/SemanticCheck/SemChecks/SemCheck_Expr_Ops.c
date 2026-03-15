@@ -1282,12 +1282,18 @@ int semcheck_addop(int *type_return,
         }
 
         int left_is_string_like = (is_string_type(type_first) || type_first == CHAR_TYPE ||
-                                   semcheck_expr_is_char_array_like(expr1));
+                                   semcheck_expr_is_char_array_like(expr1) ||
+                                   semcheck_expr_is_char_pointer(expr1));
         int right_is_string_like = (is_string_type(type_second) || type_second == CHAR_TYPE ||
-                                    semcheck_expr_is_char_array_like(expr2));
+                                    semcheck_expr_is_char_array_like(expr2) ||
+                                    semcheck_expr_is_char_pointer(expr2));
 
         if (left_is_string_like && right_is_string_like)
         {
+            if (semcheck_expr_is_char_pointer(expr1))
+                semcheck_promote_pointer_expr_to_string(expr1);
+            if (semcheck_expr_is_char_pointer(expr2))
+                semcheck_promote_pointer_expr_to_string(expr2);
             *type_return = STRING_TYPE;
             return return_val;
         }
