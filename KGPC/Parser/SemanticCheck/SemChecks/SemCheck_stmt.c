@@ -90,6 +90,123 @@ static int semcheck_expr_list_best_line(ListNode_t *list)
     return 0;
 }
 
+static HashNode_t *semcheck_find_zero_arg_method_node(SymTab_t *symtab,
+    const struct RecordType *record, const char *method_name)
+{
+    if (symtab == NULL || record == NULL || record->type_id == NULL || method_name == NULL)
+        return NULL;
+
+    size_t len = strlen(record->type_id) + 2 + strlen(method_name) + 1;
+    char *base_name = (char *)malloc(len);
+    if (base_name == NULL)
+        return NULL;
+
+    snprintf(base_name, len, "%s__%s", record->type_id, method_name);
+    ListNode_t *candidates = FindAllIdents(symtab, base_name);
+    free(base_name);
+
+    HashNode_t *match = NULL;
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        Tree_t *first_param = NULL;
+        const char *first_param_name = NULL;
+        if (cand == NULL || cand->type == NULL)
+            continue;
+        if (cand->hash_type != HASHTYPE_FUNCTION && cand->hash_type != HASHTYPE_PROCEDURE)
+            continue;
+        ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+        if (params != NULL && params->cur != NULL)
+            first_param = (Tree_t *)params->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+            first_param->tree_data.var_decl_data.ids != NULL)
+            first_param_name = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+        else if (first_param != NULL && first_param->type == TREE_ARR_DECL &&
+                 first_param->tree_data.arr_decl_data.ids != NULL)
+            first_param_name = (const char *)first_param->tree_data.arr_decl_data.ids->cur;
+
+        if (!((ListLength(params) == 0) ||
+              (ListLength(params) == 1 && first_param_name != NULL &&
+               strcasecmp(first_param_name, "Self") == 0)))
+            continue;
+        match = cand;
+        break;
+    }
+
+    DestroyList(candidates);
+    return match;
+}
+
+static int semcheck_get_enumerator_current_type(SymTab_t *symtab,
+    struct RecordType *enum_record, KgpcType **out_current_type)
+{
+    if (out_current_type != NULL)
+        *out_current_type = NULL;
+    if (symtab == NULL || enum_record == NULL || out_current_type == NULL)
+        return 0;
+
+    HashNode_t *getcurrent = semcheck_find_zero_arg_method_node(symtab, enum_record, "GetCurrent");
+    if (getcurrent != NULL && getcurrent->type != NULL)
+    {
+        KgpcType *ret = kgpc_type_get_return_type(getcurrent->type);
+        if (ret != NULL)
+        {
+            kgpc_type_retain(ret);
+            *out_current_type = ret;
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int semcheck_collection_is_enumerator_class(SymTab_t *symtab, KgpcType *collection_kgpc_type,
+    KgpcType **out_current_type)
+{
+    if (out_current_type != NULL)
+        *out_current_type = NULL;
+    if (symtab == NULL || collection_kgpc_type == NULL)
+        return 0;
+
+    KgpcType *record_candidate = collection_kgpc_type;
+    if (kgpc_type_is_pointer(collection_kgpc_type))
+        record_candidate = collection_kgpc_type->info.points_to;
+    if (record_candidate == NULL || !kgpc_type_is_record(record_candidate))
+        return 0;
+
+    struct RecordType *collection_record = kgpc_type_get_record(record_candidate);
+    if (collection_record == NULL)
+        return 0;
+
+    HashNode_t *getenum = semcheck_find_zero_arg_method_node(symtab, collection_record, "GetEnumerator");
+    if (getenum == NULL || getenum->type == NULL)
+        return 0;
+
+    KgpcType *enum_ret = kgpc_type_get_return_type(getenum->type);
+    if (enum_ret == NULL)
+        return 0;
+
+    KgpcType *enum_candidate = enum_ret;
+    if (kgpc_type_is_pointer(enum_ret))
+        enum_candidate = enum_ret->info.points_to;
+    if (enum_candidate == NULL || !kgpc_type_is_record(enum_candidate))
+        return 0;
+
+    struct RecordType *enum_record = kgpc_type_get_record(enum_candidate);
+    if (enum_record == NULL)
+        return 0;
+
+    HashNode_t *movenext = semcheck_find_zero_arg_method_node(symtab, enum_record, "MoveNext");
+    if (movenext == NULL || movenext->type == NULL)
+        return 0;
+
+    KgpcType *move_ret = kgpc_type_get_return_type(movenext->type);
+    if (move_ret == NULL || !kgpc_type_is_boolean(move_ret))
+        return 0;
+
+    return semcheck_get_enumerator_current_type(symtab, enum_record, out_current_type);
+}
+
 static int semcheck_expr_best_line(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -8811,6 +8928,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         int collection_is_string = 0;
         int collection_is_set = 0;
         int collection_is_enum_domain = 0;
+        int collection_is_enumerator_class = 0;
         const char *list_element_id = NULL;
 
         return_val += semcheck_stmt_expr_tag(&collection_type, symtab, collection, INT_MAX, NO_MUTATE);
@@ -8864,14 +8982,39 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
             }
         }
 
+        KgpcType *enumerator_current_type = NULL;
+        if (!collection_is_array && !collection_is_list &&
+            !collection_is_set && !collection_is_enum_domain)
+        {
+            collection_is_enumerator_class =
+                semcheck_collection_is_enumerator_class(symtab, collection_kgpc_type,
+                    &enumerator_current_type);
+        }
+
         if (collection_is_string)
             collection_is_array = 1;
 
         if (!collection_is_array && !collection_is_list &&
-            !collection_is_set && !collection_is_enum_domain) {
+            !collection_is_set && !collection_is_enum_domain &&
+            !collection_is_enumerator_class) {
             semcheck_error_with_context("Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;
+        } else if (collection_is_enumerator_class) {
+            int loop_var_type_owned = 0;
+            KgpcType *loop_var_kgpc = semcheck_resolve_expression_kgpc_type(symtab, loop_var,
+                max_scope_lev, MUTATE, &loop_var_type_owned);
+
+            if (loop_var_kgpc == NULL || enumerator_current_type == NULL ||
+                !kgpc_type_equals(loop_var_kgpc, enumerator_current_type))
+            {
+                semcheck_error_with_context("Error on line %d: for-in loop variable type does not match enumerator Current type!\n\n",
+                        stmt->line_num);
+                ++return_val;
+            }
+
+            if (loop_var_type_owned && loop_var_kgpc != NULL)
+                destroy_kgpc_type(loop_var_kgpc);
         } else if (!collection_is_list && loop_var_nonordinal) {
             int loop_var_type_owned = 0;
             KgpcType *loop_var_kgpc = semcheck_resolve_expression_kgpc_type(symtab, loop_var,
@@ -8909,6 +9052,8 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
         if (collection_type_owned && collection_kgpc_type != NULL)
             destroy_kgpc_type(collection_kgpc_type);
+        if (enumerator_current_type != NULL)
+            destroy_kgpc_type(enumerator_current_type);
         (void)list_element_id;
     } else {
         collection_type = UNKNOWN_TYPE;

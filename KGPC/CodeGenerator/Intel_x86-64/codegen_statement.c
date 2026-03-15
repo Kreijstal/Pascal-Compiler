@@ -89,6 +89,122 @@ static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_l
     CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+
+static HashNode_t *codegen_find_zero_arg_method_node(SymTab_t *symtab,
+    const struct RecordType *record, const char *method_name)
+{
+    if (symtab == NULL || record == NULL || record->type_id == NULL || method_name == NULL)
+        return NULL;
+
+    size_t len = strlen(record->type_id) + 2 + strlen(method_name) + 1;
+    char *base_name = (char *)malloc(len);
+    if (base_name == NULL)
+        return NULL;
+
+    snprintf(base_name, len, "%s__%s", record->type_id, method_name);
+    ListNode_t *candidates = FindAllIdents(symtab, base_name);
+    free(base_name);
+
+    HashNode_t *match = NULL;
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        Tree_t *first_param = NULL;
+        const char *first_param_name = NULL;
+        if (cand == NULL || cand->type == NULL)
+            continue;
+        if (cand->hash_type != HASHTYPE_FUNCTION && cand->hash_type != HASHTYPE_PROCEDURE)
+            continue;
+        ListNode_t *params = kgpc_type_get_procedure_params(cand->type);
+        if (params != NULL && params->cur != NULL)
+            first_param = (Tree_t *)params->cur;
+        if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+            first_param->tree_data.var_decl_data.ids != NULL)
+            first_param_name = (const char *)first_param->tree_data.var_decl_data.ids->cur;
+        else if (first_param != NULL && first_param->type == TREE_ARR_DECL &&
+                 first_param->tree_data.arr_decl_data.ids != NULL)
+            first_param_name = (const char *)first_param->tree_data.arr_decl_data.ids->cur;
+
+        if (!((ListLength(params) == 0) ||
+              (ListLength(params) == 1 && first_param_name != NULL &&
+               strcasecmp(first_param_name, "Self") == 0)))
+            continue;
+        match = cand;
+        break;
+    }
+
+    DestroyList(candidates);
+    return match;
+}
+
+static struct ClassProperty *codegen_find_class_property(const struct RecordType *record,
+    const char *property_name)
+{
+    if (record == NULL || property_name == NULL)
+        return NULL;
+
+    for (ListNode_t *cur = record->properties; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_CLASS_PROPERTY || cur->cur == NULL)
+            continue;
+        struct ClassProperty *prop = (struct ClassProperty *)cur->cur;
+        if (prop->name != NULL && pascal_identifier_equals(prop->name, property_name))
+            return prop;
+    }
+    return NULL;
+}
+
+static int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordType *enum_record,
+    HashNode_t **out_current_node, KgpcType **out_current_type)
+{
+    if (out_current_node != NULL)
+        *out_current_node = NULL;
+    if (out_current_type != NULL)
+        *out_current_type = NULL;
+    if (symtab == NULL || enum_record == NULL)
+        return 0;
+
+    struct ClassProperty *current_prop = codegen_find_class_property(enum_record, "Current");
+    if (current_prop != NULL && current_prop->read_accessor != NULL)
+    {
+        HashNode_t *getter = codegen_find_zero_arg_method_node(symtab, enum_record,
+            current_prop->read_accessor);
+        if (getter != NULL && getter->type != NULL)
+        {
+            KgpcType *ret = kgpc_type_get_return_type(getter->type);
+            if (ret != NULL)
+            {
+                if (out_current_node != NULL)
+                    *out_current_node = getter;
+                if (out_current_type != NULL)
+                {
+                    kgpc_type_retain(ret);
+                    *out_current_type = ret;
+                }
+                return 1;
+            }
+        }
+    }
+
+    HashNode_t *getter = codegen_find_zero_arg_method_node(symtab, enum_record, "GetCurrent");
+    if (getter != NULL && getter->type != NULL)
+    {
+        KgpcType *ret = kgpc_type_get_return_type(getter->type);
+        if (ret != NULL)
+        {
+            if (out_current_node != NULL)
+                *out_current_node = getter;
+            if (out_current_type != NULL)
+            {
+                kgpc_type_retain(ret);
+                *out_current_type = ret;
+            }
+            return 1;
+        }
+    }
+
+    return 0;
+}
 static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
 static int codegen_expr_is_string_like(const struct Expression *expr)
@@ -10570,6 +10686,152 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
                 is_list_class = 1;
             }
         }
+    }
+
+    int is_enumerator_class = 0;
+    HashNode_t *getenum_node = NULL;
+    HashNode_t *movenext_node = NULL;
+    HashNode_t *current_node = NULL;
+    KgpcType *current_type = NULL;
+    struct RecordType *enum_record = NULL;
+    if (!is_list_class && record_info != NULL)
+    {
+        getenum_node = codegen_find_zero_arg_method_node(symtab, record_info, "GetEnumerator");
+        if (getenum_node != NULL && getenum_node->type != NULL)
+        {
+            KgpcType *enum_ret = kgpc_type_get_return_type(getenum_node->type);
+            KgpcType *enum_candidate = enum_ret;
+            if (enum_candidate != NULL && kgpc_type_is_pointer(enum_candidate))
+                enum_candidate = enum_candidate->info.points_to;
+            if (enum_candidate != NULL && kgpc_type_is_record(enum_candidate))
+            {
+                enum_record = kgpc_type_get_record(enum_candidate);
+                if (enum_record != NULL)
+                {
+                    movenext_node = codegen_find_zero_arg_method_node(symtab, enum_record, "MoveNext");
+                    if (movenext_node != NULL && movenext_node->type != NULL)
+                    {
+                        KgpcType *move_ret = kgpc_type_get_return_type(movenext_node->type);
+                        if (move_ret != NULL && kgpc_type_is_boolean(move_ret) &&
+                            codegen_get_enumerator_current_info(symtab, enum_record,
+                                &current_node, &current_type))
+                        {
+                            is_enumerator_class = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if (is_enumerator_class) {
+        char cond_label[18], body_label[18], exit_label[18], incr_label[18], buffer[256];
+        gen_label(cond_label, 18, ctx);
+        gen_label(body_label, 18, ctx);
+        gen_label(exit_label, 18, ctx);
+        gen_label(incr_label, 18, ctx);
+
+        StackNode_t *enum_slot = codegen_alloc_temp_slot("enum_ptr");
+        if (enum_slot == NULL) {
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            codegen_report_error(ctx, "ERROR: Unable to allocate temp slot for enumerator");
+            return inst_list;
+        }
+
+        Register_t *collection_reg = NULL;
+        inst_list = codegen_expr_with_result(collection, inst_list, ctx, &collection_reg);
+        if (codegen_had_error(ctx) || collection_reg == NULL) {
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            return inst_list;
+        }
+
+        const char *arg0 = current_arg_reg64(0);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", collection_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), collection_reg);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            getenum_node->mangled_id != NULL ? getenum_node->mangled_id : getenum_node->id);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", enum_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
+        snprintf(buffer, sizeof(buffer), "%s:\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        if (!codegen_push_loop(ctx, exit_label, incr_label)) {
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            return inst_list;
+        }
+
+        Register_t *enum_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (enum_reg == NULL) {
+            codegen_pop_loop(ctx);
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for enumerator");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", enum_slot->offset, enum_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", enum_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            current_node->mangled_id != NULL ? current_node->mangled_id : current_node->id);
+
+        Register_t *loop_var_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(loop_var, inst_list, ctx, &loop_var_addr_reg);
+        if (loop_var_addr_reg == NULL || codegen_had_error(ctx)) {
+            free_reg(get_reg_stack(), enum_reg);
+            codegen_pop_loop(ctx);
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            return inst_list;
+        }
+
+        long long current_size = current_type != NULL ? kgpc_type_sizeof(current_type) : 0;
+        if (current_size <= 0 && current_type != NULL && kgpc_type_is_pointer(current_type))
+            current_size = 8;
+        if (current_size == 1) {
+            snprintf(buffer, sizeof(buffer), "\tmovb\t%%al, (%s)\n", loop_var_addr_reg->bit_64);
+        } else if (current_size == 2) {
+            snprintf(buffer, sizeof(buffer), "\tmovw\t%%ax, (%s)\n", loop_var_addr_reg->bit_64);
+        } else if (current_size == 4) {
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, (%s)\n", loop_var_addr_reg->bit_64);
+        } else {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, (%s)\n", loop_var_addr_reg->bit_64);
+        }
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), loop_var_addr_reg);
+        free_reg(get_reg_stack(), enum_reg);
+
+        inst_list = codegen_stmt(body, inst_list, ctx, symtab);
+        codegen_pop_loop(ctx);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
+        inst_list = add_inst(inst_list, buffer);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", cond_label);
+        inst_list = add_inst(inst_list, buffer);
+        Register_t *enum_cond_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (enum_cond_reg == NULL) {
+            if (current_type != NULL) destroy_kgpc_type(current_type);
+            codegen_report_error(ctx, "ERROR: Unable to allocate register for enumerator condition");
+            return inst_list;
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", enum_slot->offset, enum_cond_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", enum_cond_reg->bit_64, arg0);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = codegen_call_with_shadow_space(inst_list,
+            movenext_node->mangled_id != NULL ? movenext_node->mangled_id : movenext_node->id);
+        inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+        snprintf(buffer, sizeof(buffer), "\tjne\t%s\n", body_label);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), enum_cond_reg);
+
+        snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
+        inst_list = add_inst(inst_list, buffer);
+        if (current_type != NULL)
+            destroy_kgpc_type(current_type);
+        return inst_list;
     }
     
     if (is_list_class) {

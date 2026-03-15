@@ -299,6 +299,57 @@ HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
     return NULL;
 }
 
+HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *prefix, int caller_unit_index)
+{
+    assert(table != NULL);
+    assert(prefix != NULL);
+
+    char *canonical_prefix = pascal_identifier_lower_dup(prefix);
+    if (canonical_prefix == NULL)
+        return NULL;
+
+    size_t prefix_len = strlen(canonical_prefix);
+    HashNode_t *best = NULL;
+    int best_priority = 0;
+
+    for (int i = 0; i < TABLE_SIZE; i++)
+    {
+        ListNode_t *cur = table->table[i];
+        while (cur != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)cur->cur;
+            if (hash_node != NULL &&
+                hash_node->canonical_id != NULL &&
+                strncmp(hash_node->canonical_id, canonical_prefix, prefix_len) == 0)
+            {
+                int priority = 1;
+                if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
+                    priority = 4;
+                else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
+                    priority = 4;
+                else if (caller_unit_index > 0 && hash_node->source_unit_index > 0 &&
+                         unit_registry_is_dep(caller_unit_index, hash_node->source_unit_index))
+                    priority = 3;
+                else if (hash_node->source_unit_index == 0)
+                    priority = 2;
+
+                if (priority > best_priority ||
+                    (priority == best_priority && best != NULL &&
+                     best->hash_type == HASHTYPE_CONST &&
+                     hash_node->hash_type != HASHTYPE_CONST))
+                {
+                    best = hash_node;
+                    best_priority = priority;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    free(canonical_prefix);
+    return best;
+}
+
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;

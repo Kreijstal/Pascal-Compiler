@@ -17462,6 +17462,17 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER)
         id = dup_symbol(cur);
 
+    /* Standalone operator declarations sometimes arrive through the
+     * procedure-declaration grammar path even though they have a return type.
+     * Reuse convert_function() so interface declarations get the same
+     * mangled ids as implementations (e.g. TMyType__op_sub_TMyType). */
+    if (id != NULL &&
+        (strcasecmp(id, "operator") == 0 || is_operator_token_name(id)))
+    {
+        free(id);
+        return convert_function(proc_node);
+    }
+
     if (cur != NULL)
         cur = cur->next;
 
@@ -17702,10 +17713,13 @@ static Tree_t *convert_function(ast_t *func_node) {
         id = dup_symbol(cur);
 
     /* Check if this is a standalone operator declaration */
-    if (id != NULL && strcasecmp(id, "operator") == 0) {
+    if (id != NULL &&
+        (strcasecmp(id, "operator") == 0 || is_operator_token_name(id))) {
         is_standalone_operator = 1;
-        /* Get the operator symbol from the next child */
-        if (cur != NULL) {
+        if (is_operator_token_name(id)) {
+            operator_symbol = strdup(id);
+        } else if (cur != NULL) {
+            /* Get the operator symbol from the next child */
             cur = cur->next;
             if (cur != NULL && cur->typ == PASCAL_T_IDENTIFIER) {
                 operator_symbol = dup_symbol(cur);

@@ -23,6 +23,51 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
     int max_scope_lev,
     int prefer_non_builtin);
 
+static int semcheck_operator_lookup_unit_index(SymTab_t *symtab)
+{
+    if (symtab != NULL && symtab->unit_context > 0)
+        return symtab->unit_context;
+    return semcheck_get_current_unit_index();
+}
+
+static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
+    SymTab_t *symtab, const char *prefix)
+{
+    int return_val = 0;
+    int caller_unit_index;
+    ListNode_t *cur;
+
+    if (hash_return == NULL || symtab == NULL || prefix == NULL)
+        return -1;
+
+    caller_unit_index = semcheck_operator_lookup_unit_index(symtab);
+    cur = symtab->stack_head;
+    while (cur != NULL)
+    {
+        HashNode_t *node = FindIdentByPrefixInTableForUnit((HashTable_t *)cur->cur,
+            prefix, caller_unit_index);
+        if (node != NULL)
+        {
+            *hash_return = node;
+            return return_val;
+        }
+        ++return_val;
+        cur = cur->next;
+    }
+
+    {
+        HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
+        if (node != NULL)
+        {
+            *hash_return = node;
+            return return_val;
+        }
+    }
+
+    *hash_return = NULL;
+    return -1;
+}
+
 static int semcheck_candidate_returns_bool(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (candidate == NULL || candidate->type == NULL ||
@@ -534,7 +579,7 @@ int semcheck_relop(int *type_return,
                                 DestroyList(operator_candidates);
                             }
                             if (operator_node == NULL &&
-                                FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 &&
+                                semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
                                 operator_node != NULL)
                             {
                                 /* fallback for return-type-disambiguated names not indexed by base id */
@@ -927,7 +972,7 @@ relop_fallback:
                                 DestroyList(operator_candidates);
                             }
                             if (operator_node == NULL &&
-                                FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 &&
+                                semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
                                 operator_node != NULL)
                             {
                                 /* fallback */
@@ -1338,6 +1383,17 @@ int semcheck_addop(int *type_return,
         else if (type_second == RECORD_TYPE && right_type_name != NULL)
             record_type_name = right_type_name;
 
+        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+        {
+            fprintf(stderr,
+                "[SemCheck] addop record branch line %d: lhs_type_name=%s rhs_type_name=%s chosen=%s op=%d\n",
+                expr->line_num,
+                left_type_name != NULL ? left_type_name : "<null>",
+                right_type_name != NULL ? right_type_name : "<null>",
+                record_type_name != NULL ? record_type_name : "<null>",
+                op_type);
+        }
+
         if (record_type_name != NULL)
         {
             /* Construct the operator method name */
@@ -1352,23 +1408,190 @@ int semcheck_addop(int *type_return,
             if (op_suffix != NULL)
             {
                 /* Build the mangled operator method name: TypeName__op_add */
-                size_t name_len = strlen(left_type_name) + strlen(op_suffix) + 3;
+                size_t name_len = strlen(record_type_name) + strlen(op_suffix) + 3;
                 char *operator_method = (char *)malloc(name_len);
                 if (operator_method != NULL)
                 {
-                    snprintf(operator_method, name_len, "%s__%s", left_type_name, op_suffix);
-                    
-                    /* Look up the operator method in the symbol table.
-                     * Try exact match first, then prefix match for return-type-suffixed names
-                     * (e.g. tmyint__op_add_tmyint). */
+                    snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
+
                     HashNode_t *operator_node = NULL;
-                    if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
+                    if (getenv("KGPC_DEBUG_ADDOP") != NULL)
                     {
-                        /* exact match */
+                        fprintf(stderr,
+                            "[SemCheck] addop operator key=%s candidates=%d unit_ctx=%d lookup_unit=%d\n",
+                            operator_method,
+                            ListLength(operator_candidates),
+                            symtab != NULL ? symtab->unit_context : -1,
+                            semcheck_operator_lookup_unit_index(symtab));
                     }
-                    else if (FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    if (operator_candidates != NULL)
                     {
-                        /* prefix match — return-type-disambiguated name */
+                        KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
+                        KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
+                        HashNode_t *best_exact = NULL;
+                        int best_exact_score = -1;
+                        for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
+                        {
+                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                            if (candidate == NULL ||
+                                (candidate->hash_type != HASHTYPE_FUNCTION &&
+                                 candidate->hash_type != HASHTYPE_PROCEDURE) ||
+                                candidate->type == NULL)
+                            {
+                                continue;
+                            }
+
+                            ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+                            if (params == NULL || params->next == NULL)
+                                continue;
+
+                            Tree_t *left_decl = (Tree_t *)params->cur;
+                            Tree_t *right_decl = (Tree_t *)params->next->cur;
+                            int owns_left = 0;
+                            int owns_right = 0;
+                            KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
+                            KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
+
+                            int score = 0;
+                            int valid = 1;
+                            if (left_formal != NULL && left_arg_type != NULL)
+                            {
+                                if (kgpc_type_equals(left_formal, left_arg_type))
+                                    score += 2;
+                                else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
+                                    score += 1;
+                                else
+                                    valid = 0;
+                            }
+                            if (valid && right_formal != NULL && right_arg_type != NULL)
+                            {
+                                if (kgpc_type_equals(right_formal, right_arg_type))
+                                    score += 2;
+                                else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
+                                    score += 1;
+                                else
+                                    valid = 0;
+                            }
+                            if (owns_left && left_formal != NULL)
+                                destroy_kgpc_type(left_formal);
+                            if (owns_right && right_formal != NULL)
+                                destroy_kgpc_type(right_formal);
+
+                            if (valid && score > best_exact_score)
+                            {
+                                best_exact = candidate;
+                                best_exact_score = score;
+                            }
+                        }
+                        if (best_exact != NULL)
+                            operator_node = best_exact;
+
+                        HashNode_t *best_match = NULL;
+                        int best_rank = 0;
+                        int num_best = 0;
+                        if (operator_node == NULL)
+                        {
+                            ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
+                            if (args_given != NULL)
+                            {
+                                args_given->next = CreateListNode(expr2, LIST_EXPR);
+                                int resolve_status = semcheck_resolve_overload(
+                                    &best_match,
+                                    &best_rank,
+                                    &num_best,
+                                    operator_candidates,
+                                    args_given,
+                                    symtab,
+                                    expr,
+                                    max_scope_lev,
+                                    1);
+                                if (resolve_status == 0 && best_match != NULL)
+                                    operator_node = best_match;
+                                DestroyList(args_given);
+                            }
+                        }
+                        if (operator_node == NULL)
+                        {
+                            for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
+                            {
+                                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                if (candidate != NULL &&
+                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                     candidate->hash_type == HASHTYPE_PROCEDURE))
+                                {
+                                    operator_node = candidate;
+                                    break;
+                                }
+                            }
+                        }
+                        DestroyList(operator_candidates);
+                    }
+                    if (operator_node == NULL &&
+                        semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
+                        operator_node != NULL)
+                    {
+                        /* fallback for return-type-disambiguated names not indexed by base id */
+                        if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+                        {
+                            fprintf(stderr,
+                                "[SemCheck] addop prefix hit key=%s node=%s mangled=%s\n",
+                                operator_method,
+                                operator_node->id != NULL ? operator_node->id : "<null>",
+                                operator_node->mangled_id != NULL ? operator_node->mangled_id : "<null>");
+                        }
+                    }
+                    else if (getenv("KGPC_DEBUG_ADDOP") != NULL)
+                    {
+                        fprintf(stderr,
+                            "[SemCheck] addop prefix miss key=%s\n",
+                            operator_method);
+                        for (ListNode_t *scope = symtab != NULL ? symtab->stack_head : NULL;
+                             scope != NULL; scope = scope->next)
+                        {
+                            HashTable_t *table = (HashTable_t *)scope->cur;
+                            if (table == NULL)
+                                continue;
+                            for (int bucket = 0; bucket < TABLE_SIZE; bucket++)
+                            {
+                                for (ListNode_t *node_cur = table->table[bucket];
+                                     node_cur != NULL; node_cur = node_cur->next)
+                                {
+                                    HashNode_t *cand = (HashNode_t *)node_cur->cur;
+                                    if (cand != NULL && cand->id != NULL &&
+                                        strcasestr(cand->id, "constexprint") != NULL)
+                                    {
+                                        fprintf(stderr,
+                                            "[SemCheck] addop nearby id=%s mangled=%s src_unit=%d defined_in_unit=%d\n",
+                                            cand->id,
+                                            cand->mangled_id != NULL ? cand->mangled_id : "<null>",
+                                            cand->source_unit_index,
+                                            cand->defined_in_unit);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (operator_node == NULL)
+                    {
+                        size_t exact_len = strlen(operator_method) + strlen(record_type_name) + 2;
+                        char *operator_exact = (char *)malloc(exact_len);
+                        if (operator_exact != NULL)
+                        {
+                            snprintf(operator_exact, exact_len, "%s_%s", operator_method, record_type_name);
+                            if (FindIdentInUnit(&operator_node, symtab, operator_exact,
+                                    semcheck_operator_lookup_unit_index(symtab)) >= 0 &&
+                                operator_node != NULL &&
+                                getenv("KGPC_DEBUG_ADDOP") != NULL)
+                            {
+                                fprintf(stderr,
+                                    "[SemCheck] addop exact-return hit key=%s node=%s mangled=%s\n",
+                                    operator_exact,
+                                    operator_node->id != NULL ? operator_node->id : "<null>",
+                                    operator_node->mangled_id != NULL ? operator_node->mangled_id : "<null>");
+                            }
+                            free(operator_exact);
+                        }
                     }
                     if (operator_node != NULL)
                     {
@@ -1639,7 +1862,7 @@ int semcheck_mulop(int *type_return,
                     {
                         /* exact match */
                     }
-                    else if (FindIdentByPrefix(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    else if (semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
                     {
                         /* prefix match — return-type-disambiguated name */
                     }
