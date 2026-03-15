@@ -3315,8 +3315,14 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 node->source_unit_index > 0 &&
                 node->source_unit_index != qualified_unit_index)
             {
-                cur = cur->next;
-                continue;
+                /* Accept if the type's unit or the qualifier's unit is
+                 * a dependency of the other (covers transitive merging). */
+                if (!unit_registry_is_dep(qualified_unit_index, node->source_unit_index) &&
+                    !unit_registry_is_dep(node->source_unit_index, qualified_unit_index))
+                {
+                    cur = cur->next;
+                    continue;
+                }
             }
             if (node->source_unit_index != 0)
             {
@@ -14442,6 +14448,24 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         else if (tree->tree_data.var_decl_data.type_ref != NULL &&
                                  tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                             var_type = HASHVAR_POINTER;
+                        /* Try resolving via TypeRef (handles unit-qualified types
+                         * like baseunix.stat where the qualifier is structural). */
+                        else if (decl_type_ref != NULL)
+                        {
+                            HashNode_t *ref_node = semcheck_find_preferred_type_node_with_ref(
+                                symtab, decl_type_ref, type_id);
+                            if (ref_node != NULL)
+                            {
+                                type_node = ref_node;
+                                goto var_decl_type_resolved;
+                            }
+                            else
+                            {
+                                semantic_error(tree->line_num, 0, "undefined type %s", type_id);
+                                return_val++;
+                                var_type = HASHVAR_UNTYPED;
+                            }
+                        }
                         else
                         {
                             semantic_error(tree->line_num, 0, "undefined type %s", type_id);
@@ -14449,7 +14473,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             var_type = HASHVAR_UNTYPED;
                         }
                     }
-                    else
+                    var_decl_type_resolved:
+                    if (type_node != NULL)
                     {
                         if (type_node->type == NULL && type_id != NULL)
                         {

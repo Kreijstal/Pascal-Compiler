@@ -108,7 +108,7 @@ static int semcheck_candidate_is_direct_for_current_unit(SymTab_t *symtab, HashN
     {
         if (current_unit_index <= 0 || candidate->defined_in_unit)
             return 1;
-        return candidate->mangled_id != NULL && strchr(candidate->mangled_id, '$') != NULL;
+        return candidate->source_unit_index > 0;
     }
     if (current_unit_index <= 0)
         return 1;

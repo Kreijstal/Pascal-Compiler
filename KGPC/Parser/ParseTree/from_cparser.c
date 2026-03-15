@@ -6105,11 +6105,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (type_info->file_type_id != NULL)
                 type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
         }
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+        if (result == UNKNOWN_TYPE && type_id_out != NULL) {
+            /* map_type_name sets *type_id_out to the bare last component even
+             * for UNKNOWN_TYPE.  Override with the full qualified name so that
+             * unit-qualified references like baseunix.stat are preserved. */
             if (qualified_name != NULL) {
+                free(*type_id_out);
                 *type_id_out = qualified_name;
                 qualified_name = NULL;
-            } else {
+            } else if (*type_id_out == NULL) {
                 *type_id_out = last_dup;
                 last_dup = NULL;
             }
@@ -6136,11 +6140,12 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (type_info->file_type_id != NULL)
                 type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
         }
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+        if (result == UNKNOWN_TYPE && type_id_out != NULL) {
             if (qualified_name != NULL) {
+                free(*type_id_out);
                 *type_id_out = qualified_name;
                 qualified_name = NULL;
-            } else {
+            } else if (*type_id_out == NULL) {
                 *type_id_out = last_dup;
                 last_dup = NULL;
             }
@@ -6170,15 +6175,18 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (type_info->file_type_id != NULL)
                     type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
             }
-            if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+            if (result == UNKNOWN_TYPE && type_id_out != NULL) {
                 if (qualified_name != NULL) {
+                    free(*type_id_out);
                     *type_id_out = qualified_name;
                     qualified_name = NULL;
-                } else if (dup != NULL) {
-                    *type_id_out = strdup(dup);
-                } else {
-                    *type_id_out = last_dup;
-                    last_dup = NULL;
+                } else if (*type_id_out == NULL) {
+                    if (dup != NULL)
+                        *type_id_out = strdup(dup);
+                    else {
+                        *type_id_out = last_dup;
+                        last_dup = NULL;
+                    }
                 }
             }
             free(qualified_name);

@@ -2520,7 +2520,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             type_id_ref = qualified_ident_clone(arg_expr->id_ref);
         if (type_id_ref == NULL)
             type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
-        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+        if (type_id_ref == NULL && qualified_name != NULL)
             type_id_ref = qualified_ident_from_dotted(qualified_name);
         if (type_id_ref != NULL && qualified_name == NULL)
             qualified_name = qualified_ident_join(type_id_ref, ".");
@@ -2819,7 +2819,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
         if (arg_expr->id_ref != NULL)
             type_id_ref = qualified_ident_clone(arg_expr->id_ref);
-        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+        if (type_id_ref == NULL && qualified_name != NULL)
             type_id_ref = qualified_ident_from_dotted(qualified_name);
         if (type_id_ref == NULL && arg_expr->type == EXPR_RECORD_ACCESS)
             type_id_ref = build_qualified_ident_from_expr_local(arg_expr);

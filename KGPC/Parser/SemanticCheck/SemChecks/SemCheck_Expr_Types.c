@@ -5560,6 +5560,8 @@ static char *semcheck_mangle_specialized_type_text(const char *type_text)
 {
     if (type_text == NULL)
         return NULL;
+    /* TODO: Refactor caller to pass structured TypeRef instead of
+     * pre-rendered text, eliminating this string-based generic parsing. */
     const char *lt = strchr(type_text, '<');
     if (lt == NULL)
         return strdup(type_text);

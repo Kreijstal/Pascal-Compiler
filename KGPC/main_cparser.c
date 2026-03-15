@@ -1829,6 +1829,25 @@ int main(int argc, char **argv)
             emit_profile_stage("unit compile: auto-load ObjPas", current_time_seconds() - objpas_start);
         }
         
+        /* Register the target unit's own dependencies so that
+         * unit_registry_is_dep() works for qualified type resolution
+         * (e.g. baseunix.stat where baseunix is a direct dependency). */
+        {
+            int target_idx = unit_registry_add(user_tree->tree_data.unit_data.unit_id);
+            ListNode_t *dep;
+            for (dep = user_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
+            {
+                if (dep->type == LIST_STRING && dep->cur != NULL)
+                    unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
+            }
+            for (dep = user_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
+            {
+                if (dep->type == LIST_STRING && dep->cur != NULL)
+                    unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
+            }
+            unit_registry_add_dep(target_idx, unit_registry_add("System"));
+        }
+
         debug_check_type_presence(user_tree);
         emit_profile_stage("unit compile: total imports", current_time_seconds() - unit_import_start);
         unit_set_destroy(&visited_units);
