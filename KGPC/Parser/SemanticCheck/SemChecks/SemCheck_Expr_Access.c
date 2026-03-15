@@ -58,6 +58,20 @@ static int semcheck_expr_is_char_typecast_call_for_call_local(const struct Expre
         pascal_identifier_equals(target_id, "UnicodeChar");
 }
 
+static void semcheck_bind_set_literal_to_expected_type_for_call(
+    struct Expression *arg_expr,
+    KgpcType *expected_kgpc,
+    int *arg_type)
+{
+    if (arg_expr == NULL || arg_expr->type != EXPR_SET ||
+        expected_kgpc == NULL || !kgpc_type_is_set(expected_kgpc))
+        return;
+
+    semcheck_expr_set_resolved_kgpc_type_shared(arg_expr, expected_kgpc);
+    if (arg_type != NULL)
+        *arg_type = SET_TYPE;
+}
+
 static int semcheck_candidate_source_unit_index(HashNode_t *candidate)
 {
     if (candidate == NULL)
@@ -6876,6 +6890,10 @@ skip_overload_resolution:
                     int type_compatible = 0;
                     int owns_expected_kgpc = 0;
                     KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected_kgpc);
+
+                    semcheck_bind_set_literal_to_expected_type_for_call(
+                        current_arg_expr, expected_kgpc, &arg_type);
+
                     int owns_arg_kgpc = 0;
                     KgpcType *arg_kgpc = current_arg_expr != NULL ? current_arg_expr->resolved_kgpc_type : NULL;
                     if (arg_kgpc == NULL && current_arg_expr != NULL &&

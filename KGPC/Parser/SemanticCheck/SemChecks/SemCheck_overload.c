@@ -954,6 +954,32 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
     return arg_tag;
 }
 
+static void semcheck_bind_set_literal_to_formal_type(struct Expression *arg_expr,
+    KgpcType *formal_kgpc,
+    int *owns_arg,
+    KgpcType **arg_kgpc,
+    int *arg_tag)
+{
+    if (arg_expr == NULL || arg_expr->type != EXPR_SET ||
+        formal_kgpc == NULL || !kgpc_type_is_set(formal_kgpc))
+        return;
+
+    semcheck_expr_set_resolved_kgpc_type_shared(arg_expr, formal_kgpc);
+
+    if (owns_arg != NULL && *owns_arg && arg_kgpc != NULL && *arg_kgpc != NULL)
+        destroy_kgpc_type(*arg_kgpc);
+
+    if (arg_kgpc != NULL)
+    {
+        kgpc_type_retain(formal_kgpc);
+        *arg_kgpc = formal_kgpc;
+    }
+    if (owns_arg != NULL)
+        *owns_arg = 1;
+    if (arg_tag != NULL)
+        *arg_tag = SET_TYPE;
+}
+
 
 static MatchQuality semcheck_make_quality(MatchQualityKind kind)
 {
@@ -2569,6 +2595,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             break;
                     }
                 }
+
+                semcheck_bind_set_literal_to_formal_type(arg_expr, formal_kgpc,
+                    &owns_arg, &arg_kgpc, &arg_tag);
 
                 MatchQuality quality = semcheck_make_quality(MATCH_INCOMPATIBLE);
 
