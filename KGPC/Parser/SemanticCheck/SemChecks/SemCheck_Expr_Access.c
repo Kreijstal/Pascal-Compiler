@@ -3868,6 +3868,33 @@ int semcheck_funccall(int *type_return,
                 }
             }
         }
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int with_status = semcheck_with_try_resolve(first_arg->expr_data.id,
+                symtab, &with_expr, expr->line_num);
+            if (with_status == 0 && with_expr != NULL)
+            {
+                char *field_id = first_arg->expr_data.id;
+                memset(&first_arg->expr_data, 0, sizeof(first_arg->expr_data));
+                first_arg->type = EXPR_RECORD_ACCESS;
+                first_arg->expr_data.record_access_data.record_expr = with_expr;
+                first_arg->expr_data.record_access_data.field_id = field_id;
+                first_arg->expr_data.record_access_data.field_offset = 0;
+                first_arg->record_type = NULL;
+                first_arg->array_element_record_type = NULL;
+                first_arg->array_element_type = UNKNOWN_TYPE;
+                first_arg->array_element_type_id = NULL;
+                semcheck_set_pointer_info(first_arg, UNKNOWN_TYPE, NULL);
+                semcheck_expr_set_resolved_type(first_arg, UNKNOWN_TYPE);
+            }
+            else if (with_expr != NULL)
+            {
+                destroy_expr(with_expr);
+            }
+        }
+
         int first_arg_type_tag;
         KgpcType *first_arg_kgpc_type = NULL;
         semcheck_expr_with_type(&first_arg_kgpc_type, symtab, first_arg, max_scope_lev, NO_MUTATE);
@@ -3901,15 +3928,15 @@ int semcheck_funccall(int *type_return,
                 ? first_arg->resolved_kgpc_type
                 : first_arg_kgpc_type;
 
-            if (record_info == NULL && owner_type != NULL) {
-                if (owner_type->kind == TYPE_KIND_RECORD) {
-                    record_info = owner_type->info.record_info;
-                } else if (owner_type->kind == TYPE_KIND_POINTER &&
-                    owner_type->info.points_to != NULL &&
-                    owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                    record_info = owner_type->info.points_to->info.record_info;
-                }
+        if (record_info == NULL && owner_type != NULL) {
+            if (owner_type->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.record_info;
+            } else if (owner_type->kind == TYPE_KIND_POINTER &&
+                owner_type->info.points_to != NULL &&
+                owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
+                record_info = owner_type->info.points_to->info.record_info;
             }
+        }
             /* For "class of T" (metaclass) types, the pointer's pointee may not
              * have been resolved to TYPE_KIND_RECORD at AST conversion time.
              * Try multiple strategies to find the record type:

@@ -5366,6 +5366,32 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL && with_context_count > 0)
+        {
+            struct Expression *with_expr = NULL;
+            int with_status = semcheck_with_try_resolve(first_arg->expr_data.id,
+                symtab, &with_expr, stmt->line_num);
+            if (with_status == 0 && with_expr != NULL)
+            {
+                char *field_id = first_arg->expr_data.id;
+                memset(&first_arg->expr_data, 0, sizeof(first_arg->expr_data));
+                first_arg->type = EXPR_RECORD_ACCESS;
+                first_arg->expr_data.record_access_data.record_expr = with_expr;
+                first_arg->expr_data.record_access_data.field_id = field_id;
+                first_arg->expr_data.record_access_data.field_offset = 0;
+                first_arg->record_type = NULL;
+                first_arg->array_element_record_type = NULL;
+                first_arg->array_element_type = UNKNOWN_TYPE;
+                first_arg->array_element_type_id = NULL;
+                first_arg->pointer_subtype = UNKNOWN_TYPE;
+                semcheck_expr_set_resolved_type(first_arg, UNKNOWN_TYPE);
+            }
+            else if (with_expr != NULL)
+            {
+                destroy_expr(with_expr);
+            }
+        }
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
             /* Keep unit qualifiers out of the type-receiver fast path.
