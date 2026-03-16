@@ -1902,7 +1902,7 @@ int semcheck_mulop(int *type_return,
                     /* Look up the operator method in the symbol table.
                      * Try exact match first, then prefix match for return-type-suffixed names. */
                     HashNode_t *operator_node = NULL;
-                    if (FindIdent(&operator_node, symtab, operator_method) != 0 && operator_node != NULL)
+                    if (FindSymbol(&operator_node, symtab, operator_method) != 0 && operator_node != NULL)
                     {
                         /* exact match */
                     }
@@ -2335,7 +2335,7 @@ int semcheck_varid(int *type_return,
         return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
     }
 
-    scope_return = FindIdent(&hash_return, symtab, id);
+    scope_return = FindSymbol(&hash_return, symtab, id);
     if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
@@ -2352,7 +2352,7 @@ int semcheck_varid(int *type_return,
             id, scope_return, (void *)hash_return,
             hash_return != NULL ? hash_return->hash_type : -1);
     }
-    if (scope_return == -1 && id != NULL)
+    if (!scope_return && id != NULL)
     {
         const char *owner = semcheck_get_current_method_owner();
         if (owner != NULL)
@@ -2360,13 +2360,13 @@ int semcheck_varid(int *type_return,
             char mangled[256];
             snprintf(mangled, sizeof(mangled), "%s__%s", owner, id);
             HashNode_t *class_const = NULL;
-            int class_const_scope = FindIdent(&class_const, symtab, mangled);
+            int class_const_scope = FindSymbol(&class_const, symtab, mangled);
             if (kgpc_getenv("KGPC_DEBUG_CLASS_CONST") != NULL)
             {
                 fprintf(stderr, "[KGPC] class const lookup %s -> scope=%d node=%p\n",
                     mangled, class_const_scope, (void*)class_const);
             }
-            if (class_const_scope >= 0 && class_const != NULL &&
+            if (class_const_scope && class_const != NULL &&
                 (class_const->hash_type == HASHTYPE_CONST ||
                  class_const->hash_type == HASHTYPE_ARRAY ||
                  class_const->hash_type == HASHTYPE_VAR ||
@@ -2381,7 +2381,7 @@ int semcheck_varid(int *type_return,
             }
             /* For nested types like HeapInc.ThreadState, also try the
              * outermost class: HeapInc__ConstName */
-            if (class_const_scope == -1)
+            if (!class_const_scope)
             {
                 const char *outer = semcheck_get_current_subprogram_owner_class_outer();
                 if (outer != NULL)
@@ -2390,8 +2390,8 @@ int semcheck_varid(int *type_return,
                     snprintf(outer_mangled, sizeof(outer_mangled), "%s__%s",
                              outer, id);
                     class_const = NULL;
-                    class_const_scope = FindIdent(&class_const, symtab, outer_mangled);
-                    if (class_const_scope >= 0 && class_const != NULL &&
+                    class_const_scope = FindSymbol(&class_const, symtab, outer_mangled);
+                    if (class_const_scope && class_const != NULL &&
                         (class_const->hash_type == HASHTYPE_CONST ||
                          class_const->hash_type == HASHTYPE_ARRAY ||
                          class_const->hash_type == HASHTYPE_VAR ||
@@ -2412,7 +2412,7 @@ int semcheck_varid(int *type_return,
          * This handles scoped enum values and unit-qualified constants
          * in contexts where the parser produces a single flat identifier
          * (e.g. case labels). */
-        if (scope_return == -1)
+        if (!scope_return)
         {
             if (expr->id_ref != NULL && expr->id_ref->count >= 2)
             {
@@ -2421,8 +2421,8 @@ int semcheck_varid(int *type_return,
                 size_t prefix_len = strlen(prefix);
 
                 HashNode_t *prefix_node = NULL;
-                int prefix_scope = FindIdent(&prefix_node, symtab, prefix);
-                if (prefix_scope >= 0 && prefix_node != NULL &&
+                int prefix_scope = FindSymbol(&prefix_node, symtab, prefix);
+                if (prefix_scope && prefix_node != NULL &&
                     prefix_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *type_alias = get_type_alias_from_node(prefix_node);
@@ -2457,8 +2457,8 @@ int semcheck_varid(int *type_return,
                     assert(mangled_qid != NULL);
                     snprintf(mangled_qid, mangled_len, "%s__%s", prefix, suffix);
                     HashNode_t *class_const_node = NULL;
-                    int cc_scope = FindIdent(&class_const_node, symtab, mangled_qid);
-                    if (cc_scope >= 0 && class_const_node != NULL &&
+                    int cc_scope = FindSymbol(&class_const_node, symtab, mangled_qid);
+                    if (cc_scope && class_const_node != NULL &&
                         (class_const_node->hash_type == HASHTYPE_CONST ||
                          class_const_node->hash_type == HASHTYPE_ARRAY ||
                          class_const_node->hash_type == HASHTYPE_VAR ||
@@ -2475,12 +2475,12 @@ int semcheck_varid(int *type_return,
                     }
                     free(mangled_qid);
                 }
-                else if (prefix_scope == -1 || semcheck_is_unit_name(prefix))
+                else if (!prefix_scope || semcheck_is_unit_name(prefix))
                 {
                     /* Prefix not found - might be a unit qualifier.
                      * Try looking up the suffix directly. */
                     HashNode_t *field_node = NULL;
-                    if (FindIdent(&field_node, symtab, suffix) != 0 && field_node != NULL)
+                    if (FindSymbol(&field_node, symtab, suffix) != 0 && field_node != NULL)
                     {
                         if (field_node->hash_type == HASHTYPE_CONST)
                         {
@@ -2501,7 +2501,7 @@ int semcheck_varid(int *type_return,
                                 free(expr->expr_data.id);
                             expr->expr_data.id = field_copy;
                             id = expr->expr_data.id;
-                            scope_return = FindIdent(&hash_return, symtab, id);
+                            scope_return = FindSymbol(&hash_return, symtab, id);
                             goto resolved;
                         }
                     }
@@ -2511,16 +2511,16 @@ int semcheck_varid(int *type_return,
         /* Class property resolution in static methods: if the identifier
          * matches a class property of the enclosing record, rewrite it
          * to reference the backing field (read accessor). */
-        if (scope_return == -1 && owner != NULL)
+        if (!scope_return && owner != NULL)
         {
             HashNode_t *owner_node = NULL;
-            if (FindIdent(&owner_node, symtab, owner) != 0 && owner_node != NULL)
+            if (FindSymbol(&owner_node, symtab, owner) != 0 && owner_node != NULL)
             {
                 struct RecordType *owner_record = get_record_type_from_node(owner_node);
                 if (owner_record != NULL)
                 {
                     /* Search both 'properties' and 'record_properties' lists */
-                    for (int pp = 0; pp < 2 && scope_return == -1; pp++)
+                    for (int pp = 0; pp < 2 && !scope_return; pp++)
                     {
                         ListNode_t *pnode = (pp == 0) ? owner_record->properties
                                                        : owner_record->record_properties;
@@ -2535,9 +2535,9 @@ int semcheck_varid(int *type_return,
                                 {
                                     /* Rewrite identifier to reference the backing field */
                                     HashNode_t *accessor_node = NULL;
-                                    int acc_scope = FindIdent(&accessor_node, symtab,
+                                    int acc_scope = FindSymbol(&accessor_node, symtab,
                                         cprop->read_accessor);
-                                    if (acc_scope >= 0 && accessor_node != NULL)
+                                    if (acc_scope && accessor_node != NULL)
                                     {
                                         char *new_id = strdup(cprop->read_accessor);
                                         assert(new_id != NULL);
@@ -2556,10 +2556,10 @@ int semcheck_varid(int *type_return,
                 }
             }
         }
-        if (scope_return == -1)
+        if (!scope_return)
         {
             HashNode_t *self_node = NULL;
-            if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+            if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 if (self_record == NULL)
@@ -2592,7 +2592,7 @@ resolved:;
             hash_return != NULL ? hash_return->hash_type : -1,
             hash_return != NULL ? kgpc_type_to_string(hash_return->type) : "<null>");
     }
-    if (scope_return != -1 && hash_return != NULL &&
+    if (scope_return && hash_return != NULL &&
         hash_return->hash_type == HASHTYPE_FUNCTION &&
         mutating == NO_MUTATE && with_status != 0)
     {
@@ -2611,11 +2611,11 @@ resolved:;
             scope_return, (void*)hash_return,
             hash_return && hash_return->type ? hash_return->type->kind : -1);
     }
-    if (scope_return != -1 && with_status != 0 && id != NULL &&
+    if (scope_return && with_status != 0 && id != NULL &&
         hash_return != NULL && hash_return->hash_type == HASHTYPE_FUNCTION)
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *self_record = get_record_type_from_node(self_node);
             if (self_record == NULL)
@@ -2690,7 +2690,7 @@ resolved:;
     HashNode_t *helper_self_node = NULL;
     struct RecordType *helper_self_record = NULL;
     int helper_context = 0;
-    if (FindIdent(&helper_self_node, symtab, "Self") != 0 && helper_self_node != NULL)
+    if (FindSymbol(&helper_self_node, symtab, "Self") != 0 && helper_self_node != NULL)
     {
         helper_self_record = get_record_type_from_node(helper_self_node);
         if (helper_self_record == NULL)
@@ -2748,9 +2748,9 @@ resolved:;
         }
     }
 
-    if (scope_return == -1)
+    if (!scope_return)
     {
-        if (scope_return == -1)
+        if (!scope_return)
         {
             /* FPC-style module property fallback: resolve Foo as GetFoo() when present. */
             if (with_status != 0 && id != NULL)
@@ -2761,7 +2761,7 @@ resolved:;
                 {
                     snprintf(getter_id, id_len + 4, "Get%s", id);
                     HashNode_t *getter_node = NULL;
-                    int getter_found = (FindIdent(&getter_node, symtab, getter_id) != 0);
+                    int getter_found = (FindSymbol(&getter_node, symtab, getter_id) != 0);
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
                         fprintf(stderr, "[SemCheck] varid fallback: id=%s getter=%s found=%d hash=%d\n",
@@ -2802,7 +2802,7 @@ resolved:;
                             char mangled[256];
                             snprintf(mangled, sizeof(mangled), "%s__%s", self_record->type_id, id);
                             HashNode_t *mnode = NULL;
-                            int mscope = FindIdent(&mnode, symtab, mangled);
+                            int mscope = FindSymbol(&mnode, symtab, mangled);
                             fprintf(stderr,
                                 "[KGPC_DEBUG_MONITOR] mangled lookup %s scope=%d node=%p hash=%d\n",
                                 mangled, mscope, (void *)mnode,
@@ -2892,7 +2892,7 @@ resolved:;
             {
                 HashNode_t *self_node = helper_self_node;
                 if (self_node == NULL)
-                    FindIdent(&self_node, symtab, "Self");
+                    FindSymbol(&self_node, symtab, "Self");
                 if (self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
@@ -3028,7 +3028,7 @@ resolved:;
             if (id != NULL)
             {
                 HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+                if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record == NULL)
@@ -3058,7 +3058,7 @@ resolved:;
             if (id != NULL)
             {
                 HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+                if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record == NULL)
@@ -3250,7 +3250,7 @@ resolved:;
                 char mangled_method[512];
                 snprintf(mangled_method, sizeof(mangled_method), "%s__%s", owner, id);
                 HashNode_t *mangled_node = NULL;
-                if (FindIdent(&mangled_node, symtab, mangled_method) != 0 &&
+                if (FindSymbol(&mangled_node, symtab, mangled_method) != 0 &&
                     mangled_node != NULL &&
                     mangled_node->hash_type == HASHTYPE_FUNCTION &&
                     mangled_node->type != NULL &&
@@ -3307,7 +3307,7 @@ resolved:;
         
         set_hash_meta(hash_return, mutating);
         semcheck_mark_static_link_needed(hash_return);
-        if(scope_return > max_scope_lev)
+        if(0) /* scope depth check removed — tree scoping has no depth */
         {
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_varid: scope_return=%d max_scope_lev=%d\n", scope_return, max_scope_lev);
@@ -3456,7 +3456,7 @@ resolved:;
             if (subtype == UNKNOWN_TYPE && alias != NULL && alias->alias_name != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, alias->alias_name) != 0 &&
+                if (FindSymbol(&type_node, symtab, alias->alias_name) != 0 &&
                     type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *type_alias = get_type_alias_from_node(type_node);
@@ -3485,7 +3485,7 @@ resolved:;
                 HashNode_t *target_node = semcheck_pick_type_node_with_origin_preference(symtab,
                     type_id, prefer_unit_pointer_targets);
                 if (target_node == NULL &&
-                    FindIdent(&target_node, symtab, (char*)type_id) == -1)
+                    FindSymbol(&target_node, symtab, (char*)type_id) == 0)
                     target_node = NULL;
                 if (target_node != NULL)
                 {
@@ -3502,7 +3502,7 @@ resolved:;
             {
                 const char *candidate_type_id = alias->alias_name + 1;
                 HashNode_t *candidate_node = NULL;
-                if (FindIdent(&candidate_node, symtab, (char *)candidate_type_id) >= 0 &&
+                if (FindSymbol(&candidate_node, symtab, (char *)candidate_type_id) != 0 &&
                     candidate_node != NULL)
                 {
                     type_id = candidate_type_id;

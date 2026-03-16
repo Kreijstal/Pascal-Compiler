@@ -44,7 +44,7 @@ static struct RecordType *semcheck_resolve_record_type_from_ref(SymTab_t *symtab
     if (type_node == NULL)
         type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab, type_ref, type_id);
     if (type_node == NULL && type_id != NULL)
-        FindIdent(&type_node, symtab, type_id);
+        FindSymbol(&type_node, symtab, type_id);
 
     if (type_node != NULL)
     {
@@ -69,7 +69,7 @@ static struct RecordType *semcheck_resolve_record_type_from_ref(SymTab_t *symtab
                     target_node = semcheck_find_type_node_with_kgpc_type_ref(
                         symtab, alias->target_type_ref, alias->target_type_id);
                 if (target_node == NULL && alias->target_type_id != NULL)
-                    FindIdent(&target_node, symtab, alias->target_type_id);
+                    FindSymbol(&target_node, symtab, alias->target_type_id);
                 if (target_node != NULL)
                 {
                     record = get_record_type_from_node(target_node);
@@ -899,7 +899,7 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         if (!field->field_is_array && field_desc->type_id != NULL)
         {
             HashNode_t *alias_node = NULL;
-            if (FindIdent(&alias_node, symtab, field_desc->type_id) != 0 && alias_node != NULL)
+            if (FindSymbol(&alias_node, symtab, field_desc->type_id) != 0 && alias_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(alias_node);
                 if (alias != NULL && alias->is_array)

@@ -127,7 +127,7 @@ KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
              inner->info.primitive_type_tag == RECORD_TYPE))
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
+            if (FindSymbol(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 kgpc_type_retain(type_node->type);
@@ -146,7 +146,7 @@ KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
         expr->pointer_subtype_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
+        if (FindSymbol(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
             kgpc_type_retain(type_node->type);
@@ -296,7 +296,7 @@ void semcheck_set_array_info_from_alias(struct Expression *expr, SymTab_t *symta
                 else if (symtab != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, dim_str) != 0 &&
+                    if (FindSymbol(&type_node, symtab, dim_str) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         struct TypeAlias *dim_alias = get_type_alias_from_node(type_node);

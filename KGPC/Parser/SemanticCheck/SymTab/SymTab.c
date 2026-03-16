@@ -543,7 +543,7 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
  * Find functions
  * ======================================================================== */
 
-int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
+int FindSymbol(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);

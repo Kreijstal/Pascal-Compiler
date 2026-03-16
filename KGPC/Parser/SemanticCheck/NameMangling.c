@@ -315,7 +315,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
             lookup_name = qualified;
     }
     if (lookup_name != NULL &&
-        FindIdent(&type_node, symtab, lookup_name) != 0 && type_node != NULL)
+        FindSymbol(&type_node, symtab, lookup_name) != 0 && type_node != NULL)
     {
         if (type_node->hash_type == HASHTYPE_TYPE)
         {
@@ -351,7 +351,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
         if (unqualified != NULL)
         {
             HashNode_t *unqualified_node = NULL;
-            if (FindIdent(&unqualified_node, symtab, unqualified) != 0 &&
+            if (FindSymbol(&unqualified_node, symtab, unqualified) != 0 &&
                 unqualified_node != NULL && unqualified_node->hash_type == HASHTYPE_TYPE)
             {
                 free(unqualified);
@@ -871,7 +871,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     if (ret_id == NULL && arg_expr->expr_data.function_call_data.id != NULL)
                     {
                         HashNode_t *func_node = NULL;
-                        int find_result = FindIdent(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
+                        int find_result = FindSymbol(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
                         if (kgpc_getenv("KGPC_DEBUG_MANGLE"))
                             fprintf(stderr, "[MANGLE] fallback lookup '%s': find=%d node=%p hash_type=%d type=%p kind=%d ret_id=%s\n",
                                 arg_expr->expr_data.function_call_data.id,
@@ -881,7 +881,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                                 func_node ? (void*)func_node->type : NULL,
                                 (func_node && func_node->type) ? func_node->type->kind : -1,
                                 (func_node && func_node->type && func_node->type->kind == TYPE_KIND_PROCEDURE && func_node->type->info.proc_info.return_type_id) ? func_node->type->info.proc_info.return_type_id : "<null>");
-                        if (find_result != -1 &&
+                        if (find_result &&
                             func_node != NULL && func_node->type != NULL &&
                             func_node->type->kind == TYPE_KIND_PROCEDURE)
                             ret_id = func_node->type->info.proc_info.return_type_id;

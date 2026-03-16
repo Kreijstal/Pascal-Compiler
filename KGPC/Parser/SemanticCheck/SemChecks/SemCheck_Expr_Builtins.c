@@ -124,7 +124,7 @@ static HashNode_t *semcheck_find_exact_qualified_type_node_local(SymTab_t *symta
     char *qualified = qualified_ident_join(type_ref, ".");
     if (qualified != NULL)
     {
-        if (FindIdent(&type_node, symtab, qualified) != 0 &&
+        if (FindSymbol(&type_node, symtab, qualified) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             free(qualified);
@@ -1590,7 +1590,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
         if (!is_currency && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, arg_expr->expr_data.id) != 0 &&
+            if (FindSymbol(&node, symtab, arg_expr->expr_data.id) != 0 &&
                 node != NULL && node->type != NULL &&
                 semcheck_is_currency_kgpc_type(node->type))
                 is_currency = 1;
@@ -3141,7 +3141,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     {
         char *arg_id = arg->expr_data.id;
         HashNode_t *node = NULL;
-        int scope = FindIdent(&node, symtab, arg_id);
+        int found = FindSymbol(&node, symtab, arg_id);
         HashNode_t *preferred_type_node = NULL;
         if (arg_id != NULL)
         {
@@ -3160,10 +3160,10 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 preferred_type_node->hash_type == HASHTYPE_TYPE)
             {
                 node = preferred_type_node;
-                scope = 0;
+                found = 1;
             }
         }
-        if (scope == -1 || node == NULL)
+        if (!found || node == NULL)
         {
             /* Check if this is a builtin type name that isn't in the symbol table */
             int is_builtin_type = 0;
@@ -3211,7 +3211,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             {
                 HashNode_t *self_node = NULL;
                 struct RecordField *self_field = NULL;
-                if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+                if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record != NULL)
@@ -3251,7 +3251,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            if (node->hash_type != HASHTYPE_TYPE && scope > max_scope_lev)
+            if (node->hash_type != HASHTYPE_TYPE && !found)
             {
                 semcheck_error_with_context("Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
                     expr->line_num, arg_id);
@@ -3577,7 +3577,7 @@ int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, arg_expr->expr_data.id) != 0 &&
+        if (FindSymbol(&type_node, symtab, arg_expr->expr_data.id) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             arg_kgpc_type = type_node->type;

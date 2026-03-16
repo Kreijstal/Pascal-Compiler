@@ -852,7 +852,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         if (arg_expr->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *elem_node = NULL;
-            if (FindIdent(&elem_node, symtab, arg_expr->array_element_type_id) != 0 &&
+            if (FindSymbol(&elem_node, symtab, arg_expr->array_element_type_id) != 0 &&
                 elem_node != NULL && elem_node->type != NULL)
                 elem_type = elem_node->type;
         }
@@ -912,7 +912,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
                 if (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, arg_expr->pointer_subtype_id) != 0 &&
+                    if (FindSymbol(&type_node, symtab, arg_expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -1674,7 +1674,7 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
         return NULL;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, expr->expr_data.id) == 0 || node == NULL || node->type == NULL)
+    if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL || node->type == NULL)
         return NULL;
 
     if (node->type->type_alias != NULL && node->type->type_alias->alias_name != NULL)
@@ -1988,7 +1988,7 @@ static int semcheck_class_depth(KgpcType *type, SymTab_t *symtab)
     while (parent != NULL && depth < 100) {
         depth++;
         HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, (char *)parent) == -1 || parent_node == NULL)
+        if (FindSymbol(&parent_node, symtab, (char *)parent) == 0 || parent_node == NULL)
             break;
         struct RecordType *parent_rec = NULL;
         if (parent_node->type != NULL) {
@@ -2026,12 +2026,12 @@ static int semcheck_compare_class_specificity(HashNode_t *candidate, HashNode_t 
             KgpcType *best_type = best_decl->tree_data.var_decl_data.cached_kgpc_type;
             if (cand_type == NULL && cand_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
+                if (FindSymbol(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     cand_type = node->type;
             }
             if (best_type == NULL && best_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
+                if (FindSymbol(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     best_type = node->type;
             }
             cand_depth_total += semcheck_class_depth(cand_type, symtab);
@@ -2354,7 +2354,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (arg_elem_tag == UNKNOWN_TYPE)
                         {
                             HashNode_t *type_node = NULL;
-                            if (FindIdent(&type_node, symtab, arg_expr->array_element_type_id) != 0 && type_node != NULL)
+                            if (FindSymbol(&type_node, symtab, arg_expr->array_element_type_id) != 0 && type_node != NULL)
                                 set_type_from_hashtype(&arg_elem_tag, type_node);
                         }
                     }

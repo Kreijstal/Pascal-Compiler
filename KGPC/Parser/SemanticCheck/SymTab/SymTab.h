@@ -3,7 +3,7 @@
     kept for Push*OntoScope routing during migration.
     See docs/SCOPE_TREE_REFACTORING.md.
 
-    Phase 3: FindIdent and all lookup functions use the tree path unconditionally.
+    Phase 3: FindSymbol (formerly FindIdent) and all lookup functions use the tree path unconditionally.
     PushScope/PopScope maintain the tree in parallel. Legacy flat stack + unit_tables
     + push_target_unit are still used for symbol insertion routing (Phase 4 removes them).
 
@@ -135,10 +135,9 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
 /* Adds a built-in character constant */
 int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 
-/* Searches for an identifier and sets the hash_return that contains the id and type information */
-/* Returns 0 and sets hash_return to NULL if not found */
-/* Returns 1 if found (hash_return set to the matching node) */
-int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
+/* Searches for a symbol and sets the hash_return that contains the id and type information */
+/* Returns 0 (false) if not found, 1 (true) if found */
+int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
 /* Like FindIdent but uses unit-aware resolution.
  * Prefers symbols from caller_unit_index, then program-local, then any.

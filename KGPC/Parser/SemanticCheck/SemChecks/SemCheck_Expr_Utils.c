@@ -147,7 +147,7 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
             const char *alias_name = semcheck_type_alias_name(node->type);
             if (alias_name != NULL)

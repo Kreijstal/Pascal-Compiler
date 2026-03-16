@@ -204,7 +204,7 @@ static HashNode_t *semcheck_find_exact_qualified_type_node(SymTab_t *symtab,
     char *qualified = qualified_ident_join(type_ref, ".");
     if (qualified != NULL)
     {
-        if (FindIdent(&type_node, symtab, qualified) != 0 &&
+        if (FindSymbol(&type_node, symtab, qualified) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             free(qualified);
@@ -549,7 +549,7 @@ int semcheck_typecast(int *type_return,
     if (qualifier != NULL && !semcheck_is_unit_name(qualifier))
     {
         HashNode_t *qual_node = NULL;
-        if (FindIdent(&qual_node, symtab, qualifier) != 0 &&
+        if (FindSymbol(&qual_node, symtab, qualifier) != 0 &&
             qual_node != NULL && qual_node->hash_type != HASHTYPE_TYPE)
         {
             int call_result = semcheck_reinterpret_typecast_as_call(type_return, symtab,
@@ -614,7 +614,7 @@ int semcheck_typecast(int *type_return,
     {
         const char *tid = expr->expr_data.typecast_data.target_type_id;
         HashNode_t *type_node = NULL;
-        if (tid != NULL && FindIdent(&type_node, symtab, tid) != 0 &&
+        if (tid != NULL && FindSymbol(&type_node, symtab, tid) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
             kgpc_type_retain(type_node->type);
@@ -637,7 +637,7 @@ int semcheck_typecast(int *type_return,
                 expr->expr_data.typecast_data.target_type_ref,
                 expr->expr_data.typecast_data.target_type_id);
             if (target_node == NULL &&
-                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
+                FindSymbol(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
             {
                 /* target_node assigned by FindIdent when present */
             }
@@ -664,7 +664,7 @@ int semcheck_typecast(int *type_return,
                 expr->expr_data.typecast_data.target_type_id);
             if (target_node == NULL &&
                 expr->expr_data.typecast_data.target_type_id != NULL &&
-                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
+                FindSymbol(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
             {
                 /* target_node assigned by FindIdent when present */
             }
@@ -929,7 +929,7 @@ int semcheck_typecast(int *type_return,
                 expr->expr_data.typecast_data.target_type_id);
             if (target_node == NULL &&
                 expr->expr_data.typecast_data.target_type_id != NULL &&
-                FindIdent(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
+                FindSymbol(&target_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0)
             {
                 /* target_node assigned by FindIdent when present */
             }
@@ -1153,7 +1153,7 @@ int semcheck_is_expr(int *type_return,
     if (!is_valid_target && expr->expr_data.is_data.target_type_id != NULL)
     {
         HashNode_t *is_target_node = NULL;
-        if (FindIdent(&is_target_node, symtab, expr->expr_data.is_data.target_type_id) != 0 &&
+        if (FindSymbol(&is_target_node, symtab, expr->expr_data.is_data.target_type_id) != 0 &&
             is_target_node != NULL && is_target_node->type != NULL)
         {
             KgpcType *is_tgt = is_target_node->type;
@@ -1196,7 +1196,7 @@ int semcheck_is_expr(int *type_return,
         if (owner_id != NULL)
         {
             HashNode_t *owner_node = NULL;
-            if (FindIdent(&owner_node, symtab, owner_id) != 0 &&
+            if (FindSymbol(&owner_node, symtab, owner_id) != 0 &&
                 owner_node != NULL && owner_node->type != NULL)
             {
                 struct RecordType *owner_rec = NULL;
@@ -1219,7 +1219,7 @@ int semcheck_is_expr(int *type_return,
                         if (!is_ptr && field->type_id != NULL)
                         {
                             HashNode_t *ft_node = NULL;
-                            if (FindIdent(&ft_node, symtab, field->type_id) != 0 &&
+                            if (FindSymbol(&ft_node, symtab, field->type_id) != 0 &&
                                 ft_node != NULL && ft_node->type != NULL)
                             {
                                 KgpcType *ft = ft_node->type;
@@ -1412,7 +1412,7 @@ int semcheck_pointer_deref(int *type_return,
     if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, pointer_expr->pointer_subtype_id) != 0 &&
+        if (FindSymbol(&target_node, symtab, pointer_expr->pointer_subtype_id) != 0 &&
             target_node != NULL)
         {
             set_type_from_hashtype(&target_type, target_node);
@@ -1457,7 +1457,7 @@ int semcheck_pointer_deref(int *type_return,
     if (target_type == UNKNOWN_TYPE && pointer_expr->type == EXPR_VAR_ID)
     {
         HashNode_t *ptr_node = NULL;
-        if (FindIdent(&ptr_node, symtab, pointer_expr->expr_data.id) != 0 && ptr_node != NULL)
+        if (FindSymbol(&ptr_node, symtab, pointer_expr->expr_data.id) != 0 && ptr_node != NULL)
         {
             struct TypeAlias *alias = get_type_alias_from_node(ptr_node);
             if (alias != NULL && alias->is_pointer)
@@ -1583,7 +1583,7 @@ int semcheck_pointer_deref(int *type_return,
         if (resolved_subtype == UNKNOWN_TYPE && resolved_subtype_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, resolved_subtype_id) != 0 && type_node != NULL)
+            if (FindSymbol(&type_node, symtab, resolved_subtype_id) != 0 && type_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->is_pointer)
@@ -1611,7 +1611,7 @@ int semcheck_pointer_deref(int *type_return,
     if (pointer_expr->pointer_subtype_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, pointer_expr->pointer_subtype_id) != 0 && type_node != NULL)
+        if (FindSymbol(&type_node, symtab, pointer_expr->pointer_subtype_id) != 0 && type_node != NULL)
         {
             struct TypeAlias *alias = get_type_alias_from_node(type_node);
             if (alias != NULL && alias->is_array)
@@ -1888,12 +1888,12 @@ int semcheck_recordaccess(int *type_return,
         {
             HashNode_t *type_node = NULL;
             const char *resolved_id = qualified_id;
-            if (FindIdent(&type_node, symtab, qualified_id) == 0 ||
+            if (FindSymbol(&type_node, symtab, qualified_id) == 0 ||
                 type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
             {
                 const char *base = semcheck_base_type_name(qualified_id);
                 if (base != NULL && base != qualified_id &&
-                    FindIdent(&type_node, symtab, base) != 0 &&
+                    FindSymbol(&type_node, symtab, base) != 0 &&
                     type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                 {
                     resolved_id = base;
@@ -1953,12 +1953,12 @@ int semcheck_recordaccess(int *type_return,
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab,
             record_expr->expr_data.id);
         if ((type_node == NULL || type_node->hash_type != HASHTYPE_TYPE) &&
-            FindIdent(&type_node, symtab, record_expr->expr_data.id) != 0 &&
+            FindSymbol(&type_node, symtab, record_expr->expr_data.id) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             /* fall back to the raw symbol-table order only if the preferred lookup
              * found nothing; full bootstrap has many visible aliases with the same
-             * base name, so raw FindIdent() can pick the wrong owner. */
+             * base name, so raw FindSymbol() can pick the wrong owner. */
         }
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
@@ -2011,7 +2011,7 @@ int semcheck_recordaccess(int *type_return,
                     snprintf(qualified, owner_len + 1 + field_len + 1, "%s.%s",
                         record_expr->expr_data.id, field_id);
                     HashNode_t *nested_node = NULL;
-                    if (FindIdent(&nested_node, symtab, qualified) != 0 &&
+                    if (FindSymbol(&nested_node, symtab, qualified) != 0 &&
                         nested_node != NULL && nested_node->hash_type == HASHTYPE_TYPE)
                     {
                         struct TypeAlias *nta = hashnode_get_type_alias(nested_node);
@@ -2215,10 +2215,10 @@ int semcheck_recordaccess(int *type_return,
         int unit_is_qualifier = semcheck_is_unit_name(unit_id);
         
         /* Check if the "unit name" identifier exists in symbol table */
-        int find_result = FindIdent(&unit_check, symtab, unit_id);
+        int find_result = FindSymbol(&unit_check, symtab, unit_id);
         if (!unit_is_qualifier)
             preferred_type = semcheck_find_preferred_type_node(symtab, unit_id);
-        if (!unit_is_qualifier && find_result == -1 && unit_registry_contains(unit_id))
+        if (!unit_is_qualifier && !find_result && unit_registry_contains(unit_id))
         {
             unit_is_qualifier = 1;
             if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
@@ -2229,7 +2229,7 @@ int semcheck_recordaccess(int *type_return,
                     field_id != NULL ? field_id : "(null)");
             }
             if (kgpc_getenv("KGPC_ASSERT_UNIT_QUALIFIER") != NULL)
-                assert(find_result == -1 && "unit-qualifier registry fallback requires unresolved name");
+                assert(!find_result && "unit-qualifier registry fallback requires unresolved name");
         }
         if (unit_is_qualifier)
         {
@@ -2246,7 +2246,7 @@ int semcheck_recordaccess(int *type_return,
              * since later unit imports (e.g., objpas MaxInt) may shadow system builtins. */
             HashNode_t *field_node = NULL;
             char *field_id_copy = strdup(field_id);
-            if (field_id_copy != NULL && FindIdent(&field_node, symtab, field_id_copy) != 0 && field_node != NULL)
+            if (field_id_copy != NULL && FindSymbol(&field_node, symtab, field_id_copy) != 0 && field_node != NULL)
             {
                 /* For unit-qualified access, find the entry from the correct unit */
                 if (unit_is_qualifier && pascal_identifier_equals(unit_id, "System"))
@@ -2316,7 +2316,7 @@ int semcheck_recordaccess(int *type_return,
 
                     if (qualified_name != NULL)
                     {
-                        if (FindIdent(&qualified_type, symtab, qualified_name) == 0 ||
+                        if (FindSymbol(&qualified_type, symtab, qualified_name) == 0 ||
                             qualified_type == NULL || qualified_type->hash_type != HASHTYPE_TYPE)
                         {
                             QualifiedIdent *qid = qualified_ident_from_dotted(qualified_name);
@@ -2564,7 +2564,7 @@ int semcheck_recordaccess(int *type_return,
                 }
 
                 HashNode_t *literal_node = NULL;
-                if (FindIdent(&literal_node, symtab, field_id) != 0 &&
+                if (FindSymbol(&literal_node, symtab, field_id) != 0 &&
                     literal_node != NULL &&
                     (literal_node->hash_type == HASHTYPE_CONST ||
                      literal_node->is_constant ||
@@ -2616,7 +2616,7 @@ int semcheck_recordaccess(int *type_return,
                 field_id != NULL ? field_id : "(null)");
         }
         HashNode_t *unit_sym = NULL;
-        if (FindIdent(&unit_sym, symtab, field_id) != 0 && unit_sym != NULL)
+        if (FindSymbol(&unit_sym, symtab, field_id) != 0 && unit_sym != NULL)
         {
             /* Transform EXPR_RECORD_ACCESS into EXPR_VAR_ID for the resolved identifier */
             char *saved_field_id = strdup(field_id);
@@ -2724,7 +2724,7 @@ int semcheck_recordaccess(int *type_return,
             goto SKIP_SELF_FIELD_REWRITE;
         }
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *self_record = get_record_type_from_node(self_node);
             if (self_record != NULL)
@@ -2882,7 +2882,7 @@ SKIP_SELF_FIELD_REWRITE:
             {
                 HashNode_t *type_node = semcheck_find_type_node_with_kgpc_type(symtab, target_id);
                 if (type_node == NULL)
-                    FindIdent(&type_node, symtab, target_id);
+                    FindSymbol(&type_node, symtab, target_id);
                 if (type_node != NULL)
                 {
                     record_info = get_record_type_from_node(type_node);
@@ -2976,7 +2976,7 @@ SKIP_SELF_FIELD_REWRITE:
             HashNode_t *target_node =
                 semcheck_find_type_node_with_kgpc_type(symtab, record_expr->pointer_subtype_id);
             if (target_node == NULL)
-                FindIdent(&target_node, symtab, record_expr->pointer_subtype_id);
+                FindSymbol(&target_node, symtab, record_expr->pointer_subtype_id);
             if (target_node != NULL)
                 record_info = get_record_type_from_node(target_node);
         }
@@ -3153,7 +3153,7 @@ SKIP_SELF_FIELD_REWRITE:
             {
                 /* Try looking up the field_id directly as a global enum constant */
                 HashNode_t *enum_node = NULL;
-                if (FindIdent(&enum_node, symtab, field_id) != 0 && enum_node != NULL &&
+                if (FindSymbol(&enum_node, symtab, field_id) != 0 && enum_node != NULL &&
                     enum_node->hash_type == HASHTYPE_CONST)
                 {
                     resolved = 1;
@@ -3196,7 +3196,7 @@ SKIP_SELF_FIELD_REWRITE:
                 if ((type_node == NULL || type_node->hash_type != HASHTYPE_TYPE))
                 {
                     HashNode_t *fallback_node = NULL;
-                    if (FindIdent(&fallback_node, symtab, record_expr->expr_data.id) != 0 &&
+                    if (FindSymbol(&fallback_node, symtab, record_expr->expr_data.id) != 0 &&
                         fallback_node != NULL && fallback_node->hash_type == HASHTYPE_TYPE)
                         type_node = fallback_node;
                 }
@@ -3262,7 +3262,7 @@ SKIP_SELF_FIELD_REWRITE:
             goto SKIP_SELF_REWRITE;
         }
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *self_record = get_record_type_from_node(self_node);
             if (self_record != NULL)
@@ -3388,7 +3388,7 @@ SKIP_SELF_FIELD_REWRITE:
             record_expr->expr_data.id != NULL)
         {
             HashNode_t *record_node = NULL;
-            if (FindIdent(&record_node, symtab, record_expr->expr_data.id) != 0 &&
+            if (FindSymbol(&record_node, symtab, record_expr->expr_data.id) != 0 &&
                 record_node != NULL)
             {
                 struct RecordType *node_record = get_record_type_from_node(record_node);
@@ -3716,7 +3716,7 @@ SKIP_SELF_FIELD_REWRITE:
                         if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL) {
                             /* Check if the receiver is a type name */
                             HashNode_t *type_node = NULL;
-                            if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != 0 &&
+                            if (FindSymbol(&type_node, symtab, record_expr->expr_data.id) != 0 &&
                                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
                                 /* It's a type-qualified static method call - pass type as first arg */
                                 struct Expression *type_arg = record_expr;
@@ -3802,7 +3802,7 @@ SKIP_SELF_FIELD_REWRITE:
                 /* Check if this is a type name or a variable name */
                 HashNode_t *ident_node = NULL;
                 int is_type = 0;
-                if (FindIdent(&ident_node, symtab, (char*)expr_name) >= 0 && ident_node != NULL) {
+                if (FindSymbol(&ident_node, symtab, (char*)expr_name) != 0 && ident_node != NULL) {
                     is_type = (ident_node->hash_type == HASHTYPE_TYPE);
                 }
                 
@@ -4022,7 +4022,7 @@ SKIP_SELF_FIELD_REWRITE:
             char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
             HashNode_t *const_node = NULL;
             if (mangled_const != NULL &&
-                FindIdent(&const_node, symtab, mangled_const) != 0 &&
+                FindSymbol(&const_node, symtab, mangled_const) != 0 &&
                 const_node != NULL && const_node->hash_type == HASHTYPE_CONST)
             {
                 destroy_expr(record_expr);
@@ -4161,7 +4161,7 @@ SKIP_SELF_FIELD_REWRITE:
             char *mangled_const = semcheck_mangle_helper_const_id(record_info->type_id, field_id);
             HashNode_t *const_node = NULL;
             if (mangled_const != NULL &&
-                FindIdent(&const_node, symtab, mangled_const) != 0 &&
+                FindSymbol(&const_node, symtab, mangled_const) != 0 &&
                 const_node != NULL &&
                 (const_node->hash_type == HASHTYPE_CONST ||
                  const_node->hash_type == HASHTYPE_ARRAY ||
@@ -4195,7 +4195,7 @@ SKIP_SELF_FIELD_REWRITE:
                 snprintf(qualified_name, owner_len + 1 + field_len + 1, "%s.%s",
                     record_info->type_id, field_id);
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, qualified_name) != 0 &&
+                if (FindSymbol(&type_node, symtab, qualified_name) != 0 &&
                     type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                 {
                     /* Found a nested type.  Transform the record access into
@@ -5349,7 +5349,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
 
     /* If a method with this name exists on Self, don't reinterpret as a typecast. */
     HashNode_t *self_node = NULL;
-    if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
+    if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
     {
         struct RecordType *self_record = get_record_type_from_node(self_node);
         if (self_record != NULL)
@@ -5374,7 +5374,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
         target_type = RECORD_TYPE;
     }
     if (type_node == NULL)
-        FindIdent(&type_node, symtab, id);
+        FindSymbol(&type_node, symtab, id);
     if (target_type == UNKNOWN_TYPE && type_node != NULL &&
         type_node->hash_type == HASHTYPE_TYPE &&
         type_node->type != NULL && kgpc_type_is_record(type_node->type))
@@ -5486,7 +5486,7 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
         return 1;
 
     HashNode_t *func_node = NULL;
-    int found_func = (FindIdent(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0 &&
+    int found_func = (FindSymbol(&func_node, symtab, expr->expr_data.typecast_data.target_type_id) != 0 &&
         func_node != NULL);
 
     /* For dotted identifiers like "widestringmanager.UpperProc", if the full name
@@ -5498,7 +5498,7 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
         if (prefix != NULL)
         {
             HashNode_t *prefix_node = NULL;
-            int prefix_found = (FindIdent(&prefix_node, symtab, prefix) != 0 && prefix_node != NULL);
+            int prefix_found = (FindSymbol(&prefix_node, symtab, prefix) != 0 && prefix_node != NULL);
             if (prefix_found)
                 found_func = 1;  /* Let the function call handler resolve the dotted name */
         }
@@ -5548,7 +5548,7 @@ static HashNode_t *find_implicit_self_method(SymTab_t *symtab, const char *name)
     if (owner_id == NULL)
         return NULL;
     HashNode_t *owner_node = NULL;
-    if (FindIdent(&owner_node, symtab, owner_id) == 0 || owner_node == NULL)
+    if (FindSymbol(&owner_node, symtab, owner_id) == 0 || owner_node == NULL)
         return NULL;
     struct RecordType *owner_rec = NULL;
     if (owner_node->type != NULL)
@@ -5614,8 +5614,7 @@ int semcheck_addressof(int *type_return,
     if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
     {
         HashNode_t *inner_symbol = NULL;
-        int found = FindIdent(&inner_symbol, symtab, inner->expr_data.id);
-        if (found >= 0 &&
+        if (FindSymbol(&inner_symbol, symtab, inner->expr_data.id) &&
             inner_symbol != NULL &&
             (inner_symbol->hash_type == HASHTYPE_FUNCTION ||
              inner_symbol->hash_type == HASHTYPE_PROCEDURE ||
@@ -5643,8 +5642,7 @@ int semcheck_addressof(int *type_return,
         if (func_id != NULL)
         {
             HashNode_t *inner_symbol = NULL;
-            int found = FindIdent(&inner_symbol, symtab, func_id);
-            if (found >= 0 &&
+            if (FindSymbol(&inner_symbol, symtab, func_id) &&
                 inner_symbol != NULL &&
                 (inner_symbol->hash_type == HASHTYPE_FUNCTION ||
                  inner_symbol->hash_type == HASHTYPE_PROCEDURE ||
@@ -5684,7 +5682,7 @@ int semcheck_addressof(int *type_return,
             if (receiver_expr->type == EXPR_VAR_ID && receiver_expr->expr_data.id != NULL)
             {
                 HashNode_t *owner_node = NULL;
-                if (FindIdent(&owner_node, symtab, receiver_expr->expr_data.id) != 0 &&
+                if (FindSymbol(&owner_node, symtab, receiver_expr->expr_data.id) != 0 &&
                     owner_node != NULL &&
                     owner_node->hash_type == HASHTYPE_TYPE &&
                     owner_node->type != NULL)
@@ -5795,7 +5793,7 @@ int semcheck_addressof(int *type_return,
             if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
             {
                 HashNode_t *owner_node = NULL;
-                if (FindIdent(&owner_node, symtab, record_expr->expr_data.id) != 0 &&
+                if (FindSymbol(&owner_node, symtab, record_expr->expr_data.id) != 0 &&
                     owner_node != NULL &&
                     owner_node->hash_type == HASHTYPE_TYPE &&
                     owner_node->type != NULL)
@@ -5999,7 +5997,7 @@ int semcheck_addressof(int *type_return,
         if (func_id != NULL)
         {
             HashNode_t *func_symbol = NULL;
-            if (FindIdent(&func_symbol, symtab, func_id) != 0 &&
+            if (FindSymbol(&func_symbol, symtab, func_id) != 0 &&
                 func_symbol != NULL && 
                 (func_symbol->hash_type == HASHTYPE_FUNCTION ||
                  func_symbol->hash_type == HASHTYPE_PROCEDURE ||
@@ -6018,7 +6016,7 @@ int semcheck_addressof(int *type_return,
         if (inner->type == EXPR_VAR_ID && inner->expr_data.id != NULL)
         {
             HashNode_t *inner_symbol = NULL;
-            if (FindIdent(&inner_symbol, symtab, inner->expr_data.id) != 0 &&
+            if (FindSymbol(&inner_symbol, symtab, inner->expr_data.id) != 0 &&
                 inner_symbol != NULL && inner_symbol->type == NULL &&
                 inner_symbol->is_var_parameter)
             {
@@ -6129,7 +6127,7 @@ int semcheck_addressof(int *type_return,
         if (proc_id != NULL)
         {
             HashNode_t *proc_symbol = NULL;
-            if (FindIdent(&proc_symbol, symtab, proc_id) != 0 &&
+            if (FindSymbol(&proc_symbol, symtab, proc_id) != 0 &&
                 proc_symbol != NULL && 
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION) &&
                 proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
@@ -6168,7 +6166,7 @@ int semcheck_addressof(int *type_return,
         if (inner->type == EXPR_VAR_ID)
         {
             HashNode_t *proc_symbol = NULL;
-            if (FindIdent(&proc_symbol, symtab, inner->expr_data.id) != 0 &&
+            if (FindSymbol(&proc_symbol, symtab, inner->expr_data.id) != 0 &&
                 proc_symbol != NULL && 
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
             {
@@ -6211,7 +6209,7 @@ int semcheck_addressof(int *type_return,
             if (func_id != NULL)
             {
                 HashNode_t *proc_symbol = NULL;
-                if (FindIdent(&proc_symbol, symtab, func_id) != 0 &&
+                if (FindSymbol(&proc_symbol, symtab, func_id) != 0 &&
                     proc_symbol != NULL &&
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
                 {
@@ -6345,7 +6343,7 @@ int semcheck_addressof(int *type_return,
             if (synth_name != NULL)
             {
                 HashNode_t *existing = NULL;
-                if (FindIdent(&existing, symtab, synth_name) == 0)
+                if (FindSymbol(&existing, symtab, synth_name) == 0)
                 {
                     KgpcType *generic_proc = create_procedure_type(NULL, NULL);
                     if (generic_proc != NULL)
