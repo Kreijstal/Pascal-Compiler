@@ -2457,6 +2457,16 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
         alias->range_end = 32767;
         alias->storage_size = 2;
     }
+    else if (pascal_identifier_equals(type_name, "LongInt") ||
+             pascal_identifier_equals(type_name, "Integer"))
+    {
+        alias->base_type = LONGINT_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = -2147483648LL;
+        alias->range_end = 2147483647LL;
+        alias->storage_size = 4;
+    }
     else if (pascal_identifier_equals(type_name, "Cardinal") ||
              pascal_identifier_equals(type_name, "LongWord") ||
              pascal_identifier_equals(type_name, "DWord"))
@@ -8084,7 +8094,40 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
-                                errors += result;
+                            {
+                                /* Push failed (duplicate).  Allow a unit-level alias to
+                                 * replace the existing entry when it is one of the known
+                                 * overridable types (e.g. objpas redefining Integer=LongInt
+                                 * over system's Integer=SmallInt). */
+                                if (tree->tree_data.type_decl_data.defined_in_unit &&
+                                    (pascal_identifier_equals(type_id, "Integer") ||
+                                     pascal_identifier_equals(type_id, "PInteger") ||
+                                     pascal_identifier_equals(type_id, "SizeInt") ||
+                                     pascal_identifier_equals(type_id, "PtrInt") ||
+                                     pascal_identifier_equals(type_id, "CodePtrInt") ||
+                                     pascal_identifier_equals(type_id, "ValSInt") ||
+                                     pascal_identifier_equals(type_id, "ValUInt")))
+                                {
+                                    HashNode_t *existing_node = NULL;
+                                    if (FindIdent(&existing_node, symtab, type_id) >= 0 &&
+                                        existing_node != NULL &&
+                                        existing_node->hash_type == HASHTYPE_TYPE)
+                                    {
+                                        if (existing_node->type != NULL)
+                                            destroy_kgpc_type(existing_node->type);
+                                        kgpc_type_retain(kgpc_type);
+                                        existing_node->type = kgpc_type;
+                                        mark_hashnode_unit_info(symtab, existing_node,
+                                            tree->tree_data.type_decl_data.defined_in_unit,
+                                            tree->tree_data.type_decl_data.unit_is_public);
+                                        mark_hashnode_source_unit(existing_node,
+                                            tree->tree_data.type_decl_data.source_unit_index);
+                                        result = 0;
+                                    }
+                                }
+                                if (result > 0)
+                                    errors += result;
+                            }
                             else
                             {
                                 mark_latest_type_node_unit_info(symtab, type_id,
@@ -12895,28 +12938,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
     ensure_builtin_int_const_if_missing(symtab, "reInvalidCast", 10);
     ensure_builtin_alias_type_if_missing(symtab, "RTLString", STRING_TYPE, 0);
     
-    /* Integer boundary constants - required by FPC's objpas.pp and system.pp */
+    /* Integer boundary constants - FPC compiler-provided constants.
+     * These must be in the builtins table so system.pp can reference them
+     * during const evaluation (e.g. MaxInt = maxsmallint). */
+    ensure_builtin_int_const_if_missing(symtab, "MaxInt", 32767LL);
+    ensure_builtin_int_const_if_missing(symtab, "MaxLongint", 2147483647LL);
+    ensure_builtin_int_const_if_missing(symtab, "MaxSmallint", 32767LL);
+    ensure_builtin_int_const_if_missing(symtab, "maxsmallint", 32767LL);
     {
         char *name;
-        /* MaxInt: 32767 in System scope (Integer = SmallInt in FPC's system unit).
-         * system.p overrides this to 2147483647 (Integer = LongInt) for unqualified access. */
-        name = strdup("MaxInt");
-        if (name != NULL) {
-            PushConstOntoScope(symtab, name, 32767LL);
-            free(name);
-        }
-        /* MaxLongint: Maximum value for LongInt (32-bit signed) = 2^31 - 1 */
-        name = strdup("MaxLongint");
-        if (name != NULL) {
-            PushConstOntoScope(symtab, name, 2147483647LL);
-            free(name);
-        }
-        /* MaxSmallint: Maximum value for SmallInt (16-bit signed) = 2^15 - 1 */
-        name = strdup("MaxSmallint");
-        if (name != NULL) {
-            PushConstOntoScope(symtab, name, 32767LL);
-            free(name);
-        }
         name = strdup("DefaultSystemCodePage");
         if (name != NULL) {
             PushConstOntoScope(symtab, name, 65001LL);
