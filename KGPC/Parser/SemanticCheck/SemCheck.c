@@ -2757,9 +2757,14 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                     field->array_element_type,
                     field->array_element_type_id ? field->array_element_type_id : "<null>");
             }
-            /* Check if already defined in scope */
+            /* Check if already defined in current local scope only.
+             * Using FindIdent here would search unit tables too, causing
+             * unit-level symbols (e.g. a var 'x' in system.pp) to prevent
+             * pushing record fields like TPointF.x into the method scope. */
             HashNode_t *existing = NULL;
-            if (FindIdent(&existing, symtab, field->name) == -1)
+            if (symtab->stack_head != NULL)
+                existing = FindIdentInTable((HashTable_t *)symtab->stack_head->cur, field->name);
+            if (existing == NULL)
             {
                 /* Build a KgpcType for this field if needed */
                 KgpcType *field_type = NULL;

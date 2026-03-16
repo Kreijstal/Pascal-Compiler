@@ -564,8 +564,9 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
-    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
-        use_qword = 0;
+    /* Note: do NOT downgrade to 32-bit for Single locals here.
+     * This function spills register values that may have already been
+     * promoted to double (via cvtss2sd), so the full 64 bits must be saved. */
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;
@@ -584,8 +585,9 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
-    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
-        use_qword = 0;
+    /* Note: do NOT downgrade to 32-bit for Single locals here.
+     * This function reloads spilled register values that may have already been
+     * promoted to double (via cvtss2sd), so the full 64 bits must be loaded. */
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;

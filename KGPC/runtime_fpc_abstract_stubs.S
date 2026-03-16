@@ -55,27 +55,43 @@ tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
  * correct xmm convention. */
 .globl arctan2_r_r
 arctan2_r_r:
-    jmp kgpc_arctan2
+    cvtss2sd %xmm0, %xmm0
+    cvtss2sd %xmm1, %xmm1
+    call kgpc_arctan2
+    cvtsd2ss %xmm0, %xmm0
+    ret
 
 .globl tan_r
 tan_r:
-    jmp kgpc_tan
+    cvtss2sd %xmm0, %xmm0
+    call kgpc_tan
+    cvtsd2ss %xmm0, %xmm0
+    ret
 
 .globl cotan_r
 cotan_r:
-    jmp kgpc_cot
+    cvtss2sd %xmm0, %xmm0
+    call kgpc_cot
+    cvtsd2ss %xmm0, %xmm0
+    ret
 
-/* log2_r: redirect to C library log2() which uses xmm0/xmm0 convention. */
+/* log2_r: redirect to C library log2() which uses xmm0/xmm0 (double) convention.
+ * The caller passes a Single in xmm0, so convert to double first. */
 .globl log2_r
 log2_r:
-    jmp log2@PLT
+    cvtss2sd %xmm0, %xmm0
+    call log2@PLT
+    cvtsd2ss %xmm0, %xmm0
+    ret
 
 /* copysign_r_r: FPC's body treats floats as 10-byte Extended (sign at offset+8)
  * but KGPC passes System V doubles (8 bytes, xmm0/xmm1).  The FPC body
  * corrupts the caller's saved rbp by writing to rbp+0.  Provide a correct
- * double-based copysign using bit manipulation on GPRs. */
+ * Single-precision copysign: promote to double, do copysign, demote back. */
 .globl copysign_r_r
 copysign_r_r:
+    cvtss2sd %xmm0, %xmm0
+    cvtss2sd %xmm1, %xmm1
     movq    %xmm0, %rax
     movq    %xmm1, %rcx
     movabsq $0x7fffffffffffffff, %rdx
@@ -84,4 +100,5 @@ copysign_r_r:
     andq    %rdx,  %rcx        /* rcx = sign bit of y */
     orq     %rcx,  %rax        /* combine magnitude and sign */
     movq    %rax,  %xmm0
+    cvtsd2ss %xmm0, %xmm0
     ret

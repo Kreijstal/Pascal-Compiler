@@ -1719,7 +1719,8 @@ int semcheck_addop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        semantic_error(expr->line_num, expr->col_num, "type mismatch on addop");
+        semantic_error(expr->line_num, expr->col_num, "type mismatch on addop: lhs is %s, rhs is %s",
+            semcheck_type_tag_name(type_first), semcheck_type_tag_name(type_second));
         if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
         {
             fprintf(stderr,
@@ -1973,14 +1974,14 @@ int semcheck_mulop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        semcheck_error_with_context("Error on line %d, type mismatch on mulop!\n\n",
-            expr->line_num);
+        semcheck_error_with_context("Error on line %d, type mismatch on mulop: lhs is %s, rhs is %s!\n\n",
+            expr->line_num, semcheck_type_tag_name(type_first), semcheck_type_tag_name(type_second));
         ++return_val;
     }
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
-        semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop!\n\n",
-            expr->line_num);
+        semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop, got lhs: %s, rhs: %s!\n\n",
+            expr->line_num, semcheck_type_tag_name(type_first), semcheck_type_tag_name(type_second));
         ++return_val;
     }
 

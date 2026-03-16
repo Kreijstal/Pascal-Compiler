@@ -1778,7 +1778,15 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
     {
         struct Array *arr = &decl->tree_data.arr_decl_data;
         if (arr->is_shortstring && arr->e_range >= arr->s_range && arr->e_range >= 0)
-            return arr->e_range - arr->s_range + 1;
+        {
+            int size = arr->e_range - arr->s_range + 1;
+            /* A plain 'ShortString' type is 256 bytes (array[0..255] of Char).
+             * If the bounds indicate a very small size (e.g. e_range=0 from
+             * uninitialized/default values), use the standard 256. */
+            if (size < 2)
+                return 256;
+            return size;
+        }
     }
 
     if (decl->type == TREE_VAR_DECL)
@@ -1786,7 +1794,11 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
         struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->is_shortstring &&
             alias->array_end >= alias->array_start && alias->array_end >= 0)
-            return alias->array_end - alias->array_start + 1;
+        {
+            int size = alias->array_end - alias->array_start + 1;
+            if (size >= 2) return size;
+            return 256;
+        }
 
         KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
         if (cached != NULL)
@@ -1794,7 +1806,11 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
             struct TypeAlias *cached_alias = kgpc_type_get_type_alias(cached);
             if (cached_alias != NULL && cached_alias->is_shortstring &&
                 cached_alias->array_end >= cached_alias->array_start && cached_alias->array_end >= 0)
-                return cached_alias->array_end - cached_alias->array_start + 1;
+            {
+                int size = cached_alias->array_end - cached_alias->array_start + 1;
+                if (size >= 2) return size;
+                return 256;
+            }
             if (kgpc_type_is_array(cached))
             {
                 int start = 0;
