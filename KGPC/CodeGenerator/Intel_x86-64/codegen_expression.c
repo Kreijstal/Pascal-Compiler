@@ -7971,18 +7971,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE) &&
             !right_declared_integer_like)
         {
-            if (right_real_size == 4)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", right_reg->bit_32);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-            }
-            else
-            {
-                const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            /* Values in GP registers are always promoted to double (64-bit),
+             * even when the declared type is Single. Use movq, not movd. */
+            const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
