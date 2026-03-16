@@ -814,6 +814,77 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         scope = scope->next;
     }
 
+    /* Search unit tables — same pattern as FindIdentInUnit. */
+    {
+        int caller_unit_index = symtab->unit_context > 0
+            ? symtab->unit_context
+            : semcheck_get_current_unit_index();
+
+        /* Caller's own unit table */
+        if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
+            symtab->unit_tables[caller_unit_index] != NULL)
+        {
+            HashTable_t *table = symtab->unit_tables[caller_unit_index];
+            for (int i = 0; i < TABLE_SIZE; ++i)
+            {
+                for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)cur->cur;
+                    if (!semcheck_symbol_is_assign_operator(cand))
+                        continue;
+                    semcheck_record_assign_consider_candidate(symtab, cand, target_type,
+                        source_type, &best_node, &best_return_type, &best_score);
+                }
+            }
+        }
+
+        /* Dependency unit tables */
+        int num_units = unit_registry_count();
+        for (int dep = 1; dep <= num_units; dep++)
+        {
+            if (dep == caller_unit_index)
+                continue;
+            if (!unit_registry_is_dep(caller_unit_index, dep))
+                continue;
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+                continue;
+            HashTable_t *table = symtab->unit_tables[dep];
+            for (int i = 0; i < TABLE_SIZE; ++i)
+            {
+                for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)cur->cur;
+                    if (!semcheck_symbol_is_assign_operator(cand))
+                        continue;
+                    semcheck_record_assign_consider_candidate(symtab, cand, target_type,
+                        source_type, &best_node, &best_return_type, &best_score);
+                }
+            }
+        }
+
+        /* When unit_context is 0 (main program), search all unit tables */
+        if (caller_unit_index == 0)
+        {
+            for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
+            {
+                if (symtab->unit_tables[u] == NULL)
+                    continue;
+                HashTable_t *table = symtab->unit_tables[u];
+                for (int i = 0; i < TABLE_SIZE; ++i)
+                {
+                    for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)cur->cur;
+                        if (!semcheck_symbol_is_assign_operator(cand))
+                            continue;
+                        semcheck_record_assign_consider_candidate(symtab, cand, target_type,
+                            source_type, &best_node, &best_return_type, &best_score);
+                    }
+                }
+            }
+        }
+    }
+
     if (symtab->builtins != NULL)
     {
         HashTable_t *table = symtab->builtins;

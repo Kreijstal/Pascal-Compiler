@@ -41,6 +41,8 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         return -1;
 
     caller_unit_index = semcheck_operator_lookup_unit_index(symtab);
+
+    /* 1. Scope stack (local scopes, parameters, WITH contexts) */
     cur = symtab->stack_head;
     while (cur != NULL)
     {
@@ -55,6 +57,63 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         cur = cur->next;
     }
 
+    /* 2. Unit tables — same search order as FindIdentInUnit:
+     *    own unit first, then dependency units. */
+    {
+        int global_level = 0;
+
+        /* 2a. Caller's own unit table */
+        if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
+            symtab->unit_tables[caller_unit_index] != NULL)
+        {
+            HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                symtab->unit_tables[caller_unit_index], prefix, caller_unit_index);
+            if (node != NULL)
+            {
+                *hash_return = node;
+                return global_level;
+            }
+        }
+
+        /* 2b. Dependency unit tables */
+        int num_units = unit_registry_count();
+        for (int dep = 1; dep <= num_units; dep++)
+        {
+            if (dep == caller_unit_index)
+                continue;
+            if (!unit_registry_is_dep(caller_unit_index, dep))
+                continue;
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+                continue;
+            HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                symtab->unit_tables[dep], prefix, caller_unit_index);
+            if (node != NULL)
+            {
+                *hash_return = node;
+                return global_level;
+            }
+        }
+
+        /* 2c. When unit_context is 0 (main program), search all unit tables
+         *     that FindIdentInAnyUnitTable would cover. */
+        if (caller_unit_index == 0)
+        {
+            for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
+            {
+                if (symtab->unit_tables[u] == NULL)
+                    continue;
+                HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                    symtab->unit_tables[u], prefix, caller_unit_index);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return global_level;
+                }
+            }
+        }
+    }
+
+    /* 3. Builtins */
     {
         HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
         if (node != NULL)
@@ -1914,20 +1973,6 @@ int semcheck_mulop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        if (kgpc_getenv("KGPC_DEBUG_BARE_FIELD") != NULL)
-        {
-            fprintf(stderr,
-                "[KGPC_DEBUG_MULOP_FAIL] line=%d type_first=%d type_second=%d op=%d\n",
-                expr->line_num, type_first, type_second, op_type);
-            if (expr1 != NULL)
-                fprintf(stderr, "  lhs: expr_type=%d resolved_kgpc=%p kind=%d\n",
-                    expr1->type, (void*)expr1->resolved_kgpc_type,
-                    expr1->resolved_kgpc_type ? expr1->resolved_kgpc_type->kind : -1);
-            if (expr2 != NULL)
-                fprintf(stderr, "  rhs: expr_type=%d resolved_kgpc=%p kind=%d\n",
-                    expr2->type, (void*)expr2->resolved_kgpc_type,
-                    expr2->resolved_kgpc_type ? expr2->resolved_kgpc_type->kind : -1);
-        }
         semcheck_error_with_context("Error on line %d, type mismatch on mulop!\n\n",
             expr->line_num);
         ++return_val;
@@ -2260,17 +2305,6 @@ int semcheck_varid(int *type_return,
             id != NULL ? id : "(null)", with_context_count, expr->line_num);
     }
     int with_status = semcheck_with_try_resolve(id, symtab, &with_expr, expr->line_num);
-    if (kgpc_getenv("KGPC_DEBUG_BARE_FIELD") != NULL && id != NULL)
-    {
-        const char *owner = semcheck_get_current_method_owner();
-        if (owner != NULL && pascal_identifier_equals(owner, "TPointF") &&
-            (pascal_identifier_equals(id, "x") || pascal_identifier_equals(id, "y")))
-        {
-            fprintf(stderr,
-                "[KGPC_DEBUG_BARE_FIELD_WITH] id=%s with_status=%d with_expr=%p line=%d owner=%s\n",
-                id, with_status, (void *)with_expr, expr->line_num, owner);
-        }
-    }
     if (kgpc_getenv("KGPC_DEBUG_MONITOR") != NULL &&
         id != NULL && pascal_identifier_equals(id, "_MonitorData"))
     {
@@ -2297,35 +2331,10 @@ int semcheck_varid(int *type_return,
         expr->expr_data.record_access_data.record_expr = with_expr;
         expr->expr_data.record_access_data.field_id = field_id;
         expr->expr_data.record_access_data.field_offset = 0;
-        int with_result = semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
-        if (kgpc_getenv("KGPC_DEBUG_BARE_FIELD") != NULL && field_id != NULL)
-        {
-            const char *owner = semcheck_get_current_method_owner();
-            if (owner != NULL && pascal_identifier_equals(owner, "TPointF") &&
-                (pascal_identifier_equals(field_id, "x") || pascal_identifier_equals(field_id, "y")))
-            {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_BARE_FIELD_RESULT] field=%s type_return=%d result=%d line=%d resolved_kgpc=%p kind=%d\n",
-                    field_id, *type_return, with_result, expr->line_num,
-                    (void *)expr->resolved_kgpc_type,
-                    expr->resolved_kgpc_type ? expr->resolved_kgpc_type->kind : -1);
-            }
-        }
-        return with_result;
+        return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
     }
 
     scope_return = FindIdent(&hash_return, symtab, id);
-    if (kgpc_getenv("KGPC_DEBUG_BARE_FIELD") != NULL && id != NULL)
-    {
-        const char *owner = semcheck_get_current_method_owner();
-        if (owner != NULL && pascal_identifier_equals(owner, "TPointF"))
-        {
-            fprintf(stderr,
-                "[KGPC_DEBUG_BARE_FIELD] id=%s scope=%d hash_type=%d line=%d owner=%s\n",
-                id, scope_return, hash_return != NULL ? hash_return->hash_type : -1,
-                expr->line_num, owner);
-        }
-    }
     if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
