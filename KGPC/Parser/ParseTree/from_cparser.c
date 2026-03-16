@@ -27,6 +27,7 @@ static char* strndup(const char* s, size_t n)
 
 #include "from_cparser.h"
 #include "../../string_intern.h"
+#include "../../unit_registry.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
@@ -15793,6 +15794,42 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS) {
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   Handling MEMBER_ACCESS\n");
+        }
+        /* Check for unit-qualified procedure calls (e.g. System.SetLength).
+         * If the left side is a known unit name, create a direct procedure call
+         * with call_qualifier set instead of a method call placeholder. */
+        ast_t *lhs = child->child;
+        ast_t *rhs = (lhs != NULL) ? lhs->next : NULL;
+        if (lhs != NULL && lhs->typ == PASCAL_T_IDENTIFIER && rhs != NULL)
+        {
+            char *lhs_name = dup_symbol(lhs);
+            if (lhs_name != NULL && unit_registry_contains(lhs_name))
+            {
+                /* Extract the procedure name from rhs */
+                ast_t *method_ident = unwrap_pascal_node(rhs);
+                ast_t *call_args = child->next;
+                if (method_ident != NULL && method_ident->typ == PASCAL_T_FUNC_CALL)
+                {
+                    call_args = method_ident->child ? method_ident->child->next : NULL;
+                    method_ident = method_ident->child;
+                    if (method_ident != NULL)
+                        method_ident = unwrap_pascal_node(method_ident);
+                }
+                if (method_ident != NULL && method_ident->typ == PASCAL_T_IDENTIFIER)
+                {
+                    char *proc_name = dup_symbol(method_ident);
+                    ListNode_t *args = convert_expression_list(call_args);
+                    struct Statement *call = mk_procedurecall(call_node->line, proc_name, args);
+                    if (call != NULL) {
+                        call->source_index = call_node->index + g_source_offset;
+                        call->stmt_data.procedure_call_data.call_qualifier = lhs_name;
+                    } else {
+                        free(lhs_name);
+                    }
+                    return call;
+                }
+            }
+            free(lhs_name);
         }
         ast_t *args_node = child->next;
         struct Statement *method_stmt = convert_method_call_statement(child, args_node);

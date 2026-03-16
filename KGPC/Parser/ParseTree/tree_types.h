@@ -291,6 +291,7 @@ struct Statement
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
+            char *call_qualifier;            /* Unit prefix if call was qualified, e.g. "System" (NULL if unqualified) */
         } procedure_call_data;
 
         /* Expression statement */

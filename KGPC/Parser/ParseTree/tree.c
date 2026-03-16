@@ -1428,6 +1428,8 @@ void destroy_stmt(struct Statement *stmt)
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
               free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+          if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
+              free(stmt->stmt_data.procedure_call_data.call_qualifier);
           break;
 
         case STMT_EXPR:

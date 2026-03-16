@@ -4664,12 +4664,25 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
         case EXPR_VAR_ID:
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL && 
-                (node->hash_type == HASHTYPE_CONST || node->is_typed_const) &&
-                node->const_string_value != NULL)
+            if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL &&
+                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
             {
-                *out_value = strdup(node->const_string_value);
-                return (*out_value == NULL) ? 1 : 0;
+                if (node->const_string_value != NULL)
+                {
+                    *out_value = strdup(node->const_string_value);
+                    return (*out_value == NULL) ? 1 : 0;
+                }
+                /* Char constants (e.g. DirectorySeparator = '/') */
+                if (node->type != NULL &&
+                    semcheck_tag_from_kgpc(node->type) == CHAR_TYPE)
+                {
+                    *out_value = (char *)malloc(2);
+                    if (*out_value == NULL)
+                        return 1;
+                    (*out_value)[0] = (char)(node->const_int_value & 0xFF);
+                    (*out_value)[1] = '\0';
+                    return 0;
+                }
             }
             fprintf(stderr, "Error: constant %s is undefined or not a string const.\n", expr->expr_data.id);
             return 1;

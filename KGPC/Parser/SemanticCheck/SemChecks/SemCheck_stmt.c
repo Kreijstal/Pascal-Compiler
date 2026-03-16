@@ -28,6 +28,7 @@
 #include "../NameMangling.h"
 #include "../HashTable/HashTable.h"
 #include "../SymTab/SymTab.h"
+#include "../../../unit_registry.h"
 #include "SemCheck_sizeof.h"
 
 void semcheck_debug_expr_brief(const struct Expression *expr, const char *label);
@@ -1811,11 +1812,15 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
         return 0;
 
-    /* Prefer user-defined/prologue procedures over builtins when available. */
+    /* Prefer user-defined/prologue procedures over builtins when available.
+     * Exception: System.XXX qualified calls always resolve to the builtin. */
     HashNode_t *existing = NULL;
+    const char *qualifier = stmt->stmt_data.procedure_call_data.call_qualifier;
     int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
                         pascal_identifier_equals(expected_name, "Val") ||
-                        pascal_identifier_equals(expected_name, "Str");
+                        pascal_identifier_equals(expected_name, "Str") ||
+                        (qualifier != NULL &&
+                         pascal_identifier_equals(qualifier, "System"));
     if (!force_builtin &&
         FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
@@ -1824,6 +1829,21 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     }
 
     HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, proc_id);
+    /* Also check unit_tables[System] — builtin procedures live there since
+     * per-unit scoping was added. */
+    if (builtin_node == NULL)
+    {
+        int sys_idx = unit_registry_add("System");
+        if (sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS &&
+            symtab->unit_tables[sys_idx] != NULL)
+        {
+            HashNode_t *sys_node = FindIdentInTable(
+                symtab->unit_tables[sys_idx], proc_id);
+            if (sys_node != NULL &&
+                sys_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+                builtin_node = sys_node;
+        }
+    }
     if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
     {
         stmt->stmt_data.procedure_call_data.resolved_proc = builtin_node;
@@ -2242,7 +2262,11 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
     int source_is_shortstring = semcheck_expr_is_shortstring(source_expr);
-    if (source_type != STRING_TYPE && source_type != CHAR_TYPE && !source_is_shortstring)
+    /* Also accept dynamic arrays (e.g. TCharArray for TStringBuilder) */
+    int source_is_array = (source_expr != NULL && source_expr->resolved_kgpc_type != NULL &&
+        source_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
+    if (source_type != STRING_TYPE && source_type != CHAR_TYPE &&
+        !source_is_shortstring && !source_is_array)
     {
         semcheck_error_with_context("Error on line %d, Insert source must be a string or char.\n",
             stmt->line_num);
@@ -2252,7 +2276,9 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
-    if (target_type != STRING_TYPE && !target_is_shortstring)
+    int target_is_array = (target_expr != NULL && target_expr->resolved_kgpc_type != NULL &&
+        target_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
+    if (target_type != STRING_TYPE && !target_is_shortstring && !target_is_array)
     {
         semcheck_error_with_context("Error on line %d, Insert target must be a string variable.\n",
             stmt->line_num);
