@@ -3240,17 +3240,50 @@ resolved:;
          * This allows procedure variables to work correctly */
         if(hash_return->hash_type == HASHTYPE_PROCEDURE && mutating == NO_MUTATE)
         {
+            /* Inside a method body, a bare identifier matching a sibling method
+             * may have been found as HASHTYPE_PROCEDURE (from the short-name
+             * stub) when the real mangled entry is HASHTYPE_FUNCTION.
+             * Check if Owner__Name is a function and treat as implicit call. */
+            const char *owner = semcheck_get_current_method_owner();
+            if (owner != NULL && id != NULL)
+            {
+                char mangled_method[512];
+                snprintf(mangled_method, sizeof(mangled_method), "%s__%s", owner, id);
+                HashNode_t *mangled_node = NULL;
+                if (FindIdent(&mangled_node, symtab, mangled_method) >= 0 &&
+                    mangled_node != NULL &&
+                    mangled_node->hash_type == HASHTYPE_FUNCTION &&
+                    mangled_node->type != NULL &&
+                    kgpc_type_is_procedure(mangled_node->type))
+                {
+                    KgpcType *ret = kgpc_type_get_return_type(mangled_node->type);
+                    if (ret != NULL)
+                    {
+                        /* Rewrite as implicit zero-arg function call */
+                        *type_return = semcheck_tag_from_kgpc(ret);
+                        char *call_id = strdup(mangled_method);
+                        if (call_id != NULL)
+                        {
+                            free(expr->expr_data.id);
+                            expr->expr_data.id = call_id;
+                        }
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0,
+                               sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.id = strdup(mangled_method);
+                        if (mangled_node->mangled_id != NULL)
+                            expr->expr_data.function_call_data.mangled_id = strdup(mangled_node->mangled_id);
+                        else
+                            expr->expr_data.function_call_data.mangled_id = strdup(mangled_method);
+                        expr->expr_data.function_call_data.args_expr = NULL;
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, ret);
+                        return 0;
+                    }
+                }
+            }
             /* Keep as EXPR_VAR_ID so it can be used as a procedure value */
             set_hash_meta(hash_return, mutating);
             set_type_from_hashtype(type_return, hash_return);
-            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
-            {
-                fprintf(stderr,
-                    "[SemCheck] semcheck_varid: proc value id=%s type=%p kind=%d\n",
-                    id ? id : "<null>",
-                    (void*)hash_return->type,
-                    hash_return->type != NULL ? hash_return->type->kind : -1);
-            }
             if (hash_return->type != NULL)
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, hash_return->type);
             return 0;
