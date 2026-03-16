@@ -2875,10 +2875,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             use_qword = 1;
                     }
                 }
-                if (use_qword)
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
-                else
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+                /* Always use movq for function return values on x86-64.
+                 * movl truncates pointers and 64-bit values; movq is always safe. */
+                (void)use_qword;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
             }
             inst_list = add_inst(inst_list, buffer);
         }
