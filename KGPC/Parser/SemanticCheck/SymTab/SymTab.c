@@ -1,10 +1,6 @@
 /*
-    Damon Gwinn
-    Creates a symbol table which is simply a stack of hash tables for identifiers
-    Used to perform semantic checking on a ParseTree
-
-    WARNING: Symbol table will NOT free given identifier strings or args when destroyed
-        Remember to free given identifier strings manually
+    Symbol table: a parent-pointer scope tree.
+    Replaces the former flat stack + unit_tables[] + builtins architecture.
 */
 
 #include <stdlib.h>
@@ -21,20 +17,12 @@
 
 /* ========================================================================
  * Internal helper: get the target hash table for Push operations.
- * When push_target_unit > 0, routes to the per-unit table (lazily created).
- * Otherwise, routes to the current scope stack head.
+ * Always returns current_scope->table.
  * ======================================================================== */
 static HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
 {
-    int idx = symtab->push_target_unit;
-    if (idx > 0 && idx < SYMTAB_MAX_UNITS)
-    {
-        if (symtab->unit_tables[idx] == NULL)
-            symtab->unit_tables[idx] = InitHashTable();
-        return symtab->unit_tables[idx];
-    }
-    assert(symtab->stack_head != NULL);
-    return (HashTable_t *)symtab->stack_head->cur;
+    assert(symtab->current_scope != NULL);
+    return symtab->current_scope->table;
 }
 
 /* Helper: append list b to end of list a */
@@ -50,73 +38,139 @@ static ListNode_t *append_list(ListNode_t *a, ListNode_t *b)
 }
 
 /* ========================================================================
+ * Scope lifecycle
+ * ======================================================================== */
+
+ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index)
+{
+    ScopeNode *scope = (ScopeNode *)malloc(sizeof(ScopeNode));
+    assert(scope != NULL);
+    scope->table = InitHashTable();
+    scope->parent = parent;
+    scope->kind = kind;
+    scope->unit_index = unit_index;
+    scope->dep_scopes = NULL;
+    scope->num_deps = 0;
+    scope->cap_deps = 0;
+    return scope;
+}
+
+void DestroyScope(ScopeNode *scope)
+{
+    if (scope == NULL) return;
+    if (scope->table != NULL)
+        DestroyHashTable(scope->table);
+    free(scope->dep_scopes);
+    free(scope);
+}
+
+ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index)
+{
+    assert(symtab != NULL);
+    assert(unit_index > 0 && unit_index < SYMTAB_MAX_UNITS);
+
+    if (symtab->unit_scopes[unit_index] != NULL)
+        return symtab->unit_scopes[unit_index];
+
+    ScopeNode *scope = CreateScope(SCOPE_UNIT, symtab->builtin_scope, unit_index);
+    symtab->unit_scopes[unit_index] = scope;
+    return scope;
+}
+
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
+{
+    assert(scope != NULL);
+    assert(dep_scope != NULL);
+
+    /* Don't add duplicates */
+    for (int i = 0; i < scope->num_deps; i++)
+    {
+        if (scope->dep_scopes[i] == dep_scope)
+            return;
+    }
+
+    if (scope->num_deps >= scope->cap_deps)
+    {
+        int new_cap = (scope->cap_deps == 0) ? 8 : scope->cap_deps * 2;
+        ScopeNode **new_arr = (ScopeNode **)realloc(scope->dep_scopes,
+            (size_t)new_cap * sizeof(ScopeNode *));
+        assert(new_arr != NULL);
+        scope->dep_scopes = new_arr;
+        scope->cap_deps = new_cap;
+    }
+
+    scope->dep_scopes[scope->num_deps++] = dep_scope;
+}
+
+void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index)
+{
+    assert(symtab != NULL);
+    assert(symtab->current_scope != NULL);
+
+    ScopeNode *scope = CreateScope(kind, symtab->current_scope, unit_index);
+    symtab->current_scope = scope;
+}
+
+void LeaveScope(SymTab_t *symtab)
+{
+    assert(symtab != NULL);
+    assert(symtab->current_scope != NULL);
+    assert(symtab->current_scope->parent != NULL);  /* never leave the root */
+
+    ScopeNode *old = symtab->current_scope;
+    symtab->current_scope = old->parent;
+    DestroyScope(old);
+}
+
+/* ========================================================================
  * Init / Destroy
  * ======================================================================== */
 
-SymTab_t *InitSymTab()
+SymTab_t *InitSymTab(void)
 {
-    SymTab_t *new_symtab;
-
-    new_symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
-    assert(new_symtab != NULL);
-    new_symtab->stack_head = NULL;
-    new_symtab->builtins = InitHashTable();
-    new_symtab->unit_context = 0;
-    new_symtab->push_target_unit = 0;
-    memset(new_symtab->unit_tables, 0, sizeof(new_symtab->unit_tables));
-
-    return new_symtab;
-}
-
-void PushScope(SymTab_t *symtab)
-{
+    SymTab_t *symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
     assert(symtab != NULL);
 
-    HashTable_t *new_hash;
-    new_hash = InitHashTable();
+    symtab->builtin_scope = CreateScope(SCOPE_BUILTIN, NULL, 0);
+    symtab->current_scope = symtab->builtin_scope;
+    memset(symtab->unit_scopes, 0, sizeof(symtab->unit_scopes));
 
-    if(symtab->stack_head == NULL)
-        symtab->stack_head = CreateListNode(new_hash, LIST_UNSPECIFIED);
-    else
-        symtab->stack_head = PushListNodeFront(symtab->stack_head,
-            CreateListNode(new_hash, LIST_UNSPECIFIED));
-}
-
-void PopScope(SymTab_t *symtab)
-{
-    assert(symtab != NULL);
-    assert(symtab->stack_head != NULL);
-
-    ListNode_t *cur;
-    cur = symtab->stack_head;
-    symtab->stack_head = symtab->stack_head->next;
-
-    DestroyHashTable((HashTable_t *)cur->cur);
-    free(cur);
+    return symtab;
 }
 
 void DestroySymTab(SymTab_t *symtab)
 {
     assert(symtab != NULL);
 
-    /* Destroy per-unit tables (they own their nodes) */
+    /* Walk from current_scope up to (but not including) builtin_scope and destroy.
+     * Clear unit_scopes[] entries as we go so we don't double-free. */
+    ScopeNode *scope = symtab->current_scope;
+    while (scope != NULL && scope != symtab->builtin_scope)
+    {
+        ScopeNode *parent = scope->parent;
+        /* If this is a unit scope, clear its slot */
+        if (scope->unit_index > 0 && scope->unit_index < SYMTAB_MAX_UNITS &&
+            symtab->unit_scopes[scope->unit_index] == scope)
+        {
+            symtab->unit_scopes[scope->unit_index] = NULL;
+        }
+        DestroyScope(scope);
+        scope = parent;
+    }
+
+    /* Destroy any remaining unit scopes not in the parent chain */
     for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
     {
-        if (symtab->unit_tables[i] != NULL)
-            DestroyHashTable(symtab->unit_tables[i]);
+        if (symtab->unit_scopes[i] != NULL)
+        {
+            DestroyScope(symtab->unit_scopes[i]);
+            symtab->unit_scopes[i] = NULL;
+        }
     }
 
-    ListNode_t *cur, *next;
-    cur = symtab->stack_head;
-    while(cur != NULL)
-    {
-        next = cur->next;
-        DestroyHashTable((HashTable_t *)cur->cur);
-        free(cur);
-        cur = next;
-    }
+    /* Destroy the builtin scope (root) */
+    DestroyScope(symtab->builtin_scope);
 
-    DestroyHashTable(symtab->builtins);
     free(symtab);
 }
 
@@ -263,13 +317,13 @@ int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
             }
         }
     }
-    /* Also register in builtins for later codegen lookup */
-    if (result == 0 && symtab->builtins != NULL)
+    /* Also register in builtin scope for later codegen lookup */
+    if (result == 0 && symtab->builtin_scope != NULL)
     {
-        int builtins_result = AddIdentToTable(symtab->builtins, id, NULL, HASHTYPE_CONST, type);
+        int builtins_result = AddIdentToTable(symtab->builtin_scope->table, id, NULL, HASHTYPE_CONST, type);
         if (builtins_result == 0)
         {
-            HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
+            HashNode_t *builtin_node = FindIdentInTable(symtab->builtin_scope->table, id);
             if (builtin_node != NULL)
             {
                 builtin_node->is_constant = 1;
@@ -356,21 +410,14 @@ int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type)
 }
 
 /* ========================================================================
- * Builtin declarations — go to unit_tables[System].
- * Compiler-intrinsic types and procedures are injected here just like
- * FPC's psystem.pas does addtype('LongInt', s32inttype).
- * If system.p also declares the same name, its declaration updates
- * the existing entry (same table, collision allowed).
+ * Builtin declarations — go to the System unit scope.
  * ======================================================================== */
 
 static HashTable_t *get_or_create_system_unit_table(SymTab_t *symtab)
 {
     int sys_idx = unit_registry_add("System");
-    if (sys_idx <= 0 || sys_idx >= SYMTAB_MAX_UNITS)
-        return symtab->builtins; /* last resort if System not registered */
-    if (symtab->unit_tables[sys_idx] == NULL)
-        symtab->unit_tables[sys_idx] = InitHashTable();
-    return symtab->unit_tables[sys_idx];
+    assert(sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS);
+    return GetOrCreateUnitScope(symtab, sys_idx)->table;
 }
 
 int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type)
@@ -475,155 +522,48 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
 }
 
 /* ========================================================================
- * Find functions
+ * Find functions — tree walk
  * ======================================================================== */
-
-/* Search all unit tables (for non-unit-aware path) */
-static HashNode_t *FindIdentInAnyUnitTable(SymTab_t *symtab, const char *id)
-{
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
-        {
-            HashNode_t *node = FindIdentInTable(symtab->unit_tables[i], id);
-            if (node != NULL)
-                return node;
-        }
-    }
-    return NULL;
-}
-
-/* Collect all matches from all unit tables */
-static ListNode_t *FindAllIdentsInAnyUnitTable(SymTab_t *symtab, const char *id)
-{
-    ListNode_t *all = NULL;
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[i], id));
-    }
-    return all;
-}
-
-/* Count scope stack depth (= outermost scope level) */
-static int scope_stack_depth(SymTab_t *symtab)
-{
-    int depth = 0;
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-        depth++;
-    return depth;
-}
 
 int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
-    if (symtab->unit_context > 0)
-        return FindIdentInUnit(hash_return, symtab, id, symtab->unit_context);
-
-    int return_val = 0;
     assert(symtab != NULL);
     assert(id != NULL);
 
-    HashNode_t *hash_node;
+    int depth = 0;
+    ScopeNode *scope = symtab->current_scope;
 
-    /* 1. Scope stack (program-local + inner scopes) */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    while (scope != NULL)
     {
-        hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
-        if (hash_node != NULL)
+        HashNode_t *node = FindIdentInTable(scope->table, id);
+        if (node != NULL)
         {
-            *hash_return = hash_node;
-            return return_val;
-        }
-        ++return_val;
-        cur = cur->next;
-    }
-
-    /* 2. Unit tables + builtins (global scope — same level as outermost) */
-    {
-        int global_level = 0;  /* unit/builtin symbols are always accessible */
-
-        hash_node = FindIdentInAnyUnitTable(symtab, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return global_level;
+            *hash_return = node;
+            /* Unit/program/builtin scopes report depth 0 (global level),
+             * matching the old flat-stack behavior where unit_tables and
+             * builtins always returned 0. */
+            if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM ||
+                scope->kind == SCOPE_BUILTIN)
+                return 0;
+            return depth;
         }
 
-        hash_node = FindIdentInTable(symtab->builtins, id);
-        if (hash_node != NULL)
+        /* At unit/program scope, also search dependency unit scopes */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
-            *hash_return = hash_node;
-            return global_level;
-        }
-    }
-
-    *hash_return = NULL;
-    return -1;
-}
-
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index)
-{
-    int return_val = 0;
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    HashNode_t *hash_node;
-
-    /* 1. Scope stack (inner scopes — local variables, parameters) */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
-    {
-        hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return return_val;
-        }
-        ++return_val;
-        cur = cur->next;
-    }
-
-    /* 2. Caller's own unit table + deps + builtins (all global scope) */
-    {
-        int global_level = 0;  /* unit/builtin symbols are always accessible */
-
-        if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[caller_unit_index] != NULL)
-        {
-            hash_node = FindIdentInTable(symtab->unit_tables[caller_unit_index], id);
-            if (hash_node != NULL)
+            for (int i = 0; i < scope->num_deps; i++)
             {
-                *hash_return = hash_node;
-                return global_level;
+                node = FindIdentInTable(scope->dep_scopes[i]->table, id);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return 0;  /* dependency symbols are global level */
+                }
             }
         }
 
-        /* 3. Dependency unit tables */
-        int num_units = unit_registry_count();
-        for (int dep = 1; dep <= num_units; dep++)
-        {
-            if (dep == caller_unit_index)
-                continue;
-            if (!unit_registry_is_dep(caller_unit_index, dep))
-                continue;
-            if (symtab->unit_tables[dep] == NULL)
-                continue;
-            hash_node = FindIdentInTable(symtab->unit_tables[dep], id);
-            if (hash_node != NULL)
-            {
-                *hash_return = hash_node;
-                return global_level;
-            }
-        }
-
-        /* 4. Builtins */
-        hash_node = FindIdentInTable(symtab->builtins, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return global_level;
-        }
+        scope = scope->parent;
+        depth++;
     }
 
     *hash_return = NULL;
@@ -634,53 +574,45 @@ HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);
-    /* When push_target_unit is active, the "current scope" is the unit table */
-    if (symtab->push_target_unit > 0 && symtab->push_target_unit < SYMTAB_MAX_UNITS &&
-        symtab->unit_tables[symtab->push_target_unit] != NULL)
-        return FindIdentInTable(symtab->unit_tables[symtab->push_target_unit], id);
-    if (symtab->stack_head == NULL)
-        return NULL;
-    return FindIdentInTable((HashTable_t *)symtab->stack_head->cur, id);
+    assert(symtab->current_scope != NULL);
+    return FindIdentInTable(symtab->current_scope->table, id);
 }
 
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
 {
-    int return_val = 0;
+    int depth = 0;
     assert(symtab != NULL);
     assert(prefix != NULL);
 
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    ScopeNode *scope = symtab->current_scope;
+    while (scope != NULL)
     {
-        HashNode_t *node = FindIdentByPrefixInTable((HashTable_t *)cur->cur, prefix);
+        HashNode_t *node = FindIdentByPrefixInTable(scope->table, prefix);
         if (node != NULL)
         {
             *hash_return = node;
-            return return_val;
+            if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM ||
+                scope->kind == SCOPE_BUILTIN)
+                return 0;
+            return depth;
         }
-        ++return_val;
-        cur = cur->next;
-    }
 
-    /* Search unit tables */
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
+        /* At unit/program scope, search deps */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
-            HashNode_t *node = FindIdentByPrefixInTable(symtab->unit_tables[i], prefix);
-            if (node != NULL)
+            for (int i = 0; i < scope->num_deps; i++)
             {
-                *hash_return = node;
-                return return_val;
+                node = FindIdentByPrefixInTable(scope->dep_scopes[i]->table, prefix);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return 0;
+                }
             }
         }
-    }
 
-    HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
-    if (node != NULL)
-    {
-        *hash_return = node;
-        return return_val;
+        scope = scope->parent;
+        depth++;
     }
 
     *hash_return = NULL;
@@ -692,43 +624,19 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    if (symtab->unit_context > 0)
-    {
-        /* Unit-aware: scope stack + caller's unit + deps + builtins */
-        int caller = symtab->unit_context;
-        ListNode_t *all = NULL;
-
-        /* 1. Scope stack */
-        for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-            all = append_list(all, FindAllIdentsInTable((HashTable_t *)cur->cur, id));
-
-        /* 2. Caller's own unit table */
-        if (caller > 0 && caller < SYMTAB_MAX_UNITS && symtab->unit_tables[caller] != NULL)
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[caller], id));
-
-        /* 3. Dependency unit tables */
-        int num_units = unit_registry_count();
-        for (int dep = 1; dep <= num_units; dep++)
-        {
-            if (dep == caller) continue;
-            if (!unit_registry_is_dep(caller, dep)) continue;
-            if (symtab->unit_tables[dep] == NULL) continue;
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[dep], id));
-        }
-
-        /* 4. Builtins */
-        all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
-        return all;
-    }
-
-    /* Non-unit-aware: scope stack + all unit tables + builtins */
     ListNode_t *all = NULL;
 
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-        all = append_list(all, FindAllIdentsInTable((HashTable_t *)cur->cur, id));
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    {
+        all = append_list(all, FindAllIdentsInTable(scope->table, id));
 
-    all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
-    all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
+        /* At unit/program scope, also search deps */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            for (int i = 0; i < scope->num_deps; i++)
+                all = append_list(all, FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+        }
+    }
 
     return all;
 }
@@ -738,20 +646,25 @@ ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Check scope stack first — each scope is a distinct level */
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        ListNode_t *scope_matches = FindAllIdentsInTable((HashTable_t *)cur->cur, id);
-        if (scope_matches != NULL)
-            return scope_matches;
+        ListNode_t *matches = FindAllIdentsInTable(scope->table, id);
+        if (matches != NULL)
+            return matches;
+
+        /* At unit/program scope, also check deps — they're at the same "global" level */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            ListNode_t *dep_all = NULL;
+            for (int i = 0; i < scope->num_deps; i++)
+                dep_all = append_list(dep_all,
+                    FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+            if (dep_all != NULL)
+                return dep_all;
+        }
     }
 
-    /* Unit tables + builtins are all at the same "global" level.
-     * If any match is found, collect from all of them. */
-    ListNode_t *all = NULL;
-    all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
-    all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
-    return all;
+    return NULL;
 }
 
 /* ========================================================================
@@ -763,39 +676,44 @@ void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent)
     assert(symtab != NULL);
     assert(f != NULL);
 
-    int i, scope;
-    ListNode_t *cur;
+    int i, scope_depth;
 
-    for(i = 0; i < num_indent; ++i)
-        fprintf(f, "  ");
-    fprintf(f, "[BUILT-INS]:\n");
-    PrintHashTable(symtab->builtins, f, num_indent+1);
-
-    cur = symtab->stack_head;
-    scope = 0;
-    while(cur != NULL)
+    /* Print scope chain from current up to root */
+    ScopeNode *scope = symtab->current_scope;
+    scope_depth = 0;
+    while (scope != NULL)
     {
-        for(i = 0; i < num_indent; ++i)
+        for (i = 0; i < num_indent; ++i)
             fprintf(f, "  ");
 
-        fprintf(f, "[SCOPE:%d]\n", scope);
-        PrintHashTable((HashTable_t *)cur->cur, f, num_indent+1);
+        const char *kind_str = "UNKNOWN";
+        switch (scope->kind)
+        {
+            case SCOPE_BUILTIN:    kind_str = "BUILTIN"; break;
+            case SCOPE_UNIT:       kind_str = "UNIT"; break;
+            case SCOPE_PROGRAM:    kind_str = "PROGRAM"; break;
+            case SCOPE_SUBPROGRAM: kind_str = "SUBPROGRAM"; break;
+            case SCOPE_BLOCK:      kind_str = "BLOCK"; break;
+        }
+        fprintf(f, "[SCOPE:%d %s unit=%d]:\n", scope_depth, kind_str, scope->unit_index);
+        PrintHashTable(scope->table, f, num_indent + 1);
         fprintf(f, "\n");
 
-        cur = cur->next;
-        ++scope;
+        scope = scope->parent;
+        ++scope_depth;
     }
 
+    /* Print unit scopes */
     for (i = 1; i < SYMTAB_MAX_UNITS; i++)
     {
-        if (symtab->unit_tables[i] != NULL)
+        if (symtab->unit_scopes[i] != NULL)
         {
             int j;
-            for(j = 0; j < num_indent; ++j)
+            for (j = 0; j < num_indent; ++j)
                 fprintf(f, "  ");
             const char *uname = unit_registry_get(i);
-            fprintf(f, "[UNIT:%d %s]:\n", i, uname ? uname : "?");
-            PrintHashTable(symtab->unit_tables[i], f, num_indent+1);
+            fprintf(f, "[UNIT_SCOPE:%d %s]:\n", i, uname ? uname : "?");
+            PrintHashTable(symtab->unit_scopes[i]->table, f, num_indent + 1);
             fprintf(f, "\n");
         }
     }
@@ -806,17 +724,16 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node)
     if (symtab == NULL || node == NULL)
         return;
 
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur->cur;
-        if (table != NULL)
-            HashTable_MoveNodeToBack(table, node);
+        if (scope->table != NULL)
+            HashTable_MoveNodeToBack(scope->table, node);
     }
 
-    /* Also move in per-unit tables */
+    /* Also move in unit scopes */
     for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
     {
-        if (symtab->unit_tables[i] != NULL)
-            HashTable_MoveNodeToBack(symtab->unit_tables[i], node);
+        if (symtab->unit_scopes[i] != NULL)
+            HashTable_MoveNodeToBack(symtab->unit_scopes[i]->table, node);
     }
 }

@@ -1,10 +1,11 @@
 /*
-    Damon Gwinn
-    Creates a symbol table which is simply a stack of hash tables for identifiers
-    Used to perform semantic checking on a ParseTree
+    Symbol table: a parent-pointer scope tree.
+    Each ScopeNode owns a HashTable_t of symbols.  FindIdent walks
+    current_scope → parent → … → builtin_scope, checking dependency
+    edges at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
 
-    WARNING: Symbol table will NOT free given identifier strings or args when destroyed
-        Remember to free given identifier strings manually
+    WARNING: Symbol table will NOT free given identifier strings or args when destroyed.
+        Remember to free given identifier strings manually.
 */
 
 #ifndef SYM_TAB_H
@@ -14,129 +15,121 @@
 #include "../HashTable/HashTable.h"
 #include "../../List/List.h"
 
-/*enum VarType{HASHVAR_INTEGER, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED};
-  Defined in HashTable.h */
-
 #define SYMTAB_MAX_UNITS 256
 
-/* A stack of hash tables with built-ins and per-unit symbol tables */
+/* ======================================================================== */
+/* Scope tree types                                                         */
+/* ======================================================================== */
+
+typedef enum ScopeKind {
+    SCOPE_BUILTIN,      /* Root: compiler builtins */
+    SCOPE_UNIT,         /* Unit-level scope (one per unit) */
+    SCOPE_PROGRAM,      /* Program-level scope (globals) */
+    SCOPE_SUBPROGRAM,   /* Procedure/function body */
+    SCOPE_BLOCK,        /* Nested block: try-except, with, anonymous method */
+} ScopeKind;
+
+typedef struct ScopeNode {
+    HashTable_t *table;          /* Symbols declared in this scope */
+    struct ScopeNode *parent;    /* Walk this chain for FindIdent */
+    ScopeKind kind;
+    int unit_index;              /* Which unit this scope belongs to (0 = program) */
+
+    /* For SCOPE_UNIT / SCOPE_PROGRAM: dependency edges from `uses` clause */
+    struct ScopeNode **dep_scopes;
+    int num_deps;
+    int cap_deps;
+} ScopeNode;
+
+/* ======================================================================== */
+/* Symbol table: a scope tree                                               */
+/* ======================================================================== */
+
 typedef struct SymTab
 {
-    ListNode_t *stack_head;
-    HashTable_t *builtins;
-    int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
-    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_tables[this] */
-    /* Per-unit symbol tables. unit_tables[i] holds symbols belonging to unit i.
-     * Lazily allocated on first push to that unit. Owned by SymTab — destroyed
-     * with DestroyHashTable (full ownership of their HashNodes). */
-    HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
+    ScopeNode *builtin_scope;                 /* Root of the tree */
+    ScopeNode *current_scope;                 /* Active scope — all lookups start here */
+    ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index */
 } SymTab_t;
 
-/* Initializes the SymTab with stack_head pointing to NULL */
-SymTab_t *InitSymTab();
+/* ======================================================================== */
+/* Scope lifecycle                                                          */
+/* ======================================================================== */
 
-/* Pushes a new scope onto the stack (FIFO) */
-void PushScope(SymTab_t *symtab);
+ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index);
+void DestroyScope(ScopeNode *scope);
 
-int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
+/* Get (or lazily create) the unit scope for the given unit registry index. */
+ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
 
-/* Pushes a constant with explicit KgpcType onto the current scope (head) */
-int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type);
+/* Add a dependency edge: scope can see dep_scope's symbols. */
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
 
-/* Pushes a real constant onto the current scope (head) */
-int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value);
+/* Push a new child scope under current_scope and make it current. */
+void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
 
-/* Pushes a string constant onto the current scope (head) */
-int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value);
+/* Destroy current_scope and move to its parent. */
+void LeaveScope(SymTab_t *symtab);
 
-/* Pushes a set constant (supports 4-byte small sets and 32-byte char sets) */
-int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
-    int size_bytes, KgpcType *type);
+/* ======================================================================== */
+/* Symbol table lifecycle                                                   */
+/* ======================================================================== */
 
-/* Pushes a new type onto the current scope (head) */
-int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
-    struct RecordType *record_type, struct TypeAlias *type_alias);
-
-/* Type system functions using KgpcType */
-
-/* Pushes a new variable with a KgpcType onto the current scope */
-int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Pushes a new array with a KgpcType onto the current scope */
-int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Pushes a new procedure with a KgpcType onto the current scope */
-int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
-
-/* Pushes a new function with a KgpcType onto the current scope */
-int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
-
-/* Pushes a new function return value with a KgpcType onto the current scope */
-int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Pushes a new type declaration with a KgpcType onto the current scope */
-int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Builtin declarations using KgpcType */
-
-/* Adds a built-in type with a KgpcType */
-int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Adds a built-in procedure with a KgpcType */
-int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Adds a built-in function with a KgpcType */
-int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type);
-
-/* Adds a built-in real constant */
-int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);
-
-/* Adds a built-in string constant */
-int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value);
-
-/* Adds a built-in integer constant */
-int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
-
-/* Adds a built-in character constant */
-int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
-
-/* Searches for an identifier and sets the hash_return that contains the id and type information */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
-int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
-
-/* Like FindIdent but uses unit-aware resolution.
- * Prefers symbols from caller_unit_index, then program-local, then any. */
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
-
-/* Searches for any identifier starting with the given prefix */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
-int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
-
-/* Searches for all instances of an identifier and returns a list of HashNode_t* */
-/* Returns NULL if not found */
-ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
-
-/* Searches for all instances of an identifier in the nearest scope that defines it */
-/* Returns NULL if not found */
-ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
-
-/* Pops the current scope */
-void PopScope(SymTab_t *symtab);
-
-/* Destroys the SymTab and all associated hash tables */
-/* WARNING: Does not free given identifier strings */
+SymTab_t *InitSymTab(void);
 void DestroySymTab(SymTab_t *symtab);
 
-/* Prints the table for debugging */
-void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent);
+/* ======================================================================== */
+/* Push functions — add symbols to current_scope->table                     */
+/* ======================================================================== */
 
-/* Find an identifier in the current (top) scope only, bypassing unit-aware resolution.
- * Use after pushing an entry to get the just-added node reliably. */
+int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
+int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcType *type);
+int PushRealConstOntoScope(SymTab_t *symtab, char *id, double value);
+int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value);
+int PushSetConstOntoScope(SymTab_t *symtab, char *id, const unsigned char *data,
+    int size_bytes, KgpcType *type);
+int PushTypeOntoScope(SymTab_t *symtab, char *id, enum VarType var_type,
+    struct RecordType *record_type, struct TypeAlias *type_alias);
+int PushVarOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
+int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
+int PushFuncRetOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int PushTypeOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+
+/* ======================================================================== */
+/* Builtin declarations — go to system unit scope                           */
+/* ======================================================================== */
+
+int AddBuiltinType_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinProc_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinFunction_Typed(SymTab_t *symtab, char *id, KgpcType *type);
+int AddBuiltinRealConst(SymTab_t *symtab, const char *id, double value);
+int AddBuiltinStringConst(SymTab_t *symtab, const char *id, const char *value);
+int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
+int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
+
+/* ======================================================================== */
+/* Find functions                                                           */
+/* ======================================================================== */
+
+/* Walk current_scope → parent → … → builtin_scope.
+ * Returns scope depth (0 = current or global, 1+ = enclosing local scopes).
+ * Returns -1 and sets *hash_return to NULL if not found. */
+int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id);
+
+int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
+ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
+ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
+
+/* Find an identifier in current_scope->table only. */
 HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id);
 
-/* Move a hash node to the back of its bucket list in the nearest scope */
+/* ======================================================================== */
+/* Debug / utilities                                                        */
+/* ======================================================================== */
+
+void PrintSymTab(SymTab_t *symtab, FILE *f, int num_indent);
 void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 
 #endif
