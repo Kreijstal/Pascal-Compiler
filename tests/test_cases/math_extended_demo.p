@@ -4,7 +4,7 @@ uses
     Math;
 
 var
-    SampleValues: array [0..3] of Integer;
+    SampleValues: array [0..3] of Longint;
     sinVal, cosVal: Real;
 begin
     SampleValues[0] := 1;
