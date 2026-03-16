@@ -41,14 +41,17 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
         return NULL;
 
     /* Prefer type identifiers even if a variable with the same name exists. */
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    ListNode_t *cur = symtab->stack_head;
+    while (cur != NULL)
     {
-        HashNode_t *node = FindIdentInTable(scope->table, type_id);
+        HashTable_t *table = (HashTable_t *)cur->cur;
+        HashNode_t *node = FindIdentInTable(table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             return node;
+        cur = cur->next;
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
         return builtin;
 
@@ -437,9 +440,11 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 
     HashNode_t *fallback = NULL;
     HashNode_t *fallback_outermost = NULL;
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    ListNode_t *cur = symtab->stack_head;
+    while (cur != NULL)
     {
-        HashNode_t *node = FindIdentInTable(scope->table, type_id);
+        HashTable_t *table = (HashTable_t *)cur->cur;
+        HashNode_t *node = FindIdentInTable(table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             if (node->defined_in_unit == defined_in_unit)
@@ -448,6 +453,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                 fallback = node;
             fallback_outermost = node;
         }
+        cur = cur->next;
     }
 
     /* Search per-unit tables (types from imported units live here) */
@@ -455,9 +461,9 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         int n_units = unit_registry_count();
         for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++)
         {
-            if (symtab->unit_scopes[i] == NULL)
+            if (symtab->unit_tables[i] == NULL)
                 continue;
-            HashNode_t *node = FindIdentInTable(symtab->unit_scopes[i]->table, type_id);
+            HashNode_t *node = FindIdentInTable(symtab->unit_tables[i], type_id);
             if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             {
                 if (node->defined_in_unit == defined_in_unit)
@@ -469,7 +475,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         }
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
     {
         if (builtin->defined_in_unit == defined_in_unit)
