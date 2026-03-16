@@ -108,6 +108,13 @@ static int semcheck_candidate_is_direct_for_current_unit(SymTab_t *symtab, HashN
     {
         if (current_unit_index <= 0 || candidate->defined_in_unit)
             return 1;
+        /* Compiler-injected builtins (not from any unit) are always directly
+         * accessible.  Only program-local non-unit symbols that aren't nested
+         * should be filtered when inside a unit body. */
+        if (candidate->hash_type == HASHTYPE_FUNCTION ||
+            candidate->hash_type == HASHTYPE_PROCEDURE ||
+            candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
+            return 1;
         return candidate->is_nested_scope;
     }
     if (current_unit_index <= 0)

@@ -456,6 +456,25 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         cur = cur->next;
     }
 
+    /* Search per-unit tables (types from imported units live here) */
+    {
+        int n_units = unit_registry_count();
+        for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++)
+        {
+            if (symtab->unit_tables[i] == NULL)
+                continue;
+            HashNode_t *node = FindIdentInTable(symtab->unit_tables[i], type_id);
+            if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+            {
+                if (node->defined_in_unit == defined_in_unit)
+                    return node;
+                if (fallback == NULL)
+                    fallback = node;
+                fallback_outermost = node;
+            }
+        }
+    }
+
     HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
     {

@@ -2020,6 +2020,72 @@ static int resolve_error_source_context(int source_index,
     return (computed_line > 0) ? computed_line : 0;
 }
 
+/* Resolve error location inside a unit body.
+ * Uses {#line} directives in the preprocessed source to find the actual
+ * include file and line number.  Returns the resolved line (>0 on success).
+ * On success, directive_file_out contains the include file path and
+ * unit_chain_out contains a string like " (in unit System from program.p)". */
+static int resolve_unit_error_location(int source_index, int line_num,
+    char *directive_file_out, size_t dir_size,
+    char *unit_chain_out, size_t chain_size)
+{
+    if (directive_file_out != NULL && dir_size > 0)
+        directive_file_out[0] = '\0';
+    if (unit_chain_out != NULL && chain_size > 0)
+        unit_chain_out[0] = '\0';
+
+    int resolved_line = 0;
+    if (source_index >= 0)
+    {
+        resolved_line = resolve_error_source_context(
+            source_index, directive_file_out, dir_size, 1);
+    }
+    if (resolved_line <= 0)
+        resolved_line = line_num;
+
+    /* Build the include chain annotation */
+    if (unit_chain_out != NULL && chain_size > 0 && g_semcheck_error_unit_context != NULL)
+    {
+        const char *unit_name = g_semcheck_error_unit_context;
+        /* Find the registered path for this unit's buffer */
+        const char *unit_path = NULL;
+        if (source_index >= 0)
+        {
+            for (int i = 0; i < g_source_buffer_count; i++)
+            {
+                int gs = g_source_buffer_registry[i].global_start;
+                int len = (int)g_source_buffer_registry[i].length;
+                if (source_index >= gs && source_index < gs + len)
+                {
+                    unit_path = g_source_buffer_registry[i].path;
+                    break;
+                }
+            }
+        }
+
+        if (directive_file_out[0] != '\0' && unit_path != NULL)
+        {
+            /* Include file resolved — show chain:
+             * "generic.inc:3652 (included in FPCSource/rtl/linux/system.pp)" */
+            snprintf(unit_chain_out, chain_size, " (included in %s)", unit_path);
+        }
+        else if (unit_path != NULL)
+        {
+            /* No include file — error is directly in the unit source */
+            strncpy(directive_file_out, unit_path, dir_size - 1);
+            directive_file_out[dir_size - 1] = '\0';
+        }
+        else
+        {
+            /* Can't find unit path — fall back to unit name */
+            strncpy(directive_file_out, unit_name, dir_size - 1);
+            directive_file_out[dir_size - 1] = '\0';
+        }
+    }
+
+    return resolved_line;
+}
+
 /* Helper function to print semantic error with source code context */
 void semantic_error(int line_num, int col_num, const char *format, ...)
 {
@@ -2036,9 +2102,16 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
+    char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
+    unit_chain[0] = '\0';
     if (g_semcheck_error_unit_context != NULL)
     {
-        /* Inside unit body: skip line resolution, just show unit name */
+        int resolved_line = resolve_unit_error_location(
+            effective_source_index, effective_line,
+            directive_file, sizeof(directive_file),
+            unit_chain, sizeof(unit_chain));
+        if (resolved_line > 0)
+            effective_line = resolved_line;
     }
     else if (effective_source_index >= 0)
     {
@@ -2068,6 +2141,8 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
+    if (unit_chain[0] != '\0')
+        fprintf(stderr, "%s", unit_chain);
     fprintf(stderr, "\n");
 
     print_error_context(effective_line, effective_col, effective_source_index, directive_file);
@@ -2084,9 +2159,16 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
+    char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
+    unit_chain[0] = '\0';
     if (g_semcheck_error_unit_context != NULL)
     {
-        /* Inside unit body: skip line resolution, just show unit name */
+        int resolved_line = resolve_unit_error_location(
+            source_index, line_num,
+            directive_file, sizeof(directive_file),
+            unit_chain, sizeof(unit_chain));
+        if (resolved_line > 0)
+            line_num = resolved_line;
     }
     else if (source_index >= 0)
     {
@@ -2114,6 +2196,8 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     va_start(args, format);
     vfprintf(stderr, format, args);
     va_end(args);
+    if (unit_chain[0] != '\0')
+        fprintf(stderr, "%s", unit_chain);
     fprintf(stderr, "\n");
 
     print_error_context(line_num, col_num, source_index, directive_file);
@@ -2201,9 +2285,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
+    char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
+    unit_chain[0] = '\0';
     if (g_semcheck_error_unit_context != NULL)
     {
-        /* Inside unit body: skip line resolution, just show unit name */
+        int resolved_line = resolve_unit_error_location(
+            source_index, effective_line,
+            directive_file, sizeof(directive_file),
+            unit_chain, sizeof(unit_chain));
+        if (resolved_line > 0)
+            effective_line = resolved_line;
     }
     else if (source_index >= 0)
     {
@@ -2225,6 +2316,8 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     va_start(args, format);
     v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
         source_index, format, args);
+    if (unit_chain[0] != '\0')
+        fprintf(stderr, "  %s\n", unit_chain);
     va_end(args);
 }
 
@@ -2246,9 +2339,16 @@ void semcheck_error_with_context(const char *format, ...)
 
     char directive_file[MAX_DIRECTIVE_FILENAME_LEN];
     directive_file[0] = '\0';
+    char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
+    unit_chain[0] = '\0';
     if (g_semcheck_error_unit_context != NULL)
     {
-        /* Inside unit body: skip line resolution, just show unit name */
+        int resolved_line = resolve_unit_error_location(
+            effective_source_index, line_num,
+            directive_file, sizeof(directive_file),
+            unit_chain, sizeof(unit_chain));
+        if (resolved_line > 0)
+            effective_line = resolved_line;
     }
     else if (effective_source_index >= 0)
     {
@@ -2276,6 +2376,8 @@ void semcheck_error_with_context(const char *format, ...)
 
     v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
         effective_source_index, format, args);
+    if (unit_chain[0] != '\0')
+        fprintf(stderr, "  %s\n", unit_chain);
     va_end(args);
 }
 
@@ -13283,13 +13385,13 @@ void semcheck_add_builtins(SymTab_t *symtab)
         /* AtomicIncrement/AtomicDecrement(var Target: T[; Value: T]): T
          * Target is a var parameter — must be passed by reference.
          * In FPC these are compiler intrinsics that work on any ordinal type.
-         * Register overloads for Integer and Int64 to cover common usage. */
+         * Register overloads for LongInt, Int64, Integer, and QWord. */
         {
             const char *names[] = {
                 "AtomicIncrement", "AtomicDecrement",
                 "InterlockedIncrement", "InterlockedDecrement",
             };
-            static const int atomic_types[] = {INT_TYPE, INT64_TYPE};
+            static const int atomic_types[] = {LONGINT_TYPE, INT64_TYPE, INT_TYPE, QWORD_TYPE};
             for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
             {
                 for (size_t ti = 0; ti < sizeof(atomic_types) / sizeof(atomic_types[0]); ti++)
@@ -15926,7 +16028,9 @@ next_identifier:
                                 if (!compatible && inferred_is_pointer && var_node != NULL)
                                 {
                                     struct TypeAlias *alias = hashnode_get_type_alias(var_node);
-                                    if (alias != NULL && alias->is_pointer)
+                                    if (alias != NULL && (alias->is_pointer ||
+                                        (alias->target_type_id != NULL &&
+                                         strcasecmp(alias->target_type_id, "Pointer") == 0)))
                                         compatible = 1;
                                 }
                             }
@@ -17120,6 +17224,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     }
     
     /**** PLACE SUBPROGRAM ON THE CURRENT SCOPE ****/
+
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         /* Create KgpcType for the procedure */
@@ -17318,6 +17423,36 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprograms error after Pass 1: %d\n", return_val);
 #endif
+
+    /* Pass 1.5: Resolve parameter types for all predeclared subprograms.
+     * This must run AFTER type declarations are fully processed (semcheck_type_decls)
+     * so that types like PAnsiChar, TypedFile, etc. are available.
+     * predeclare_subprogram can't do this because it runs before semcheck_type_decls. */
+    cur = subprograms;
+    while (cur != NULL)
+    {
+        assert(cur->cur != NULL);
+        Tree_t *child = (Tree_t *)cur->cur;
+        ListNode_t *param_cur = child->tree_data.subprogram_data.args_var;
+        while (param_cur != NULL)
+        {
+            Tree_t *param = (Tree_t *)param_cur->cur;
+            if (param != NULL && param->type == TREE_VAR_DECL &&
+                param->tree_data.var_decl_data.cached_kgpc_type == NULL)
+            {
+                int owns = 0;
+                KgpcType *resolved = resolve_type_from_vardecl(param, symtab, &owns);
+                if (resolved != NULL)
+                {
+                    if (!owns)
+                        kgpc_type_retain(resolved);
+                    param->tree_data.var_decl_data.cached_kgpc_type = resolved;
+                }
+            }
+            param_cur = param_cur->next;
+        }
+        cur = cur->next;
+    }
 
     /* Pass 2: Process full semantic checking including bodies */
     int skip_imported_bodies = (kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL);
