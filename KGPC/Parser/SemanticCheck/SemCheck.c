@@ -13216,7 +13216,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
     /* PopCnt: function PopCnt(AValue: QWord): Byte - counts set bits */
     {
-        static const int popcnt_types[] = {BYTE_TYPE, WORD_TYPE, LONGWORD_TYPE, QWORD_TYPE};
+        static const int popcnt_types[] = {BYTE_TYPE, WORD_TYPE, INT_TYPE, LONGINT_TYPE, LONGWORD_TYPE, QWORD_TYPE};
         for (size_t i = 0; i < sizeof(popcnt_types) / sizeof(popcnt_types[0]); ++i)
             register_unary_builtin_func(symtab, "PopCnt", "AValue", popcnt_types[i], BYTE_TYPE);
     }

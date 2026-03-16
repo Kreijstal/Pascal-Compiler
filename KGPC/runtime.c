@@ -5506,6 +5506,16 @@ int64_t popcnt_i64(uint64_t value)
     return (int64_t)__builtin_popcountll(value);
 }
 
+int32_t popcnt_i(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
+}
+
+int32_t popcnt_li(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
+}
+
 /* filecreate_rbs: FPC FileCreate(Filename: string): THandle
  * Creates a new file (or truncates existing), returns file descriptor.
  * The _i and _i_i suffixed variants (with Rights/Attributes params) redirect

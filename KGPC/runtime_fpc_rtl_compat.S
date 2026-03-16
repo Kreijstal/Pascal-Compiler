@@ -7,16 +7,6 @@
 PopCnt:
     jmp popcnt_i64
 
-/* filecreate_rbs_i / filecreate_rbs_i_i: FPC FileCreate(Filename; [Rights[; Attrs]]).
- * Both variants redirect to filecreate_rbs — either the compiler-emitted version
- * (from FPC's Pascal source) or the kgpc_filecreate_rbs fallback. */
-.globl filecreate_rbs_i
-filecreate_rbs_i:
-    jmp filecreate_rbs
-
-.globl filecreate_rbs_i_i
-filecreate_rbs_i_i:
-    jmp filecreate_rbs
 
 /* FindComponentClass / ReadDeltaStream: FPC TReader/TComponent class methods that
  * are referenced but rarely executed.  Redirect to the abstract-method error
