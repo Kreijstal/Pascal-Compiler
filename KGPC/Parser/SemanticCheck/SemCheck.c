@@ -7356,6 +7356,36 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
  * Complex types (pointers, arrays, records, etc.) are NOT pre-declared because
  * they may have forward references that can't be resolved yet.
  */
+
+/* Return the storage size in bytes for a builtin Pascal type name.
+ * Used to decide whether a type alias override widens or narrows. */
+static long long semcheck_builtin_type_size(const char *name)
+{
+    if (name == NULL) return 0;
+    if (pascal_identifier_equals(name, "LongInt") ||
+        pascal_identifier_equals(name, "LongWord") ||
+        pascal_identifier_equals(name, "DWord") ||
+        pascal_identifier_equals(name, "Cardinal") ||
+        pascal_identifier_equals(name, "Single"))
+        return 4;
+    if (pascal_identifier_equals(name, "SmallInt") ||
+        pascal_identifier_equals(name, "Word") ||
+        pascal_identifier_equals(name, "WideChar"))
+        return 2;
+    if (pascal_identifier_equals(name, "Byte") ||
+        pascal_identifier_equals(name, "ShortInt") ||
+        pascal_identifier_equals(name, "Boolean") ||
+        pascal_identifier_equals(name, "Char") ||
+        pascal_identifier_equals(name, "AnsiChar"))
+        return 1;
+    if (pascal_identifier_equals(name, "Int64") ||
+        pascal_identifier_equals(name, "QWord") ||
+        pascal_identifier_equals(name, "Double") ||
+        pascal_identifier_equals(name, "Real"))
+        return 8;
+    return 0;
+}
+
 static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 {
     if (symtab == NULL)
@@ -7684,7 +7714,24 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     pascal_identifier_equals(tree->tree_data.type_decl_data.id, "CodePtrInt") ||
                                     pascal_identifier_equals(tree->tree_data.type_decl_data.id, "ValSInt") ||
                                     pascal_identifier_equals(tree->tree_data.type_decl_data.id, "ValUInt"))
-                                    is_alias_override = 1;
+                                {
+                                    /* Only allow widening overrides (e.g. Integer=LongInt
+                                     * over Integer=SmallInt from objpas over system).
+                                     * Prevent system's Integer=SmallInt from overriding
+                                     * objpas's Integer=LongInt when the merged type
+                                     * declarations are processed in an order where
+                                     * system comes after objpas. */
+                                    long long new_size = new_alias->storage_size;
+                                    long long old_size = old_alias->storage_size;
+                                    if (new_size <= 0 && new_alias->target_type_id != NULL)
+                                        new_size = semcheck_builtin_type_size(new_alias->target_type_id);
+                                    if (old_size <= 0 && old_alias->target_type_id != NULL)
+                                        old_size = semcheck_builtin_type_size(old_alias->target_type_id);
+                                    /* Allow override only if new type is at least as wide,
+                                     * or if sizes can't be determined (allow by default). */
+                                    if (new_size >= old_size || new_size <= 0 || old_size <= 0)
+                                        is_alias_override = 1;
+                                }
                             }
                         }
                         if (!is_forward_class_completion && !is_alias_override)
