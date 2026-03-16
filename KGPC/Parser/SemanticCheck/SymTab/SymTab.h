@@ -200,18 +200,4 @@ void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
  * Also calls PopScope() to keep the flat stack in sync. */
 void LeaveScope(SymTab_t *symtab);
 
-/* ========================================================================
- * Phase 3: Tree-walking lookup is now unconditional.
- *
- * SymTab_InitScopeTreeFlag() and SymTab_UseScopeTree() are kept as
- * no-op / always-true stubs for callers that still reference them.
- * They will be removed in Phase 4 cleanup.
- * ======================================================================== */
-
-/* No-op: tree path is unconditional in Phase 3 */
-void SymTab_InitScopeTreeFlag(void);
-
-/* Always returns 1 in Phase 3 */
-int SymTab_UseScopeTree(void);
-
 #endif

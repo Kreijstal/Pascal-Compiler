@@ -849,13 +849,6 @@ void LeaveScope(SymTab_t *symtab)
  * dep_scopes at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
  * ======================================================================== */
 
-/* Phase 3: Tree path is now always active.  SymTab_InitScopeTreeFlag() and
- * SymTab_UseScopeTree() are kept as no-ops / always-true for callers that
- * still reference them; they will be removed in Phase 4 cleanup. */
-
-void SymTab_InitScopeTreeFlag(void) { /* no-op: tree path is unconditional */ }
-int SymTab_UseScopeTree(void) { return 1; }
-
 /* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
  * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].
  *
