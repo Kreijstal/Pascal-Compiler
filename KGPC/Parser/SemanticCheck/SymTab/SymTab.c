@@ -49,7 +49,7 @@ static ListNode_t *append_list(ListNode_t *a, ListNode_t *b)
     return a;
 }
 
-/* Phase 2: Forward declarations for tree-walking lookups (defined at end of file) */
+/* Forward declarations for tree-walking lookups (defined at end of file) */
 static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id);
 static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
 static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id);
@@ -94,7 +94,7 @@ void PushScope(SymTab_t *symtab)
         symtab->stack_head = PushListNodeFront(symtab->stack_head,
             CreateListNode(new_hash, LIST_UNSPECIFIED));
 
-    /* Phase 2: Keep scope tree in sync — create a SCOPE_BLOCK child node
+    /* Keep scope tree in sync — create a SCOPE_BLOCK child node
      * sharing the just-pushed hash table.  Kind is generic SCOPE_BLOCK;
      * callers that need precise kinds should use EnterScope() instead. */
     if (symtab->current_scope != NULL)
@@ -109,7 +109,7 @@ void PopScope(SymTab_t *symtab)
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
 
-    /* Phase 2: Keep scope tree in sync — pop back to parent.
+    /* Keep scope tree in sync — pop back to parent.
      * Only pop if current_scope's table matches the popped stack entry
      * (guards against mismatched push/pop from EnterScope/LeaveScope). */
     if (symtab->current_scope != NULL &&
@@ -771,12 +771,12 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node)
 }
 
 /* ========================================================================
- * Scope tree infrastructure (Phase 1)
+ * Scope tree infrastructure
  *
- * These functions build/maintain the scope tree in parallel with the
- * flat stack.  During Phase 1, no lookup code uses the tree — it is
- * purely structural.  Phase 2 will shadow FindIdent; Phase 3+ will
- * remove the flat stack entirely.
+ * These functions build/maintain the parent-pointer scope tree.
+ * The tree is maintained in parallel with the legacy flat stack
+ * (stack_head + unit_tables).  Phase 3: All lookups use the tree.
+ * Phase 4 will remove the legacy flat stack entirely.
  * ======================================================================== */
 
 ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index, HashTable_t *table)
@@ -870,13 +870,14 @@ void LeaveScope(SymTab_t *symtab)
 }
 
 /* ========================================================================
- * Phase 2: Tree-walking lookup (parallel implementation)
+ * Tree-walking lookup (Phase 3: unconditional)
  *
- * These shadow the legacy flat-stack Find* functions.  They walk
- * current_scope → parent → ... → builtin_scope, checking dep_scopes
- * at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
+ * These walk current_scope → parent → ... → builtin_scope, checking
+ * dep_scopes at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
  *
- * Gated by KGPC_SCOPE_TREE=1 env var (checked once at startup).
+ * Compatibility fallback: At SCOPE_BUILTIN, also search unit_tables[]
+ * since unit scope deps aren't fully wired yet.  This fallback will
+ * be removed in Phase 4 when all deps are properly wired.
  * ======================================================================== */
 
 /* Phase 3: Tree path is now always active.  SymTab_InitScopeTreeFlag() and
@@ -889,9 +890,9 @@ int SymTab_UseScopeTree(void) { return 1; }
 /* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
  * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].
  *
- * Phase 2 compatibility: When we reach builtin_scope, also search all
- * unit_tables[] (since unit scope deps aren't fully wired yet).  This
- * fallback will be removed in Phase 3 when all deps are properly wired.
+ * Compatibility fallback: At SCOPE_BUILTIN, also search unit_tables[]
+ * since unit scope deps aren't fully wired yet.  This fallback will
+ * be removed in Phase 4 when all deps are properly wired.
  *
  * Return value: depth 0 for unit/builtin symbols (matches legacy behavior
  * where unit_tables and builtins are all at "global level 0"). */

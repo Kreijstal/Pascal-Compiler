@@ -6962,7 +6962,9 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     }
 
     symtab = InitSymTab();
-    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global scope for built-in constants and types */
+    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global pre-program scope (builtins are
+                                           * registered into unit_tables[System] via
+                                           * push_target_unit, not into this scope) */
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
