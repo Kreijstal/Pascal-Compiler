@@ -41,6 +41,8 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         return -1;
 
     caller_unit_index = semcheck_operator_lookup_unit_index(symtab);
+
+    /* 1. Scope stack (local scopes, parameters, WITH contexts) */
     cur = symtab->stack_head;
     while (cur != NULL)
     {
@@ -55,6 +57,63 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         cur = cur->next;
     }
 
+    /* 2. Unit tables — same search order as FindIdentInUnit:
+     *    own unit first, then dependency units. */
+    {
+        int global_level = 0;
+
+        /* 2a. Caller's own unit table */
+        if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
+            symtab->unit_tables[caller_unit_index] != NULL)
+        {
+            HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                symtab->unit_tables[caller_unit_index], prefix, caller_unit_index);
+            if (node != NULL)
+            {
+                *hash_return = node;
+                return global_level;
+            }
+        }
+
+        /* 2b. Dependency unit tables */
+        int num_units = unit_registry_count();
+        for (int dep = 1; dep <= num_units; dep++)
+        {
+            if (dep == caller_unit_index)
+                continue;
+            if (!unit_registry_is_dep(caller_unit_index, dep))
+                continue;
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+                continue;
+            HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                symtab->unit_tables[dep], prefix, caller_unit_index);
+            if (node != NULL)
+            {
+                *hash_return = node;
+                return global_level;
+            }
+        }
+
+        /* 2c. When unit_context is 0 (main program), search all unit tables
+         *     that FindIdentInAnyUnitTable would cover. */
+        if (caller_unit_index == 0)
+        {
+            for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
+            {
+                if (symtab->unit_tables[u] == NULL)
+                    continue;
+                HashNode_t *node = FindIdentByPrefixInTableForUnit(
+                    symtab->unit_tables[u], prefix, caller_unit_index);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return global_level;
+                }
+            }
+        }
+    }
+
+    /* 3. Builtins */
     {
         HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
         if (node != NULL)
