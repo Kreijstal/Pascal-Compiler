@@ -543,33 +543,6 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value)
  * Find functions
  * ======================================================================== */
 
-/* Search all unit tables (for non-unit-aware path) */
-static HashNode_t *FindIdentInAnyUnitTable(SymTab_t *symtab, const char *id)
-{
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
-        {
-            HashNode_t *node = FindIdentInTable(symtab->unit_tables[i], id);
-            if (node != NULL)
-                return node;
-        }
-    }
-    return NULL;
-}
-
-/* Collect all matches from all unit tables */
-static ListNode_t *FindAllIdentsInAnyUnitTable(SymTab_t *symtab, const char *id)
-{
-    ListNode_t *all = NULL;
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[i], id));
-    }
-    return all;
-}
-
 int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
@@ -870,14 +843,10 @@ void LeaveScope(SymTab_t *symtab)
 }
 
 /* ========================================================================
- * Tree-walking lookup (Phase 3: unconditional)
+ * Tree-walking lookup (Phase 3: unconditional, deps wired)
  *
  * These walk current_scope → parent → ... → builtin_scope, checking
  * dep_scopes at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
- *
- * Compatibility fallback: At SCOPE_BUILTIN, also search unit_tables[]
- * since unit scope deps aren't fully wired yet.  This fallback will
- * be removed in Phase 4 when all deps are properly wired.
  * ======================================================================== */
 
 /* Phase 3: Tree path is now always active.  SymTab_InitScopeTreeFlag() and
@@ -889,10 +858,6 @@ int SymTab_UseScopeTree(void) { return 1; }
 
 /* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
  * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].
- *
- * Compatibility fallback: At SCOPE_BUILTIN, also search unit_tables[]
- * since unit scope deps aren't fully wired yet.  This fallback will
- * be removed in Phase 4 when all deps are properly wired.
  *
  * Return value: depth 0 for unit/builtin symbols (matches legacy behavior
  * where unit_tables and builtins are all at "global level 0"). */
@@ -925,18 +890,6 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
                     *hash_return = node;
                     return 0;  /* dep symbols at global level */
                 }
-            }
-        }
-
-        /* Phase 2 fallback: at builtin_scope, also search unit_tables[]
-         * (since unit scope deps aren't fully wired yet). */
-        if (scope->kind == SCOPE_BUILTIN)
-        {
-            node = FindIdentInAnyUnitTable(symtab, id);
-            if (node != NULL)
-            {
-                *hash_return = node;
-                return 0;  /* unit symbols at global level */
             }
         }
 
@@ -976,23 +929,6 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
             }
         }
 
-        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
-        if (scope->kind == SCOPE_BUILTIN)
-        {
-            for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-            {
-                if (symtab->unit_tables[i] != NULL)
-                {
-                    node = FindIdentByPrefixInTable(symtab->unit_tables[i], prefix);
-                    if (node != NULL)
-                    {
-                        *hash_return = node;
-                        return depth;
-                    }
-                }
-            }
-        }
-
         scope = scope->parent;
         depth++;
     }
@@ -1016,10 +952,6 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
             for (int i = 0; i < scope->num_deps; i++)
                 all = append_list(all, FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
         }
-
-        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
-        if (scope->kind == SCOPE_BUILTIN)
-            all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
 
         scope = scope->parent;
     }
@@ -1046,9 +978,6 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
                     matches = append_list(matches,
                         FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
             }
-            /* Phase 2 fallback: if this is builtin_scope, also collect from unit_tables[] */
-            if (scope->kind == SCOPE_BUILTIN)
-                matches = append_list(matches, FindAllIdentsInAnyUnitTable(symtab, id));
             return matches;
         }
 
@@ -1061,14 +990,6 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
                     FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
             if (dep_matches != NULL)
                 return dep_matches;
-        }
-
-        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
-        if (scope->kind == SCOPE_BUILTIN)
-        {
-            ListNode_t *unit_matches = FindAllIdentsInAnyUnitTable(symtab, id);
-            if (unit_matches != NULL)
-                return unit_matches;
         }
 
         scope = scope->parent;

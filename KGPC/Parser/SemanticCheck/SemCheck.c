@@ -13578,6 +13578,43 @@ static void semcheck_timing_step(const char *label, double *last_ms) {
     *last_ms = now;
 }
 
+/* Wire scope tree deps: add each unit in uses_list as a dependency of scope.
+ * Also always adds System as a dependency. */
+static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses_list)
+{
+    if (scope == NULL) return;
+
+    /* Every scope implicitly depends on System */
+    int sys_idx = unit_registry_add("System");
+    if (sys_idx > 0)
+        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, sys_idx));
+
+    ListNode_t *cur = uses_list;
+    while (cur != NULL)
+    {
+        if (cur->type == LIST_STRING && cur->cur != NULL)
+        {
+            const char *name = (const char *)cur->cur;
+            int idx = unit_registry_add(name);
+            if (idx > 0)
+                ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, idx));
+        }
+        cur = cur->next;
+    }
+}
+
+/* Wire program scope deps to ALL loaded units.  This is needed because the
+ * current architecture merges all units into the program tree, so subprograms
+ * from any unit run under the program scope and need to see their own unit's
+ * symbols through the dep_scopes chain. */
+static void wire_program_scope_all_units(SymTab_t *symtab, ScopeNode *scope)
+{
+    if (scope == NULL) return;
+    int count = unit_registry_count();
+    for (int i = 1; i <= count; i++)
+        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, i));
+}
+
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;
@@ -13596,6 +13633,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_name_add("System");
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
     semcheck_timing_step("unit names", &t0);
+
+    /* Wire scope tree deps: program scope can see ALL loaded units.
+     * This is needed because units are merged into the program tree,
+     * so subprograms from any unit need to see their own unit's symbols. */
+    wire_program_scope_all_units(symtab, symtab->current_scope);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
     semcheck_timing_step("id check", &t0);
@@ -13786,6 +13828,27 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
+
+    /* Wire scope tree deps: unit scope can see interface + implementation uses */
+    wire_scope_deps(symtab, symtab->current_scope,
+                    tree->tree_data.unit_data.interface_uses);
+    /* Also add implementation uses as deps */
+    {
+        ListNode_t *cur = tree->tree_data.unit_data.implementation_uses;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_STRING && cur->cur != NULL)
+            {
+                const char *name = (const char *)cur->cur;
+                int idx = unit_registry_add(name);
+                if (idx > 0)
+                    ScopeAddDependency(symtab->current_scope,
+                                       GetOrCreateUnitScope(symtab, idx));
+            }
+            cur = cur->next;
+        }
+    }
+
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.interface_type_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.implementation_type_decls,
