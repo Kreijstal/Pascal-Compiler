@@ -1365,9 +1365,26 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         }
         return semcheck_make_quality(MATCH_EXACT);
     }
-    /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
+    /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE).
+     * AnsiString (STRING_TYPE) → RawByteString formal should rank higher than
+     * AnsiString → ShortString, since AnsiString IS-A RawByteString.
+     * This prevents Assign(t, AnsiString(s)) from picking the ShortString
+     * overload (assign_t_ss) over the RawByteString overload (assign_t_rbs). */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
+    {
+        if (actual_tag == STRING_TYPE && formal_tag == STRING_TYPE)
+        {
+            /* Both are AnsiString-family (STRING_TYPE).  Check alias names:
+             * AnsiString → RawByteString is exact, other cross-aliases are promotion. */
+            const char *formal_alias = (formal_kgpc != NULL && formal_kgpc->type_alias != NULL)
+                ? formal_kgpc->type_alias->alias_name : NULL;
+            if (formal_alias != NULL &&
+                pascal_identifier_equals(formal_alias, "RawByteString"))
+                return semcheck_make_quality(MATCH_EXACT);
+        }
+        /* AnsiString → ShortString or vice versa: promotion (lossy conversion) */
         return semcheck_make_quality(MATCH_PROMOTION);
+    }
 
     /* Plain Pointer is implicitly convertible to typed pointer parameters
      * such as PChar/PAnsiChar in RTL code (e.g. FpWrite/FpRead wrappers). */
