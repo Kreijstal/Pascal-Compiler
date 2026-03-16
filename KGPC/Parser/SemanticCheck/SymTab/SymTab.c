@@ -67,8 +67,7 @@ SymTab_t *InitSymTab()
 
     /* Phase 1: Initialize scope tree alongside flat stack.
      * builtin_scope->table points to the same builtins hash table. */
-    new_symtab->builtin_scope = CreateScope(SCOPE_BUILTIN, NULL, 0);
-    new_symtab->builtin_scope->table = new_symtab->builtins;  /* shared, not owned */
+    new_symtab->builtin_scope = CreateScope(SCOPE_BUILTIN, NULL, 0, new_symtab->builtins);
     new_symtab->current_scope = new_symtab->builtin_scope;
     memset(new_symtab->unit_scopes, 0, sizeof(new_symtab->unit_scopes));
 
@@ -107,18 +106,23 @@ void DestroySymTab(SymTab_t *symtab)
     assert(symtab != NULL);
 
     /* Phase 1: Destroy scope tree nodes (they don't own their tables).
-     * Walk from current_scope up to builtin_scope, destroying non-unit scopes. */
+     * Walk from current_scope up to builtin_scope, destroying each node.
+     * Clear unit_scopes[] entries as we go so we don't double-free. */
     {
         ScopeNode *scope = symtab->current_scope;
         while (scope != NULL && scope != symtab->builtin_scope)
         {
             ScopeNode *parent = scope->parent;
-            /* Skip unit scopes — they're destroyed below from unit_scopes[] */
-            if (scope->kind != SCOPE_UNIT)
-                DestroyScope(scope);
+            /* If this is a unit scope, clear its slot to prevent double-free below */
+            if (scope->unit_index > 0 && scope->unit_index < SYMTAB_MAX_UNITS &&
+                symtab->unit_scopes[scope->unit_index] == scope)
+            {
+                symtab->unit_scopes[scope->unit_index] = NULL;
+            }
+            DestroyScope(scope);
             scope = parent;
         }
-        /* Destroy unit scopes */
+        /* Destroy any remaining unit scopes not in the parent chain */
         for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
         {
             if (symtab->unit_scopes[i] != NULL)
@@ -863,11 +867,12 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node)
  * remove the flat stack entirely.
  * ======================================================================== */
 
-ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index)
+ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index, HashTable_t *table)
 {
+    assert(table != NULL);
     ScopeNode *scope = (ScopeNode *)calloc(1, sizeof(ScopeNode));
     assert(scope != NULL);
-    scope->table = NULL;   /* caller must set — Phase 1 scopes share tables with flat stack */
+    scope->table = table;  /* NOT owned — shared with flat stack or unit_tables */
     scope->parent = parent;
     scope->kind = kind;
     scope->unit_index = unit_index;
@@ -897,8 +902,8 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index)
     if (symtab->unit_tables[unit_index] == NULL)
         symtab->unit_tables[unit_index] = InitHashTable();
 
-    ScopeNode *scope = CreateScope(SCOPE_UNIT, symtab->builtin_scope, unit_index);
-    scope->table = symtab->unit_tables[unit_index];  /* shared, not owned */
+    ScopeNode *scope = CreateScope(SCOPE_UNIT, symtab->builtin_scope, unit_index,
+                                    symtab->unit_tables[unit_index]);
     symtab->unit_scopes[unit_index] = scope;
     return scope;
 }
@@ -937,8 +942,8 @@ void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index)
     PushScope(symtab);
 
     /* Build tree node whose table points to the just-pushed flat-stack hash table */
-    ScopeNode *scope = CreateScope(kind, symtab->current_scope, unit_index);
-    scope->table = (HashTable_t *)symtab->stack_head->cur;  /* shared */
+    ScopeNode *scope = CreateScope(kind, symtab->current_scope, unit_index,
+                                   (HashTable_t *)symtab->stack_head->cur);
     symtab->current_scope = scope;
 }
 

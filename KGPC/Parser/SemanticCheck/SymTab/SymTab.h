@@ -179,7 +179,7 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 /* Create a scope node.  The table pointer is NOT owned by the scope node —
  * it points into the flat stack or unit_tables.  DestroyScope frees the
  * ScopeNode itself and the dep_scopes array, but NOT the table. */
-ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index);
+ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index, HashTable_t *table);
 void DestroyScope(ScopeNode *scope);
 
 /* Get (or lazily create) the unit scope for the given unit registry index.
