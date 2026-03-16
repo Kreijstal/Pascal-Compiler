@@ -6974,6 +6974,49 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     }
     /*PrintSymTab(symtab, stderr, 0);*/
 
+    /* Wire unit scope dependencies from the unit_registry into the scope tree.
+     * Each unit scope gets dep_scopes[] populated from its uses clause,
+     * so FindIdent_Tree can search dependencies without the flat-model fallback. */
+    {
+        int num_units = unit_registry_count();
+        for (int u = 1; u <= num_units; u++)
+        {
+            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+            if (unit_scope == NULL) continue;
+            /* Always add System as a dep (every unit implicitly uses System) */
+            int sys_idx = unit_registry_add("System");
+            if (sys_idx > 0 && sys_idx != u)
+            {
+                ScopeNode *sys_scope = GetOrCreateUnitScope(symtab, sys_idx);
+                if (sys_scope != NULL)
+                    ScopeAddDependency(unit_scope, sys_scope);
+            }
+            /* Add explicit deps from uses clause */
+            for (int d = 1; d <= num_units; d++)
+            {
+                if (d == u) continue;
+                if (unit_registry_is_dep(u, d))
+                {
+                    ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                    if (dep_scope != NULL)
+                        ScopeAddDependency(unit_scope, dep_scope);
+                }
+            }
+        }
+        /* Program scope sees all units (program uses everything that was loaded) */
+        if (symtab->current_scope != NULL &&
+            (symtab->current_scope->kind == SCOPE_BLOCK ||
+             symtab->current_scope->kind == SCOPE_PROGRAM))
+        {
+            for (int u = 1; u <= num_units; u++)
+            {
+                ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+                if (unit_scope != NULL)
+                    ScopeAddDependency(symtab->current_scope, unit_scope);
+            }
+        }
+    }
+
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     if (parse_tree->type == TREE_UNIT) {
@@ -16302,6 +16345,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (owner_copy != NULL)
             semcheck_set_current_method_owner(owner_copy);
     }
+    else
+    {
+        /* Standalone procedure/function — clear method owner so that
+         * semcheck_proccall doesn't misinterpret calls as method calls. */
+        semcheck_set_current_method_owner(NULL);
+    }
 
     /* For class methods, copy default parameter values from the class declaration
      * to the implementation. This is needed because Pascal allows defaults only in
@@ -17072,8 +17121,14 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 if (FindIdent(&self_node, symtab, "Self") == -1)
                 {
+                    /* Push Self to the method scope (stack head), NOT the unit table.
+                     * If push_target_unit is set, temporarily clear it so Self goes
+                     * to the local scope and gets cleaned up when the method exits. */
+                    int saved_push_target_self = symtab->push_target_unit;
+                    symtab->push_target_unit = 0;
                     kgpc_type_retain(self_type);
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
+                    symtab->push_target_unit = saved_push_target_self;
                     if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
                         self_node->is_var_parameter = self_is_var_param;
                 }
@@ -17252,10 +17307,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
     if (owner_copy != NULL)
-    {
-        semcheck_set_current_method_owner(prev_owner);
         free(owner_copy);
-    }
+    /* Always restore the previous method owner, even for standalone procedures.
+     * Without this, the owner from a previously semchecked method leaks into
+     * subsequent standalone procedures, causing semcheck_proccall to
+     * misinterpret calls as method calls (e.g. Assign → assign_t_ss recursion). */
+    semcheck_set_current_method_owner(prev_owner);
 
     return return_val;
 }
