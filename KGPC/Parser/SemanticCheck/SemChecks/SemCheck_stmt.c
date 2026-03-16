@@ -3715,7 +3715,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 stmt->stmt_data.try_except_data.exception_var_name != NULL) {
                 
                 /* Push a new scope for the exception variable */
-                PushScope(symtab);
+                EnterScope(symtab, SCOPE_BLOCK, 0);
                 
                 /* Add the exception variable to the symbol table */
                 char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
@@ -3747,7 +3747,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
                 
                 /* Pop the scope */
-                PopScope(symtab);
+                LeaveScope(symtab);
             } else {
                 /* No exception variable - just check the except statements normally */
                 return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);

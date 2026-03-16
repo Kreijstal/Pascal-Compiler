@@ -6962,7 +6962,7 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
     }
 
     symtab = InitSymTab();
-    PushScope(symtab);  /* Push global scope for built-in constants and types */
+    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global scope for built-in constants and types */
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
@@ -13588,7 +13588,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (SEMCHECK_TIMINGS_ENABLED())
         t0 = semcheck_now_ms();
 
-    PushScope(symtab);
+    EnterScope(symtab, SCOPE_PROGRAM, 0);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
@@ -13775,7 +13775,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
 
-    PushScope(symtab);
+    EnterScope(symtab, SCOPE_UNIT, 0);  /* unit_index set below once we know it */
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
@@ -16501,7 +16501,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
         }
 
-        PushScope(symtab);
+        EnterScope(symtab, SCOPE_SUBPROGRAM,
+            subprogram->tree_data.subprogram_data.source_unit_index);
 
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram);
@@ -16628,9 +16629,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
         }
 
-        PushScope(symtab);
+        EnterScope(symtab, SCOPE_SUBPROGRAM,
+            subprogram->tree_data.subprogram_data.source_unit_index);
         if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
-            fprintf(stderr, "[KGPC] semcheck_subprogram (func): PushScope for %s\n",
+            fprintf(stderr, "[KGPC] semcheck_subprogram (func): EnterScope for %s\n",
                 subprogram->tree_data.subprogram_data.id);
 
         /* For method implementations, add class vars to scope */
@@ -17050,7 +17052,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
         symtab->unit_context = saved_unit_context;
-        PopScope(symtab);
+        LeaveScope(symtab);
 #ifdef DEBUG
         fprintf(stderr, "DEBUG: semcheck_subprogram %s returning (no body): %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
@@ -17173,7 +17175,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     g_semcheck_current_subprogram = prev_current_subprogram;
-    PopScope(symtab);
+    LeaveScope(symtab);
 
     /* Restore error context / suppress flag after body processing. */
     g_semcheck_error_suppress_source_index = saved_suppress;

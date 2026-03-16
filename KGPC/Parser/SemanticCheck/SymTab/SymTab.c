@@ -570,66 +570,18 @@ static ListNode_t *FindAllIdentsInAnyUnitTable(SymTab_t *symtab, const char *id)
     return all;
 }
 
-/* Count scope stack depth (= outermost scope level) */
-static int scope_stack_depth(SymTab_t *symtab)
-{
-    int depth = 0;
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-        depth++;
-    return depth;
-}
-
 int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
-    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+    /* Phase 3: tree-walking path is unconditional.
+     * The tree walk handles unit-aware lookup via parent chain + dep_scopes,
+     * making FindIdentInUnit / unit_context dispatch unnecessary. */
+    if (symtab->current_scope != NULL)
         return FindIdent_Tree(hash_return, symtab, id);
 
-    if (symtab->unit_context > 0)
-        return FindIdentInUnit(hash_return, symtab, id, symtab->unit_context);
-
-    int return_val = 0;
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    HashNode_t *hash_node;
-
-    /* 1. Scope stack (program-local + inner scopes) */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
-    {
-        hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return return_val;
-        }
-        ++return_val;
-        cur = cur->next;
-    }
-
-    /* 2. Unit tables + builtins (global scope — same level as outermost) */
-    {
-        int global_level = 0;  /* unit/builtin symbols are always accessible */
-
-        hash_node = FindIdentInAnyUnitTable(symtab, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return global_level;
-        }
-
-        hash_node = FindIdentInTable(symtab->builtins, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return global_level;
-        }
-    }
-
+    /* Fallback for edge case where scope tree is not initialized */
     *hash_return = NULL;
     return -1;
 }
@@ -707,62 +659,21 @@ HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
-    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+    /* Phase 3: tree path unconditional */
+    if (symtab->current_scope != NULL)
         return FindIdentInCurrentScope_Tree(symtab, id);
 
-    /* When push_target_unit is active, the "current scope" is the unit table */
-    if (symtab->push_target_unit > 0 && symtab->push_target_unit < SYMTAB_MAX_UNITS &&
-        symtab->unit_tables[symtab->push_target_unit] != NULL)
-        return FindIdentInTable(symtab->unit_tables[symtab->push_target_unit], id);
-    if (symtab->stack_head == NULL)
-        return NULL;
-    return FindIdentInTable((HashTable_t *)symtab->stack_head->cur, id);
+    return NULL;
 }
 
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
 {
-    int return_val = 0;
     assert(symtab != NULL);
     assert(prefix != NULL);
 
-    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
-    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+    /* Phase 3: tree path unconditional */
+    if (symtab->current_scope != NULL)
         return FindIdentByPrefix_Tree(hash_return, symtab, prefix);
-
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
-    {
-        HashNode_t *node = FindIdentByPrefixInTable((HashTable_t *)cur->cur, prefix);
-        if (node != NULL)
-        {
-            *hash_return = node;
-            return return_val;
-        }
-        ++return_val;
-        cur = cur->next;
-    }
-
-    /* Search unit tables */
-    for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
-    {
-        if (symtab->unit_tables[i] != NULL)
-        {
-            HashNode_t *node = FindIdentByPrefixInTable(symtab->unit_tables[i], prefix);
-            if (node != NULL)
-            {
-                *hash_return = node;
-                return return_val;
-            }
-        }
-    }
-
-    HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
-    if (node != NULL)
-    {
-        *hash_return = node;
-        return return_val;
-    }
 
     *hash_return = NULL;
     return -1;
@@ -773,49 +684,11 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
-    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+    /* Phase 3: tree path unconditional */
+    if (symtab->current_scope != NULL)
         return FindAllIdents_Tree(symtab, id);
 
-    if (symtab->unit_context > 0)
-    {
-        /* Unit-aware: scope stack + caller's unit + deps + builtins */
-        int caller = symtab->unit_context;
-        ListNode_t *all = NULL;
-
-        /* 1. Scope stack */
-        for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-            all = append_list(all, FindAllIdentsInTable((HashTable_t *)cur->cur, id));
-
-        /* 2. Caller's own unit table */
-        if (caller > 0 && caller < SYMTAB_MAX_UNITS && symtab->unit_tables[caller] != NULL)
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[caller], id));
-
-        /* 3. Dependency unit tables */
-        int num_units = unit_registry_count();
-        for (int dep = 1; dep <= num_units; dep++)
-        {
-            if (dep == caller) continue;
-            if (!unit_registry_is_dep(caller, dep)) continue;
-            if (symtab->unit_tables[dep] == NULL) continue;
-            all = append_list(all, FindAllIdentsInTable(symtab->unit_tables[dep], id));
-        }
-
-        /* 4. Builtins */
-        all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
-        return all;
-    }
-
-    /* Non-unit-aware: scope stack + all unit tables + builtins */
-    ListNode_t *all = NULL;
-
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-        all = append_list(all, FindAllIdentsInTable((HashTable_t *)cur->cur, id));
-
-    all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
-    all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
-
-    return all;
+    return NULL;
 }
 
 ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
@@ -823,24 +696,11 @@ ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
-    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+    /* Phase 3: tree path unconditional */
+    if (symtab->current_scope != NULL)
         return FindAllIdentsInNearestScope_Tree(symtab, id);
 
-    /* Check scope stack first — each scope is a distinct level */
-    for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
-    {
-        ListNode_t *scope_matches = FindAllIdentsInTable((HashTable_t *)cur->cur, id);
-        if (scope_matches != NULL)
-            return scope_matches;
-    }
-
-    /* Unit tables + builtins are all at the same "global" level.
-     * If any match is found, collect from all of them. */
-    ListNode_t *all = NULL;
-    all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
-    all = append_list(all, FindAllIdentsInTable(symtab->builtins, id));
-    return all;
+    return NULL;
 }
 
 /* ========================================================================
@@ -1019,20 +879,12 @@ void LeaveScope(SymTab_t *symtab)
  * Gated by KGPC_SCOPE_TREE=1 env var (checked once at startup).
  * ======================================================================== */
 
-static int g_use_scope_tree = -1;  /* -1 = not yet initialized */
+/* Phase 3: Tree path is now always active.  SymTab_InitScopeTreeFlag() and
+ * SymTab_UseScopeTree() are kept as no-ops / always-true for callers that
+ * still reference them; they will be removed in Phase 4 cleanup. */
 
-void SymTab_InitScopeTreeFlag(void)
-{
-    const char *val = getenv("KGPC_SCOPE_TREE");
-    g_use_scope_tree = (val != NULL && strcmp(val, "1") == 0) ? 1 : 0;
-}
-
-int SymTab_UseScopeTree(void)
-{
-    if (g_use_scope_tree < 0)
-        SymTab_InitScopeTreeFlag();
-    return g_use_scope_tree;
-}
+void SymTab_InitScopeTreeFlag(void) { /* no-op: tree path is unconditional */ }
+int SymTab_UseScopeTree(void) { return 1; }
 
 /* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
  * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].

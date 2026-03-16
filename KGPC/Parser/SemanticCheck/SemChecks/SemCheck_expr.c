@@ -1685,7 +1685,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             /* We need to create a new scope with parameters and return variable */
             if (expr->expr_data.anonymous_method_data.body != NULL)
             {
-                PushScope(symtab);
+                EnterScope(symtab, SCOPE_BLOCK, 0);
                 
                 /* Add parameters to the scope */
                 if (params != NULL)
@@ -1750,7 +1750,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 /* Semantic check the body statement */
                 return_val += semcheck_stmt(symtab, expr->expr_data.anonymous_method_data.body, max_scope_lev);
                 
-                PopScope(symtab);
+                LeaveScope(symtab);
             }
             
             break;

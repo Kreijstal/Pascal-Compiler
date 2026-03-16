@@ -1,9 +1,11 @@
 /*
-    Symbol table: a stack of hash tables (legacy) with a parallel parent-pointer
-    scope tree being built for migration (see docs/SCOPE_TREE_REFACTORING.md).
+    Symbol table: parent-pointer scope tree (primary) with legacy flat stack
+    kept for Push*OntoScope routing during migration.
+    See docs/SCOPE_TREE_REFACTORING.md.
 
-    Phase 1: Both systems coexist. EnterScope/LeaveScope maintain the tree AND
-    call PushScope/PopScope. All existing code continues to work unchanged.
+    Phase 3: FindIdent and all lookup functions use the tree path unconditionally.
+    PushScope/PopScope maintain the tree in parallel. Legacy flat stack + unit_tables
+    + push_target_unit are still used for symbol insertion routing (Phase 4 removes them).
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually
@@ -199,18 +201,17 @@ void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
 void LeaveScope(SymTab_t *symtab);
 
 /* ========================================================================
- * Phase 2: Tree-walking lookup (gated by KGPC_SCOPE_TREE=1 env var)
+ * Phase 3: Tree-walking lookup is now unconditional.
  *
- * These are parallel implementations that walk the parent-pointer tree
- * instead of the flat stack.  When KGPC_SCOPE_TREE=1 is set, FindIdent
- * and friends dispatch to these.  Call SymTab_InitScopeTreeFlag() once
- * at startup to read the env var.
+ * SymTab_InitScopeTreeFlag() and SymTab_UseScopeTree() are kept as
+ * no-op / always-true stubs for callers that still reference them.
+ * They will be removed in Phase 4 cleanup.
  * ======================================================================== */
 
-/* Call once at startup to read KGPC_SCOPE_TREE env var */
+/* No-op: tree path is unconditional in Phase 3 */
 void SymTab_InitScopeTreeFlag(void);
 
-/* Returns non-zero if tree-walking path is active */
+/* Always returns 1 in Phase 3 */
 int SymTab_UseScopeTree(void);
 
 #endif
