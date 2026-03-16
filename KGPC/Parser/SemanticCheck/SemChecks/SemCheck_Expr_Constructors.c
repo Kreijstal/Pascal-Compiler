@@ -899,7 +899,7 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         if (!field->field_is_array && field_desc->type_id != NULL)
         {
             HashNode_t *alias_node = NULL;
-            if (FindIdent(&alias_node, symtab, field_desc->type_id) != -1 && alias_node != NULL)
+            if (FindIdent(&alias_node, symtab, field_desc->type_id) != 0 && alias_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(alias_node);
                 if (alias != NULL && alias->is_array)

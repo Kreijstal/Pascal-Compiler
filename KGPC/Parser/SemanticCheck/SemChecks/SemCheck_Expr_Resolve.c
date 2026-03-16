@@ -86,7 +86,7 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, id) == 0 &&
+        if (FindIdent(&type_node, symtab, id) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             int mapped = UNKNOWN_TYPE;
@@ -205,7 +205,7 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         if (alias->target_type_id != NULL)
         {
             HashNode_t *target_node = NULL;
-            if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
+            if (FindIdent(&target_node, symtab, alias->target_type_id) != 0 &&
                 target_node != NULL)
             {
                 set_type_from_hashtype(out_type, target_node);

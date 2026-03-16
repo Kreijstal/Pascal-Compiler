@@ -1,0 +1,31 @@
+The Meson build system
+Version: 1.10.1
+Source dir: /home/runner/work/Pascal-Compiler/Pascal-Compiler
+Build dir: /home/runner/work/Pascal-Compiler/Pascal-Compiler/build-fpc
+Build type: native build
+Project name: kgpc-project
+Project version: undefined
+C compiler for the host machine: cc (gcc 13.3.0 "cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0")
+C linker for the host machine: cc ld.bfd 2.42
+Host machine cpu family: x86_64
+Host machine cpu: x86_64
+Program bash found: YES (/usr/bin/bash)
+Found pkg-config: YES (/usr/bin/pkg-config) 1.8.1
+Run-time dependency libunwind found: YES 1.6.2
+Library unwind-x86_64 found: YES
+Library m found: YES
+Run-time dependency gmp found: YES 6.3.0
+Run-time dependency threads found: YES
+Library dl found: YES
+Program valgrind found: NO
+Program python3 found: YES (/opt/hostedtoolcache/Python/3.10.19/x64/bin/python3)
+Build targets in project: 13
+
+kgpc-project undefined
+
+  User defined options
+    buildtype        : debugoptimized
+    run_fpc_rtl_tests: true
+    with_gmp         : enabled
+
+Found ninja-1.13.0.git.kitware.jobserver-pipe-1 at /opt/hostedtoolcache/Python/3.10.19/x64/bin/ninja

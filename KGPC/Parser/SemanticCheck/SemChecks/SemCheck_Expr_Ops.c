@@ -1902,7 +1902,7 @@ int semcheck_mulop(int *type_return,
                     /* Look up the operator method in the symbol table.
                      * Try exact match first, then prefix match for return-type-suffixed names. */
                     HashNode_t *operator_node = NULL;
-                    if (FindIdent(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
+                    if (FindIdent(&operator_node, symtab, operator_method) != 0 && operator_node != NULL)
                     {
                         /* exact match */
                     }
@@ -2480,7 +2480,7 @@ int semcheck_varid(int *type_return,
                     /* Prefix not found - might be a unit qualifier.
                      * Try looking up the suffix directly. */
                     HashNode_t *field_node = NULL;
-                    if (FindIdent(&field_node, symtab, suffix) >= 0 && field_node != NULL)
+                    if (FindIdent(&field_node, symtab, suffix) != 0 && field_node != NULL)
                     {
                         if (field_node->hash_type == HASHTYPE_CONST)
                         {
@@ -2514,7 +2514,7 @@ int semcheck_varid(int *type_return,
         if (scope_return == -1 && owner != NULL)
         {
             HashNode_t *owner_node = NULL;
-            if (FindIdent(&owner_node, symtab, owner) >= 0 && owner_node != NULL)
+            if (FindIdent(&owner_node, symtab, owner) != 0 && owner_node != NULL)
             {
                 struct RecordType *owner_record = get_record_type_from_node(owner_node);
                 if (owner_record != NULL)
@@ -2559,7 +2559,7 @@ int semcheck_varid(int *type_return,
         if (scope_return == -1)
         {
             HashNode_t *self_node = NULL;
-            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 if (self_record == NULL)
@@ -2615,7 +2615,7 @@ resolved:;
         hash_return != NULL && hash_return->hash_type == HASHTYPE_FUNCTION)
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *self_record = get_record_type_from_node(self_node);
             if (self_record == NULL)
@@ -2690,7 +2690,7 @@ resolved:;
     HashNode_t *helper_self_node = NULL;
     struct RecordType *helper_self_record = NULL;
     int helper_context = 0;
-    if (FindIdent(&helper_self_node, symtab, "Self") == 0 && helper_self_node != NULL)
+    if (FindIdent(&helper_self_node, symtab, "Self") != 0 && helper_self_node != NULL)
     {
         helper_self_record = get_record_type_from_node(helper_self_node);
         if (helper_self_record == NULL)
@@ -2761,7 +2761,7 @@ resolved:;
                 {
                     snprintf(getter_id, id_len + 4, "Get%s", id);
                     HashNode_t *getter_node = NULL;
-                    int getter_found = (FindIdent(&getter_node, symtab, getter_id) != -1);
+                    int getter_found = (FindIdent(&getter_node, symtab, getter_id) != 0);
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
                     {
                         fprintf(stderr, "[SemCheck] varid fallback: id=%s getter=%s found=%d hash=%d\n",
@@ -3028,7 +3028,7 @@ resolved:;
             if (id != NULL)
             {
                 HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record == NULL)
@@ -3058,7 +3058,7 @@ resolved:;
             if (id != NULL)
             {
                 HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record == NULL)
@@ -3250,7 +3250,7 @@ resolved:;
                 char mangled_method[512];
                 snprintf(mangled_method, sizeof(mangled_method), "%s__%s", owner, id);
                 HashNode_t *mangled_node = NULL;
-                if (FindIdent(&mangled_node, symtab, mangled_method) >= 0 &&
+                if (FindIdent(&mangled_node, symtab, mangled_method) != 0 &&
                     mangled_node != NULL &&
                     mangled_node->hash_type == HASHTYPE_FUNCTION &&
                     mangled_node->type != NULL &&
@@ -3306,7 +3306,7 @@ resolved:;
         }
         
         set_hash_meta(hash_return, mutating);
-        semcheck_mark_static_link_needed(scope_return, hash_return);
+        semcheck_mark_static_link_needed(hash_return);
         if(scope_return > max_scope_lev)
         {
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
@@ -3456,7 +3456,7 @@ resolved:;
             if (subtype == UNKNOWN_TYPE && alias != NULL && alias->alias_name != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, alias->alias_name) != -1 &&
+                if (FindIdent(&type_node, symtab, alias->alias_name) != 0 &&
                     type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                 {
                     struct TypeAlias *type_alias = get_type_alias_from_node(type_node);

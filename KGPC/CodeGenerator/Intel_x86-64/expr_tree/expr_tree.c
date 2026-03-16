@@ -145,7 +145,7 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
 
         HashNode_t *node = NULL;
         if (!use_value &&
-            FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            FindIdent(&node, ctx->symtab, array_expr->expr_data.id) != 0 &&
             node != NULL && node->is_var_parameter)
         {
             use_value = 1;
@@ -376,7 +376,7 @@ static int expr_effective_storage_type(const struct Expression *expr, CodeGenCon
     if (expr != NULL && ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID)
     {
         HashNode_t *sym_node = NULL;
-        if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
             sym_node != NULL && sym_node->type != NULL)
         {
             int sym_tag = expr_tree_tag_from_kgpc(sym_node->type);
@@ -543,7 +543,7 @@ static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab
             if (pascal_identifier_equals(field->type_id, "Single"))
                 return 1;
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, field->type_id) == 0 &&
+            if (FindIdent(&type_node, symtab, field->type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL &&
                 kgpc_type_equals_tag(type_node->type, REAL_TYPE) &&
                 kgpc_type_sizeof(type_node->type) == 4)
@@ -1507,7 +1507,7 @@ static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGe
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
         {
             KgpcType *elem = kgpc_type_get_array_element_type(node->type);
@@ -2228,7 +2228,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
                 {
                     HashNode_t *class_node = NULL;
-                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) >= 0 &&
+                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) != 0 &&
                         class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
                         class_node->type != NULL)
                     {
@@ -2249,7 +2249,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 const char *owner_id = ctx->current_subprogram_owner_class;
 
                 HashNode_t *owner_node = NULL;
-                if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
+                if (FindIdent(&owner_node, ctx->symtab, owner_id) != 0 &&
                     owner_node != NULL && owner_node->type != NULL)
                 {
                     if (owner_node->type->kind == TYPE_KIND_RECORD)
@@ -2951,7 +2951,7 @@ cleanup_constructor:
     {
         /* Check if this is a string constant reference (but not a procedure address constant) */
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
             node->const_string_value != NULL &&
             /* Skip if this is a procedure address constant - those use const_string_value
@@ -3700,7 +3700,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
                 int found = (ctx != NULL && ctx->symtab != NULL &&
-                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    FindIdent(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
 
                 /* If FindIdent returned a function but there's a const with the same

@@ -68,7 +68,7 @@ static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id, long 
         return 1;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, id) >= 0 &&
+    if (FindIdent(&node, symtab, id) != 0 &&
         node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
     {
         *out_value = node->const_int_value;
@@ -1413,7 +1413,7 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
             return 1;
         /* Look up parent class in symbol table */
         HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
+        if (FindIdent(&parent_node, symtab, current->parent_class_name) != 0 && parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
             if (records_same_type(parent_record, superclass))
                 return 1;
@@ -1506,7 +1506,7 @@ static struct RecordType *resolve_record_field_record_type(struct RecordField *f
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field->type_id) >= 0)
+        if (FindIdent(&type_node, symtab, field->type_id) != 0)
         {
             struct RecordType *record = get_record_type_from_hashnode(type_node);
             if (record != NULL)
@@ -2031,7 +2031,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         /* Check if RHS target is a subclass of LHS record */
                         if (symtab != NULL) {
                             struct HashNode *rhs_class_node = NULL;
-                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
                                 rhs_class_node != NULL && rhs_class_node->type != NULL &&
                                 rhs_class_node->type->kind == TYPE_KIND_POINTER &&
                                 rhs_class_node->type->info.points_to != NULL &&
@@ -2102,7 +2102,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to "class of TParent" is allowed) */
                         if (symtab != NULL) {
                             struct HashNode *rhs_class_node = NULL;
-                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
                                 rhs_class_node != NULL && rhs_class_node->type != NULL &&
                                 rhs_class_node->type->kind == TYPE_KIND_POINTER &&
                                 rhs_class_node->type->info.points_to != NULL &&
@@ -2882,7 +2882,7 @@ static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long
         while (end >= trimmed && isspace((unsigned char)*end)) *end-- = '\0';
 
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, trimmed) >= 0 && node != NULL &&
+        if (FindIdent(&node, symtab, trimmed) != 0 && node != NULL &&
             (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
         {
             *out_value = node->const_int_value;
@@ -2957,7 +2957,7 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                 else if (symtab != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, range_str) >= 0 &&
+                    if (FindIdent(&type_node, symtab, range_str) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);

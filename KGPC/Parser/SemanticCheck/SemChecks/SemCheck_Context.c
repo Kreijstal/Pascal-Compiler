@@ -309,7 +309,7 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
         if (record_info == NULL && context_expr->pointer_subtype_id != NULL)
         {
             HashNode_t *target_node = NULL;
-            if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != -1 &&
+            if (FindIdent(&target_node, symtab, context_expr->pointer_subtype_id) != 0 &&
                 target_node != NULL)
                 record_info = get_record_type_from_node(target_node);
         }
@@ -342,7 +342,7 @@ struct RecordType *resolve_record_type_for_with(SymTab_t *symtab,
                     if (alias_name != NULL)
                     {
                         HashNode_t *alias_node = NULL;
-                        if (FindIdent(&alias_node, symtab, alias_name) != -1 &&
+                        if (FindIdent(&alias_node, symtab, alias_name) != 0 &&
                             alias_node != NULL)
                             record_info = get_record_type_from_node(alias_node);
                     }
@@ -441,7 +441,7 @@ int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
             if (!is_proc_field && field_desc->type_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 &&
+                if (FindIdent(&type_node, symtab, field_desc->type_id) != 0 &&
                     type_node != NULL && type_node->type != NULL &&
                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                 {

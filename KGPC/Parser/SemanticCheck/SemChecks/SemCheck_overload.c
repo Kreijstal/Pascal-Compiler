@@ -852,7 +852,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         if (arg_expr->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *elem_node = NULL;
-            if (FindIdent(&elem_node, symtab, arg_expr->array_element_type_id) == 0 &&
+            if (FindIdent(&elem_node, symtab, arg_expr->array_element_type_id) != 0 &&
                 elem_node != NULL && elem_node->type != NULL)
                 elem_type = elem_node->type;
         }
@@ -912,7 +912,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
                 if (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, arg_expr->pointer_subtype_id) == 0 &&
+                    if (FindIdent(&type_node, symtab, arg_expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -1674,7 +1674,7 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
         return NULL;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, expr->expr_data.id) < 0 || node == NULL || node->type == NULL)
+    if (FindIdent(&node, symtab, expr->expr_data.id) == 0 || node == NULL || node->type == NULL)
         return NULL;
 
     if (node->type->type_alias != NULL && node->type->type_alias->alias_name != NULL)
@@ -2026,12 +2026,12 @@ static int semcheck_compare_class_specificity(HashNode_t *candidate, HashNode_t 
             KgpcType *best_type = best_decl->tree_data.var_decl_data.cached_kgpc_type;
             if (cand_type == NULL && cand_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                if (FindIdent(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     cand_type = node->type;
             }
             if (best_type == NULL && best_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                if (FindIdent(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     best_type = node->type;
             }
             cand_depth_total += semcheck_class_depth(cand_type, symtab);
@@ -2354,7 +2354,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (arg_elem_tag == UNKNOWN_TYPE)
                         {
                             HashNode_t *type_node = NULL;
-                            if (FindIdent(&type_node, symtab, arg_expr->array_element_type_id) != -1 && type_node != NULL)
+                            if (FindIdent(&type_node, symtab, arg_expr->array_element_type_id) != 0 && type_node != NULL)
                                 set_type_from_hashtype(&arg_elem_tag, type_node);
                         }
                     }
@@ -2776,7 +2776,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         {
                             if (formal_tag == SHORTSTRING_TYPE)
                             {
-                                quality.kind = MATCH_EXACT;
+                                /* STRING_TYPE arg to SHORTSTRING_TYPE formal is a
+                                 * narrowing conversion (lossy), not exact. This ensures
+                                 * RawByteString/AnsiString overloads are preferred over
+                                 * ShortString when the actual arg is a long string. */
+                                if (arg_tag == STRING_TYPE)
+                                    quality.kind = MATCH_PROMOTION;
+                                else
+                                    quality.kind = MATCH_EXACT;
                             }
                             else if (formal_tag == STRING_TYPE)
                             {
@@ -2789,6 +2796,29 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         int cast_target = arg_expr->expr_data.typecast_data.target_type;
                         const char *cast_target_id = arg_expr->expr_data.typecast_data.target_type_id;
+                        /* String typecast: AnsiString(s) should prefer RawByteString/String
+                         * overloads over ShortString. The typecast explicitly requests the
+                         * target type, so ShortString is a narrowing mismatch. */
+                        if (is_string_type(cast_target) && cast_target_id != NULL &&
+                            (pascal_identifier_equals(cast_target_id, "AnsiString") ||
+                             pascal_identifier_equals(cast_target_id, "RawByteString") ||
+                             pascal_identifier_equals(cast_target_id, "String")))
+                        {
+                            if (formal_tag == SHORTSTRING_TYPE ||
+                                (formal_id != NULL && pascal_identifier_equals(formal_id, "ShortString")))
+                            {
+                                quality.kind = MATCH_PROMOTION;
+                                quality.char_promo_rank = 10;
+                            }
+                            else if (formal_id != NULL &&
+                                (pascal_identifier_equals(formal_id, "RawByteString") ||
+                                 pascal_identifier_equals(formal_id, "AnsiString") ||
+                                 pascal_identifier_equals(formal_id, "String")))
+                            {
+                                quality.kind = MATCH_EXACT;
+                                quality.char_promo_rank = 0;
+                            }
+                        }
                         if (cast_target == POINTER_TYPE)
                         {
                             if (formal_tag == POINTER_TYPE)

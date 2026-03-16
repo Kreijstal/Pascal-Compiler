@@ -556,12 +556,11 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 
     /* Fallback for edge case where scope tree is not initialized */
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 
 int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index)
 {
-    int return_val = 0;
     assert(symtab != NULL);
     assert(id != NULL);
 
@@ -575,16 +574,13 @@ int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, 
         if (hash_node != NULL)
         {
             *hash_return = hash_node;
-            return return_val;
+            return 1;
         }
-        ++return_val;
         cur = cur->next;
     }
 
     /* 2. Caller's own unit table + deps + builtins (all global scope) */
     {
-        int global_level = 0;  /* unit/builtin symbols are always accessible */
-
         if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
             symtab->unit_tables[caller_unit_index] != NULL)
         {
@@ -592,7 +588,7 @@ int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, 
             if (hash_node != NULL)
             {
                 *hash_return = hash_node;
-                return global_level;
+                return 1;
             }
         }
 
@@ -610,7 +606,7 @@ int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, 
             if (hash_node != NULL)
             {
                 *hash_return = hash_node;
-                return global_level;
+                return 1;
             }
         }
 
@@ -619,12 +615,12 @@ int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, 
         if (hash_node != NULL)
         {
             *hash_return = hash_node;
-            return global_level;
+            return 1;
         }
     }
 
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 
 HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
@@ -649,7 +645,7 @@ int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *pr
         return FindIdentByPrefix_Tree(hash_return, symtab, prefix);
 
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 
 ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
@@ -852,11 +848,9 @@ void LeaveScope(SymTab_t *symtab)
 /* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
  * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].
  *
- * Return value: depth 0 for unit/builtin symbols (matches legacy behavior
- * where unit_tables and builtins are all at "global level 0"). */
+ * Return value: 0 = not found, 1 = found. */
 static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
-    int depth = 0;
     ScopeNode *scope = symtab->current_scope;
 
     while (scope != NULL)
@@ -865,11 +859,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
         if (node != NULL)
         {
             *hash_return = node;
-            /* Unit/builtin scope symbols are at global level (depth 0) to match
-             * legacy FindIdent semantics where unit_tables + builtins return 0. */
-            if (scope->kind == SCOPE_BUILTIN || scope->kind == SCOPE_UNIT)
-                return 0;
-            return depth;
+            return 1;
         }
 
         /* At unit/program scope, also search dependency unit scopes */
@@ -881,23 +871,21 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
                 if (node != NULL)
                 {
                     *hash_return = node;
-                    return 0;  /* dep symbols at global level */
+                    return 1;
                 }
             }
         }
 
         scope = scope->parent;
-        depth++;
     }
 
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 
-/* Tree-walking FindIdentByPrefix */
+/* Tree-walking FindIdentByPrefix.  Returns 0 = not found, 1 = found. */
 static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
 {
-    int depth = 0;
     ScopeNode *scope = symtab->current_scope;
 
     while (scope != NULL)
@@ -906,7 +894,7 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
         if (node != NULL)
         {
             *hash_return = node;
-            return depth;
+            return 1;
         }
 
         if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
@@ -917,17 +905,16 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
                 if (node != NULL)
                 {
                     *hash_return = node;
-                    return depth;
+                    return 1;
                 }
             }
         }
 
         scope = scope->parent;
-        depth++;
     }
 
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 
 /* Tree-walking FindAllIdents: collect all matches from all reachable scopes */

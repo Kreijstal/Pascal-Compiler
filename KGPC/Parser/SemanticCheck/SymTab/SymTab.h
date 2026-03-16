@@ -136,17 +136,18 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
 int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 
 /* Searches for an identifier and sets the hash_return that contains the id and type information */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
+/* Returns 0 and sets hash_return to NULL if not found */
+/* Returns 1 if found (hash_return set to the matching node) */
 int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
 /* Like FindIdent but uses unit-aware resolution.
- * Prefers symbols from caller_unit_index, then program-local, then any. */
+ * Prefers symbols from caller_unit_index, then program-local, then any.
+ * Returns 0 if not found, 1 if found. */
 int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
+/* Returns 0 and sets hash_return to NULL if not found */
+/* Returns 1 if found (hash_return set to the matching node) */
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
 
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */

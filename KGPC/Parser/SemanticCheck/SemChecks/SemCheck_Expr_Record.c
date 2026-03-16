@@ -299,7 +299,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
             if (find_result == -1 || method_node == NULL)
             {
                 HashNode_t *class_type_node = NULL;
-                if (FindIdent(&class_type_node, symtab, class_id) != -1 &&
+                if (FindIdent(&class_type_node, symtab, class_id) != 0 &&
                     class_type_node != NULL && class_type_node->id != NULL &&
                     !pascal_identifier_equals(class_type_node->id, class_id))
                 {
@@ -355,7 +355,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
         if (current->is_type_helper && current->helper_parent_id != NULL)
         {
             HashNode_t *parent_node = NULL;
-            if (FindIdent(&parent_node, symtab, current->helper_parent_id) != -1 && parent_node != NULL)
+            if (FindIdent(&parent_node, symtab, current->helper_parent_id) != 0 && parent_node != NULL)
             {
                 struct RecordType *parent_helper = get_record_type_from_node(parent_node);
                 if (parent_helper != NULL && parent_helper->is_type_helper)

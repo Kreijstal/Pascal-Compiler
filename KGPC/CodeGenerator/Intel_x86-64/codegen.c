@@ -246,7 +246,7 @@ static int codegen_self_param_is_class(Tree_t *arg_decl, SymTab_t *symtab)
     if (type == NULL && symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, type_id) == 0 &&
+        if (FindIdent(&type_node, symtab, type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -550,7 +550,7 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field->type_id) != -1 && type_node != NULL &&
+        if (FindIdent(&type_node, symtab, field->type_id) != 0 && type_node != NULL &&
             type_node->type != NULL)
         {
             long long type_size = kgpc_type_sizeof(type_node->type);
@@ -566,7 +566,7 @@ static int codegen_class_var_field_size(SymTab_t *symtab, const struct RecordFie
         if (field->array_element_type_id != NULL)
         {
             HashNode_t *elem_node = NULL;
-            if (FindIdent(&elem_node, symtab, field->array_element_type_id) != -1 &&
+            if (FindIdent(&elem_node, symtab, field->array_element_type_id) != 0 &&
                 elem_node != NULL && elem_node->type != NULL)
             {
                 long long type_size = kgpc_type_sizeof(elem_node->type);
@@ -702,7 +702,7 @@ static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *
     if (alias != NULL && alias->target_type_id != NULL && symtab != NULL)
     {
         HashNode_t *target = NULL;
-        if (FindIdent(&target, symtab, alias->target_type_id) != -1 && target != NULL)
+        if (FindIdent(&target, symtab, alias->target_type_id) != 0 && target != NULL)
             return codegen_resolve_record_type_name(target, symtab);
     }
     return NULL;
@@ -1239,7 +1239,7 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
             if (pointee_id != NULL)
             {
                 HashNode_t *pointee_node = NULL;
-                if (FindIdent(&pointee_node, symtab, pointee_id) >= 0 &&
+                if (FindIdent(&pointee_node, symtab, pointee_id) != 0 &&
                     pointee_node != NULL && pointee_node->type != NULL)
                 {
                     kgpc_type_retain(pointee_node->type);
@@ -1319,7 +1319,7 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
             if (is_param)
             {
                 HashNode_t *var_node = NULL;
-                if (FindIdent(&var_node, symtab, id_node->cur) == 0 && var_node != NULL)
+                if (FindIdent(&var_node, symtab, id_node->cur) != 0 && var_node != NULL)
                 {
                     int is_var_param = 0;
                     int is_untyped_param = 0;
@@ -2812,7 +2812,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             /* Look up the interface type to get its GUID */
             HashNode_t *iface_node = NULL;
             struct RecordType *iface_record = NULL;
-            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
+            if (FindIdent(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
                 iface_record = get_record_type_from_node(iface_node);
                 if (iface_record == NULL && iface_node->type != NULL &&
                     iface_node->type->kind == TYPE_KIND_POINTER &&
@@ -2855,7 +2855,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     const char *parent_vmt_label = record_info->parent_class_name;
     if (parent_vmt_label != NULL) {
         HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, parent_vmt_label) == 0 && parent_node != NULL) {
+        if (FindIdent(&parent_node, symtab, parent_vmt_label) != 0 && parent_node != NULL) {
             struct RecordType *parent_rec = get_record_type_from_node(parent_node);
             /* Only use the resolved type_id if it's actually a class. If FindIdent
              * resolved to a plain record (e.g. TTimeZone = timezone record alias
@@ -3066,7 +3066,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                      * error handlers. */
                     HashNode_t *sym = NULL;
                     int has_impl = 0;
-                    if (FindIdent(&sym, symtab, full_mangled) == 0 && sym != NULL &&
+                    if (FindIdent(&sym, symtab, full_mangled) != 0 && sym != NULL &&
                         sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
                         sym->type->info.proc_info.definition != NULL &&
                         sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
@@ -3097,7 +3097,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             /* Look up the interface to get its method list */
             HashNode_t *iface_node = NULL;
             struct RecordType *iface_record = NULL;
-            if (FindIdent(&iface_node, symtab, iface_name) == 0 && iface_node != NULL) {
+            if (FindIdent(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
                 iface_record = get_record_type_from_node(iface_node);
                 if (iface_record == NULL && iface_node->type != NULL &&
                     iface_node->type->kind == TYPE_KIND_POINTER &&
@@ -4179,7 +4179,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     
                     if (symtab != NULL)
                     {
-                        if (FindIdent(&var_info, symtab, id_list->cur) >= 0 && var_info != NULL)
+                        if (FindIdent(&var_info, symtab, id_list->cur) != 0 && var_info != NULL)
                             size_node = var_info;
                     }
                     /* Use type_node if we don't have specific var_info */
@@ -4246,7 +4246,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     int field_offset = -1;
                                     HashNode_t *base_node = NULL;
                                     if (ctx->symtab != NULL &&
-                                        FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
+                                        FindIdent(&base_node, ctx->symtab, base_var) != 0 &&
                                         base_node != NULL)
                                     {
                                         struct RecordType *record = get_record_type_from_node(base_node);
@@ -4337,7 +4337,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     int field_offset = -1;
                                     HashNode_t *base_node = NULL;
                                     if (ctx->symtab != NULL &&
-                                        FindIdent(&base_node, ctx->symtab, base_var) >= 0 &&
+                                        FindIdent(&base_node, ctx->symtab, base_var) != 0 &&
                                         base_node != NULL)
                                     {
                                         struct RecordType *record = get_record_type_from_node(base_node);
@@ -4403,7 +4403,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                 if (record_desc == NULL && alias != NULL && alias->target_type_id != NULL)
                 {
                     HashNode_t *target_node = NULL;
-                    if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                    if (FindIdent(&target_node, symtab, alias->target_type_id) != 0 &&
                         target_node != NULL)
                         record_desc = get_record_type_from_node(target_node);
                 }
@@ -7348,7 +7348,7 @@ static int codegen_resolve_file_component(const struct TypeAlias *alias, SymTab_
     HashNode_t *type_node = NULL;
     if (parser_tag == UNKNOWN_TYPE && alias->file_type_id != NULL && symtab != NULL)
     {
-        if (FindIdent(&type_node, symtab, alias->file_type_id) >= 0 && type_node != NULL)
+        if (FindIdent(&type_node, symtab, alias->file_type_id) != 0 && type_node != NULL)
         {
             if (type_node->type != NULL)
                 parser_tag = kgpc_type_get_primitive_tag(type_node->type);
@@ -7452,7 +7452,7 @@ ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, C
                         if (file_alias == NULL || !file_alias->is_file)
                         {
                             HashNode_t *var_hash = NULL;
-                            if (FindIdent(&var_hash, symtab, var_name) >= 0 && var_hash != NULL)
+                            if (FindIdent(&var_hash, symtab, var_name) != 0 && var_hash != NULL)
                                 file_alias = hashnode_get_type_alias(var_hash);
                         }
 

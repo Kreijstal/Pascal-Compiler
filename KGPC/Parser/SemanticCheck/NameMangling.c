@@ -315,7 +315,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
             lookup_name = qualified;
     }
     if (lookup_name != NULL &&
-        FindIdent(&type_node, symtab, lookup_name) >= 0 && type_node != NULL)
+        FindIdent(&type_node, symtab, lookup_name) != 0 && type_node != NULL)
     {
         if (type_node->hash_type == HASHTYPE_TYPE)
         {
@@ -351,7 +351,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
         if (unqualified != NULL)
         {
             HashNode_t *unqualified_node = NULL;
-            if (FindIdent(&unqualified_node, symtab, unqualified) >= 0 &&
+            if (FindIdent(&unqualified_node, symtab, unqualified) != 0 &&
                 unqualified_node != NULL && unqualified_node->hash_type == HASHTYPE_TYPE)
             {
                 free(unqualified);

@@ -237,7 +237,7 @@ static void semcheck_compute_array_linearization(SymTab_t *symtab,
     if (array_type == NULL && array_expr->type == EXPR_VAR_ID && symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, array_expr->expr_data.id) >= 0 && node != NULL)
+        if (FindIdent(&node, symtab, array_expr->expr_data.id) != 0 && node != NULL)
             array_type = node->type;
     }
 
@@ -516,7 +516,7 @@ int semcheck_arrayaccess(int *type_return,
         if (array_expr->type == EXPR_VAR_ID)
         {
             HashNode_t *self_node = NULL;
-            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
             {
                 struct RecordType *self_record = get_record_type_from_node(self_node);
                 if (self_record != NULL)
@@ -801,7 +801,7 @@ int semcheck_arrayaccess(int *type_return,
         if (element_type == POINTER_TYPE && array_expr->pointer_subtype_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, array_expr->pointer_subtype_id) != -1 && type_node != NULL)
+            if (FindIdent(&type_node, symtab, array_expr->pointer_subtype_id) != 0 && type_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->is_pointer)
@@ -833,7 +833,7 @@ int semcheck_arrayaccess(int *type_return,
         if (array_expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 && type_node != NULL)
+            if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != 0 && type_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(type_node);
                 if (alias != NULL && alias->is_array)
@@ -851,7 +851,7 @@ int semcheck_arrayaccess(int *type_return,
             if (array_expr->array_element_type_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != -1 &&
+                if (FindIdent(&type_node, symtab, array_expr->array_element_type_id) != 0 &&
                     type_node != NULL)
                 {
                     struct TypeAlias *alias = get_type_alias_from_node(type_node);
@@ -871,7 +871,7 @@ int semcheck_arrayaccess(int *type_return,
             {
                 const char *candidate_type_id = array_expr->array_element_type_id + 1;
                 HashNode_t *candidate_node = NULL;
-                if (FindIdent(&candidate_node, symtab, candidate_type_id) >= 0 &&
+                if (FindIdent(&candidate_node, symtab, candidate_type_id) != 0 &&
                     candidate_node != NULL)
                 {
                     pointer_subtype_id = candidate_type_id;
@@ -1038,7 +1038,7 @@ int semcheck_arrayaccess(int *type_return,
                 if (res_type != NULL)
                 {
                     HashNode_t *wide_node = NULL;
-                    if (FindIdent(&wide_node, symtab, "WideChar") >= 0 &&
+                    if (FindIdent(&wide_node, symtab, "WideChar") != 0 &&
                         wide_node != NULL)
                     {
                         struct TypeAlias *wide_alias = get_type_alias_from_node(wide_node);
@@ -1206,7 +1206,7 @@ int semcheck_funccall(int *type_return,
         }
 
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *current_class = NULL;
             if (self_node->type != NULL && self_node->type->kind == TYPE_KIND_RECORD &&
@@ -1228,7 +1228,7 @@ int semcheck_funccall(int *type_return,
                     snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
                         search_parent, id);
                     HashNode_t *parent_method = NULL;
-                    if (FindIdent(&parent_method, symtab, parent_mangled) != -1 &&
+                    if (FindIdent(&parent_method, symtab, parent_mangled) != 0 &&
                         parent_method != NULL)
                     {
                         /* Prepend Self as the first argument (method receiver) */
@@ -1591,7 +1591,7 @@ int semcheck_funccall(int *type_return,
             {
                 /* Look up the type by the function call id (which is the typecast type name) */
                 HashNode_t *type_node = NULL;
-                if (id != NULL && FindIdent(&type_node, symtab, id) != -1 &&
+                if (id != NULL && FindIdent(&type_node, symtab, id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     resolved = type_node->type;
@@ -1995,7 +1995,7 @@ int semcheck_funccall(int *type_return,
             {
                 int can_strip = 0;
                 HashNode_t *first_node = NULL;
-                if (FindIdent(&first_node, symtab, first_arg->expr_data.id) == -1 ||
+                if (FindIdent(&first_node, symtab, first_arg->expr_data.id) == 0 ||
                     first_node == NULL)
                 {
                     /* Before applying the lowercase heuristic, check if this
@@ -2004,7 +2004,7 @@ int semcheck_funccall(int *type_return,
                      * and would be wrongly stripped as unit qualifiers. */
                     int looks_like_self_field = 0;
                     HashNode_t *self_node = NULL;
-                    if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                    if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
                     {
                         struct RecordType *self_record = get_record_type_from_node(self_node);
                         if (self_record != NULL &&
@@ -2044,7 +2044,7 @@ int semcheck_funccall(int *type_return,
                 {
                     /* Type-qualified casts like UnitName.TypeName(...) can also strip. */
                     HashNode_t *nested_type_node = NULL;
-                    if (id != NULL && FindIdent(&nested_type_node, symtab, id) != -1 &&
+                    if (id != NULL && FindIdent(&nested_type_node, symtab, id) != 0 &&
                         nested_type_node != NULL && nested_type_node->hash_type == HASHTYPE_TYPE)
                     {
                         can_strip = 1;
@@ -2140,7 +2140,7 @@ int semcheck_funccall(int *type_return,
             !was_unit_qualified && id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
         {
             HashNode_t *global_node = NULL;
-            if (FindIdent(&global_node, symtab, id) >= 0 && global_node != NULL &&
+            if (FindIdent(&global_node, symtab, id) != 0 && global_node != NULL &&
                 (global_node->hash_type == HASHTYPE_FUNCTION ||
                  global_node->hash_type == HASHTYPE_PROCEDURE) &&
                 global_node->owner_class == NULL)
@@ -2195,7 +2195,7 @@ int semcheck_funccall(int *type_return,
             }
             HashNode_t *self_node = NULL;
             int self_found = 0;
-            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
             {
                 self_found = 1;
                 struct RecordType *self_record = get_record_type_from_node(self_node);
@@ -2789,7 +2789,7 @@ int semcheck_funccall(int *type_return,
             receiver_expr->expr_data.id != NULL)
         {
             HashNode_t *recv_node = NULL;
-            if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 && recv_node != NULL)
+            if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) != 0 && recv_node != NULL)
             {
                 recv_record = get_record_type_from_node(recv_node);
                 if (recv_record == NULL && recv_node->type != NULL &&
@@ -2820,7 +2820,7 @@ int semcheck_funccall(int *type_return,
                 if (field_desc->type_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, field_desc->type_id) != -1 &&
+                    if (FindIdent(&type_node, symtab, field_desc->type_id) != 0 &&
                         type_node != NULL && type_node->type != NULL &&
                         type_node->type->kind == TYPE_KIND_PROCEDURE)
                     {
@@ -3567,7 +3567,7 @@ int semcheck_funccall(int *type_return,
                     if (!has_direct_match && has_self_match && !has_self_arg)
                     {
                         HashNode_t *self_node = NULL;
-                        int self_found = (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL);
+                        int self_found = (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL);
                         const char *self_arg_name = "Self";
                         if (!self_found && record_for_mangling != NULL &&
                             record_type_is_class(record_for_mangling) &&
@@ -3701,7 +3701,7 @@ int semcheck_funccall(int *type_return,
                         else if (proc_field->type_id != NULL)
                         {
                             HashNode_t *type_node = NULL;
-                            if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                            if (FindIdent(&type_node, symtab, proc_field->type_id) != 0 &&
                                 type_node != NULL && type_node->type != NULL &&
                                 type_node->type->kind == TYPE_KIND_PROCEDURE)
                             {
@@ -3798,7 +3798,7 @@ int semcheck_funccall(int *type_return,
             int first_scope = FindIdent(&first_ident, symtab, first_arg->expr_data.id);
             HashNode_t *self_node = NULL;
             struct RecordType *self_record = NULL;
-            if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+            if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
             {
                 self_record = get_record_type_from_node(self_node);
                 if (self_record == NULL && self_node->type != NULL)
@@ -3970,7 +3970,7 @@ int semcheck_funccall(int *type_return,
                     first_arg->expr_data.id != NULL)
                 {
                     HashNode_t *var_node = NULL;
-                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != 0 &&
                         var_node != NULL)
                     {
                         record_info = get_record_type_from_node(var_node);
@@ -4130,7 +4130,7 @@ int semcheck_funccall(int *type_return,
                             first_arg->expr_data.id != NULL)
                         {
                             HashNode_t *first_ident_node = NULL;
-                            if (FindIdent(&first_ident_node, symtab, first_arg->expr_data.id) >= 0 &&
+                            if (FindIdent(&first_ident_node, symtab, first_arg->expr_data.id) != 0 &&
                                 first_ident_node != NULL &&
                                 first_ident_node->hash_type == HASHTYPE_TYPE)
                             {
@@ -4232,7 +4232,7 @@ int semcheck_funccall(int *type_return,
                             else if (proc_field->type_id != NULL)
                             {
                                 HashNode_t *type_node = NULL;
-                                if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                                if (FindIdent(&type_node, symtab, proc_field->type_id) != 0 &&
                                     type_node != NULL && type_node->type != NULL &&
                                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                                 {
@@ -4385,7 +4385,7 @@ int semcheck_funccall(int *type_return,
                                 first_arg->expr_data.id != NULL)
                             {
                                 HashNode_t *first_ident_node = NULL;
-                                if (FindIdent(&first_ident_node, symtab, first_arg->expr_data.id) >= 0 &&
+                                if (FindIdent(&first_ident_node, symtab, first_arg->expr_data.id) != 0 &&
                                     first_ident_node != NULL &&
                                     first_ident_node->hash_type == HASHTYPE_TYPE)
                                 {
@@ -4478,7 +4478,7 @@ int semcheck_funccall(int *type_return,
             first_arg->expr_data.id != NULL) {
             /* Check if first arg is a type identifier */
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) != -1 &&
+            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) != 0 &&
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE) {
                 /* It's a type - check if there's a static method with this name */
                 struct RecordType *record_info = get_record_type_from_node(type_node);
@@ -5135,7 +5135,7 @@ int semcheck_funccall(int *type_return,
                 first_arg->expr_data.id != NULL)
             {
                 HashNode_t *var_node = NULL;
-                if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != 0 &&
                     var_node != NULL)
                 {
                     struct TypeAlias *var_alias = hashnode_get_type_alias(var_node);
@@ -5554,7 +5554,7 @@ method_call_resolved:
                 const char *ret_id = best_match->type->info.proc_info.return_type_id;
                 HashNode_t *type_node = NULL;
                 KgpcType *ret_type = NULL;
-                if (FindIdent(&type_node, symtab, ret_id) != -1 &&
+                if (FindIdent(&type_node, symtab, ret_id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     kgpc_type_retain(type_node->type);
@@ -5577,7 +5577,7 @@ method_call_resolved:
                 best_match->owner_class != NULL && best_match->method_name != NULL)
             {
                 HashNode_t *class_node = NULL;
-                if (FindIdent(&class_node, symtab, best_match->owner_class) != -1 && class_node != NULL)
+                if (FindIdent(&class_node, symtab, best_match->owner_class) != 0 && class_node != NULL)
                 {
                     struct RecordType *record_info = get_record_type_from_node(class_node);
                     if (record_info != NULL)
@@ -6716,7 +6716,7 @@ skip_overload_resolution:
                 current_arg_expr->expr_data.id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, current_arg_expr->expr_data.id) == 0 &&
+                if (FindIdent(&type_node, symtab, current_arg_expr->expr_data.id) != 0 &&
                     type_node != NULL && type_node->hash_type == HASHTYPE_TYPE &&
                     type_node->type != NULL)
                 {
@@ -7055,7 +7055,7 @@ skip_overload_resolution:
                         current_arg_expr != NULL && current_arg_expr->type == EXPR_VAR_ID)
                     {
                         HashNode_t *arg_node = NULL;
-                        if (FindIdent(&arg_node, symtab, current_arg_expr->expr_data.id) == 0 &&
+                        if (FindIdent(&arg_node, symtab, current_arg_expr->expr_data.id) != 0 &&
                             arg_node != NULL && arg_node->type == NULL)
                         {
                             type_compatible = 1;
@@ -7430,7 +7430,7 @@ int semcheck_try_indexed_property_getter(int *type_return,
     if (base_id != NULL && index_expr != NULL)
     {
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+        if (FindIdent(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             struct RecordType *self_record = get_record_type_from_node(self_node);
             if (self_record != NULL)
@@ -7537,7 +7537,7 @@ int semcheck_try_indexed_property_getter(int *type_return,
     snprintf(getter_id, id_len + 4, "Get%s", base_id);
 
     HashNode_t *getter_node = NULL;
-    int getter_found = (FindIdent(&getter_node, symtab, getter_id) == 0);
+    int getter_found = (FindIdent(&getter_node, symtab, getter_id) != 0);
     if (!getter_found || getter_node == NULL || getter_node->hash_type != HASHTYPE_FUNCTION)
     {
         free(getter_id);

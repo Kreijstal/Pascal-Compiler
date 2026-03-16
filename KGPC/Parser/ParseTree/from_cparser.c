@@ -4286,7 +4286,7 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, base_type_id) == 0 && type_node != NULL)
+        if (FindIdent(&type_node, symtab, base_type_id) != 0 && type_node != NULL)
         {
             if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_RECORD)
             {
@@ -7262,7 +7262,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
-                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != -1 && 
+                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != 0 && 
                                 type_node != NULL && type_node->type != NULL) {
                                 return_type = type_node->type;
                             }
@@ -12507,7 +12507,7 @@ static void qualify_param_type_id(char **type_id, struct TypeRef **type_ref,
             continue;
         snprintf(qualified, len, "%s.%s", owner, *type_id);
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, qualified) >= 0 &&
+        if (FindIdent(&node, symtab, qualified) != 0 &&
             node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             free(qualified);

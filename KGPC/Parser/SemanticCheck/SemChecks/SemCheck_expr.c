@@ -541,7 +541,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             /* Prefer explicit symbols to avoid clobbering user-defined "result" variables. */
             HashNode_t *node = NULL;
             if (expr->expr_data.id != NULL &&
-                FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
+                FindIdent(&node, symtab, expr->expr_data.id) != 0 && node != NULL)
             {
                 if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
                     pascal_identifier_equals(expr->expr_data.id, "Ctr"))
@@ -690,7 +690,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != -1 &&
+                    if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         size_t len = strlen(record_expr->expr_data.id) + strlen(field_name) + 3;
@@ -699,7 +699,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         {
                             snprintf(mangled, len, "%s__%s", record_expr->expr_data.id, field_name);
                             HashNode_t *const_node = NULL;
-                            if (FindIdent(&const_node, symtab, mangled) != -1 &&
+                            if (FindIdent(&const_node, symtab, mangled) != 0 &&
                                 const_node != NULL &&
                                 (const_node->hash_type == HASHTYPE_CONST ||
                                  const_node->hash_type == HASHTYPE_ARRAY ||
@@ -962,7 +962,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] Resolving array element type alias: %s\n", alias_id);
                 }
-                if (FindIdent(&type_node, symtab, alias_id) != -1 &&
+                if (FindIdent(&type_node, symtab, alias_id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     if (debug_fstd)
@@ -1022,7 +1022,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != -1 &&
+                    if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -1241,7 +1241,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, target_id) >= 0 &&
+                if (FindIdent(&type_node, symtab, target_id) != 0 &&
                     type_node != NULL && type_node->type != NULL &&
                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                 {
@@ -1423,7 +1423,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 assert(lookup_id != NULL &&
                        "EXPR_ADDR_OF_PROC must have proc_id set");
                 HashNode_t *proc_node = NULL;
-                if (FindIdent(&proc_node, symtab, lookup_id) >= 0 &&
+                if (FindIdent(&proc_node, symtab, lookup_id) != 0 &&
                     proc_node != NULL && proc_node->type != NULL)
                 {
                     kgpc_type_retain(proc_node->type);
@@ -1642,7 +1642,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 if (return_type_id != NULL) {
                     /* Try to look up the type in the symbol table */
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, return_type_id) >= 0 && type_node != NULL) {
+                    if (FindIdent(&type_node, symtab, return_type_id) != 0 && type_node != NULL) {
                         /* Use the KgpcType from the symbol table if available */
                         if (type_node->type != NULL) {
                             return_type = type_node->type;
@@ -1710,7 +1710,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                                     if (param_tree->tree_data.var_decl_data.type_id != NULL)
                                     {
                                         HashNode_t *type_node = NULL;
-                                        if (FindIdent(&type_node, symtab, param_tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                        if (FindIdent(&type_node, symtab, param_tree->tree_data.var_decl_data.type_id) != 0 &&
                                             type_node != NULL && type_node->type != NULL)
                                         {
                                             param_kgpc_type = type_node->type;
