@@ -4,7 +4,9 @@
 
 The current scope system uses a flat stack (`stack_head` linked list) shared by all method bodies, plus a bolt-on `unit_tables[256]` array for per-unit symbols. This causes:
 
-- **Scope leaking**: Local variables from one unit's methods are visible inside other units' methods (e.g., `x: uint64` from `system.inc` shadows `TPointF.x` in `types.pp`)
+- **Scope leaking**: Local variables and parameters from one subprogram are visible inside sibling subprograms. Examples:
+  - `x: uint64` (local in `Xoshiro128ss_32.Setup` in system.inc) shadows `TPointF.x` (field) in types.pp methods — **fixed with band-aid at `add_class_vars_to_method_scope_impl`**
+  - `Output: TStream` (parameter of `ObjectBinaryToText` in classes.inc) shadows `Output: Text` (system global) inside `fpc_get_output` in text.inc — causes `format_function` compilation failure, **unfixable without tree scopes**
 - **Workaround proliferation**: `source_unit_index` checks, `unit_context` routing, `push_target_unit` save/restore (~40 sites), `add_class_vars` FindIdent hacks
 - **Unnatural complexity**: The flat stack fights against Pascal's inherently tree-structured scoping
 
