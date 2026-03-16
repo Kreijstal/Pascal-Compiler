@@ -13645,7 +13645,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
                 if (final_stmt->source_unit_index > 0) {
                     const char *uname = unit_registry_get(final_stmt->source_unit_index);
                     g_semcheck_error_unit_context = uname ? uname : "<unit>";
-                    g_semcheck_error_suppress_source_index = 1;
+                    g_semcheck_error_suppress_source_index = 0;
                 }
                 return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
                 g_semcheck_error_suppress_source_index = saved_suppress;
@@ -16984,8 +16984,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     const char *saved_error_unit_context = g_semcheck_error_unit_context;
     if (subprogram->tree_data.subprogram_data.defined_in_unit)
     {
-        g_semcheck_error_suppress_source_index = 1;
-        g_semcheck_error_source_index = -1;
+        /* Don't suppress source_index — the buffer registry can disambiguate
+         * unit buffers via globally unique offsets, allowing {#line} directive
+         * resolution to show original include file/line in error messages. */
+        g_semcheck_error_suppress_source_index = 0;
         /* Show unit name instead of misleading main-program file:line */
         if (subprogram->tree_data.subprogram_data.source_unit_index > 0)
         {

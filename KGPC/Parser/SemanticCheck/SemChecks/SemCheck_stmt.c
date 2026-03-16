@@ -2266,6 +2266,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     int source_is_array = (source_expr != NULL && source_expr->resolved_kgpc_type != NULL &&
         source_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
     if (source_type != STRING_TYPE && source_type != CHAR_TYPE &&
+        source_type != SHORTSTRING_TYPE &&
         !source_is_shortstring && !source_is_array)
     {
         semcheck_error_with_context("Error on line %d, Insert source must be a string or char.\n",
@@ -2278,7 +2279,8 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
     int target_is_array = (target_expr != NULL && target_expr->resolved_kgpc_type != NULL &&
         target_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
-    if (target_type != STRING_TYPE && !target_is_shortstring && !target_is_array)
+    if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE &&
+        !target_is_shortstring && !target_is_array)
     {
         semcheck_error_with_context("Error on line %d, Insert target must be a string variable.\n",
             stmt->line_num);

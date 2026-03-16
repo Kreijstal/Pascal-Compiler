@@ -580,6 +580,18 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
 
                 if (node->type != NULL)
                 {
+                    /* For functions referenced without parentheses (implicit
+                     * zero-arg call), return the return type, not the function
+                     * type.  E.g. `Result := ReadInteger;` should give LongInt,
+                     * not "procedure". */
+                    if (node->hash_type == HASHTYPE_FUNCTION &&
+                        node->type->kind == TYPE_KIND_PROCEDURE &&
+                        node->type->info.proc_info.return_type != NULL)
+                    {
+                        if (owns_type != NULL)
+                            *owns_type = 0;
+                        return node->type->info.proc_info.return_type;
+                    }
                     /* Return a shared reference - caller doesn't own it */
                     if (owns_type != NULL)
                         *owns_type = 0;
