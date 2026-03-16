@@ -7796,6 +7796,20 @@ uint32_t atomicincrement_u32(uint32_t *target)
     return __sync_add_and_fetch(target, 1);
 }
 
+/* LongInt (32-bit signed) overloads for compiler intrinsics.
+ * AtomicIncrement/AtomicDecrement/AtomicExchange/AtomicCmpExchange are true
+ * compiler intrinsics (like Ord, Chr) — they have no Pascal source body.
+ * The runtime provides all type-specific implementations. */
+int32_t atomicincrement_li(int32_t *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+int32_t atomicincrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
 long atomicdecrement_i(long *target)
 {
     return __sync_sub_and_fetch(target, 1);
@@ -7804,6 +7818,26 @@ long atomicdecrement_i(long *target)
 uint32_t atomicdecrement_u32(uint32_t *target)
 {
     return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li(int32_t *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_sub_and_fetch(target, value);
+}
+
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
 }
 
 void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)

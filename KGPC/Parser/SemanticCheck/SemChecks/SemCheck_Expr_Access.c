@@ -1401,6 +1401,23 @@ int semcheck_funccall(int *type_return,
     if (id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
     {
         HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
+        /* Also check the System unit table — compiler intrinsics (Ord, Chr,
+         * Length, High, etc.) live there since per-unit scoping was added. */
+        if (builtin_node == NULL)
+        {
+            int sys_idx = unit_registry_add("System");
+            if (sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS &&
+                symtab->unit_tables[sys_idx] != NULL)
+            {
+                HashNode_t *sys_node = FindIdentInTable(
+                    symtab->unit_tables[sys_idx], id);
+                if (sys_node != NULL &&
+                    (sys_node->hash_type == HASHTYPE_FUNCTION ||
+                     sys_node->hash_type == HASHTYPE_PROCEDURE ||
+                     sys_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE))
+                    builtin_node = sys_node;
+            }
+        }
         if (builtin_node != NULL)
         {
             allow_early_builtins = 1;

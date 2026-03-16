@@ -13331,7 +13331,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     {
         /* AtomicCmpExchange(var Target: T; NewValue: T; Comparand: T): T */
         {
-            static const int cmpxchg_types[] = {INT_TYPE, INT64_TYPE, POINTER_TYPE};
+            static const int cmpxchg_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE, POINTER_TYPE};
             for (size_t i = 0; i < sizeof(cmpxchg_types) / sizeof(cmpxchg_types[0]); ++i)
             {
                 int t = cmpxchg_types[i];
@@ -13345,12 +13345,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 if (func_type != NULL)
                 {
                     char *n1 = strdup("AtomicCmpExchange");
-                    char *n2 = strdup("InterlockedCompareExchange");
                     AddBuiltinFunction_Typed(symtab, n1, func_type);
-                    AddBuiltinFunction_Typed(symtab, n2, func_type);
+                    /* InterlockedCompareExchange is defined in system.pp
+                     * (generic.inc) — do NOT register it as a builtin. */
                     destroy_kgpc_type(func_type);
                     free(n1);
-                    free(n2);
                 }
                 DestroyList(p1);
                 destroy_kgpc_type(return_type);
@@ -13359,7 +13358,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
         /* AtomicExchange(var Target: T; Value: T): T
          * Target is a var parameter — must be passed by reference. */
         {
-            static const int xchg_types[] = {INT_TYPE, INT64_TYPE, POINTER_TYPE};
+            static const int xchg_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE, POINTER_TYPE};
             for (size_t i = 0; i < sizeof(xchg_types) / sizeof(xchg_types[0]); ++i)
             {
                 int t = xchg_types[i];
@@ -13371,12 +13370,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 if (func_type != NULL)
                 {
                     char *n1 = strdup("AtomicExchange");
-                    char *n2 = strdup("InterlockedExchange");
                     AddBuiltinFunction_Typed(symtab, n1, func_type);
-                    AddBuiltinFunction_Typed(symtab, n2, func_type);
+                    /* InterlockedExchange is defined in system.pp
+                     * (generic.inc) — do NOT register it as a builtin. */
                     destroy_kgpc_type(func_type);
                     free(n1);
-                    free(n2);
                 }
                 DestroyList(p1);
                 destroy_kgpc_type(return_type);
@@ -13387,9 +13385,10 @@ void semcheck_add_builtins(SymTab_t *symtab)
          * In FPC these are compiler intrinsics that work on any ordinal type.
          * Register overloads for LongInt, Int64, Integer, and QWord. */
         {
+            /* InterlockedIncrement/InterlockedDecrement are defined in
+             * system.pp (generic.inc) — only register Atomic* builtins. */
             const char *names[] = {
                 "AtomicIncrement", "AtomicDecrement",
-                "InterlockedIncrement", "InterlockedDecrement",
             };
             static const int atomic_types[] = {LONGINT_TYPE, INT64_TYPE, INT_TYPE, QWORD_TYPE};
             for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
