@@ -16380,8 +16380,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     else
     {
         /* Standalone procedure/function — clear method owner so that
-         * semcheck_proccall doesn't misinterpret calls as method calls. */
-        semcheck_set_current_method_owner(NULL);
+         * semcheck_proccall doesn't misinterpret calls as method calls.
+         * However, for nested functions inside a method body, preserve the
+         * enclosing method owner so that unqualified calls to Self's methods
+         * (e.g. Error(...) inside a nested function of TReader.ReadComponent)
+         * still resolve via Self-injection. */
+        if (prev_owner != NULL && max_scope_lev > 0)
+        {
+            /* Nested function inside a method — keep the enclosing owner */
+        }
+        else
+        {
+            semcheck_set_current_method_owner(NULL);
+        }
     }
 
     /* For class methods, copy default parameter values from the class declaration
