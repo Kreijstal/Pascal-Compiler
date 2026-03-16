@@ -2634,13 +2634,37 @@ static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_
     }
 }
 
+/* Check if 'name' matches any parameter identifier in args_var list.
+ * Used to prevent class field/method injection from shadowing parameters. */
+static int name_matches_parameter(const char *name, ListNode_t *args_var)
+{
+    if (name == NULL || args_var == NULL) return 0;
+    for (ListNode_t *p = args_var; p != NULL; p = p->next)
+    {
+        if (p->type != LIST_TREE || p->cur == NULL) continue;
+        Tree_t *param_tree = (Tree_t *)p->cur;
+        ListNode_t *ids = NULL;
+        if (param_tree->type == TREE_VAR_DECL)
+            ids = param_tree->tree_data.var_decl_data.ids;
+        else if (param_tree->type == TREE_ARR_DECL)
+            ids = param_tree->tree_data.arr_decl_data.ids;
+        for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next)
+        {
+            if (id_node->cur != NULL && pascal_identifier_equals(name, (const char *)id_node->cur))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 /**
  * For a method implementation (ClassName__MethodName), add class vars to scope
  * so they can be referenced within the method body. This is essential for
  * static methods which have no implicit Self parameter.
  */
 static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
-    const char *owner, const char *method_name, int is_operator)
+    const char *owner, const char *method_name, int is_operator,
+    ListNode_t *subprogram_args)
 {
     if (symtab == NULL || owner == NULL || method_name == NULL || method_name[0] == '\0')
         return;
@@ -2769,7 +2793,14 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
             /* Check if already defined in current local scope only.
              * Using FindIdent here would search unit tables too, causing
              * unit-level symbols (e.g. a var 'x' in system.pp) to prevent
-             * pushing record fields like TPointF.x into the method scope. */
+             * pushing record fields like TPointF.x into the method scope.
+             * Also skip fields that match parameter names — parameters must
+             * shadow class fields (e.g. 'dst' parameter vs field 'dst'). */
+            if (name_matches_parameter(field->name, subprogram_args))
+            {
+                field_node = field_node->next;
+                continue;
+            }
             HashNode_t *existing = NULL;
             if (symtab->stack_head != NULL)
                 existing = FindIdentInTable((HashTable_t *)symtab->stack_head->cur, field->name);
@@ -2887,6 +2918,14 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
         if (binding != NULL && binding->method_name != NULL && binding->method_name[0] != '\0')
         {
+            /* Skip methods whose short name matches a parameter name —
+             * parameters must shadow class methods (e.g. parameter 'angle'
+             * must shadow method 'Angle' inside TVec.Rotate). */
+            if (name_matches_parameter(binding->method_name, subprogram_args))
+            {
+                cur_method = cur_method->next;
+                continue;
+            }
             /* Build the mangled name: ClassName__MethodName */
             size_t mangled_len = strlen(class_name) + 2 + strlen(binding->method_name) + 1;
             char *mangled_name = (char *)malloc(mangled_len);
@@ -2937,7 +2976,8 @@ static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
     add_class_vars_to_method_scope_impl(symtab,
         subprogram->tree_data.subprogram_data.owner_class,
         subprogram->tree_data.subprogram_data.method_name,
-        subprogram->tree_data.subprogram_data.is_operator);
+        subprogram->tree_data.subprogram_data.is_operator,
+        subprogram->tree_data.subprogram_data.args_var);
 }
 
 static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
@@ -2947,7 +2987,8 @@ static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subpr
     add_class_vars_to_method_scope_impl(symtab,
         subprogram->tree_data.subprogram_data.owner_class_outer,
         subprogram->tree_data.subprogram_data.method_name,
-        subprogram->tree_data.subprogram_data.is_operator);
+        subprogram->tree_data.subprogram_data.is_operator,
+        subprogram->tree_data.subprogram_data.args_var);
 }
 
 /**
