@@ -1263,44 +1263,6 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
 
-static int source_file_needs_objpas(const char *path)
-{
-    if (path == NULL)
-        return 0;
-
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-        return 0;
-
-    int found = 0;
-    char buf[8192 + 1];
-    size_t carry = 0;
-    while (!found)
-    {
-        size_t n = fread(buf + carry, 1, sizeof(buf) - 1 - carry, f);
-        if (n == 0 && carry == 0)
-            break;
-        n += carry;
-        buf[n] = '\0';
-        for (size_t i = 0; i + 13 < n; ++i)
-        {
-            if (strncasecmp(buf + i, "ObjPas.", 7) == 0 ||
-                strncasecmp(buf + i, "{$mode objfpc}", 14) == 0 ||
-                strncasecmp(buf + i, "{$mode delphi}", 14) == 0)
-            {
-                found = 1;
-                break;
-            }
-        }
-        if (found || feof(f))
-            break;
-        carry = (n >= 14) ? 14 : n;
-        memmove(buf, buf + n - carry, carry);
-    }
-
-    fclose(f);
-    return found;
-}
 
 static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
 {
@@ -1338,7 +1300,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
-    int wants_objpas = source_file_needs_objpas(path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
@@ -1382,11 +1343,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
-    /* Imported units that explicitly reference ObjPas-qualified names need
-     * ObjPas loaded before merge/semcheck, otherwise aliases like
-     * ObjPas.TEndian can bind to unrelated visible types. Keep this narrow. */
+    /* {$mode objfpc} and {$mode delphi} implicitly require the ObjPas unit */
     if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id, "objpas") &&
-        wants_objpas)
+        pascal_frontend_is_objfpc_mode())
     {
         load_unit(program, "objpas", visited);
         int has_objpas = 0;
