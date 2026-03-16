@@ -10223,6 +10223,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
+        /* Route unit types to per-unit table */
+        int saved_push_target_type = symtab->push_target_unit;
+        if (tree->tree_data.type_decl_data.defined_in_unit &&
+            tree->tree_data.type_decl_data.source_unit_index > 0)
+            symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
+
         const char *debug_pss = kgpc_getenv("KGPC_DEBUG_PSHORTSTRING");
         if (debug_pss != NULL &&
             tree->tree_data.type_decl_data.id != NULL &&
@@ -11385,6 +11391,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
+            symtab->push_target_unit = saved_push_target_type;
             cur = cur->next;
             continue;
         }
@@ -11698,6 +11705,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 #endif
         }
 
+        symtab->push_target_unit = saved_push_target_type;
         cur = cur->next;
     }
 
@@ -11774,11 +11782,13 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree->type == TREE_CONST_DECL);
 
     int saved_unit_context = symtab->unit_context;
+    int saved_push_target = symtab->push_target_unit;
     int saved_imported_unit = g_semcheck_imported_decl_unit_index;
     if (tree->tree_data.const_decl_data.defined_in_unit &&
         tree->tree_data.const_decl_data.source_unit_index > 0)
     {
         symtab->unit_context = tree->tree_data.const_decl_data.source_unit_index;
+        symtab->push_target_unit = tree->tree_data.const_decl_data.source_unit_index;
         g_semcheck_imported_decl_unit_index =
             tree->tree_data.const_decl_data.source_unit_index;
     }
@@ -12115,6 +12125,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     /* Same constant with same value - treat as re-export, skip silently */
                     g_semcheck_imported_decl_unit_index = saved_imported_unit;
                     symtab->unit_context = saved_unit_context;
+                    symtab->push_target_unit = saved_push_target;
                     return 0;
                 }
 
@@ -12211,6 +12222,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 
     g_semcheck_imported_decl_unit_index = saved_imported_unit;
     symtab->unit_context = saved_unit_context;
+    symtab->push_target_unit = saved_push_target;
     return return_val;
 }
 
@@ -12906,100 +12918,25 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 672));
     add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 672));
 
-    AddBuiltinRealConst(symtab, "Pi", acos(-1.0));
-
-    /* Builtin procedures - procedures have no return type */
+    /* Builtin procedures — only true compiler intrinsics that need special
+     * handling (variable args, type-dependent behavior, compile-time magic).
+     * Regular procedures belong in system.p, not here. */
     {
         static const char *simple_procs[] = {
             "SetLength", "SetString", "write", "writeln", "writestr",
-            "read", "readln", "Halt", "Error", "Assign", "Close",
-            "SetTextCodePage", "GetMem", "ReallocMem",
-            "FreeMem", "Val", "Str", "Insert", "Delete", "Inc", "Dec",
+            "read", "readln",
+            "Val", "Str", "Insert", "Delete", "Inc", "Dec",
             "Include", "Exclude", "New", "Dispose", "Assert"
         };
         for (size_t i = 0; i < sizeof(simple_procs) / sizeof(simple_procs[0]); ++i)
             register_simple_builtin_proc(symtab, simple_procs[i]);
     }
 
-    char *pchar_to_shortstr_name = strdup("fpc_pchar_to_shortstr");
-    if (pchar_to_shortstr_name != NULL)
-    {
-        ListNode_t *param_res = semcheck_create_builtin_param_with_id(
-            "res", SHORTSTRING_TYPE, "shortstring", 1);
-        ListNode_t *param_p = semcheck_create_builtin_param_with_id(
-            "p", POINTER_TYPE, "PAnsiChar", 0);
-        if (param_res != NULL)
-        {
-            param_res->next = param_p;
-            KgpcType *proc_type = create_procedure_type(param_res, NULL);
-            assert(proc_type != NULL &&
-                "Failed to create fpc_pchar_to_shortstr procedure type");
-            AddBuiltinProc_Typed(symtab, pchar_to_shortstr_name, proc_type);
-            destroy_kgpc_type(proc_type);
-        }
-        free(pchar_to_shortstr_name);
-    }
-
-    const char *sysutils_hooks[] = {
-        "InitExceptions",
-        "InitInternational",
-        "DoneExceptions",
-        "FreeDriveStr",
-        "FreeTerminateProcs",
-        "SysBeep"
-    };
-    for (size_t i = 0; i < sizeof(sysutils_hooks) / sizeof(sysutils_hooks[0]); ++i)
-        register_simple_builtin_proc(symtab, sysutils_hooks[i]);
-
-    char *move_proc = strdup("Move");
-    if (move_proc != NULL) {
-        ListNode_t *move_params = NULL;
-        ListNode_t *move_tail = NULL;
-        ListNode_t *param = NULL;
-
-        param = semcheck_create_builtin_param_var("source", UNKNOWN_TYPE);
-        if (param != NULL) {
-            move_params = param;
-            move_tail = param;
-        }
-
-        param = semcheck_create_builtin_param_var("dest", UNKNOWN_TYPE);
-        if (param != NULL) {
-            if (move_tail != NULL)
-                move_tail->next = param;
-            else
-                move_params = param;
-            move_tail = param;
-        }
-
-        param = semcheck_create_builtin_param("count", LONGINT_TYPE);
-        if (param != NULL) {
-            if (move_tail != NULL)
-                move_tail->next = param;
-            else
-                move_params = param;
-        }
-
-        KgpcType *move_type = create_procedure_type(move_params, NULL);
-        assert(move_type != NULL && "Failed to create Move procedure type");
-        AddBuiltinProc_Typed(symtab, move_proc, move_type);
-        destroy_kgpc_type(move_type);
-        free(move_proc);
-    }
-
-    {
-        static const int swap_types[] = {INT_TYPE, LONGINT_TYPE, INT64_TYPE};
-        for (size_t i = 0; i < sizeof(swap_types) / sizeof(swap_types[0]); ++i)
-            register_unary_builtin_func(symtab, "SwapEndian", "AValue", swap_types[i], swap_types[i]);
-    }
-
-    /* Builtin functions - functions have return types */
+    /* Builtin functions — only true compiler intrinsics */
     {
         typedef struct { const char *name; int return_tag; } SimpleBuiltinFunc;
         static const SimpleBuiltinFunc simple_funcs[] = {
             {"Length",       LONGINT_TYPE},
-            {"GetMem",       POINTER_TYPE},
-            {"ArrayStringToPPchar", POINTER_TYPE},
             {"Copy",         STRING_TYPE},
             {"Concat",       STRING_TYPE},
             {"EOF",          BOOL},
@@ -13007,12 +12944,6 @@ void semcheck_add_builtins(SymTab_t *symtab)
             {"SizeOf",       LONGINT_TYPE},
             {"Chr",          CHAR_TYPE},
             {"Ord",          LONGINT_TYPE},
-            {"Odd",          BOOL},
-            {"UpCase",       CHAR_TYPE},
-            {"Sqr",          LONGINT_TYPE},
-            {"Ln",           REAL_TYPE},
-            {"Exp",          REAL_TYPE},
-            {"RandomRange",  LONGINT_TYPE},
             {"High",         LONGINT_TYPE},
         };
         for (size_t i = 0; i < sizeof(simple_funcs) / sizeof(simple_funcs[0]); ++i)
@@ -13938,6 +13869,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         assert(cur->type == LIST_TREE);
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
+
+        /* Route unit vars to per-unit table, but NOT function parameters/locals.
+         * Function parameters also have defined_in_unit=1 from mark_unit_var_decls,
+         * but they should go to the local scope stack. We detect "inside a function"
+         * by checking if there's more than one scope (the outermost + function scope). */
+        int saved_push_target_var = symtab->push_target_unit;
+        if (tree->type == TREE_VAR_DECL &&
+            tree->tree_data.var_decl_data.defined_in_unit &&
+            tree->tree_data.var_decl_data.source_unit_index > 0 &&
+            symtab->stack_head != NULL && symtab->stack_head->next == NULL)
+            symtab->push_target_unit = tree->tree_data.var_decl_data.source_unit_index;
 
         if (tree->type == TREE_VAR_DECL)
             ids_head = tree->tree_data.var_decl_data.ids;
@@ -16056,6 +15998,7 @@ next_identifier:
             return_val += semcheck_stmt(symtab, tree->tree_data.arr_decl_data.initializer, INT_MAX);
         }
 
+        symtab->push_target_unit = saved_push_target_var;
     }
 
     return return_val;
@@ -17066,14 +17009,16 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
-    /* Set unit_context during predeclaration so type resolution (e.g. for
-     * parameter types like TSize) picks the correct unit-specific type
-     * instead of a local program type that happens to shadow it. */
+    /* Set unit_context and push_target_unit during predeclaration so type
+     * resolution picks the correct unit-specific type and the pushed
+     * procedure/function goes into the correct per-unit table. */
     int saved_unit_context = symtab->unit_context;
+    int saved_push_target = symtab->push_target_unit;
     if (subprogram->tree_data.subprogram_data.defined_in_unit &&
         subprogram->tree_data.subprogram_data.source_unit_index > 0)
     {
         symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
+        symtab->push_target_unit = subprogram->tree_data.subprogram_data.source_unit_index;
     }
 
     char *id_to_use_for_lookup;
@@ -17152,6 +17097,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         semcheck_refresh_predecl_match(lookup.tree_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
         symtab->unit_context = saved_unit_context;
+        symtab->push_target_unit = saved_push_target;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -17160,6 +17106,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         semcheck_refresh_predecl_match(lookup.exact_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
         symtab->unit_context = saved_unit_context;
+        symtab->push_target_unit = saved_push_target;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -17168,6 +17115,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         semcheck_refresh_predecl_match(lookup.body_pair_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
         symtab->unit_context = saved_unit_context;
+        symtab->push_target_unit = saved_push_target;
         return 0;  /* Declaration/body pair already tracked */
     }
     
@@ -17293,6 +17241,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 #endif
 
     symtab->unit_context = saved_unit_context;
+    symtab->push_target_unit = saved_push_target;
     return return_val;
 }
 

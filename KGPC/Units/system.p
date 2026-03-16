@@ -22,8 +22,6 @@ type
   QWord = Int64;
   UInt64 = QWord;
 
-  { Single, Double, Extended are now builtin types with correct sizes (4, 8, 16 bytes) }
-
   { Size types - platform dependent }
   NativeInt = Int64;
   NativeUInt = QWord;
@@ -565,6 +563,9 @@ var
 { UpCase(ch) - Converts a character to uppercase
   Example: UpCase('a') returns 'A'
 }
+
+{ Internal string conversion helper }
+procedure fpc_pchar_to_shortstr(var res: shortstring; p: PAnsiChar); cdecl; external name 'fpc_pchar_to_shortstr';
 
 { Math intrinsics — declared with external name to map to runtime functions }
 { Pi is injected as a builtin constant by the semantic checker }

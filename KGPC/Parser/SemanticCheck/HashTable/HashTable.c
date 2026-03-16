@@ -754,6 +754,18 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
         return 1;
     }
 
+    /* Allow any declaration to shadow a HASHTYPE_BUILTIN_PROCEDURE.
+     * Unit declarations (from system.pp) replace compiler-injected builtins. */
+    if (existing_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE) {
+        return 1;
+    }
+
+    /* Allow functions to shadow builtin constants (e.g., Pi as internproc
+     * replaces Pi as a builtin constant). */
+    if (existing_node->hash_type == HASHTYPE_CONST && is_new_proc_func) {
+        return 1;
+    }
+
     /* No other collisions allowed */
     return 0;
 }

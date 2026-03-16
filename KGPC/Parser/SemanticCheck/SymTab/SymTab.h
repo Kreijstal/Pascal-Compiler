@@ -17,12 +17,19 @@
 /*enum VarType{HASHVAR_INTEGER, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED};
   Defined in HashTable.h */
 
-/* A stack of hash tables with built-ins */
+#define SYMTAB_MAX_UNITS 256
+
+/* A stack of hash tables with built-ins and per-unit symbol tables */
 typedef struct SymTab
 {
     ListNode_t *stack_head;
     HashTable_t *builtins;
-    int unit_context;  /* Active unit index for unit-aware resolution (0 = program) */
+    int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
+    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_tables[this] */
+    /* Per-unit symbol tables. unit_tables[i] holds symbols belonging to unit i.
+     * Lazily allocated on first push to that unit. Owned by SymTab — destroyed
+     * with DestroyHashTable (full ownership of their HashNodes). */
+    HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
 } SymTab_t;
 
 /* Initializes the SymTab with stack_head pointing to NULL */
