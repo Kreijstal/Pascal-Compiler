@@ -1263,7 +1263,7 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
 
-static int source_file_mentions_objpas_qualified(const char *path)
+static int source_file_needs_objpas(const char *path)
 {
     if (path == NULL)
         return 0;
@@ -1282,15 +1282,11 @@ static int source_file_mentions_objpas_qualified(const char *path)
             break;
         n += carry;
         buf[n] = '\0';
-        for (size_t i = 0; i + 6 < n; ++i)
+        for (size_t i = 0; i + 13 < n; ++i)
         {
-            if ((buf[i] == 'O' || buf[i] == 'o') &&
-                (buf[i + 1] == 'B' || buf[i + 1] == 'b') &&
-                (buf[i + 2] == 'J' || buf[i + 2] == 'j') &&
-                (buf[i + 3] == 'P' || buf[i + 3] == 'p') &&
-                (buf[i + 4] == 'A' || buf[i + 4] == 'a') &&
-                (buf[i + 5] == 'S' || buf[i + 5] == 's') &&
-                buf[i + 6] == '.')
+            if (strncasecmp(buf + i, "ObjPas.", 7) == 0 ||
+                strncasecmp(buf + i, "{$mode objfpc}", 14) == 0 ||
+                strncasecmp(buf + i, "{$mode delphi}", 14) == 0)
             {
                 found = 1;
                 break;
@@ -1298,7 +1294,7 @@ static int source_file_mentions_objpas_qualified(const char *path)
         }
         if (found || feof(f))
             break;
-        carry = (n >= 6) ? 6 : n;
+        carry = (n >= 14) ? 14 : n;
         memmove(buf, buf + n - carry, carry);
     }
 
@@ -1342,7 +1338,7 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
-    int wants_objpas = source_file_mentions_objpas_qualified(path);
+    int wants_objpas = source_file_needs_objpas(path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
