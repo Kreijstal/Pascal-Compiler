@@ -1435,6 +1435,9 @@ int main(int argc, char **argv)
 {
     install_stack_trace_handler();
 
+    /* Phase 2: read KGPC_SCOPE_TREE env var before any compilation */
+    SymTab_InitScopeTreeFlag();
+
     // Initialize global arena with 1MB blocks
     arena_t* arena = arena_create(1024 * 1024);
     arena_set_global(arena);

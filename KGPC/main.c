@@ -409,6 +409,10 @@ int main(int argc, char **argv)
 {
     assert(argv != NULL);
     install_stack_trace_handler();
+
+    /* Phase 2: read KGPC_SCOPE_TREE env var before any compilation */
+    SymTab_InitScopeTreeFlag();
+
     Tree_t *prelude_tree, *user_tree;
     int required_args, args_left;
     int exit_status = 0;

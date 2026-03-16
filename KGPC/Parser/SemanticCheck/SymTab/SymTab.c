@@ -49,6 +49,13 @@ static ListNode_t *append_list(ListNode_t *a, ListNode_t *b)
     return a;
 }
 
+/* Phase 2: Forward declarations for tree-walking lookups (defined at end of file) */
+static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id);
+static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
+static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id);
+static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char *id);
+static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id);
+
 /* ========================================================================
  * Init / Destroy
  * ======================================================================== */
@@ -86,12 +93,33 @@ void PushScope(SymTab_t *symtab)
     else
         symtab->stack_head = PushListNodeFront(symtab->stack_head,
             CreateListNode(new_hash, LIST_UNSPECIFIED));
+
+    /* Phase 2: Keep scope tree in sync — create a SCOPE_BLOCK child node
+     * sharing the just-pushed hash table.  Kind is generic SCOPE_BLOCK;
+     * callers that need precise kinds should use EnterScope() instead. */
+    if (symtab->current_scope != NULL)
+    {
+        ScopeNode *scope = CreateScope(SCOPE_BLOCK, symtab->current_scope, 0, new_hash);
+        symtab->current_scope = scope;
+    }
 }
 
 void PopScope(SymTab_t *symtab)
 {
     assert(symtab != NULL);
     assert(symtab->stack_head != NULL);
+
+    /* Phase 2: Keep scope tree in sync — pop back to parent.
+     * Only pop if current_scope's table matches the popped stack entry
+     * (guards against mismatched push/pop from EnterScope/LeaveScope). */
+    if (symtab->current_scope != NULL &&
+        symtab->current_scope->parent != NULL &&
+        symtab->current_scope->table == (HashTable_t *)symtab->stack_head->cur)
+    {
+        ScopeNode *old = symtab->current_scope;
+        symtab->current_scope = old->parent;
+        DestroyScope(old);
+    }
 
     ListNode_t *cur;
     cur = symtab->stack_head;
@@ -553,6 +581,13 @@ static int scope_stack_depth(SymTab_t *symtab)
 
 int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
+    assert(symtab != NULL);
+    assert(id != NULL);
+
+    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
+    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+        return FindIdent_Tree(hash_return, symtab, id);
+
     if (symtab->unit_context > 0)
         return FindIdentInUnit(hash_return, symtab, id, symtab->unit_context);
 
@@ -671,6 +706,11 @@ HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);
+
+    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
+    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+        return FindIdentInCurrentScope_Tree(symtab, id);
+
     /* When push_target_unit is active, the "current scope" is the unit table */
     if (symtab->push_target_unit > 0 && symtab->push_target_unit < SYMTAB_MAX_UNITS &&
         symtab->unit_tables[symtab->push_target_unit] != NULL)
@@ -685,6 +725,10 @@ int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *pr
     int return_val = 0;
     assert(symtab != NULL);
     assert(prefix != NULL);
+
+    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
+    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+        return FindIdentByPrefix_Tree(hash_return, symtab, prefix);
 
     ListNode_t *cur = symtab->stack_head;
     while (cur != NULL)
@@ -728,6 +772,10 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);
+
+    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
+    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+        return FindAllIdents_Tree(symtab, id);
 
     if (symtab->unit_context > 0)
     {
@@ -774,6 +822,10 @@ ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
     assert(id != NULL);
+
+    /* Phase 2: dispatch to tree-walking path when KGPC_SCOPE_TREE=1 */
+    if (SymTab_UseScopeTree() && symtab->current_scope != NULL)
+        return FindAllIdentsInNearestScope_Tree(symtab, id);
 
     /* Check scope stack first — each scope is a distinct level */
     for (ListNode_t *cur = symtab->stack_head; cur != NULL; cur = cur->next)
@@ -938,13 +990,13 @@ void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index)
     assert(symtab != NULL);
     assert(symtab->current_scope != NULL);
 
-    /* Keep flat stack in sync */
+    /* PushScope creates both the flat-stack entry and a SCOPE_BLOCK tree node.
+     * We just fix up the tree node's kind and unit_index to the precise values. */
     PushScope(symtab);
 
-    /* Build tree node whose table points to the just-pushed flat-stack hash table */
-    ScopeNode *scope = CreateScope(kind, symtab->current_scope, unit_index,
-                                   (HashTable_t *)symtab->stack_head->cur);
-    symtab->current_scope = scope;
+    /* Fix up the scope node created by PushScope */
+    symtab->current_scope->kind = kind;
+    symtab->current_scope->unit_index = unit_index;
 }
 
 void LeaveScope(SymTab_t *symtab)
@@ -953,10 +1005,229 @@ void LeaveScope(SymTab_t *symtab)
     assert(symtab->current_scope != NULL);
     assert(symtab->current_scope->parent != NULL);  /* never leave the root */
 
-    ScopeNode *old = symtab->current_scope;
-    symtab->current_scope = old->parent;
-    DestroyScope(old);
-
-    /* Keep flat stack in sync */
+    /* PopScope handles both flat-stack pop and tree node cleanup */
     PopScope(symtab);
+}
+
+/* ========================================================================
+ * Phase 2: Tree-walking lookup (parallel implementation)
+ *
+ * These shadow the legacy flat-stack Find* functions.  They walk
+ * current_scope → parent → ... → builtin_scope, checking dep_scopes
+ * at SCOPE_UNIT / SCOPE_PROGRAM boundaries.
+ *
+ * Gated by KGPC_SCOPE_TREE=1 env var (checked once at startup).
+ * ======================================================================== */
+
+static int g_use_scope_tree = -1;  /* -1 = not yet initialized */
+
+void SymTab_InitScopeTreeFlag(void)
+{
+    const char *val = getenv("KGPC_SCOPE_TREE");
+    g_use_scope_tree = (val != NULL && strcmp(val, "1") == 0) ? 1 : 0;
+}
+
+int SymTab_UseScopeTree(void)
+{
+    if (g_use_scope_tree < 0)
+        SymTab_InitScopeTreeFlag();
+    return g_use_scope_tree;
+}
+
+/* Tree-walking FindIdent: walk current_scope → parent → ... → NULL.
+ * At SCOPE_UNIT/SCOPE_PROGRAM, also check dep_scopes[].
+ *
+ * Phase 2 compatibility: When we reach builtin_scope, also search all
+ * unit_tables[] (since unit scope deps aren't fully wired yet).  This
+ * fallback will be removed in Phase 3 when all deps are properly wired.
+ *
+ * Return value: depth 0 for unit/builtin symbols (matches legacy behavior
+ * where unit_tables and builtins are all at "global level 0"). */
+static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
+{
+    int depth = 0;
+    ScopeNode *scope = symtab->current_scope;
+
+    while (scope != NULL)
+    {
+        HashNode_t *node = FindIdentInTable(scope->table, id);
+        if (node != NULL)
+        {
+            *hash_return = node;
+            /* Unit/builtin scope symbols are at global level (depth 0) to match
+             * legacy FindIdent semantics where unit_tables + builtins return 0. */
+            if (scope->kind == SCOPE_BUILTIN || scope->kind == SCOPE_UNIT)
+                return 0;
+            return depth;
+        }
+
+        /* At unit/program scope, also search dependency unit scopes */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            for (int i = 0; i < scope->num_deps; i++)
+            {
+                node = FindIdentInTable(scope->dep_scopes[i]->table, id);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return 0;  /* dep symbols at global level */
+                }
+            }
+        }
+
+        /* Phase 2 fallback: at builtin_scope, also search unit_tables[]
+         * (since unit scope deps aren't fully wired yet). */
+        if (scope->kind == SCOPE_BUILTIN)
+        {
+            node = FindIdentInAnyUnitTable(symtab, id);
+            if (node != NULL)
+            {
+                *hash_return = node;
+                return 0;  /* unit symbols at global level */
+            }
+        }
+
+        scope = scope->parent;
+        depth++;
+    }
+
+    *hash_return = NULL;
+    return -1;
+}
+
+/* Tree-walking FindIdentByPrefix */
+static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix)
+{
+    int depth = 0;
+    ScopeNode *scope = symtab->current_scope;
+
+    while (scope != NULL)
+    {
+        HashNode_t *node = FindIdentByPrefixInTable(scope->table, prefix);
+        if (node != NULL)
+        {
+            *hash_return = node;
+            return depth;
+        }
+
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            for (int i = 0; i < scope->num_deps; i++)
+            {
+                node = FindIdentByPrefixInTable(scope->dep_scopes[i]->table, prefix);
+                if (node != NULL)
+                {
+                    *hash_return = node;
+                    return depth;
+                }
+            }
+        }
+
+        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
+        if (scope->kind == SCOPE_BUILTIN)
+        {
+            for (int i = 1; i < SYMTAB_MAX_UNITS; i++)
+            {
+                if (symtab->unit_tables[i] != NULL)
+                {
+                    node = FindIdentByPrefixInTable(symtab->unit_tables[i], prefix);
+                    if (node != NULL)
+                    {
+                        *hash_return = node;
+                        return depth;
+                    }
+                }
+            }
+        }
+
+        scope = scope->parent;
+        depth++;
+    }
+
+    *hash_return = NULL;
+    return -1;
+}
+
+/* Tree-walking FindAllIdents: collect all matches from all reachable scopes */
+static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
+{
+    ListNode_t *all = NULL;
+    ScopeNode *scope = symtab->current_scope;
+
+    while (scope != NULL)
+    {
+        all = append_list(all, FindAllIdentsInTable(scope->table, id));
+
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            for (int i = 0; i < scope->num_deps; i++)
+                all = append_list(all, FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+        }
+
+        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
+        if (scope->kind == SCOPE_BUILTIN)
+            all = append_list(all, FindAllIdentsInAnyUnitTable(symtab, id));
+
+        scope = scope->parent;
+    }
+
+    return all;
+}
+
+/* Tree-walking FindAllIdentsInNearestScope: find closest scope with a match,
+ * then collect all matches from that scope level (including dep_scopes if
+ * at unit/program boundary). */
+static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char *id)
+{
+    ScopeNode *scope = symtab->current_scope;
+
+    while (scope != NULL)
+    {
+        ListNode_t *matches = FindAllIdentsInTable(scope->table, id);
+        if (matches != NULL)
+        {
+            /* Also collect from dep_scopes at this level for completeness */
+            if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+            {
+                for (int i = 0; i < scope->num_deps; i++)
+                    matches = append_list(matches,
+                        FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+            }
+            /* Phase 2 fallback: if this is builtin_scope, also collect from unit_tables[] */
+            if (scope->kind == SCOPE_BUILTIN)
+                matches = append_list(matches, FindAllIdentsInAnyUnitTable(symtab, id));
+            return matches;
+        }
+
+        /* Check dep_scopes as part of this scope level */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        {
+            ListNode_t *dep_matches = NULL;
+            for (int i = 0; i < scope->num_deps; i++)
+                dep_matches = append_list(dep_matches,
+                    FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+            if (dep_matches != NULL)
+                return dep_matches;
+        }
+
+        /* Phase 2 fallback: at builtin_scope, also search unit_tables[] */
+        if (scope->kind == SCOPE_BUILTIN)
+        {
+            ListNode_t *unit_matches = FindAllIdentsInAnyUnitTable(symtab, id);
+            if (unit_matches != NULL)
+                return unit_matches;
+        }
+
+        scope = scope->parent;
+    }
+
+    return NULL;
+}
+
+/* Tree-walking FindIdentInCurrentScope */
+static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id)
+{
+    if (symtab->current_scope == NULL)
+        return NULL;
+    return FindIdentInTable(symtab->current_scope->table, id);
 }

@@ -198,4 +198,19 @@ void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
  * Also calls PopScope() to keep the flat stack in sync. */
 void LeaveScope(SymTab_t *symtab);
 
+/* ========================================================================
+ * Phase 2: Tree-walking lookup (gated by KGPC_SCOPE_TREE=1 env var)
+ *
+ * These are parallel implementations that walk the parent-pointer tree
+ * instead of the flat stack.  When KGPC_SCOPE_TREE=1 is set, FindIdent
+ * and friends dispatch to these.  Call SymTab_InitScopeTreeFlag() once
+ * at startup to read the env var.
+ * ======================================================================== */
+
+/* Call once at startup to read KGPC_SCOPE_TREE env var */
+void SymTab_InitScopeTreeFlag(void);
+
+/* Returns non-zero if tree-walking path is active */
+int SymTab_UseScopeTree(void);
+
 #endif
