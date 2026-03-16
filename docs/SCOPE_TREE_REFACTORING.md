@@ -8,10 +8,13 @@ The current scope system uses a flat stack (`stack_head` linked list) shared by 
   - `x: uint64` (local in `Xoshiro128ss_32.Setup` in system.inc) shadows `TPointF.x` (field) in types.pp methods — **fixed with band-aid at `add_class_vars_to_method_scope_impl`**
   - `Output: TStream` (parameter of `ObjectBinaryToText` in classes.inc) shadows `Output: Text` (system global) inside `fpc_get_output` in text.inc — causes `format_function` compilation failure, **unfixable without tree scopes**
   - `Self` from a previously semchecked class method body leaks into standalone procedures like `Assign(t:Text, s:ShortString)` in text.inc. `semcheck_proccall` finds `Self` in scope, thinks the `Assign(t, AnsiString(s))` call is a method call on Self's class, and bypasses the normal overload resolution entirely. This causes the call to resolve to `assign_t_ss` (itself) instead of `assign_t_rbs` (the RawByteString overload), producing **infinite recursion at runtime**. Affects `crt_colour_list`, `fpc_bootstrap_assign_textrec_cast`, `fpc_bootstrap_system_qualified_proccall`, `fpc_settextcodepage`, `tdd_cp_acp_paramstr_ioresult` — all 5 crash with stack overflow in `assign_t_ss`.
+- **Name mangling ordering dependency**: In the flat merge model, all units are merged then semchecked sequentially. ObjPas's `Integer = LongInt` override happens partway through. Call sites processed BEFORE the override mangle `Integer` parameters as `_i` (INT_TYPE = SmallInt). Function bodies processed AFTER mangle as `_li` (LONGINT_TYPE = LongInt). The symbols don't match → **link errors**. Example: `FileCreate(Filename: RawByteString; Rights: Integer)` is codegenned as `filecreate_rbs_li` but callers emit `call filecreate_rbs_i`. Affects `adfgvxcipher`, `class_field_offset_tstringlist`, `tdd_varparam_tstringlist_filter`. With tree scopes, each unit resolves types in its own scope — a unit that `uses ObjPas` sees `Integer = LongInt` from the start, no ordering dependency.
 - **Workaround proliferation**: `source_unit_index` checks, `unit_context` routing, `push_target_unit` save/restore (~40 sites), `add_class_vars` FindIdent hacks
 - **Unnatural complexity**: The flat stack fights against Pascal's inherently tree-structured scoping
 
 A tree just mirrors the source code structure. It simplifies the codebase by removing workarounds, not adding complexity.
+
+**Priority**: FPC RTL tests take priority over normal tests. The goal is all 208 FPC RTL tests passing.
 
 ## Current Architecture
 
