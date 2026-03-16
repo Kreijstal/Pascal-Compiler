@@ -5869,6 +5869,20 @@ skip_type_receiver_rewrite:
     {
         HashNode_t *self_node = NULL;
         struct RecordType *self_record = NULL;
+        if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL &&
+            pascal_identifier_equals(proc_id, "Assign"))
+        {
+            HashNode_t *dbg_self = NULL;
+            int dbg_found = FindIdent(&dbg_self, symtab, "Self");
+            HashNode_t *dbg_proc = NULL;
+            FindIdent(&dbg_proc, symtab, "Assign");
+            const char *dbg_owner = semcheck_get_current_method_owner();
+            fprintf(stderr, "[ASSIGN-TRACE] Self_found=%d owner=%s scope_kind=%d proc_owner=%s proc_hash=%d\n",
+                dbg_found != -1, dbg_owner ? dbg_owner : "<null>",
+                symtab->current_scope ? symtab->current_scope->kind : -1,
+                (dbg_proc && dbg_proc->owner_class) ? dbg_proc->owner_class : "<null>",
+                dbg_proc ? dbg_proc->hash_type : -1);
+        }
         if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
         {
             self_record = semcheck_stmt_get_record_type_from_node(self_node);
@@ -7628,6 +7642,10 @@ proccall_parent_resolve_done:
 
     if (match_count == 1)
     {
+        if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL &&
+            pascal_identifier_equals(proc_id, "Assign"))
+            fprintf(stderr, "[ASSIGN-RESOLVED] mangled=%s match_count=%d\n",
+                resolved_proc->mangled_id ? resolved_proc->mangled_id : "<null>", match_count);
         if (resolved_proc->mangled_id != NULL)
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
         else if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)

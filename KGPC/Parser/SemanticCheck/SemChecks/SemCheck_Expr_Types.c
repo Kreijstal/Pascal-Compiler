@@ -605,6 +605,28 @@ int semcheck_typecast(int *type_return,
         destroy_kgpc_type(expr->resolved_kgpc_type);
         expr->resolved_kgpc_type = NULL;
     }
+    /* Set resolved_kgpc_type for the target type so that callers
+     * (especially overload mangling) see the cast target type, not the inner
+     * expression's type. Look up the target type node for a proper KgpcType
+     * with alias info preserved (needed for AnsiString → _rbs mangling). */
+    if (target_type != UNKNOWN_TYPE && target_type != PROCEDURE &&
+        expr->resolved_kgpc_type == NULL)
+    {
+        const char *tid = expr->expr_data.typecast_data.target_type_id;
+        HashNode_t *type_node = NULL;
+        if (tid != NULL && FindIdent(&type_node, symtab, tid) >= 0 &&
+            type_node != NULL && type_node->type != NULL)
+        {
+            kgpc_type_retain(type_node->type);
+            expr->resolved_kgpc_type = type_node->type;
+        }
+        else
+        {
+            KgpcType *target_kgpc = create_primitive_type(target_type);
+            if (target_kgpc != NULL)
+                expr->resolved_kgpc_type = target_kgpc;
+        }
+    }
     if (target_type == PROCEDURE)
     {
         HashNode_t *target_node = NULL;
