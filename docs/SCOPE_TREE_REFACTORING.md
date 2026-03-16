@@ -127,9 +127,11 @@ static HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
 ## C. FindIdent Rewrite
 
 ```c
-int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
+/* Returns true (1) if found, false (0) if not.
+ * Symbol is returned via *hash_return.
+ * Optional found_kind reports which scope kind contained the symbol. */
+bool FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
-    int depth = 0;
     ScopeNode *scope = symtab->current_scope;
 
     while (scope != NULL)
@@ -138,7 +140,7 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
         if (node != NULL)
         {
             *hash_return = node;
-            return depth;
+            return 1;
         }
 
         /* At unit scope, also search dependency unit scopes */
@@ -150,17 +152,16 @@ int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
                 if (node != NULL)
                 {
                     *hash_return = node;
-                    return depth;
+                    return 1;
                 }
             }
         }
 
         scope = scope->parent;
-        depth++;
     }
 
     *hash_return = NULL;
-    return -1;
+    return 0;
 }
 ```
 
@@ -208,11 +209,18 @@ The goal is **complete removal** of the flat scope system. No fallbacks, no para
 
 17. **Remove all workarounds** listed in section E (add_class_vars hack, source_unit_index priority system, error suppression flags, etc.)
 
-18. **Fix `FindIdent` return value to mean actual tree depth.** Currently 43 call sites check `FindIdent(...) == 0` to mean "found and accessible." Most of these should be `>= 0` (found anywhere). The Phase 2 shim returns 0 for unit/builtin symbols to avoid breaking these checks, but this hides the real tree distance. Fix:
-    - Change all `== 0` checks to `>= 0` where the intent is "symbol exists" (most cases)
-    - Keep `== 0` only where the intent is truly "found in innermost scope" (rare — mainly Self checks)
-    - Remove the `return 0` shim for `SCOPE_UNIT`/`SCOPE_BUILTIN` in `FindIdent_Tree`
-    - `FindIdent` returns -1 (not found) or actual tree depth (0 = current scope, 1 = parent, etc.)
+18. **Change `FindIdent` return type to `bool`.** "Depth" is meaningless in a tree — a symbol in a sibling unit has no depth relative to the current scope. The return value should be:
+    - `0` (false): not found
+    - `1` (true): found — the symbol is in `*hash_return`
+
+    The current Phase 2 shim returns 0 for unit/builtin symbols to keep 43 `== 0` checks working. This is a hack. The real fix:
+    - Change signature: `bool FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)`
+    - Change all 43 `== 0` checks to `!= 0` or just use the bool directly
+    - Change all `== -1` checks to `== 0` or `!FindIdent(...)`
+    - Change all `>= 0` checks to `!= 0`
+    - Remove the depth shim entirely
+
+    If a caller genuinely needs to know WHERE the symbol was found (e.g. "is this in my local scope?"), add an optional `ScopeKind *found_in` output parameter. This is cleaner than inferring scope from a numeric depth that has no stable meaning.
 
 19. **Compile-time guarantee**: After this phase, `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**. This is the acceptance criterion — if any of these strings exist in the codebase, Phase 4 is not complete.
 
