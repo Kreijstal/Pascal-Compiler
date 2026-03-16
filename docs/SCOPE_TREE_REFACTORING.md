@@ -208,7 +208,13 @@ The goal is **complete removal** of the flat scope system. No fallbacks, no para
 
 17. **Remove all workarounds** listed in section E (add_class_vars hack, source_unit_index priority system, error suppression flags, etc.)
 
-18. **Compile-time guarantee**: After this phase, `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**. This is the acceptance criterion — if any of these strings exist in the codebase, Phase 4 is not complete.
+18. **Fix `FindIdent` return value to mean actual tree depth.** Currently 43 call sites check `FindIdent(...) == 0` to mean "found and accessible." Most of these should be `>= 0` (found anywhere). The Phase 2 shim returns 0 for unit/builtin symbols to avoid breaking these checks, but this hides the real tree distance. Fix:
+    - Change all `== 0` checks to `>= 0` where the intent is "symbol exists" (most cases)
+    - Keep `== 0` only where the intent is truly "found in innermost scope" (rare — mainly Self checks)
+    - Remove the `return 0` shim for `SCOPE_UNIT`/`SCOPE_BUILTIN` in `FindIdent_Tree`
+    - `FindIdent` returns -1 (not found) or actual tree depth (0 = current scope, 1 = parent, etc.)
+
+19. **Compile-time guarantee**: After this phase, `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**. This is the acceptance criterion — if any of these strings exist in the codebase, Phase 4 is not complete.
 
 19. **Delete `UNIT_SCOPING_PLAN.md`** — it documents the old bolt-on unit_tables approach which is now fully superseded by the tree.
 
