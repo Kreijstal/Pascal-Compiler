@@ -852,14 +852,28 @@ void LeaveScope(SymTab_t *symtab)
 static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     ScopeNode *scope = symtab->current_scope;
+    /* When unit_context > 0, we're inside a unit subprogram body.
+     * At the PROGRAM scope, skip program-local symbols (defined_in_unit==0)
+     * so that program variables (e.g. "output: string") don't shadow
+     * unit/builtin symbols (e.g. System's "Output: Text"). */
+    int skip_program_locals = (symtab->unit_context > 0);
 
     while (scope != NULL)
     {
         HashNode_t *node = FindIdentInTable(scope->table, id);
         if (node != NULL)
         {
-            *hash_return = node;
-            return 1;
+            /* At program scope, skip program-local symbols when in unit context */
+            if (skip_program_locals && scope->kind == SCOPE_PROGRAM &&
+                !node->defined_in_unit)
+            {
+                /* Don't return this match — fall through to dep_scopes and parent */
+            }
+            else
+            {
+                *hash_return = node;
+                return 1;
+            }
         }
 
         /* At unit/program scope, also search dependency unit scopes */
@@ -939,26 +953,62 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
     return all;
 }
 
+/* Helper: filter out program-local symbols (defined_in_unit==0) from a list.
+ * Returns the filtered list; destroyed nodes are freed. */
+static ListNode_t *filter_program_local_symbols(ListNode_t *list)
+{
+    ListNode_t *result = NULL;
+    ListNode_t **tail = &result;
+    ListNode_t *cur = list;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node != NULL && node->defined_in_unit)
+        {
+            cur->next = NULL;
+            *tail = cur;
+            tail = &cur->next;
+        }
+        else
+        {
+            cur->next = NULL;
+            DestroyList(cur);
+        }
+        cur = next;
+    }
+    return result;
+}
+
 /* Tree-walking FindAllIdentsInNearestScope: find closest scope with a match,
  * then collect all matches from that scope level (including dep_scopes if
  * at unit/program boundary). */
 static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char *id)
 {
     ScopeNode *scope = symtab->current_scope;
+    int skip_program_locals = (symtab->unit_context > 0);
 
     while (scope != NULL)
     {
         ListNode_t *matches = FindAllIdentsInTable(scope->table, id);
         if (matches != NULL)
         {
-            /* Also collect from dep_scopes at this level for completeness */
-            if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+            /* At program scope in unit context, filter out program-local symbols */
+            if (skip_program_locals && scope->kind == SCOPE_PROGRAM)
+                matches = filter_program_local_symbols(matches);
+
+            if (matches != NULL)
             {
-                for (int i = 0; i < scope->num_deps; i++)
-                    matches = append_list(matches,
-                        FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+                /* Also collect from dep_scopes at this level for completeness */
+                if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+                {
+                    for (int i = 0; i < scope->num_deps; i++)
+                        matches = append_list(matches,
+                            FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+                }
+                return matches;
             }
-            return matches;
+            /* If all matches were program-local and filtered, fall through */
         }
 
         /* Check dep_scopes as part of this scope level */
