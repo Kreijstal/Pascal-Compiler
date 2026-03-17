@@ -1468,10 +1468,6 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Power"))
             return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
-        if (pascal_identifier_equals(id, "Random"))
-            return semcheck_builtin_random(type_return, symtab, expr, max_scope_lev);
-        if (pascal_identifier_equals(id, "RandomRange"))
-            return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Aligned"))
             return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "ArrayStringToPPchar"))
@@ -3145,10 +3141,6 @@ int semcheck_funccall(int *type_return,
         return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Random"))
-        return semcheck_builtin_random(type_return, symtab, expr, max_scope_lev);
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RandomRange"))
-        return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Aligned"))
         return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
 
@@ -3303,11 +3295,6 @@ int semcheck_funccall(int *type_return,
 
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Power"))
         return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
-
-    /* Random is resolved through normal function lookup (system.p or FPC RTL) */
-
-    if (allow_builtins && id != NULL && pascal_identifier_equals(id, "RandomRange"))
-        return semcheck_builtin_randomrange(type_return, symtab, expr, max_scope_lev);
 
     if (allow_builtins && id != NULL && pascal_identifier_equals(id, "Aligned"))
         return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);

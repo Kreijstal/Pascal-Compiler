@@ -446,10 +446,6 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
-int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
-int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,

@@ -638,9 +638,8 @@ procedure Flush(var f: Text); cdecl; external name 'kgpc_flush';
 { GetFPCHeapStatus - returns heap usage information }
 function GetFPCHeapStatus: TFPCHeapStatus; cdecl; external name 'kgpc_get_fpc_heap_status';
 
-{ RandomRange(low, high) - Returns a random integer in [low, high)
-  Overloaded for integer and longint types.
-}
+function RandomRange(low, high: LongInt): LongInt; cdecl; external name 'kgpc_random_range';
+function RandomRange(low, high: Int64): Int64; cdecl; external name 'kgpc_random_range';
 
 { Copy(s, index, count) - Returns a substring
   Example: Copy('Hello', 2, 3) returns 'ell'
