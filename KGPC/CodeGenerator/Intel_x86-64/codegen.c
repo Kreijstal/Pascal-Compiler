@@ -4645,6 +4645,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub->type == TREE_SUBPROGRAM);
 
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
         {
             ListNode_t *seen = ctx->emitted_subprograms;
@@ -4678,7 +4679,14 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
          * generic filutil.inc version.  The later definition wins.
          * We restrict to same-unit to avoid cross-unit mangling collisions
          * (e.g. FpClosedir(var TDirRec) vs FpClosedir(PDirRec) from different
-         * units may collide in mangled name but are distinct functions). */
+         * units may collide in mangled name but are distinct functions).
+         *
+         * Exception: if a LATER subprogram from a MORE FUNDAMENTAL unit (lower
+         * source_unit_index) has the same mangled_id, prefer the fundamental unit.
+         * This handles the case where a wrapper unit (e.g. objpas) defines a
+         * same-named function that wraps the system unit's implementation — both
+         * compile to the same mangled name, but the system unit's version is the
+         * real implementation that should be compiled. */
         if (mangled_id != NULL)
         {
             int this_unit = sub->tree_data.subprogram_data.source_unit_index;
@@ -4694,11 +4702,13 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 if (later->type == LIST_TREE && later->cur != NULL)
                 {
                     Tree_t *later_sub = (Tree_t *)later->cur;
+                    int later_unit = later_sub->tree_data.subprogram_data.source_unit_index;
                     if (later_sub->type == TREE_SUBPROGRAM &&
                         later_sub->tree_data.subprogram_data.statement_list != NULL &&
                         later_sub->tree_data.subprogram_data.mangled_id != NULL &&
-                        later_sub->tree_data.subprogram_data.source_unit_index == this_unit &&
-                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0)
+                        strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0 &&
+                        (later_unit == this_unit ||
+                         (later_unit > 0 && this_unit > 0 && later_unit < this_unit)))
                     {
                         int later_dist = codegen_float_native_distance(later_sub);
                         if (later_dist <= current_dist)

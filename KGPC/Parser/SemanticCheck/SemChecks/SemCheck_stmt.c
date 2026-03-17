@@ -7184,7 +7184,7 @@ skip_type_receiver_rewrite:
         }
     }
 
-    /* For inherited calls where mangled_id is already set, use it directly 
+    /* For inherited calls where mangled_id is already set, use it directly
      * instead of re-mangling based on the call site arguments.
      * The mangled_id already includes the correct parameter signature. */
     if (stmt->stmt_data.procedure_call_data.mangled_id != NULL) {

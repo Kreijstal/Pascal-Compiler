@@ -1245,6 +1245,33 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         /* Look up the named type in the symbol table */
         struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
             type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
+        /* If the found type is a non-class record, check if there is a class (pointer) type
+         * with the same name. This handles name collisions like TTimeZone = timezone (OS struct)
+         * vs TTimeZone = class abstract (Pascal class): prefer the class version. */
+        if (type_node != NULL && type_node->type != NULL &&
+            type_node->type->kind == TYPE_KIND_RECORD &&
+            type_node->type->info.record_info != NULL &&
+            !record_type_is_class(type_node->type->info.record_info) &&
+            !type_node->type->info.record_info->is_interface)
+        {
+            ListNode_t *all_nodes = FindAllIdents(symtab, type_id);
+            for (ListNode_t *n = all_nodes; n != NULL; n = n->next)
+            {
+                HashNode_t *cand = (HashNode_t *)n->cur;
+                if (cand != NULL && cand->type != NULL &&
+                    cand->hash_type == HASHTYPE_TYPE &&
+                    cand->type->kind == TYPE_KIND_POINTER &&
+                    cand->type->info.points_to != NULL &&
+                    cand->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                    cand->type->info.points_to->info.record_info != NULL &&
+                    record_type_is_class(cand->type->info.points_to->info.record_info))
+                {
+                    type_node = cand;
+                    break;
+                }
+            }
+            DestroyList(all_nodes);
+        }
         if (type_node != NULL && type_node->type != NULL) {
             struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             if (alias != NULL && alias->is_array &&
@@ -1415,6 +1442,28 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         HashNode_t *parent_node = NULL;
         if (FindSymbol(&parent_node, symtab, current->parent_class_name) != 0 && parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
+            /* If the found record is not a class (e.g., it's an OS struct alias with the
+             * same name as a Pascal class, like TTimeZone = timezone vs TTimeZone = class),
+             * try FindAllIdents to find a class record with this name. */
+            if (parent_record != NULL && !record_type_is_class(parent_record) &&
+                !parent_record->is_interface)
+            {
+                ListNode_t *all_nodes = FindAllIdents(symtab, current->parent_class_name);
+                struct RecordType *class_record = NULL;
+                for (ListNode_t *n = all_nodes; n != NULL; n = n->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)n->cur;
+                    struct RecordType *r = get_record_type_from_hashnode(cand);
+                    if (r != NULL && (record_type_is_class(r) || r->is_interface))
+                    {
+                        class_record = r;
+                        break;
+                    }
+                }
+                DestroyList(all_nodes);
+                if (class_record != NULL)
+                    parent_record = class_record;
+            }
             if (records_same_type(parent_record, superclass))
                 return 1;
             current = parent_record;
@@ -1423,6 +1472,26 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         }
     }
 
+    /* In Pascal, any class without an explicit parent implicitly inherits from TObject.
+     * If we walked the chain and ended at a class with no parent_class_name, and the
+     * superclass being checked is TObject, then subclass IS a subclass of TObject. */
+    if (current != NULL && current->parent_class_name == NULL &&
+        current->is_class && superclass != NULL && superclass->type_id != NULL &&
+        strcasecmp(superclass->type_id, "TObject") == 0)
+    {
+        if (kgpc_getenv("KGPC_DEBUG_SUBCLASS") != NULL)
+            fprintf(stderr, "[SUBCLASS] implicit TObject: subclass=%s current=%s\n",
+                (subclass && subclass->type_id) ? subclass->type_id : "?",
+                (current && current->type_id) ? current->type_id : "?");
+        return 1;
+    }
+
+    if (kgpc_getenv("KGPC_DEBUG_SUBCLASS") != NULL)
+        fprintf(stderr, "[SUBCLASS] NOT found: subclass=%s superclass=%s current=%s current_parent=%s\n",
+            (subclass && subclass->type_id) ? subclass->type_id : "?",
+            (superclass && superclass->type_id) ? superclass->type_id : "?",
+            (current && current->type_id) ? current->type_id : "?",
+            (current && current->parent_class_name) ? current->parent_class_name : "<null>");
     return 0;
 }
 

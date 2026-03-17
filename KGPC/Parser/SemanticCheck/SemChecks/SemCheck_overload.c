@@ -3019,6 +3019,14 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
          * filter from excluding sibling overloads. */
         if (candidate->owner_class != NULL && candidate_scope == 0)
             candidate_scope = 1;
+        /* Unit-defined procedures are self-pushed into the procedure body scope
+         * (stack_head[0]) for recursion support, making them appear at scope 0.
+         * Logically they belong at the unit scope level and must compete with
+         * their overload siblings from the same unit on quality alone. */
+        if (candidate->owner_class == NULL &&
+            candidate->source_unit_index > 0 &&
+            candidate_scope == 0)
+            candidate_scope = INT_MAX / 2;
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;

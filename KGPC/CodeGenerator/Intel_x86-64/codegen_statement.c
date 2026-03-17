@@ -9977,7 +9977,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     args_expr = stmt->stmt_data.procedure_call_data.expr_args;
     call_args = args_expr;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
-    
+
     /* CRITICAL FIX: Use cached information from AST instead of HashNode pointer.
      * The resolved_proc pointer may point to freed memory if the HashNode was in a scope
      * that has been popped (e.g., nested procedures' parameters/local variables).

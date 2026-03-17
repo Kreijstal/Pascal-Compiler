@@ -3043,11 +3043,6 @@ resolved:;
                     {
                         int member_result = semcheck_try_helper_member(type_return, symtab, expr,
                             max_scope_lev, mutating, self_node, self_record, id);
-                        fprintf(stderr,
-                            "[KGPC_DEBUG_VARID_MEMBER] id=%s self_record=%s member_result=%d type_return=%d\n",
-                            id ? id : "(null)",
-                            self_record->type_id ? self_record->type_id : "(null)",
-                            member_result, *type_return);
                         if (member_result >= 0)
                             return member_result;
                     }
