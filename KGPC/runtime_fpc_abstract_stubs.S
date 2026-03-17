@@ -52,46 +52,35 @@ tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
  * FPC bodies are completely incompatible.  The code generator suppresses
  * emitting those bodies so these symbols remain external references; the
  * strong definitions here redirect to KGPC runtime functions that use the
- * correct xmm convention. */
+ * correct xmm convention.
+ *
+ * Note: KGPC maps the FPC "float" type to double (8 bytes), NOT single
+ * (4 bytes).  Arguments arrive in xmm0/xmm1 as doubles, so we must NOT
+ * do cvtss2sd/cvtsd2ss conversions — just forward the doubles directly. */
 .globl arctan2_r_r
 arctan2_r_r:
-    cvtss2sd %xmm0, %xmm0
-    cvtss2sd %xmm1, %xmm1
-    call kgpc_arctan2
-    cvtsd2ss %xmm0, %xmm0
-    ret
+    jmp kgpc_arctan2
 
 .globl tan_r
 tan_r:
-    cvtss2sd %xmm0, %xmm0
-    call kgpc_tan
-    cvtsd2ss %xmm0, %xmm0
-    ret
+    jmp kgpc_tan
 
 .globl cotan_r
 cotan_r:
-    cvtss2sd %xmm0, %xmm0
-    call kgpc_cot
-    cvtsd2ss %xmm0, %xmm0
-    ret
+    jmp kgpc_cot
 
 /* log2_r: redirect to C library log2() which uses xmm0/xmm0 (double) convention.
- * The caller passes a Single in xmm0, so convert to double first. */
+ * The caller passes a double in xmm0, so forward directly. */
 .globl log2_r
 log2_r:
-    cvtss2sd %xmm0, %xmm0
-    call log2@PLT
-    cvtsd2ss %xmm0, %xmm0
-    ret
+    jmp log2@PLT
 
 /* copysign_r_r: FPC's body treats floats as 10-byte Extended (sign at offset+8)
  * but KGPC passes System V doubles (8 bytes, xmm0/xmm1).  The FPC body
  * corrupts the caller's saved rbp by writing to rbp+0.  Provide a correct
- * Single-precision copysign: promote to double, do copysign, demote back. */
+ * double-precision copysign using bit manipulation. */
 .globl copysign_r_r
 copysign_r_r:
-    cvtss2sd %xmm0, %xmm0
-    cvtss2sd %xmm1, %xmm1
     movq    %xmm0, %rax
     movq    %xmm1, %rcx
     movabsq $0x7fffffffffffffff, %rdx
@@ -100,5 +89,4 @@ copysign_r_r:
     andq    %rdx,  %rcx        /* rcx = sign bit of y */
     orq     %rcx,  %rax        /* combine magnitude and sign */
     movq    %rax,  %xmm0
-    cvtsd2ss %xmm0, %xmm0
     ret
