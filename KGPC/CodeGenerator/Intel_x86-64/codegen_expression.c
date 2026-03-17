@@ -10048,7 +10048,13 @@ pass_value_arg:
         int expected_real_size = (arg_infos != NULL) ? arg_infos[i].expected_real_size : 0;
         int actual_type = (arg_infos != NULL && arg_infos[i].expr != NULL)
             ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
-        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE);
+        int is_ptr_like = (arg_infos != NULL && arg_infos[i].is_pointer_like);
+        /* When an argument is passed by reference (var/out/array), the value
+         * stored in the spill slot is a pointer (address), not the underlying
+         * integer value.  Sign-extending a 64-bit pointer via movslq would
+         * truncate it, so suppress the sign-extension for pointer-like args. */
+        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE
+                                 && !is_ptr_like);
         int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
 
         int reg_index = arg_start_index + i;
