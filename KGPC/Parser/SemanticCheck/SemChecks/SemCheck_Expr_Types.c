@@ -2240,41 +2240,22 @@ int semcheck_recordaccess(int *type_return,
                     unit_id != NULL ? unit_id : "(null)",
                     field_id != NULL ? field_id : "(null)");
             }
-            /* Identifier not found - might be a unit qualifier.
-             * Try to look up the field_id directly as it may be an exported constant/var.
-             * When qualifier is "System", prefer the builtin (non-unit-imported) entry
-             * since later unit imports (e.g., objpas MaxInt) may shadow system builtins. */
+            /* Unit-qualified access: look up field_id directly in the unit's own table.
+             * This ensures e.g. System.MaxInt returns System's MaxInt (32767),
+             * not ObjPas's redefined MaxInt (2147483647). */
             HashNode_t *field_node = NULL;
-            char *field_id_copy = strdup(field_id);
-            if (field_id_copy != NULL && FindSymbol(&field_node, symtab, field_id_copy) != 0 && field_node != NULL)
+            int unit_idx = unit_registry_add(unit_id);
+            if (unit_idx > 0 && unit_idx < SYMTAB_MAX_UNITS &&
+                symtab->unit_tables[unit_idx] != NULL)
             {
-                /* For unit-qualified access, find the entry from the correct unit */
-                if (unit_is_qualifier && pascal_identifier_equals(unit_id, "System"))
-                {
-                    ListNode_t *all_nodes = FindAllIdents(symtab, field_id);
-                    ListNode_t *cur_node = all_nodes;
-                    HashNode_t *system_entry = NULL;
-                    while (cur_node != NULL)
-                    {
-                        HashNode_t *n = (HashNode_t *)cur_node->cur;
-                        if (n != NULL && n->hash_type == field_node->hash_type && !n->defined_in_unit)
-                        {
-                            system_entry = n;
-                            break;
-                        }
-                        cur_node = cur_node->next;
-                    }
-                    if (system_entry != NULL)
-                        field_node = system_entry;
-                    /* Free the list nodes (not the HashNode_t payloads) */
-                    while (all_nodes != NULL)
-                    {
-                        ListNode_t *tmp = all_nodes->next;
-                        free(all_nodes);
-                        all_nodes = tmp;
-                    }
-                }
-                free(field_id_copy);
+                field_node = FindIdentInTable(symtab->unit_tables[unit_idx], field_id);
+            }
+            /* No fallback to FindSymbol — if the unit's own table doesn't
+             * have the identifier, it's genuinely not exported by that unit.
+             * Falling back to the scope chain would find symbols from other
+             * units, which is exactly the wrong-unit bug we're preventing. */
+            if (field_node != NULL)
+            {
                 /* Found the field as a direct identifier - transform the expression */
                 if (field_node->hash_type == HASHTYPE_CONST)
                 {
@@ -2400,10 +2381,6 @@ int semcheck_recordaccess(int *type_return,
                     semcheck_reset_function_call_cache(expr);
                     return semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);
                 }
-            }
-            else
-            {
-                free(field_id_copy);
             }
         }
         /* Scoped enum support: TEnumType.EnumValue
