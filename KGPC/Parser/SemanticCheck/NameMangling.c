@@ -253,7 +253,14 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
         return HASHVAR_UNICODESTRING;
     
     // Integer types
-    if (strcasecmp(type_name, "Integer") == 0 || strcasecmp(type_name, "Byte") == 0 ||
+    /* Note: "Integer" is intentionally NOT in this list.  In ObjFPC/Delphi mode
+     * ObjPas redefines Integer = LongInt (overriding System's Integer = SmallInt).
+     * Hardcoding Integer -> HASHVAR_INTEGER here would bypass the symbol-table
+     * lookup that correctly reflects that override.  Returning HASHVAR_UNTYPED
+     * causes the caller to fall through to find_type_node_for_mangling(), which
+     * consults the live symbol table and returns HASHVAR_LONGINT after the
+     * ObjPas override has been applied. */
+    if (strcasecmp(type_name, "Byte") == 0 ||
         strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
         return HASHVAR_INTEGER;
     
