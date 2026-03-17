@@ -207,15 +207,6 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
             }
         }
 
-        if (mangled_id != NULL &&
-            (strcmp(mangled_id, "arctan2_r_r") == 0 ||
-             strcmp(mangled_id, "tan_r") == 0 ||
-             strcmp(mangled_id, "cotan_r") == 0 ||
-             strcmp(mangled_id, "copysign_r_r") == 0)) {
-            sub_list = sub_list->next;
-            continue;
-        }
-
         if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used) {
             sub_list = sub_list->next;
             continue;
@@ -4728,22 +4719,6 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub_list = sub_list->next;
                 continue;
             }
-        }
-
-        /* Skip FPC RTL functions that use the Extended stack ABI (nostackframe)
-         * which is incompatible with KGPC's xmm-register calling convention.
-         * The generated .s would emit a .weak definition that wins over the
-         * strong override in runtime_fpc_rtl_compat.S.  By skipping the body
-         * here, the symbol remains an external reference that the linker
-         * resolves from the runtime library (correct xmm convention). */
-        if (mangled_id != NULL &&
-            (strcmp(mangled_id, "arctan2_r_r")  == 0 ||
-             strcmp(mangled_id, "tan_r")         == 0 ||
-             strcmp(mangled_id, "cotan_r")       == 0 ||
-             strcmp(mangled_id, "copysign_r_r")  == 0))
-        {
-            sub_list = sub_list->next;
-            continue;
         }
 
         /* Skip unused functions (dead code elimination / reachability pass). */
