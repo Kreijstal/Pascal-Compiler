@@ -13141,7 +13141,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "WideChar", create_primitive_type_with_size(CHAR_TYPE, 2));
     add_builtin_from_vartype(symtab, "String", HASHVAR_PCHAR);
     add_builtin_from_vartype(symtab, "OpenString", HASHVAR_PCHAR);
-    add_builtin_from_vartype(symtab, "AnsiString", HASHVAR_PCHAR);
+    add_builtin_string_type_with_alias(symtab, "AnsiString", HASHVAR_PCHAR, 0);
     add_builtin_shortstring_type(symtab, "ShortString");
     add_builtin_string_type_with_alias(symtab, "RawByteString", HASHVAR_PCHAR, 0);
     add_builtin_string_type_with_alias(symtab, "UnicodeString", HASHVAR_PCHAR, 1);

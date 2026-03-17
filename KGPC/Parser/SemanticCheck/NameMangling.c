@@ -446,7 +446,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                  decl_tree->tree_data.var_decl_data.type_id != NULL)) {
                 const TypeRef *type_ref = decl_tree->tree_data.var_decl_data.type_ref;
                 const char *type_id = decl_tree->tree_data.var_decl_data.type_id;
-                
+
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
                     type_ref_base_name_or_id(type_ref, type_id));
@@ -850,7 +850,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)
                     {
-                        if (strcasecmp(alias->alias_name, "RawByteString") == 0)
+                        if (strcasecmp(alias->alias_name, "RawByteString") == 0 ||
+                            strcasecmp(alias->alias_name, "AnsiString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;
@@ -888,7 +889,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     }
                     if (ret_id != NULL)
                     {
-                        if (strcasecmp(ret_id, "RawByteString") == 0)
+                        if (strcasecmp(ret_id, "RawByteString") == 0 ||
+                            strcasecmp(ret_id, "AnsiString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(ret_id, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;

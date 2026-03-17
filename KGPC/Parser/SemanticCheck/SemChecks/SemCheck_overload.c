@@ -1724,7 +1724,8 @@ static int semcheck_string_kind_from_type_id(const char *type_id)
         pascal_identifier_equals(id, "AnsiChar") ||
         pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
-        pascal_identifier_equals(id, "RawByteString"))
+        pascal_identifier_equals(id, "RawByteString") ||
+        pascal_identifier_equals(id, "ShortString"))
         return 1;
 
     return 0;
@@ -2786,8 +2787,12 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                              pascal_identifier_equals(formal_id, "AnsiString") ||
                              pascal_identifier_equals(formal_id, "String")))
                         {
+                            /* String literals prefer ShortString over RawByteString
+                             * (FPC behavior). Typecasts like AnsiString(s) should
+                             * match RawByteString without penalty. */
                             quality.kind = MATCH_EXACT;
-                            quality.char_promo_rank = 1;
+                            if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
+                                quality.char_promo_rank = 1;
                         }
                         else if (formal_id == NULL)
                         {

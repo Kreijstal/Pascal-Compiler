@@ -617,14 +617,46 @@ int semcheck_typecast(int *type_return,
         if (tid != NULL && FindSymbol(&type_node, symtab, tid) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
-            kgpc_type_retain(type_node->type);
-            expr->resolved_kgpc_type = type_node->type;
+            /* Verify the looked-up type matches the expected target_type.
+             * String types like AnsiString may be registered in the RTL as
+             * pointer-to-record types, but for typecast semantics we need
+             * the primitive STRING_TYPE representation so callers (including
+             * overload resolution) see the correct type tag. */
+            int node_tag = semcheck_tag_from_kgpc(type_node->type);
+            if (target_is_builtin && node_tag != target_type &&
+                node_tag != UNKNOWN_TYPE)
+            {
+                /* Symbol table type doesn't match builtin mapping; fall
+                 * through to create a fresh primitive from target_type. */
+                type_node = NULL;
+            }
+            else
+            {
+                kgpc_type_retain(type_node->type);
+                expr->resolved_kgpc_type = type_node->type;
+            }
         }
         else
         {
             KgpcType *target_kgpc = create_primitive_type(target_type);
             if (target_kgpc != NULL)
+            {
+                /* For string-type typecasts (AnsiString, RawByteString, UnicodeString),
+                 * attach a type_alias with alias_name so call-site mangling can
+                 * distinguish between string subtypes (e.g., _rbs vs _s). */
+                if (target_type == STRING_TYPE && tid != NULL &&
+                    target_kgpc->type_alias == NULL)
+                {
+                    struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                    if (alias != NULL)
+                    {
+                        alias->alias_name = strdup(tid);
+                        alias->base_type = STRING_TYPE;
+                    }
+                    target_kgpc->type_alias = alias;
+                }
                 expr->resolved_kgpc_type = target_kgpc;
+            }
         }
     }
     if (target_type == PROCEDURE)

@@ -229,6 +229,12 @@ The goal is **complete removal** of the flat scope system. No fallbacks, no para
 
 19. **Delete `UNIT_SCOPING_PLAN.md`** — it documents the old bolt-on unit_tables approach which is now fully superseded by the tree.
 
+20. **Remove overload scoring heuristics.** `semcheck_resolve_overload` uses `char_promo_rank`, `MATCH_PROMOTION`, `MATCH_CONVERSION` and string-type-name-comparison heuristics to pick between overloads. These exist because the flat scope model couldn't structurally distinguish which overload belongs to which unit. With tree scoping, overloads resolve by scope membership — the correct overload is the one visible in the current scope chain, not the one with the best "score". Remove:
+    - `char_promo_rank` field and all uses
+    - String-type-name scoring in `semcheck_resolve_overload`
+    - `MatchQualityKind` ranking beyond EXACT/INCOMPATIBLE
+    - Any `strcasecmp(alias_name, "RawByteString")` type-name comparisons in scoring
+
 ## E. What Gets Removed
 
 These workarounds become unnecessary with tree scoping:
