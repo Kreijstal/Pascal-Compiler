@@ -647,7 +647,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
                 case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
                 case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
-                case HASHVAR_QWORD:  type_suffix = "_aui64"; break; /* array of QWord */
+                case HASHVAR_QWORD:  type_suffix = "_au64"; break; /* array of QWord */
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_ax";
@@ -680,7 +680,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
                 case HASHVAR_LONGINT: type_suffix = "_li"; break;
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
-                case HASHVAR_QWORD:  type_suffix = "_ui64"; break;
+                case HASHVAR_QWORD:  type_suffix = "_u64"; break;
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_x";

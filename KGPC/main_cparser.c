@@ -1261,25 +1261,25 @@ static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
     merge_unit_into_target(program, unit_tree);
 }
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
+static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited, SymTab_t *symtab);
 
 
-static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
+static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited, SymTab_t *symtab)
 {
     if (prelude == NULL || visited == NULL)
         return;
     if (prelude->type == TREE_PROGRAM_TYPE)
     {
-        load_units_from_list(program, prelude->tree_data.program_data.uses_units, visited);
+        load_units_from_list(program, prelude->tree_data.program_data.uses_units, visited, symtab);
     }
     else if (prelude->type == TREE_UNIT)
     {
-        load_units_from_list(program, prelude->tree_data.unit_data.interface_uses, visited);
-        load_units_from_list(program, prelude->tree_data.unit_data.implementation_uses, visited);
+        load_units_from_list(program, prelude->tree_data.unit_data.interface_uses, visited, symtab);
+        load_units_from_list(program, prelude->tree_data.unit_data.implementation_uses, visited, symtab);
     }
 }
 
-static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
+static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited, SymTab_t *symtab)
 {
     if (unit_name == NULL || visited == NULL)
         return;
@@ -1313,9 +1313,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         g_time_parse_units += current_time_seconds() - start_time;
         ++g_count_parse_units;
     }
-    free(path);
     if (!ok)
     {
+        free(path);
         fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
         exit(1);
     }
@@ -1340,14 +1340,14 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         emit_profile_stage(stage, current_time_seconds() - profile_start);
     }
 
-    load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
-    load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+    load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited, symtab);
+    load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited, symtab);
 
     /* {$mode objfpc} and {$mode delphi} implicitly require the ObjPas unit */
     if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id, "objpas") &&
         pascal_frontend_is_objfpc_mode())
     {
-        load_unit(program, "objpas", visited);
+        load_unit(program, "objpas", visited, symtab);
         int has_objpas = 0;
         for (ListNode_t *cur = unit_tree->tree_data.unit_data.interface_uses;
              cur != NULL; cur = cur->next)
@@ -1388,17 +1388,52 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         unit_registry_add_dep(this_idx, unit_registry_add("System"));
     }
 
+    /* Mark unit declarations BEFORE semcheck so defined_in_unit is set.
+     * These functions just set flags on AST nodes, they don't touch the symbol table. */
+    {
+        int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+        mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1, unit_idx);
+        if (program->type == TREE_PROGRAM_TYPE)
+        {
+            mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+            mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
+            mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        }
+        else
+        {
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        }
+    }
+
+    /* Per-unit semantic check: populates per-unit symbol tables.
+     * Save/restore file_to_parse because recursive load_unit calls
+     * (for deps) change it via pascal_frontend, and the child's path
+     * may have been freed before we return here. */
+    if (symtab != NULL)
+    {
+        char *saved_file_to_parse = file_to_parse;
+        file_to_parse = path;  /* point to our still-valid path */
+        semcheck_unit_decls_only(symtab, unit_tree);
+        LeaveScope(symtab);  /* Leave the SCOPE_UNIT entered by semcheck_unit_decls_only */
+        file_to_parse = saved_file_to_parse;
+    }
+
+    free(path);
+    path = NULL;
     merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);
 }
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited)
+static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited, SymTab_t *symtab)
 {
     ListNode_t *cur = uses;
     while (cur != NULL)
     {
         if (cur->type == LIST_STRING && cur->cur != NULL)
-            load_unit(program, (const char *)cur->cur, visited);
+            load_unit(program, (const char *)cur->cur, visited, symtab);
         cur = cur->next;
     }
 }
@@ -1757,23 +1792,23 @@ int main(int argc, char **argv)
             !pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System"))
         {
             double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-            load_unit(user_tree, "System", &visited_units);
+            load_unit(user_tree, "System", &visited_units, NULL);
             emit_profile_stage("unit compile: auto-load System", current_time_seconds() - system_load_start);
         }
         double interface_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
+        load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units, NULL);
         emit_profile_stage("unit compile: load interface uses", current_time_seconds() - interface_uses_start);
         double implementation_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units, NULL);
         emit_profile_stage("unit compile: load implementation uses", current_time_seconds() - implementation_uses_start);
-        
+
         /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
          * This makes types like TEndian available without explicit 'uses objpas'.
          * Also add ObjPas to the uses list so that unit-qualified references work. */
         if (pascal_frontend_is_objfpc_mode())
         {
             double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-            load_unit(user_tree, "objpas", &visited_units);
+            load_unit(user_tree, "objpas", &visited_units, NULL);
             /* Add ObjPas to interface_uses for semcheck_is_unit_name to recognize it */
             ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
             if (objpas_node != NULL)
@@ -1931,6 +1966,8 @@ int main(int argc, char **argv)
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
     unit_set_init(&visited_units);
+    /* Create symtab early for per-unit declaration pre-population during load */
+    SymTab_t *early_symtab = semcheck_init_symtab();
     ListNode_t *user_types = user_tree->tree_data.program_data.type_declaration;
     ListNode_t *user_consts = user_tree->tree_data.program_data.const_declaration;
     ListNode_t *user_vars = user_tree->tree_data.program_data.var_declaration;
@@ -1989,19 +2026,19 @@ int main(int argc, char **argv)
             clear_prelude_var_decls(prelude_tree);
         }
 
-        load_prelude_uses(user_tree, prelude_tree, &visited_units);
+        load_prelude_uses(user_tree, prelude_tree, &visited_units, early_symtab);
         emit_profile_stage("program: merge prelude and prelude uses", current_time_seconds() - prelude_merge_start);
     }
     if (!use_stdlib)
     {
         double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_unit(user_tree, "System", &visited_units);
+        load_unit(user_tree, "System", &visited_units, early_symtab);
         emit_profile_stage("program: auto-load System", current_time_seconds() - system_load_start);
     }
     double uses_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units, early_symtab);
     emit_profile_stage("program: load uses units", current_time_seconds() - uses_load_start);
-    
+
     /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
      * This makes types like TEndian available without explicit 'uses objpas'.
      * Also add ObjPas to the uses list so that unit-qualified references
@@ -2009,7 +2046,7 @@ int main(int argc, char **argv)
     if (pascal_frontend_is_objfpc_mode())
     {
         double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_unit(user_tree, "objpas", &visited_units);
+        load_unit(user_tree, "objpas", &visited_units, early_symtab);
         /* Add ObjPas to uses list for semcheck_is_unit_name to recognize it */
         ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
         if (objpas_node != NULL)
@@ -2072,7 +2109,7 @@ int main(int argc, char **argv)
      * semantic checking of imported unit implementation bodies.  This is
      * safe when the program has errors (codegen is skipped anyway) and
      * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
-    SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+    SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
     emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);

@@ -192,48 +192,56 @@ Tests pass — no behavioral change.
 8. Replace 28 PushScope/PopScope sites with EnterScope/LeaveScope
 9. Remove ~40 `unit_context`/`push_target_unit` save/restore patterns
 
-### Phase 4: Cleanup — zero legacy flat scoping
+### Phase 4: Per-unit compilation
 
-The goal is **complete removal** of the flat scope system. No fallbacks, no parallel paths, no "just in case" code. The tree is the only scope mechanism.
+The merged-AST model (all units flattened into one program tree) is the root cause of scope leaking, symbol collisions, and type corruption across units. This phase eliminates merging.
 
-10. **Remove `stack_head` from `SymTab_t`.** This is the flat linked list. Delete the field, then fix every compile error — each one is a site that was still using the flat path. If something breaks, the fix is to use `current_scope`, not to keep `stack_head`.
+10. **Per-unit semcheck.** Extract symtab initialization from `semcheck_program_or_unit()`. In `load_unit()`, after parsing and loading deps but BEFORE merging, call `semcheck_unit(symtab, unit_tree)` on each unit. The symtab persists between calls so later units see earlier units' symbols via `dep_scopes`. The existing `semcheck_unit()` function already handles scope setup correctly.
 
-11. **Remove `unit_tables[256]` from `SymTab_t`.** Replace all references with `unit_scopes[i]->table`. The `unit_scopes[]` array already provides the same O(1) lookup.
+11. **Skip re-semchecking merged unit declarations.** After per-unit semcheck, `semcheck_program()` must not re-process unit declarations. Declarations with `defined_in_unit=1` can be skipped in `predeclare_types`, `semcheck_type_decls`, `semcheck_decls`, `semcheck_const_decls`.
 
-12. **Remove `builtins` field from `SymTab_t`.** It becomes `builtin_scope->table`. All `FindIdentInTable(symtab->builtins, ...)` calls become unnecessary since the tree walk already reaches `builtin_scope`.
+12. **Per-unit codegen.** Instead of codegen walking one flat merged subprogram list, iterate over unit scopes and process each unit's subprograms in its unit scope context. One `.s` output, but traversal is per-unit. DCE and optimizations preserved.
 
-13. **Remove `unit_context` and `push_target_unit` fields.** These are routing hacks for the flat model. With the tree, `current_scope` already knows which unit it belongs to (`current_scope->unit_index` or walk to nearest `SCOPE_UNIT` ancestor).
+13. **Remove `merge_unit_into_target`.** Once semcheck and codegen both work per-unit, the merge step in `main_cparser.c` is unnecessary. Unit trees stay alive with their own declaration lists.
 
-14. **Remove `PushScope` and `PopScope` functions entirely.** Not deprecated, not hidden — deleted. `EnterScope`/`LeaveScope` are the only scope manipulation API.
+### Phase 5: Remove flat scope legacy
 
-15. **Remove `FindIdentInUnit`, `FindIdentInAnyUnitTable`, `FindAllIdentsInAnyUnitTable`.** These flat-model helpers have no purpose in the tree.
+With per-unit compilation, the flat scope infrastructure is dead code. Remove it.
 
-16. **Remove `SymTab_GetTargetTable` routing logic.** It becomes `return current_scope->table;` — no conditionals, no `push_target_unit` check.
+14. **Remove `push_target_unit` and `unit_context`.** Symbols go directly to `current_scope->table`. No routing hacks needed — `current_scope` is always the right scope.
 
-17. **Remove all workarounds** listed in section E (add_class_vars hack, source_unit_index priority system, error suppression flags, etc.)
+15. **Remove `stack_head` from `SymTab_t`.** The flat linked list. Fix every compile error by using `current_scope`.
 
-18. **Change `FindIdent` return type to `bool`.** "Depth" is meaningless in a tree — a symbol in a sibling unit has no depth relative to the current scope. The return value should be:
-    - `0` (false): not found
-    - `1` (true): found — the symbol is in `*hash_return`
+16. **Remove `unit_tables[256]`.** Replace with `unit_scopes[i]->table`.
 
-    The current Phase 2 shim returns 0 for unit/builtin symbols to keep 43 `== 0` checks working. This is a hack. The real fix:
-    - Change signature: `bool FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)`
-    - Change all 43 `== 0` checks to `!= 0` or just use the bool directly
-    - Change all `== -1` checks to `== 0` or `!FindIdent(...)`
-    - Change all `>= 0` checks to `!= 0`
-    - Remove the depth shim entirely
+17. **Remove `builtins` field.** It becomes `builtin_scope->table`.
 
-    If a caller genuinely needs to know WHERE the symbol was found (e.g. "is this in my local scope?"), add an optional `ScopeKind *found_in` output parameter. This is cleaner than inferring scope from a numeric depth that has no stable meaning.
+18. **Remove `PushScope`/`PopScope`.** Only `EnterScope`/`LeaveScope`.
 
-19. **Compile-time guarantee**: After this phase, `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**. This is the acceptance criterion — if any of these strings exist in the codebase, Phase 4 is not complete.
+19. **Remove flat-model lookup helpers.** `FindIdentInUnit`, `FindIdentInAnyUnitTable`, `FindAllIdentsInAnyUnitTable`, `SymTab_GetTargetTable` routing logic.
 
-19. **Delete `UNIT_SCOPING_PLAN.md`** — it documents the old bolt-on unit_tables approach which is now fully superseded by the tree.
+20. **Remove all workarounds** listed in section E.
 
-20. **Remove overload scoring heuristics.** `semcheck_resolve_overload` uses `char_promo_rank`, `MATCH_PROMOTION`, `MATCH_CONVERSION` and string-type-name-comparison heuristics to pick between overloads. These exist because the flat scope model couldn't structurally distinguish which overload belongs to which unit. With tree scoping, overloads resolve by scope membership — the correct overload is the one visible in the current scope chain, not the one with the best "score". Remove:
-    - `char_promo_rank` field and all uses
-    - String-type-name scoring in `semcheck_resolve_overload`
-    - `MatchQualityKind` ranking beyond EXACT/INCOMPATIBLE
-    - Any `strcasecmp(alias_name, "RawByteString")` type-name comparisons in scoring
+### Phase 6: Simplify overload resolution
+
+With proper per-unit scoping, overloads resolve structurally by scope membership.
+
+21. **Remove overload scoring heuristics.** `char_promo_rank`, `MATCH_PROMOTION`, `MATCH_CONVERSION`, string-type-name comparisons — all exist because the flat model couldn't distinguish overloads by scope. Remove them.
+
+### Acceptance criteria
+
+After Phase 5: `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**.
+
+### Already completed
+
+- Phase 3 step 7: FindIdent → FindSymbol (bool return, all inversions fixed)
+- Phase 3 step 8: `FindIdent_Tree` is the only lookup path
+- Nested function method owner preservation
+- Parameter-shadows-class-method fix
+- Math function stubs removed (codegen emits Pascal bodies)
+- Random/RandomRange builtin interception removed
+- Unit-qualified lookup (System.MaxInt) fixed
+- Delete `UNIT_SCOPING_PLAN.md`
 
 ## E. What Gets Removed
 

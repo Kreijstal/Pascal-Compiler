@@ -4191,8 +4191,15 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
         {
             if (node->type != NULL)
             {
-                result = node;
-                break;
+                /* Prefer a fully resolved type over an UNKNOWN_TYPE placeholder. */
+                if (node->type->kind != TYPE_KIND_PRIMITIVE ||
+                    node->type->info.primitive_type_tag != UNKNOWN_TYPE)
+                {
+                    result = node;
+                    break;
+                }
+                if (result == NULL)
+                    result = node;
             }
             if (result == NULL)
                 result = node;
@@ -6976,7 +6983,78 @@ static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, d
     -1      -> Check successful with warnings
     >= 1    -> Check failed with n errors
 */
+/* Create and initialize a SymTab_t with a global scope and builtins.
+ * This is extracted from start_semcheck() so it can be called earlier
+ * (before unit loading) for per-unit semantic checking. */
+SymTab_t *semcheck_init_symtab(void)
+{
+    double t0 = 0.0;
+    SymTab_t *symtab = InitSymTab();
+    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global pre-program scope (builtins are
+                                           * registered into unit_tables[System] via
+                                           * push_target_unit, not into this scope) */
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
+        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+    semcheck_add_builtins(symtab);
+    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL) {
+        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
+        fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
+    }
+    return symtab;
+}
+
+/* Wire unit scope dependencies from the unit_registry into the scope tree.
+ * Each unit scope gets dep_scopes[] populated from its uses clause,
+ * so FindIdent_Tree can search dependencies without the flat-model fallback.
+ * Extracted from start_semcheck() so it can be called after all units are loaded
+ * but before the final program-level semcheck. */
+void wire_all_unit_scope_deps(SymTab_t *symtab)
+{
+    int num_units = unit_registry_count();
+    for (int u = 1; u <= num_units; u++)
+    {
+        ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+        if (unit_scope == NULL) continue;
+        /* Always add System as a dep (every unit implicitly uses System) */
+        int sys_idx = unit_registry_add("System");
+        if (sys_idx > 0 && sys_idx != u)
+        {
+            ScopeNode *sys_scope = GetOrCreateUnitScope(symtab, sys_idx);
+            if (sys_scope != NULL)
+                ScopeAddDependency(unit_scope, sys_scope);
+        }
+        /* Add explicit deps from uses clause */
+        for (int d = 1; d <= num_units; d++)
+        {
+            if (d == u) continue;
+            if (unit_registry_is_dep(u, d))
+            {
+                ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                if (dep_scope != NULL)
+                    ScopeAddDependency(unit_scope, dep_scope);
+            }
+        }
+    }
+    /* Program scope sees all units (program uses everything that was loaded) */
+    if (symtab->current_scope != NULL &&
+        (symtab->current_scope->kind == SCOPE_BLOCK ||
+         symtab->current_scope->kind == SCOPE_PROGRAM))
+    {
+        for (int u = 1; u <= num_units; u++)
+        {
+            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+            if (unit_scope != NULL)
+                ScopeAddDependency(symtab->current_scope, unit_scope);
+        }
+    }
+}
+
 SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
+{
+    return start_semcheck_with_symtab(NULL, parse_tree, sem_result);
+}
+
+SymTab_t *start_semcheck_with_symtab(SymTab_t *existing_symtab, Tree_t *parse_tree, int *sem_result)
 {
     SymTab_t *symtab;
     int return_val;
@@ -6998,61 +7076,12 @@ SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
         preprocessed_length = g_semcheck_source_length;
     }
 
-    symtab = InitSymTab();
-    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global pre-program scope (builtins are
-                                           * registered into unit_tables[System] via
-                                           * push_target_unit, not into this scope) */
-    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
-        t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
-    semcheck_add_builtins(symtab);
-    if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL) {
-        double t1 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
-        fprintf(stderr, "[timing] semcheck_add_builtins: %.2f ms\n", t1 - t0);
-    }
-    /*PrintSymTab(symtab, stderr, 0);*/
+    if (existing_symtab != NULL)
+        symtab = existing_symtab;
+    else
+        symtab = semcheck_init_symtab();
 
-    /* Wire unit scope dependencies from the unit_registry into the scope tree.
-     * Each unit scope gets dep_scopes[] populated from its uses clause,
-     * so FindIdent_Tree can search dependencies without the flat-model fallback. */
-    {
-        int num_units = unit_registry_count();
-        for (int u = 1; u <= num_units; u++)
-        {
-            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
-            if (unit_scope == NULL) continue;
-            /* Always add System as a dep (every unit implicitly uses System) */
-            int sys_idx = unit_registry_add("System");
-            if (sys_idx > 0 && sys_idx != u)
-            {
-                ScopeNode *sys_scope = GetOrCreateUnitScope(symtab, sys_idx);
-                if (sys_scope != NULL)
-                    ScopeAddDependency(unit_scope, sys_scope);
-            }
-            /* Add explicit deps from uses clause */
-            for (int d = 1; d <= num_units; d++)
-            {
-                if (d == u) continue;
-                if (unit_registry_is_dep(u, d))
-                {
-                    ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
-                    if (dep_scope != NULL)
-                        ScopeAddDependency(unit_scope, dep_scope);
-                }
-            }
-        }
-        /* Program scope sees all units (program uses everything that was loaded) */
-        if (symtab->current_scope != NULL &&
-            (symtab->current_scope->kind == SCOPE_BLOCK ||
-             symtab->current_scope->kind == SCOPE_PROGRAM))
-        {
-            for (int u = 1; u <= num_units; u++)
-            {
-                ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
-                if (unit_scope != NULL)
-                    ScopeAddDependency(symtab->current_scope, unit_scope);
-            }
-        }
-    }
+    wire_all_unit_scope_deps(symtab);
 
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
@@ -7482,7 +7511,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
             if (tree->type == TREE_TYPE_DECL)
             {
                 const char *type_id = tree->tree_data.type_decl_data.id;
-                
+
                 /* Skip if no type id */
                 if (type_id == NULL)
                 {
@@ -11556,12 +11585,16 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
             alias_info != NULL)
         {
-            /* Rebuild KgpcType from alias when parser's pre-built type is missing
-             * or wrong (e.g., string[3] parsed as primitive SHORTSTRING instead of
-             * array[0..3] of char, or pointer alias parsed as primitive). */
+            /* Rebuild KgpcType from alias when parser's pre-built type is missing,
+             * wrong (e.g., string[3] parsed as primitive SHORTSTRING instead of
+             * array[0..3] of char, or pointer alias parsed as primitive),
+             * or is an UNKNOWN_TYPE placeholder from predeclare_types. */
             int need_rebuild = (kgpc_type == NULL);
             if (!need_rebuild && kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
                 (alias_info->is_array || alias_info->is_pointer))
+                need_rebuild = 1;
+            if (!need_rebuild && kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                kgpc_type->info.primitive_type_tag == UNKNOWN_TYPE)
                 need_rebuild = 1;
             if (need_rebuild)
             {
@@ -14143,6 +14176,85 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     return return_val;
 }
 
+/* Lightweight per-unit semantic check: pre-declares types, enum literals,
+ * and subprogram signatures into the per-unit symbol tables. Does NOT do
+ * full type resolution, constant evaluation, or body checking -- those are
+ * handled later by semcheck_program() on the merged tree.
+ * Enters a SCOPE_UNIT scope; caller must call LeaveScope() after this returns. */
+int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
+{
+    int return_val;
+    assert(tree != NULL);
+    assert(symtab != NULL);
+    assert(tree->type == TREE_UNIT);
+
+    return_val = 0;
+
+    EnterScope(symtab, SCOPE_UNIT, 0);
+
+    semcheck_unit_names_reset();
+    semcheck_unit_name_add("System");
+    semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
+    if (tree->tree_data.unit_data.unit_id != NULL)
+        g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
+    semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
+
+    /* Wire scope tree deps: unit scope can see interface + implementation uses */
+    wire_scope_deps(symtab, symtab->current_scope,
+                    tree->tree_data.unit_data.interface_uses);
+    {
+        ListNode_t *cur = tree->tree_data.unit_data.implementation_uses;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_STRING && cur->cur != NULL)
+            {
+                const char *name = (const char *)cur->cur;
+                int idx = unit_registry_add(name);
+                if (idx > 0)
+                    ScopeAddDependency(symtab->current_scope,
+                                       GetOrCreateUnitScope(symtab, idx));
+            }
+            cur = cur->next;
+        }
+    }
+
+    semcheck_mark_type_decl_units(tree->tree_data.unit_data.interface_type_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_type_decl_units(tree->tree_data.unit_data.implementation_type_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
+        g_semcheck_current_unit_index);
+
+    /* Wire the unit's own scope table as a dep of this UNIT scope so that
+     * FindAllIdents_Tree can see entries pushed via push_target_unit into
+     * unit_tables[unit_idx].  Without this, predeclare_subprogram's duplicate
+     * detection misses entries already in the unit table, creating duplicates. */
+    if (g_semcheck_current_unit_index > 0)
+    {
+        ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
+        if (own_unit_scope != NULL && symtab->current_scope != NULL)
+            ScopeAddDependency(symtab->current_scope, own_unit_scope);
+    }
+
+    /* Only predeclare types (push names) and enum literals -- this is lightweight
+     * and doesn't conflict with the later full processing by semcheck_program. */
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.interface_type_decls);
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.interface_type_decls);
+    return_val += predeclare_enum_literals(symtab, tree->tree_data.unit_data.implementation_type_decls);
+    return_val += predeclare_types(symtab, tree->tree_data.unit_data.implementation_type_decls);
+
+    /* Predeclare subprogram signatures (no bodies) */
+    return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
+
+    /* Pre-push trivially evaluable constants (just integer/string values) */
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls);
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls);
+
+    semcheck_unit_names_reset();
+    return return_val;
+}
+
 
 /* Adds arguments to the symbol table */
 /* A return value greater than 0 indicates how many errors occurred */
@@ -16703,12 +16815,51 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 subprogram->tree_data.subprogram_data.args_var);
         }
 
-        /* If the predeclare step could not resolve the type (e.g., inline array),
-         * build it now and update the existing declaration. */
-        if (return_kgpc_type == NULL)
+        /* If the predeclare step could not resolve the type (e.g., inline array,
+         * type alias not yet resolved at predeclare time, or array with NULL
+         * element type from incomplete resolution), build it now and update
+         * the existing declaration. */
+        int return_type_needs_rebuild =
+            (return_kgpc_type == NULL) ||
+            (return_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+             return_kgpc_type->info.primitive_type_tag == UNKNOWN_TYPE) ||
+            (return_kgpc_type->kind == TYPE_KIND_ARRAY &&
+             return_kgpc_type->info.array_info.element_type == NULL);
+        if (return_type_needs_rebuild)
         {
             int before_ret = return_val;
-            return_kgpc_type = build_function_return_type(subprogram, symtab, &return_val, 0);
+            KgpcType *rebuilt = build_function_return_type(subprogram, symtab, &return_val, 0);
+            int rebuilt_is_incomplete =
+                (rebuilt == NULL) ||
+                (rebuilt->kind == TYPE_KIND_PRIMITIVE &&
+                 rebuilt->info.primitive_type_tag == UNKNOWN_TYPE) ||
+                (rebuilt->kind == TYPE_KIND_ARRAY &&
+                 rebuilt->info.array_info.element_type == NULL);
+            if (!rebuilt_is_incomplete)
+            {
+                return_kgpc_type = rebuilt;
+                /* Update the existing declaration's return type so future
+                 * references (e.g., from semcheck_subprograms Pass 1.5) see
+                 * the resolved type. */
+                if (existing_decl != NULL && existing_decl->type != NULL &&
+                    existing_decl->type->kind == TYPE_KIND_PROCEDURE)
+                {
+                    KgpcType *old_ret = existing_decl->type->info.proc_info.return_type;
+                    if (rebuilt != old_ret)
+                    {
+                        kgpc_type_retain(rebuilt);
+                        if (old_ret != NULL)
+                            kgpc_type_release(old_ret);
+                        existing_decl->type->info.proc_info.return_type = rebuilt;
+                    }
+                }
+            }
+            else
+            {
+                if (rebuilt == NULL && return_kgpc_type == NULL)
+                    return_kgpc_type = rebuilt;
+                /* else keep the existing UNKNOWN_TYPE */
+            }
             semcheck_debug_error_step("build_return_type", subprogram, before_ret, return_val);
 #ifdef DEBUG
             if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s error after build_function_return_type: %d\n", subprogram->tree_data.subprogram_data.id, return_val);

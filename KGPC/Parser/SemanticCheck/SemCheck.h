@@ -37,6 +37,27 @@
 */
 SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result);
 
+/* start_semcheck variant that accepts a pre-existing symtab (from per-unit semcheck).
+ * If existing_symtab is NULL, creates a new one. */
+SymTab_t *start_semcheck_with_symtab(SymTab_t *existing_symtab, Tree_t *parse_tree, int *sem_result);
+
+/* Create and initialize a SymTab_t with global scope and builtins.
+ * Call this before loading units to enable per-unit semantic checking. */
+SymTab_t *semcheck_init_symtab(void);
+
+/* Wire unit scope dependencies from the unit_registry into the scope tree.
+ * Call after all units are loaded but before program-level semcheck. */
+void wire_all_unit_scope_deps(SymTab_t *symtab);
+
+/* Semantic-check a single unit tree. Enters a SCOPE_UNIT scope;
+ * caller must call LeaveScope() after this returns. */
+int semcheck_unit(SymTab_t *symtab, Tree_t *tree);
+
+/* Lightweight per-unit semantic check: processes declarations only (types, consts,
+ * vars, subprogram signatures) without checking subprogram bodies.
+ * Enters a SCOPE_UNIT scope; caller must call LeaveScope() after this returns. */
+int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree);
+
 /* Helper to print semantic error with source code context
  * line_num: line number where error occurred
  * col_num: column number where error occurred (0 if unknown)
