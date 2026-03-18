@@ -37,24 +37,11 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     return is_builtin;
 }
 
-/* Helper: check if candidate is in the given hash table (pointer identity). */
+/* Helper: check if candidate is in the given hash table (pointer identity).
+ * Uses FindIdentPtrInTable for zero-allocation direct bucket walk. */
 static int candidate_in_table(HashTable_t *table, HashNode_t *candidate)
 {
-    if (table == NULL || candidate == NULL || candidate->id == NULL)
-        return 0;
-    ListNode_t *matches = FindAllIdentsInTable(table, candidate->id);
-    int found = 0;
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        if (cur->cur == candidate)
-        {
-            found = 1;
-            break;
-        }
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-    return found;
+    return FindIdentPtrInTable(table, candidate);
 }
 
 /* Walk the scope tree to determine the candidate's scope level.

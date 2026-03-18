@@ -211,6 +211,24 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     return NULL;
 }
 
+/* Check if a specific HashNode pointer exists in the given table.
+ * Direct bucket walk — zero heap allocations. */
+int FindIdentPtrInTable(HashTable_t *table, HashNode_t *candidate)
+{
+    if (table == NULL || candidate == NULL || candidate->id == NULL)
+        return 0;
+
+    int hash = hashpjw(candidate->canonical_id);
+    ListNode_t *cur = table->table[hash];
+    while (cur != NULL)
+    {
+        if (cur->cur == candidate)
+            return 1;
+        cur = cur->next;
+    }
+    return 0;
+}
+
 HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;

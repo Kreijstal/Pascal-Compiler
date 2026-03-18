@@ -16762,8 +16762,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 /* Search the TARGET TABLE where the node was just pushed,
                  * not the full scope, to avoid marking a local overload. */
-                HashTable_t *_tgt = SymTab_GetTargetTable(symtab);
-                HashNode_t *pushed = FindIdentInTable(_tgt, id_to_use_for_lookup);
+                HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+                HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
             }
@@ -16928,8 +16928,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 /* Search the TARGET TABLE where the node was just pushed,
                  * not the full scope, to avoid marking a local overload. */
-                HashTable_t *_tgt = SymTab_GetTargetTable(symtab);
-                HashNode_t *pushed = FindIdentInTable(_tgt, id_to_use_for_lookup);
+                HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+                HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
             }
@@ -17709,8 +17709,8 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
          * not the full scope tree, to avoid mistakenly finding and modifying
          * a same-named local overload in the program scope. */
         if (func_return == 0) {
-            HashTable_t *_tgt = SymTab_GetTargetTable(symtab);
-            HashNode_t *node = FindIdentInTable(_tgt, id_to_use_for_lookup);
+            HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+            HashNode_t *node = FindIdentInTable(target_table, id_to_use_for_lookup);
             if (node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;
@@ -17768,12 +17768,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
-        /* Propagate flags and method identity to the hash node.
-         * Use type pointer identity to find the SPECIFIC node just pushed. */
         /* Propagate flags — search only the target table (see proc case above). */
         if (func_return == 0) {
-            HashTable_t *_tgt = SymTab_GetTargetTable(symtab);
-            HashNode_t *node = FindIdentInTable(_tgt, id_to_use_for_lookup);
+            HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+            HashNode_t *node = FindIdentInTable(target_table, id_to_use_for_lookup);
             if (node != NULL) {
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;

@@ -552,12 +552,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                     fallback = node;
                 else if (hashnode_is_plain_record(fallback) && hashnode_is_class_type(node))
                     fallback = node;
-                if (fallback_outermost == NULL)
-                    fallback_outermost = node;
-                else if (hashnode_is_plain_record(fallback_outermost) && hashnode_is_class_type(node))
-                    fallback_outermost = node;
-                else
-                    fallback_outermost = node;
+                fallback_outermost = node;
             }
         }
     }
