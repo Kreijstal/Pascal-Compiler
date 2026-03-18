@@ -16700,6 +16700,23 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     /**** FIRST PLACING SUBPROGRAM ON THE CURRENT SCOPE ****/
+
+    /* For unit subprograms (source_unit_index > 0), temporarily switch
+     * current_scope to the unit's scope so that EnterScope(SCOPE_SUBPROGRAM)
+     * creates the subprogram as a child of the unit scope, not the program
+     * scope.  This ensures unit code walks:
+     *   SCOPE_SUBPROGRAM -> SCOPE_UNIT -> SCOPE_BUILTIN
+     * and never sees program-local declarations. */
+    ScopeNode *saved_scope_for_unit = NULL;
+    {
+        int unit_idx = subprogram->tree_data.subprogram_data.source_unit_index;
+        if (unit_idx > 0 && symtab->unit_scopes[unit_idx] != NULL)
+        {
+            saved_scope_for_unit = symtab->current_scope;
+            symtab->current_scope = symtab->unit_scopes[unit_idx];
+        }
+    }
+
     if(sub_type == TREE_SUBPROGRAM_PROC)
     {
         /* Create KgpcType for the procedure */
@@ -17423,6 +17440,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         g_semcheck_current_subprogram = prev_current_subprogram;
         symtab->unit_context = saved_unit_context;
         LeaveScope(symtab);
+        if (saved_scope_for_unit != NULL)
+            symtab->current_scope = saved_scope_for_unit;
 #ifdef DEBUG
         fprintf(stderr, "DEBUG: semcheck_subprogram %s returning (no body): %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
@@ -17546,6 +17565,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
     g_semcheck_current_subprogram = prev_current_subprogram;
     LeaveScope(symtab);
+    if (saved_scope_for_unit != NULL)
+        symtab->current_scope = saved_scope_for_unit;
 
     /* Restore error context / suppress flag after body processing. */
     g_semcheck_error_suppress_source_index = saved_suppress;
