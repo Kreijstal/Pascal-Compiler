@@ -860,20 +860,24 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
 
     while (scope != NULL)
     {
-        HashNode_t *node = FindIdentInTable(scope->table, id);
+        HashNode_t *node;
+
+        if (skip_program_locals && scope->kind == SCOPE_PROGRAM)
+        {
+            /* In unit context at PROGRAM scope: skip program-local symbols
+             * (defined_in_unit==0) but still find unit-defined symbols that
+             * were merged into the same table (defined_in_unit==1). */
+            node = FindIdentInTable_UnitOnly(scope->table, id);
+        }
+        else
+        {
+            node = FindIdentInTable(scope->table, id);
+        }
+
         if (node != NULL)
         {
-            /* At program scope, skip program-local symbols when in unit context */
-            if (skip_program_locals && scope->kind == SCOPE_PROGRAM &&
-                !node->defined_in_unit)
-            {
-                /* Don't return this match — fall through to dep_scopes and parent */
-            }
-            else
-            {
-                *hash_return = node;
-                return 1;
-            }
+            *hash_return = node;
+            return 1;
         }
 
         /* At unit/program scope, also search dependency unit scopes.

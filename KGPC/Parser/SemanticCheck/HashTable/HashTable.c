@@ -211,6 +211,43 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     return NULL;
 }
 
+HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
+{
+    ListNode_t *list, *cur;
+    HashNode_t *hash_node;
+    int hash;
+
+    assert(table != NULL);
+    assert(id != NULL);
+
+    char *canonical_id = pascal_identifier_lower_dup(id);
+    if (canonical_id == NULL)
+        return NULL;
+
+    hash = hashpjw(canonical_id);
+    list = table->table[hash];
+    if(list == NULL)
+    {
+        free(canonical_id);
+        return NULL;
+    }
+
+    cur = list;
+    while(cur != NULL)
+    {
+        hash_node = (HashNode_t *)cur->cur;
+        if(strcmp(hash_node->canonical_id, canonical_id) == 0 && hash_node->defined_in_unit)
+        {
+            free(canonical_id);
+            return hash_node;
+        }
+        cur = cur->next;
+    }
+
+    free(canonical_id);
+    return NULL;
+}
+
 HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index)
 {
     ListNode_t *cur;
