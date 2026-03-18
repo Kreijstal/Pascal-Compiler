@@ -1038,5 +1038,17 @@ static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id
 {
     if (symtab->current_scope == NULL)
         return NULL;
+
+    /* When push_target_unit > 0, symbols are routed to unit_tables[idx] via
+     * SymTab_GetTargetTable.  We must check that table too so that duplicate
+     * detection in predeclare_* functions sees the symbols already pushed there. */
+    int idx = symtab->push_target_unit;
+    if (idx > 0 && idx < SYMTAB_MAX_UNITS && symtab->unit_tables[idx] != NULL)
+    {
+        HashNode_t *node = FindIdentInTable(symtab->unit_tables[idx], id);
+        if (node != NULL)
+            return node;
+    }
+
     return FindIdentInTable(symtab->current_scope->table, id);
 }
