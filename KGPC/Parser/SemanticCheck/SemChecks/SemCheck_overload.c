@@ -37,41 +37,71 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     return is_builtin;
 }
 
+/* Helper: check if candidate is in the given hash table (pointer identity). */
+static int candidate_in_table(HashTable_t *table, HashNode_t *candidate)
+{
+    if (table == NULL || candidate == NULL || candidate->id == NULL)
+        return 0;
+    ListNode_t *matches = FindAllIdentsInTable(table, candidate->id);
+    int found = 0;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        if (cur->cur == candidate)
+        {
+            found = 1;
+            break;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return found;
+}
+
+/* Walk the scope tree to determine the candidate's scope level.
+ *
+ * Returns a scope level where lower = closer/more preferred:
+ *   - Each step up the parent chain adds 1
+ *   - At SCOPE_UNIT/SCOPE_PROGRAM boundaries, dep_scopes are searched
+ *     in reverse order (last `uses` clause entry wins = lowest dep level)
+ *   - Builtins get the highest level
+ *
+ * This replaces the legacy flat-stack walk and eliminates the INT_MAX/2 hack. */
 static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (symtab == NULL || candidate == NULL || candidate->id == NULL)
         return INT_MAX / 2;
 
     int level = 0;
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next, ++level)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        ListNode_t *matches = FindAllIdentsInTable((HashTable_t *)scope->cur, candidate->id);
-        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        /* Check this scope's own table */
+        if (candidate_in_table(scope->table, candidate))
+            return level;
+
+        /* At unit/program boundary, check dep_scopes in reverse order
+         * (last uses clause entry = dep_scopes[num_deps-1] searched first = lowest level) */
+        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
-            if (cur->cur == candidate)
+            for (int i = scope->num_deps - 1; i >= 0; i--)
             {
-                if (matches != NULL)
-                    DestroyList(matches);
-                return level;
+                if (candidate_in_table(scope->dep_scopes[i]->table, candidate))
+                {
+                    /* dep_scopes[num_deps-1] (last in uses) gets level+1,
+                     * dep_scopes[num_deps-2] gets level+2, etc.
+                     * dep_scopes[0] (typically System) gets level+num_deps */
+                    return level + 1 + (scope->num_deps - 1 - i);
+                }
             }
+            /* Skip past all dep levels when continuing to parent */
+            level += 1 + scope->num_deps;
         }
-        if (matches != NULL)
-            DestroyList(matches);
-    }
-
-    ListNode_t *builtins = FindAllIdentsInTable(symtab->builtins, candidate->id);
-    for (ListNode_t *cur = builtins; cur != NULL; cur = cur->next)
-    {
-        if (cur->cur == candidate)
+        else
         {
-            if (builtins != NULL)
-                DestroyList(builtins);
-            return INT_MAX / 2;
+            level++;
         }
     }
-    if (builtins != NULL)
-        DestroyList(builtins);
 
+    /* Not found in any reachable scope */
     return INT_MAX / 2;
 }
 
@@ -3020,13 +3050,39 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         if (candidate->owner_class != NULL && candidate_scope == 0)
             candidate_scope = 1;
         /* Unit-defined procedures are self-pushed into the procedure body scope
-         * (stack_head[0]) for recursion support, making them appear at scope 0.
-         * Logically they belong at the unit scope level and must compete with
-         * their overload siblings from the same unit on quality alone. */
+         * (current_scope at level 0) for recursion support, making them appear
+         * at scope 0.  Find their real level from the unit table in dep_scopes
+         * so they compete with sibling overloads on quality alone. */
         if (candidate->owner_class == NULL &&
             candidate->source_unit_index > 0 &&
             candidate_scope == 0)
-            candidate_scope = INT_MAX / 2;
+        {
+            /* Walk the scope tree to find which dep_scope contains this
+             * candidate's unit table, using the same reverse-uses ordering. */
+            int real_level = INT_MAX / 2;
+            int lvl = 0;
+            for (ScopeNode *sc = symtab->current_scope; sc != NULL; sc = sc->parent)
+            {
+                if (sc->kind == SCOPE_UNIT || sc->kind == SCOPE_PROGRAM)
+                {
+                    for (int di = sc->num_deps - 1; di >= 0; di--)
+                    {
+                        if (sc->dep_scopes[di]->unit_index == candidate->source_unit_index)
+                        {
+                            real_level = lvl + 1 + (sc->num_deps - 1 - di);
+                            goto found_real_level;
+                        }
+                    }
+                    lvl += 1 + sc->num_deps;
+                }
+                else
+                {
+                    lvl++;
+                }
+            }
+            found_real_level:
+            candidate_scope = real_level;
+        }
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;
