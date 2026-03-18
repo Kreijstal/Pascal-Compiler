@@ -499,7 +499,7 @@ int semcheck_typecast(int *type_return,
     {
         if (expr->expr_data.typecast_data.expr == NULL)
         {
-            semcheck_error_with_context("Error on line %d, unaligned requires an argument.\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unaligned requires an argument.\n\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -592,7 +592,7 @@ int semcheck_typecast(int *type_return,
         expr->expr_data.typecast_data.target_type_id == NULL &&
         expr->expr_data.typecast_data.target_type_ref == NULL)
     {
-        semcheck_error_with_context("Error on line %d, typecast requires a target type.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, typecast requires a target type.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -1083,7 +1083,7 @@ int semcheck_is_expr(int *type_return,
     struct Expression *value_expr = expr->expr_data.is_data.expr;
     if (value_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, \"is\" operator requires a value expression.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"is\" operator requires a value expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1154,7 +1154,7 @@ int semcheck_is_expr(int *type_return,
 
     if (!is_valid_class)
     {
-        semcheck_error_with_context("Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"is\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -1270,7 +1270,7 @@ int semcheck_is_expr(int *type_return,
 
     if (!is_valid_target)
     {
-        semcheck_error_with_context("Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"is\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -1296,7 +1296,7 @@ int semcheck_as_expr(int *type_return,
     struct Expression *value_expr = expr->expr_data.as_data.expr;
     if (value_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, \"as\" operator requires a value expression.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"as\" operator requires a value expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1330,7 +1330,7 @@ int semcheck_as_expr(int *type_return,
 
     if (!is_valid_class)
     {
-        semcheck_error_with_context("Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"as\" operator requires a class instance on the left-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -1352,7 +1352,7 @@ int semcheck_as_expr(int *type_return,
     
     if (!is_valid_target)
     {
-        semcheck_error_with_context("Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"as\" operator requires a class type on the right-hand side.\n\n",
             expr->line_num);
         ++error_count;
     }
@@ -1405,7 +1405,7 @@ int semcheck_pointer_deref(int *type_return,
     struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
     if (pointer_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, dereference operator requires an operand.\\n\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, dereference operator requires an operand.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1434,7 +1434,7 @@ int semcheck_pointer_deref(int *type_return,
 
     if (pointer_type != POINTER_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, dereference operator requires a pointer expression.\\n\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, dereference operator requires a pointer expression.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return ++error_count;
@@ -1752,7 +1752,7 @@ int semcheck_transform_property_getter_call(int *type_return,
     struct Expression *object_expr = expr->expr_data.record_access_data.record_expr;
     if (object_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, property getter requires an object instance.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property getter requires an object instance.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1792,7 +1792,7 @@ int semcheck_transform_property_getter_call(int *type_return,
         arg_node = CreateListNode(object_expr, LIST_EXPR);
         if (arg_node == NULL)
         {
-            semcheck_error_with_context("Error on line %d, unable to allocate getter argument list.\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unable to allocate getter argument list.\n\n",
                 expr->line_num);
             expr->expr_data.record_access_data.record_expr = object_expr;
             *type_return = UNKNOWN_TYPE;
@@ -1813,7 +1813,7 @@ int semcheck_transform_property_getter_call(int *type_return,
     if ((method_node->id != NULL && id_copy == NULL) ||
         (method_node->mangled_id != NULL && mangled_copy == NULL))
     {
-        semcheck_error_with_context("Error on line %d, unable to prepare property getter call.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unable to prepare property getter call.\n\n",
             expr->line_num);
         free(id_copy);
         free(mangled_copy);
@@ -1866,7 +1866,7 @@ int semcheck_recordaccess(int *type_return,
     const char *field_id = expr->expr_data.record_access_data.field_id;
     if (record_expr == NULL || field_id == NULL)
     {
-        semcheck_error_with_context("Error on line %d, malformed record field access.\n\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, malformed record field access.\n\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -2099,7 +2099,7 @@ int semcheck_recordaccess(int *type_return,
                 struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
                 if (new_record_access == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
                         expr->line_num);
                     *type_return = UNKNOWN_TYPE;
                     return 1;
@@ -2111,7 +2111,7 @@ int semcheck_recordaccess(int *type_return,
                 new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
                 if (new_record_access->expr_data.record_access_data.field_id == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d: failed to duplicate field name in AST transformation.\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to duplicate field name in AST transformation.\n",
                         expr->line_num);
                     free(new_record_access);
                     *type_return = UNKNOWN_TYPE;
@@ -2199,7 +2199,7 @@ int semcheck_recordaccess(int *type_return,
         struct Expression *new_record_access = (struct Expression *)calloc(1, sizeof(struct Expression));
         if (new_record_access == NULL)
         {
-            semcheck_error_with_context("Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate expression for AST transformation in semcheck_recordaccess.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -2211,7 +2211,7 @@ int semcheck_recordaccess(int *type_return,
         new_record_access->expr_data.record_access_data.field_id = strdup(field_id);
         if (new_record_access->expr_data.record_access_data.field_id == NULL)
         {
-            semcheck_error_with_context("Error on line %d: failed to duplicate field name in AST transformation.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to duplicate field name in AST transformation.\n",
                 expr->line_num);
             free(new_record_access);
             *type_return = UNKNOWN_TYPE;
@@ -2309,7 +2309,7 @@ int semcheck_recordaccess(int *type_return,
                     char *field_copy = strdup(field_id);
                     if (field_copy == NULL)
                     {
-                        semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified variable.\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate memory for unit-qualified variable.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return 1;
@@ -2343,14 +2343,14 @@ int semcheck_recordaccess(int *type_return,
 
                     if (qualified_name == NULL)
                     {
-                        semcheck_error_with_context("Error on line %d: failed to allocate memory for unit-qualified type.\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate memory for unit-qualified type.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return 1;
                     }
                     if (qualified_type == NULL)
                     {
-                        semcheck_error_with_context(
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, 
                             "Error on line %d: unable to resolve unit-qualified type %s.\n",
                             expr->line_num, qualified_name);
                         free(qualified_name);
@@ -3010,7 +3010,7 @@ SKIP_SELF_FIELD_REWRITE:
             }
             if (record_info == NULL)
             {
-                semcheck_error_with_context("Error on line %d, pointer does not reference a record type.\n\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, pointer does not reference a record type.\n\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return error_count + 1;
@@ -3103,7 +3103,7 @@ SKIP_SELF_FIELD_REWRITE:
             struct Expression *right_expr = clone_expression(record_expr);
             if (right_expr == NULL)
             {
-                semcheck_error_with_context("Error on line %d, failed to allocate IsNan expression.\n\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, failed to allocate IsNan expression.\n\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return error_count + 1;
@@ -3182,7 +3182,7 @@ SKIP_SELF_FIELD_REWRITE:
                 *type_return = ENUM_TYPE;
                 return 0;
             }
-            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
         }
@@ -3246,7 +3246,7 @@ SKIP_SELF_FIELD_REWRITE:
                     record_type,
                     field_id != NULL ? field_id : "(null)");
             }
-            semcheck_error_with_context("Error on line %d, field access requires a record value.\n\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return error_count + 1;
             }
@@ -3257,7 +3257,7 @@ SKIP_SELF_FIELD_REWRITE:
 
     if (record_info == NULL)
     {
-        semcheck_error_with_context("Error on line %d, unable to resolve record type for field %s.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unable to resolve record type for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -3453,7 +3453,7 @@ SKIP_SELF_FIELD_REWRITE:
             {
                 if (property->read_accessor == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d, property %s is write-only.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property %s is write-only.\n\n",
                         expr->line_num, property->name != NULL ? property->name : field_id);
                     *type_return = UNKNOWN_TYPE;
                     return error_count + 1;
@@ -3485,7 +3485,7 @@ SKIP_SELF_FIELD_REWRITE:
                         expr->expr_data.record_access_data.field_id = strdup(property->read_accessor);
                         if (expr->expr_data.record_access_data.field_id == NULL)
                         {
-                            semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
+                            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, failed to allocate property field name.\n\n",
                                 expr->line_num);
                             *type_return = UNKNOWN_TYPE;
                             return error_count + 1;
@@ -3498,7 +3498,7 @@ SKIP_SELF_FIELD_REWRITE:
                     property_owner, property->read_accessor, NULL);
                 if (getter_node == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d, getter %s for property %s not found.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, getter %s for property %s not found.\n\n",
                         expr->line_num,
                         property->read_accessor != NULL ? property->read_accessor : "<unknown>",
                         property->name != NULL ? property->name : field_id);
@@ -3537,7 +3537,7 @@ SKIP_SELF_FIELD_REWRITE:
                 }
                 if (!getter_is_function)
                 {
-                    semcheck_error_with_context("Error on line %d, property getter %s must be a function.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property getter %s must be a function.\n\n",
                         expr->line_num, property->read_accessor);
                     *type_return = UNKNOWN_TYPE;
                     return error_count + 1;
@@ -3550,7 +3550,7 @@ SKIP_SELF_FIELD_REWRITE:
             {
                 if (property->write_accessor == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d, property %s is read-only.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property %s is read-only.\n\n",
                         expr->line_num, property->name != NULL ? property->name : field_id);
                     *type_return = UNKNOWN_TYPE;
                     return error_count + 1;
@@ -3570,7 +3570,7 @@ SKIP_SELF_FIELD_REWRITE:
                         expr->expr_data.record_access_data.field_id = strdup(property->write_accessor);
                         if (expr->expr_data.record_access_data.field_id == NULL)
                         {
-                            semcheck_error_with_context("Error on line %d, failed to allocate property field name.\n\n",
+                            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, failed to allocate property field name.\n\n",
                                 expr->line_num);
                             *type_return = UNKNOWN_TYPE;
                             return error_count + 1;
@@ -3581,7 +3581,7 @@ SKIP_SELF_FIELD_REWRITE:
 
                 if (mutating == BOTH_MUTATE_REFERENCE)
                 {
-                    semcheck_error_with_context("Error on line %d, property %s cannot be passed as a var parameter.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property %s cannot be passed as a var parameter.\n\n",
                         expr->line_num, property->name != NULL ? property->name : field_id);
                     *type_return = UNKNOWN_TYPE;
                     return error_count + 1;
@@ -3591,7 +3591,7 @@ SKIP_SELF_FIELD_REWRITE:
                     property_owner, property->write_accessor, NULL);
                 if (setter_node == NULL)
                 {
-                    semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, setter %s for property %s not found.\n\n",
                         expr->line_num,
                         property->write_accessor != NULL ? property->write_accessor : "<unknown>",
                         property->name != NULL ? property->name : field_id);
@@ -3600,7 +3600,7 @@ SKIP_SELF_FIELD_REWRITE:
                 }
                 if (setter_node->hash_type != HASHTYPE_PROCEDURE)
                 {
-                    semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, property setter %s must be a procedure.\n\n",
                         expr->line_num, property->write_accessor);
                     *type_return = UNKNOWN_TYPE;
                     return error_count + 1;
@@ -3821,7 +3821,7 @@ SKIP_SELF_FIELD_REWRITE:
                 /* Calculate class size using KgpcType */
                 KgpcType *record_kgpc = create_record_type(record_info);
                 if (record_kgpc == NULL) {
-                    semcheck_error_with_context("Error on line %d: Unable to create KgpcType for class %s\n", 
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: Unable to create KgpcType for class %s\n", 
                         expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
@@ -3829,7 +3829,7 @@ SKIP_SELF_FIELD_REWRITE:
                 
                 long long class_size = kgpc_type_sizeof(record_kgpc);
                 if (class_size <= 0) {
-                    semcheck_error_with_context("Error on line %d: Unable to determine size for class %s\n", 
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: Unable to determine size for class %s\n", 
                         expr->line_num, expr_name);
                     destroy_expr(record_expr);
                     return error_count + 1;
@@ -4240,10 +4240,10 @@ SKIP_SELF_FIELD_REWRITE:
         }
 
         if (record_info != NULL && record_info->type_id != NULL)
-            semcheck_error_with_context("Error on line %d, record field %s not found on type '%s'.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, record field %s not found on type '%s'.\n",
                 expr->line_num, field_id, record_info->type_id);
         else
-            semcheck_error_with_context("Error on line %d, record field %s not found.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, record field %s not found.\n",
                 expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         return error_count + 1;
@@ -4716,7 +4716,7 @@ FIELD_RESOLVED:
 
     if (field_type == UNKNOWN_TYPE && field_record == NULL && array_alias == NULL && !field_is_array_type)
     {
-        semcheck_error_with_context("Error on line %d, unable to resolve type for field %s.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unable to resolve type for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         if (has_unit_ctx_ra)
@@ -4726,7 +4726,7 @@ FIELD_RESOLVED:
 
     if (field_type == RECORD_TYPE && field_record == NULL && !field_is_array_type)
     {
-        semcheck_error_with_context("Error on line %d, missing record definition for field %s.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, missing record definition for field %s.\n\n",
             expr->line_num, field_id);
         *type_return = UNKNOWN_TYPE;
         if (has_unit_ctx_ra)
@@ -5442,7 +5442,7 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     }
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, typecast to %s expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, typecast to %s expects exactly one argument.\n",
             expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         free(id_copy);
@@ -5600,7 +5600,7 @@ int semcheck_addressof(int *type_return,
     struct Expression *inner = expr->expr_data.addr_data.expr;
     if (inner == NULL)
     {
-        semcheck_error_with_context("Error on line %d, address-of operator requires an operand.\\n\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, address-of operator requires an operand.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;

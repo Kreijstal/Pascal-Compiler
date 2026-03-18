@@ -1414,16 +1414,11 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited, 
      * may have been freed before we return here. */
     if (symtab != NULL)
     {
-        int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
-        int saved_push = symtab->push_target_unit;
-        if (unit_idx > 0)
-            symtab->push_target_unit = unit_idx;
         char *saved_file_to_parse = file_to_parse;
-        file_to_parse = path;
+        file_to_parse = path;  /* point to our still-valid path */
         semcheck_unit_decls_only(symtab, unit_tree);
-        LeaveScope(symtab);
+        LeaveScope(symtab);  /* Leave the SCOPE_UNIT entered by semcheck_unit_decls_only */
         file_to_parse = saved_file_to_parse;
-        symtab->push_target_unit = saved_push;
     }
 
     free(path);

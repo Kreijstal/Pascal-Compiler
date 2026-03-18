@@ -441,7 +441,7 @@ int semcheck_relop(int *type_return,
             expr->expr_data.mulop_data.right_factor = neg_one;
             return semcheck_mulop(type_return, symtab, expr, max_scope_lev, mutating);
         }
-        semcheck_error_with_context("Error on line %d, expected relational type after \"NOT\"!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected relational type after \"NOT\"!\n\n",
             expr->line_num);
         ++return_val;
         *type_return = UNKNOWN_TYPE;
@@ -475,7 +475,7 @@ int semcheck_relop(int *type_return,
 
                 if (type_second != SET_TYPE)
                 {
-                    semcheck_error_with_context("Error on line %d, expected set operand on right side of IN expression!\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected set operand on right side of IN expression!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -492,7 +492,7 @@ int semcheck_relop(int *type_return,
                     }
                     if (!in_ok)
                     {
-                        semcheck_error_with_context("Error on line %d, expected integer operand on left side of IN expression!\n\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected integer operand on left side of IN expression!\n\n",
                             expr->line_num);
                         ++return_val;
                     }
@@ -969,7 +969,7 @@ relop_fallback:
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {
-                    semcheck_error_with_context("Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, equality comparison requires matching numeric, boolean, string, character, or pointer types!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -1208,7 +1208,7 @@ relop_fallback:
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {
-                    semcheck_error_with_context(
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, 
                         "Error on line %d, expected compatible numeric, string, or character types between relational op!\n\n",
                         expr->line_num);
                     ++return_val;
@@ -1241,7 +1241,7 @@ int semcheck_signterm(int *type_return,
     /* Checking types */
     if(!is_type_ir(type_return))
     {
-        semcheck_error_with_context("Error on line %d, expected int or real after \"-\"!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected int or real after \"-\"!\n\n",
             expr->line_num);
         ++return_val;
     }
@@ -1294,7 +1294,7 @@ int semcheck_addop(int *type_return,
                 *type_return = INT_TYPE;
             return return_val;
         }
-        semcheck_error_with_context("Error on line %d, expected boolean or integer operands for OR expression!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
             expr->line_num);
         if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
@@ -1319,7 +1319,7 @@ int semcheck_addop(int *type_return,
         }
         else
         {
-            semcheck_error_with_context("Error on line %d, unsupported set additive operator.\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unsupported set additive operator.\n\n",
                 expr->line_num);
             ++return_val;
             *type_return = SET_TYPE;
@@ -1832,7 +1832,7 @@ int semcheck_mulop(int *type_return,
         }
 
         /* Invalid operand types for AND/XOR */
-        semcheck_error_with_context("Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
         if (kgpc_getenv("KGPC_DEBUG_ANDOR") != NULL)
         {
@@ -1859,7 +1859,7 @@ int semcheck_mulop(int *type_return,
         }
         else
         {
-            semcheck_error_with_context("Error on line %d, unsupported set multiplicative operator.\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unsupported set multiplicative operator.\n\n",
                 expr->line_num);
             ++return_val;
             *type_return = SET_TYPE;
@@ -1974,13 +1974,13 @@ int semcheck_mulop(int *type_return,
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
-        semcheck_error_with_context("Error on line %d, type mismatch on mulop: lhs is %s, rhs is %s!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, type mismatch on mulop: lhs is %s, rhs is %s!\n\n",
             expr->line_num, semcheck_type_tag_name(type_first), semcheck_type_tag_name(type_second));
         ++return_val;
     }
     if(!is_type_ir(&type_first) || !is_type_ir(&type_second))
     {
-        semcheck_error_with_context("Error on line %d, expected int/real on both sides of mulop, got lhs: %s, rhs: %s!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected int/real on both sides of mulop, got lhs: %s, rhs: %s!\n\n",
             expr->line_num, semcheck_type_tag_name(type_first), semcheck_type_tag_name(type_second));
         ++return_val;
     }
@@ -1991,7 +1991,7 @@ int semcheck_mulop(int *type_return,
         if (type_first == REAL_TYPE || type_second == REAL_TYPE ||
             type_first == EXTENDED_TYPE || type_second == EXTENDED_TYPE)
         {
-            semcheck_error_with_context("Error on line %d, DIV and MOD operators require integer operands!\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, DIV and MOD operators require integer operands!\n\n",
                 expr->line_num);
             ++return_val;
         }
@@ -3311,7 +3311,7 @@ resolved:;
                 hash_return->hash_type != HASHTYPE_CONST &&
                 hash_return->hash_type != HASHTYPE_TYPE)
             {
-                semcheck_error_with_context("Error on line %d, cannot change \"%s\", invalid scope!\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, cannot change \"%s\", invalid scope!\n",
                     expr->line_num, id);
                 fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
                 ++return_val;
@@ -3369,7 +3369,7 @@ resolved:;
             }
             else
             {
-                semcheck_error_with_context("Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, cannot assign \"%s\", is not a scalar variable!\n\n",
                     expr->line_num, id);
                 ++return_val;
             }

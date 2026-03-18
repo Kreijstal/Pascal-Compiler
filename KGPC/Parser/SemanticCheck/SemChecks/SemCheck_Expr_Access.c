@@ -394,7 +394,7 @@ int semcheck_arrayaccess(int *type_return,
 
     if (array_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, array access requires a base expression.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, array access requires a base expression.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -422,7 +422,7 @@ int semcheck_arrayaccess(int *type_return,
                 inner_record, strdup(array_expr->expr_data.record_access_data.field_id));
             if (field_access == NULL)
             {
-                semcheck_error_with_context("Error on line %d: failed to normalize NOT over indexed field access.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to normalize NOT over indexed field access.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -431,7 +431,7 @@ int semcheck_arrayaccess(int *type_return,
             struct Expression *indexed_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
             if (indexed_expr == NULL)
             {
-                semcheck_error_with_context("Error on line %d: failed to allocate normalized indexed expression.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate normalized indexed expression.\n",
                     expr->line_num);
                 destroy_expr(field_access);
                 *type_return = UNKNOWN_TYPE;
@@ -690,7 +690,7 @@ int semcheck_arrayaccess(int *type_return,
         if (property_result >= 0)
             return return_val + property_result;
 
-        semcheck_error_with_context("Error on line %d, expression is not indexable as an array.\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return return_val + 1;
@@ -909,7 +909,7 @@ int semcheck_arrayaccess(int *type_return,
     index_type = semcheck_tag_from_kgpc(index_kgpc_type);
     if (!is_ordinal_type(index_type))
     {
-        semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
             expr->line_num);
         ++return_val;
     }
@@ -933,7 +933,7 @@ int semcheck_arrayaccess(int *type_return,
                 extra_idx_type = semcheck_tag_from_kgpc(extra_kgpc_type);
                 if (!is_ordinal_type(extra_idx_type))
                 {
-                    semcheck_error_with_context("Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
@@ -1535,7 +1535,7 @@ int semcheck_funccall(int *type_return,
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
             if (args == NULL || args->next == NULL || args->next->next != NULL)
             {
-                semcheck_error_with_context("Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -1880,7 +1880,7 @@ int semcheck_funccall(int *type_return,
             struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
             if (call_expr == NULL)
             {
-                semcheck_error_with_context("Error on line %d: failed to allocate expression for NOT call fixup.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate expression for NOT call fixup.\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -2906,7 +2906,7 @@ int semcheck_funccall(int *type_return,
                     struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
                     if (proc_expr == NULL)
                     {
-                        semcheck_error_with_context("Error on line %d: failed to allocate procedural field expression.\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: failed to allocate procedural field expression.\n",
                             expr->line_num);
                         *type_return = UNKNOWN_TYPE;
                         return ++return_val;
@@ -2924,7 +2924,7 @@ int semcheck_funccall(int *type_return,
                         ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
                         if (semcheck_count_total_params(formal_params) != ListLength(remaining_args))
                         {
-                            semcheck_error_with_context("Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
+                            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
                                 expr->line_num, id, semcheck_count_total_params(formal_params), ListLength(remaining_args));
                             if (proc_type != NULL)
                                 destroy_kgpc_type(proc_type);
@@ -3073,7 +3073,7 @@ int semcheck_funccall(int *type_return,
         ListNode_t *args = expr->expr_data.function_call_data.args_expr;
         if (args == NULL || args->next != NULL)
         {
-            semcheck_error_with_context("Error on line %d, GetMem expects exactly one argument.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, GetMem expects exactly one argument.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -5289,7 +5289,7 @@ int semcheck_funccall(int *type_return,
             /* Validate arguments match the procedural type's signature */
             if (semcheck_count_total_params(formal_params) != ListLength(args_given))
             {
-                semcheck_error_with_context("Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, call to procedural variable %s: expected %d arguments, got %d\n",
                     expr->line_num, id, semcheck_count_total_params(formal_params), ListLength(args_given));
                 destroy_list(overload_candidates);
                 if (mangled_name != NULL) free(mangled_name);
@@ -5387,7 +5387,7 @@ int semcheck_funccall(int *type_return,
     }
     
     if (id == NULL) {
-        semcheck_error_with_context("Error on line %d: function call with NULL id\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: function call with NULL id\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         if (overload_candidates != NULL) destroy_list(overload_candidates);
         return ++return_val;
@@ -6126,7 +6126,7 @@ method_call_resolved:
             
             if (overloads_buf[0] != '\0')
             {
-                semcheck_error_with_context(
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, 
                     "Error on line %d, call to function %s%s does not match any available overload.\n"
                     "Available overloads:\n%s",
                     expr->line_num, id, arg_types_buf, overloads_buf);
@@ -6134,7 +6134,8 @@ method_call_resolved:
             else
             {
                 /* No overloads found - function is not declared */
-                semcheck_error_with_context(
+                semcheck_error_with_context_at(
+                    expr->line_num, expr->col_num, expr->source_index,
                     "Error on line %d, function %s%s is not declared.\n",
                     expr->line_num, id, arg_types_buf);
             }
@@ -6168,7 +6169,7 @@ method_call_resolved:
                 cur = cur->next;
             }
         }
-        semcheck_error_with_context("Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, call to function %s is ambiguous\n", expr->line_num, id);
         *type_return = UNKNOWN_TYPE;
         final_status = ++return_val;
         goto funccall_cleanup;
@@ -6180,7 +6181,7 @@ skip_overload_resolution:
 
     if(!scope_return) // Should not happen if match_count > 0
     {
-        semcheck_error_with_context("Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, undeclared function %s (mangled to %s)!\n\n", expr->line_num, id, mangled_name);
         ++return_val;
 
         *type_return = UNKNOWN_TYPE;
@@ -6194,7 +6195,7 @@ skip_overload_resolution:
                 fprintf(stderr, "[SemCheck] semcheck_funccall: scope_return (%d) > max_scope_lev (%d)\n",
                     scope_return, max_scope_lev);
             }
-            semcheck_error_with_context("Error on line %d, cannot change \"%s\", invalid scope!\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, cannot change \"%s\", invalid scope!\n\n",
                 expr->line_num, id);
             fprintf(stderr, "[Was it defined above a function declaration?]\n\n");
             ++return_val;
@@ -6203,7 +6204,7 @@ skip_overload_resolution:
             hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
             hash_return->hash_type != HASHTYPE_PROCEDURE)
         {
-            semcheck_error_with_context("Error on line %d, \"%s\" is not a function!\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, \"%s\" is not a function!\n\n",
                 expr->line_num, id);
             ++return_val;
         }
@@ -6638,7 +6639,7 @@ skip_overload_resolution:
             arg_decl = (Tree_t *)true_args_to_validate->cur;
             if (arg_decl->type != TREE_VAR_DECL && arg_decl->type != TREE_ARR_DECL)
             {
-                semcheck_error_with_context("Error on line %d, unsupported parameter declaration in call to %s.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unsupported parameter declaration in call to %s.\n",
                     expr->line_num, id);
                 ++return_val;
                 true_args_to_validate = true_args_to_validate->next;
@@ -6911,7 +6912,7 @@ skip_overload_resolution:
                     {
                         const char *expected_str = type_tag_to_string(expected_type);
                         const char *given_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
-                        semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
                             expr->line_num, id, cur_arg, expected_str, given_str);
                         ++return_val;
                     }
@@ -7238,7 +7239,7 @@ skip_overload_resolution:
                             if (current_arg_expr != NULL && current_arg_expr->resolved_kgpc_type != NULL)
                                 given_str = kgpc_type_to_string(current_arg_expr->resolved_kgpc_type);
                             
-                            semcheck_error_with_context("Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
+                            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, on function call %s, argument %d: Type mismatch (expected: %s, given: %s)!\n\n",
                                 expr->line_num, id, cur_arg, expected_str, given_str);
                             ++return_val;
                         }
@@ -7290,7 +7291,7 @@ skip_overload_resolution:
             }
             if (!allow_forward_params && !(hash_return != NULL && hash_return->is_varargs))
             {
-                semcheck_error_with_context("Error on line %d, on function call %s, too many arguments given!\n\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, on function call %s, too many arguments given!\n\n",
                     expr->line_num, id);
                 ++return_val;
             }
@@ -7298,7 +7299,7 @@ skip_overload_resolution:
         }
         else if(true_args_to_validate != NULL && args_to_validate == NULL)
         {
-            semcheck_error_with_context("Error on line %d, on function call %s, not enough arguments given!\n\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, on function call %s, not enough arguments given!\n\n",
                 expr->line_num, id);
             ++return_val;
         }
