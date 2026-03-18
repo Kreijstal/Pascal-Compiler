@@ -9709,6 +9709,25 @@ pass_value_arg:
                     }
                     top_reg = value_reg;
                 }
+                else if (arg_expr->type == EXPR_TYPECAST &&
+                    arg_expr->expr_data.typecast_data.expr != NULL &&
+                    arg_expr->expr_data.typecast_data.target_type == STRING_TYPE &&
+                    codegen_expr_is_shortstring_value_ctx(
+                        arg_expr->expr_data.typecast_data.expr, ctx))
+                {
+                    /* ShortString to AnsiString typecast: build_expr_tree
+                     * strips EXPR_TYPECAST nodes, losing the conversion.
+                     * Use codegen_expr_tree_value which handles this. */
+                    Register_t *value_reg = NULL;
+                    inst_list = codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
+                    if (codegen_had_error(ctx) || value_reg == NULL)
+                    {
+                        if (arg_infos != NULL)
+                            free(arg_infos);
+                        return inst_list;
+                    }
+                    top_reg = value_reg;
+                }
                 else
                 {
                     expr_tree = build_expr_tree(arg_expr);
