@@ -22,7 +22,7 @@
 /* ========================================================================
  * Internal helper: get the target hash table for Push operations.
  * When push_target_unit > 0, routes to the per-unit table (lazily created).
- * Otherwise, routes to the current scope stack head.
+ * Otherwise, routes to the current scope tree node's table.
  * ======================================================================== */
 HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
 {
@@ -33,8 +33,8 @@ HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
             symtab->unit_tables[idx] = InitHashTable();
         return symtab->unit_tables[idx];
     }
-    assert(symtab->stack_head != NULL);
-    return (HashTable_t *)symtab->stack_head->cur;
+    assert(symtab->current_scope != NULL);
+    return symtab->current_scope->table;
 }
 
 /* Helper: append list b to end of list a */
