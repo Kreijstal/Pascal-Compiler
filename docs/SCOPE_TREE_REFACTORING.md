@@ -196,7 +196,15 @@ Tests pass — no behavioral change.
 
 The merged-AST model (all units flattened into one program tree) is the root cause of scope leaking, symbol collisions, and type corruption across units. This phase eliminates merging.
 
-10. **Per-unit semcheck.** Extract symtab initialization from `semcheck_program_or_unit()`. In `load_unit()`, after parsing and loading deps but BEFORE merging, call `semcheck_unit(symtab, unit_tree)` on each unit. The symtab persists between calls so later units see earlier units' symbols via `dep_scopes`. The existing `semcheck_unit()` function already handles scope setup correctly.
+10. **Per-unit semcheck.** Extract symtab initialization from `semcheck_program_or_unit()`. In `load_unit()`, after parsing and loading deps but BEFORE merging, process each unit's declarations in its own scope. The symtab persists between calls so later units see earlier units' symbols via `dep_scopes`. Split into sequential sub-steps (each depends on the previous):
+
+    a. **Types + enums.** Predeclare types and enum literals into `unit_tables[unit_index]` via `push_target_unit`. Already partly done via `semcheck_unit_decls_only` — needs correct routing so types survive `LeaveScope`.
+
+    b. **Constants + variables.** Process `const` and `var` declarations per-unit. Constants can reference types (must be done after 10a). Variables can reference types and constants.
+
+    c. **Subprogram signatures.** Predeclare procedure/function signatures per-unit. Already partly done via `predeclare_subprograms` in `semcheck_unit_decls_only`.
+
+    d. **Subprogram bodies.** Full semcheck of procedure/function bodies per-unit. This is the hardest sub-step — Self leak, scope leaking, and overload resolution all happen here. Previous attempts hit SIGSEGV in pp-cache deserialization and 214+ errors from destructive AST modifications. Approach incrementally.
 
 11. **Skip re-semchecking merged unit declarations.** After per-unit semcheck, `semcheck_program()` must not re-process unit declarations. Declarations with `defined_in_unit=1` can be skipped in `predeclare_types`, `semcheck_type_decls`, `semcheck_decls`, `semcheck_const_decls`.
 

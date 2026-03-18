@@ -3479,6 +3479,17 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "tdd_system_exit_qualified",
     "tdd_system_ttypekind",
     "tdd_types_core_symbols_bootstrap",
+    # Tests that pass normally but fail with FPC RTL — added for regression tracking
+    "bug_parser_full_repro",
+    "const_var_transition",
+    "random_function",
+    "random_range_function",
+    "reg_sysutils_inttohex_binstr",
+    "tdd_capsizeint_wsm",
+    "tdd_proc_field_dispatch",
+    "tdd_propinfo_kind_case",
+    "tdd_record_method_no_param_return_type",
+    "tdd_upcase_ord",
 }
 
 _FPC_RTL_KNOWN_UNITS = None
