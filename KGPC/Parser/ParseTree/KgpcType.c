@@ -35,6 +35,70 @@
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
+
+/* Check if a HashNode represents a class type (either a pointer to a class record
+ * or a direct class record).  Used to prefer class types over plain record aliases
+ * when the same name resolves to both (e.g. TTimeZone = timezone struct alias vs
+ * TTimeZone = class abstract). */
+static int hashnode_is_class_type(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
+        return 0;
+    if (node->type->kind == TYPE_KIND_POINTER &&
+        node->type->info.points_to != NULL &&
+        node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+        node->type->info.points_to->info.record_info != NULL &&
+        record_type_is_class(node->type->info.points_to->info.record_info))
+        return 1;
+    if (node->type->kind == TYPE_KIND_RECORD &&
+        node->type->info.record_info != NULL &&
+        record_type_is_class(node->type->info.record_info))
+        return 1;
+    return 0;
+}
+
+/* Check if a HashNode is a plain (non-class, non-interface) record type */
+static int hashnode_is_plain_record(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
+        return 0;
+    if (node->type->kind == TYPE_KIND_RECORD &&
+        node->type->info.record_info != NULL &&
+        !record_type_is_class(node->type->info.record_info) &&
+        !node->type->info.record_info->is_interface)
+        return 1;
+    return 0;
+}
+
+/* Find the best type node in a single hash table, preferring class types over
+ * plain record aliases when multiple entries share the same name. */
+static HashNode_t *find_best_type_in_table(HashTable_t *table, const char *type_id)
+{
+    HashNode_t *first = FindIdentInTable(table, type_id);
+    if (first == NULL || first->hash_type != HASHTYPE_TYPE)
+        return first;
+    /* If the first match is already a class type or not a plain record,
+     * no disambiguation needed. */
+    if (!hashnode_is_plain_record(first))
+        return first;
+    /* The first match is a plain record — check if there's a class type
+     * with the same name in this table. */
+    ListNode_t *all = FindAllIdentsInTable(table, type_id);
+    HashNode_t *best = first;
+    for (ListNode_t *n = all; n != NULL; n = n->next)
+    {
+        HashNode_t *cand = (HashNode_t *)n->cur;
+        if (cand != NULL && cand->hash_type == HASHTYPE_TYPE &&
+            hashnode_is_class_type(cand))
+        {
+            best = cand;
+            break;
+        }
+    }
+    DestroyList(all);
+    return best;
+}
+
 static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
@@ -440,15 +504,24 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 
     HashNode_t *fallback = NULL;
     HashNode_t *fallback_outermost = NULL;
+    HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record) */
     ListNode_t *cur = symtab->stack_head;
     while (cur != NULL)
     {
         HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = FindIdentInTable(table, type_id);
+        HashNode_t *node = find_best_type_in_table(table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             if (node->defined_in_unit == defined_in_unit)
-                return node;
+            {
+                /* If this is a class type, return immediately. If it's a plain
+                 * record, save it — a class type with the same name from another
+                 * table should take precedence. */
+                if (!hashnode_is_plain_record(node))
+                    return node;
+                if (unit_match == NULL)
+                    unit_match = node;
+            }
             if (fallback == NULL)
                 fallback = node;
             fallback_outermost = node;
@@ -463,14 +536,28 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         {
             if (symtab->unit_tables[i] == NULL)
                 continue;
-            HashNode_t *node = FindIdentInTable(symtab->unit_tables[i], type_id);
+            HashNode_t *node = find_best_type_in_table(symtab->unit_tables[i], type_id);
             if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             {
                 if (node->defined_in_unit == defined_in_unit)
-                    return node;
+                {
+                    if (!hashnode_is_plain_record(node))
+                        return node;
+                    if (unit_match == NULL)
+                        unit_match = node;
+                }
+                /* When we already have a plain-record fallback and this candidate
+                 * is a class type, upgrade the fallback to the class. */
                 if (fallback == NULL)
                     fallback = node;
-                fallback_outermost = node;
+                else if (hashnode_is_plain_record(fallback) && hashnode_is_class_type(node))
+                    fallback = node;
+                if (fallback_outermost == NULL)
+                    fallback_outermost = node;
+                else if (hashnode_is_plain_record(fallback_outermost) && hashnode_is_class_type(node))
+                    fallback_outermost = node;
+                else
+                    fallback_outermost = node;
             }
         }
     }
@@ -493,6 +580,15 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
             return builtin;
         return fallback_outermost;
+    }
+
+    /* If we found a unit_match (plain record) but no class in the same table,
+     * check if a class was found in another table. */
+    if (unit_match != NULL)
+    {
+        if (fallback != NULL && hashnode_is_class_type(fallback))
+            return fallback;
+        return unit_match;
     }
 
     return fallback;
@@ -1242,36 +1338,12 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
     /* Handle named type references using the symbol table */
     if (type_id != NULL && symtab != NULL) {
-        /* Look up the named type in the symbol table */
+        /* Look up the named type in the symbol table.
+         * kgpc_find_type_node_with_unit_flag already prefers class types over
+         * plain record aliases when the same name resolves to both (e.g.
+         * TTimeZone = timezone struct alias vs TTimeZone = class abstract). */
         struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
             type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
-        /* If the found type is a non-class record, check if there is a class (pointer) type
-         * with the same name. This handles name collisions like TTimeZone = timezone (OS struct)
-         * vs TTimeZone = class abstract (Pascal class): prefer the class version. */
-        if (type_node != NULL && type_node->type != NULL &&
-            type_node->type->kind == TYPE_KIND_RECORD &&
-            type_node->type->info.record_info != NULL &&
-            !record_type_is_class(type_node->type->info.record_info) &&
-            !type_node->type->info.record_info->is_interface)
-        {
-            ListNode_t *all_nodes = FindAllIdents(symtab, type_id);
-            for (ListNode_t *n = all_nodes; n != NULL; n = n->next)
-            {
-                HashNode_t *cand = (HashNode_t *)n->cur;
-                if (cand != NULL && cand->type != NULL &&
-                    cand->hash_type == HASHTYPE_TYPE &&
-                    cand->type->kind == TYPE_KIND_POINTER &&
-                    cand->type->info.points_to != NULL &&
-                    cand->type->info.points_to->kind == TYPE_KIND_RECORD &&
-                    cand->type->info.points_to->info.record_info != NULL &&
-                    record_type_is_class(cand->type->info.points_to->info.record_info))
-                {
-                    type_node = cand;
-                    break;
-                }
-            }
-            DestroyList(all_nodes);
-        }
         if (type_node != NULL && type_node->type != NULL) {
             struct TypeAlias *alias = hashnode_get_type_alias(type_node);
             if (alias != NULL && alias->is_array &&
@@ -1438,32 +1510,15 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         if (superclass != NULL && superclass->type_id != NULL &&
             strcasecmp(current->parent_class_name, superclass->type_id) == 0)
             return 1;
-        /* Look up parent class in symbol table */
-        HashNode_t *parent_node = NULL;
-        if (FindSymbol(&parent_node, symtab, current->parent_class_name) != 0 && parent_node != NULL) {
+        /* Look up parent class type in symbol table.  Use the type-specific
+         * lookup which prefers class types over plain record aliases when the
+         * same name resolves to both (e.g. TTimeZone struct alias vs class). */
+        HashNode_t *parent_node = kgpc_find_type_node_with_unit_flag(symtab,
+            current->parent_class_name, /*defined_in_unit=*/1);
+        if (parent_node == NULL)
+            parent_node = kgpc_find_type_node(symtab, current->parent_class_name);
+        if (parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
-            /* If the found record is not a class (e.g., it's an OS struct alias with the
-             * same name as a Pascal class, like TTimeZone = timezone vs TTimeZone = class),
-             * try FindAllIdents to find a class record with this name. */
-            if (parent_record != NULL && !record_type_is_class(parent_record) &&
-                !parent_record->is_interface)
-            {
-                ListNode_t *all_nodes = FindAllIdents(symtab, current->parent_class_name);
-                struct RecordType *class_record = NULL;
-                for (ListNode_t *n = all_nodes; n != NULL; n = n->next)
-                {
-                    HashNode_t *cand = (HashNode_t *)n->cur;
-                    struct RecordType *r = get_record_type_from_hashnode(cand);
-                    if (r != NULL && (record_type_is_class(r) || r->is_interface))
-                    {
-                        class_record = r;
-                        break;
-                    }
-                }
-                DestroyList(all_nodes);
-                if (class_record != NULL)
-                    parent_record = class_record;
-            }
             if (records_same_type(parent_record, superclass))
                 return 1;
             current = parent_record;
