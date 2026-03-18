@@ -99,9 +99,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             free(canonical_id);
             return 1;
         }
-        
-        if (params->type != NULL)
-            kgpc_type_retain(params->type);
+        /* create_hash_node already retains type; no second retain needed */
         hash_node->canonical_id = canonical_id;
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
@@ -133,7 +131,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         }
 
         /* No collision or allowed collision - create new entry */
-        HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id, 
+        HashNode_t *hash_node = create_hash_node(params->id, params->mangled_id,
                                                params->hash_type,
                                                params->type, params->var_type,
                                                params->record_type, params->type_alias);
@@ -142,9 +140,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
             free(canonical_id);
             return 1;
         }
-        
-        if (params->type != NULL)
-            kgpc_type_retain(params->type);
+        /* create_hash_node already retains type; no second retain needed */
         hash_node->canonical_id = canonical_id;
         if (append_after_type && last != NULL)
         {

@@ -13348,6 +13348,14 @@ void semcheck_add_builtins(SymTab_t *symtab)
             wide_return_alias->base_type = STRING_TYPE;
             wide_return_alias->is_wide_string = 1;
             kgpc_type_set_type_alias(wide_return_type, wide_return_alias);
+            /* kgpc_type_set_type_alias copies the alias; free the original */
+            free(wide_return_alias->alias_name);
+            free(wide_return_alias->target_type_id);
+            free(wide_return_alias);
+        }
+        else if (wide_return_alias != NULL)
+        {
+            free(wide_return_alias);
         }
 
         /* Char + LongInt */
