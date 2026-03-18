@@ -876,10 +876,11 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
             }
         }
 
-        /* At unit/program scope, also search dependency unit scopes */
+        /* At unit/program scope, also search dependency unit scopes.
+         * Search in reverse order: last `uses` clause entry wins (Pascal semantics). */
         if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
-            for (int i = 0; i < scope->num_deps; i++)
+            for (int i = scope->num_deps - 1; i >= 0; i--)
             {
                 node = FindIdentInTable(scope->dep_scopes[i]->table, id);
                 if (node != NULL)
@@ -913,7 +914,7 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
 
         if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
-            for (int i = 0; i < scope->num_deps; i++)
+            for (int i = scope->num_deps - 1; i >= 0; i--)
             {
                 node = FindIdentByPrefixInTable(scope->dep_scopes[i]->table, prefix);
                 if (node != NULL)
