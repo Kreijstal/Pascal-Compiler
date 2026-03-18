@@ -192,59 +192,51 @@ Tests pass — no behavioral change.
 8. Replace 28 PushScope/PopScope sites with EnterScope/LeaveScope
 9. Remove ~40 `unit_context`/`push_target_unit` save/restore patterns
 
-### Phase 4: Per-unit compilation
+### Phase 4: Per-unit symbol table isolation
 
-The merged-AST model (all units flattened into one program tree) is the root cause of scope leaking, symbol collisions, and type corruption across units. This phase eliminates merging.
+Unit symbols belong in per-unit tables (`unit_tables[N]` = `unit_scopes[N]->table`), not the PROGRAM scope table. The PROGRAM table should only contain the program's own declarations. Unit symbols are found via `dep_scopes` in `FindIdent_Tree`.
 
-10. **Per-unit semcheck.** Process each unit's declarations in its own scope so symbols go to per-unit tables, not the PROGRAM table. This eliminates the need for the scope isolation filter (`FindIdentInTable_UnitOnly` / `skip_program_locals`).
+**Constraint:** The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections, e.g. System↔ObjPas). Full per-unit semcheck in load order is impossible. The merged-AST model must be kept — all units merged into one program tree, processed by `semcheck_program`. But symbol INSERTION is directed to per-unit tables via `push_target_unit`.
 
-    **Critical constraint: cyclic dependencies.** System.pp loads ObjPas internally (`{$mode objfpc}`), creating a cycle: System → ObjPas → System. Full per-unit semcheck cannot process System before ObjPas or vice versa. The solution is a two-pass approach:
+**What was done (completed):**
 
-    **Pass 1 (during load_unit, handles cycles):** Lightweight predeclaration via `semcheck_unit_decls_only` — only type stubs, enum literals, subprogram signatures, trivial constants. This is what currently exists. It handles the System↔ObjPas cycle because stubs are enough for the other unit's predeclaration. Symbols must be routed to `unit_tables[unit_index]` via `push_target_unit` so they survive `LeaveScope` and are accessible via `dep_scopes`.
+10. **Two-pass symbol insertion.**
+    - **Pass 1 (during `load_unit`):** `semcheck_unit_decls_only` predeclares type stubs, enum literals, subprogram signatures, trivial constants. `push_target_unit` is set to the unit index so symbols go to `unit_tables[N]` and survive `LeaveScope`.
+    - **Pass 2 (during `semcheck_program`):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) runs on the merged tree. Each function sets `push_target_unit = source_unit_index` per-declaration for unit symbols. The functions find existing stubs from Pass 1 via `FindIdentInCurrentScope` (which checks `unit_tables[push_target_unit]`) and update them in place. No duplicates in the PROGRAM table.
+    - **Scope isolation filter removed.** `FindIdent_Tree` uses plain `FindIdentInTable` — no `skip_program_locals`, no `FindIdentInTable_UnitOnly`, no `filter_program_local_symbols`.
 
-    **Pass 2+ (in semcheck_program, on merged tree):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) already runs across all declarations. The fix: set `push_target_unit = source_unit_index` before processing each unit declaration so symbols route to `unit_tables[source_unit_index]` instead of the PROGRAM table. Do NOT skip processing — the passes do more than push symbols (they resolve type bodies, wire pointers, complete forward declarations). Just route the output to the right table.
+11. **Do NOT skip re-processing.** `semcheck_program` must still process unit declarations because `semcheck_unit_decls_only` only creates stubs — it does not resolve type bodies, evaluate constants, or declare variables. The full processing in `semcheck_program` completes what Pass 1 started. Skipping it causes types like Currency to become undefined.
 
-    The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections). This is why per-unit full semcheck in load order is impossible. But multi-pass across ALL units works because each pass only needs the PREVIOUS pass's output — cycles don't matter.
+**Lessons learned from 16+ failed agent attempts:**
+- Full `semcheck_unit()` during `load_unit` → 150 errors (System↔ObjPas cycle)
+- Skipping `semcheck_type_decls` for unit types → types undefined (it resolves bodies, not just stubs)
+- Removing filter without `push_target_unit` routing → program-local symbols shadow unit symbols
+- `FindIdentInCurrentScope` must check `unit_tables[push_target_unit]` for duplicate detection
+- `EnterScope(SCOPE_UNIT, 0)` must fix up `unit_index` after `unit_registry_add` computes it
 
-    Passes (same as current `semcheck_program_or_unit` order):
-    a. `predeclare_enum_literals` — route unit enums to per-unit tables
-    b. `predeclare_types` — route unit type stubs to per-unit tables
-    c. `predeclare_subprograms` — route unit signatures to per-unit tables
-    d. `semcheck_type_decls` — resolve type bodies, route to per-unit tables
-    e. `semcheck_const_decls` / `semcheck_decls` — route to per-unit tables
-    f. `semcheck_subprograms` — process bodies in unit scope context
+### Phase 5: Remove flat stack
 
-    **What 16+ agents tried and why they failed:**
-    - Setting `push_target_unit` in `load_unit` without fixing `FindIdentInCurrentScope` → duplicate detection fails
-    - Skipping unit declarations in `predeclare_types` without skipping in `semcheck_type_decls` → 57+ redeclaration errors
-    - Skipping `semcheck_type_decls`/`semcheck_decls` for unit declarations → types like Currency become undefined (these functions do MORE than predeclare — they resolve type bodies)
-    - Removing the scope isolation filter without routing symbols to per-unit tables → 17+ regressions
-    - Calling full `semcheck_unit()` during `load_unit` → 150 errors because System↔ObjPas cycle means ObjPas is loaded mid-System-semcheck before System's types are resolved
-    - All agents that hit cascading failures reverted instead of debugging through them
+The flat stack is redundant — lookups use the tree, insertions use `push_target_unit` → `unit_tables[N]`. Nothing needs `stack_head`. Remove it now.
 
-11. **Skip re-semchecking merged unit declarations.** After per-unit semcheck, `semcheck_program()` must not re-process unit declarations. Declarations with `defined_in_unit=1` can be skipped in `predeclare_types`, `semcheck_type_decls`, `semcheck_decls`, `semcheck_const_decls`.
+12. **`SymTab_GetTargetTable` → `current_scope->table` or `unit_tables[push_target_unit]`.** Remove the `stack_head->cur` fallback. All `Push*OntoScope` functions already go through `SymTab_GetTargetTable`, so this is one change point.
 
-12. **Per-unit codegen.** Instead of codegen walking one flat merged subprogram list, iterate over unit scopes and process each unit's subprograms in its unit scope context. One `.s` output, but traversal is per-unit. DCE and optimizations preserved.
+13. **`PushScope` → tree-only.** Stop creating flat stack entries. `EnterScope` creates a scope node with a new `HashTable_t`, `LeaveScope` destroys it. No `stack_head` manipulation.
 
-13. **Remove `merge_unit_into_target`.** Once semcheck and codegen both work per-unit, the merge step in `main_cparser.c` is unnecessary. Unit trees stay alive with their own declaration lists.
+14. **Remove `stack_head` from `SymTab_t`.** Fix every compile error — replace `stack_head->cur` with `current_scope->table`.
 
-### Phase 5: Remove flat scope legacy
+15. **Remove `PushScope`/`PopScope`.** Only `EnterScope`/`LeaveScope` remain.
 
-With per-unit compilation, the flat scope infrastructure is dead code. Remove it.
+16. **Remove `unit_tables[256]`.** `unit_scopes[i]->table` is the same pointer. Replace all `unit_tables[N]` references with `unit_scopes[N]->table`.
 
-14. **Remove `push_target_unit` and `unit_context`.** Symbols go directly to `current_scope->table`. No routing hacks needed — `current_scope` is always the right scope.
+17. **Remove `push_target_unit`.** `SymTab_GetTargetTable` becomes: if processing a unit declaration, use `unit_scopes[source_unit_index]->table`; otherwise use `current_scope->table`. The `source_unit_index` is on the tree node being processed, not a global variable.
 
-15. **Remove `stack_head` from `SymTab_t`.** The flat linked list. Fix every compile error by using `current_scope`.
+18. **Remove `builtins` field.** Becomes `builtin_scope->table`.
 
-16. **Remove `unit_tables[256]`.** Replace with `unit_scopes[i]->table`.
+19. **Remove `unit_context`.** `current_scope->unit_index` replaces it.
 
-17. **Remove `builtins` field.** It becomes `builtin_scope->table`.
+20. **Remove flat-model lookup helpers.** `FindIdentInUnit`, `FindIdentInAnyUnitTable`, `FindAllIdentsInAnyUnitTable`, `FindIdentInTable_UnitOnly`.
 
-18. **Remove `PushScope`/`PopScope`.** Only `EnterScope`/`LeaveScope`.
-
-19. **Remove flat-model lookup helpers.** `FindIdentInUnit`, `FindIdentInAnyUnitTable`, `FindAllIdentsInAnyUnitTable`, `SymTab_GetTargetTable` routing logic.
-
-20. **Remove all workarounds** listed in section E.
+21. **Remove all workarounds** listed in section E.
 
 ### Phase 6: Simplify overload resolution
 

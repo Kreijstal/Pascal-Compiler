@@ -2417,6 +2417,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
             proc_name_hint = mangled_name_hint;
+        /* When the semantic checker rewrote the call to a different runtime
+         * function (is_call_info_valid=1, call_kgpc_type=NULL), using the
+         * original Pascal id (e.g. "UpCase") for the fallback FindSymbol
+         * lookup in codegen_pass_arguments would find the wrong overload
+         * (e.g. the string UpCase) and incorrectly promote char args to
+         * strings.  Use the mangled name instead so the lookup either finds
+         * the correct C runtime entry or finds nothing — in both cases no
+         * spurious char-to-string conversion is inserted. */
+        if (func_type == NULL &&
+            expr->expr_data.function_call_data.is_call_info_valid &&
+            mangled_name_hint != NULL)
+            proc_name_hint = mangled_name_hint;
 
         if (is_constructor && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
             int args_count = 0;

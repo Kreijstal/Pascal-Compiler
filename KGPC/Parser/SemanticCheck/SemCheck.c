@@ -7525,14 +7525,22 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
         return 0;
 
     int errors = 0;
+    int predecl_saved_push = symtab->push_target_unit;
     ListNode_t *cur = type_decls;
     while (cur != NULL)
     {
+        /* Restore at top of each iteration — set per-declaration below */
+        symtab->push_target_unit = predecl_saved_push;
+
         if (cur->type == LIST_TREE && cur->cur != NULL)
         {
             Tree_t *tree = (Tree_t *)cur->cur;
             if (tree->type == TREE_TYPE_DECL)
             {
+                /* Route unit types to per-unit table */
+                if (tree->tree_data.type_decl_data.defined_in_unit &&
+                    tree->tree_data.type_decl_data.source_unit_index > 0)
+                    symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
                 const char *type_id = tree->tree_data.type_decl_data.id;
 
                 /* Skip if no type id */
@@ -8833,6 +8841,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
         cur = cur->next;
     }
 
+    symtab->push_target_unit = predecl_saved_push;
     return errors;
 }
 

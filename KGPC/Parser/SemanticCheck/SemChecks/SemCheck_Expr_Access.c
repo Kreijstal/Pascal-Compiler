@@ -1470,6 +1470,66 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Aligned"))
             return semcheck_builtin_aligned(type_return, symtab, expr, max_scope_lev);
+        /* UpCase/UpperCase/LowerCase(char) must be intercepted here (in the
+         * early builtins section) because the later interception at the end of
+         * the builtin block is never reached when overload resolution diverts
+         * to a unit-scope overload (e.g. the shortstring UpCase from FPC RTL).
+         * Only intercept when the argument is char-like; string overloads must
+         * still go through normal overload resolution. */
+        if (pascal_identifier_equals(id, "UpCase") ||
+            pascal_identifier_equals(id, "UpperCase") ||
+            pascal_identifier_equals(id, "LowerCase"))
+        {
+            ListNode_t *uc_args = expr->expr_data.function_call_data.args_expr;
+            if (uc_args != NULL && uc_args->next == NULL)
+            {
+                struct Expression *uc_arg = (struct Expression *)uc_args->cur;
+                KgpcType *uc_kgpc_type = NULL;
+                int uc_cast_type = UNKNOWN_TYPE;
+                if (uc_arg != NULL && uc_arg->type == EXPR_FUNCTION_CALL &&
+                    semcheck_expr_is_char_typecast_call_for_call_local(uc_arg))
+                    semcheck_try_reinterpret_as_typecast(&uc_cast_type, symtab, uc_arg, max_scope_lev);
+                int uc_err = semcheck_expr_with_type(&uc_kgpc_type, symtab, uc_arg, max_scope_lev, NO_MUTATE);
+                int uc_tag = semcheck_tag_from_kgpc(uc_kgpc_type);
+                if (uc_err == 0 &&
+                    (uc_tag == CHAR_TYPE ||
+                     semcheck_expr_is_char_like(uc_arg) ||
+                     semcheck_kgpc_type_is_char_like_for_call_local(uc_kgpc_type) ||
+                     semcheck_expr_is_explicit_char_typecast_for_call_local(uc_arg)))
+                {
+                    if (pascal_identifier_equals(id, "LowerCase"))
+                    {
+                        if (expr->expr_data.function_call_data.mangled_id != NULL)
+                            free(expr->expr_data.function_call_data.mangled_id);
+                        if (expr->expr_data.function_call_data.id != NULL)
+                            free(expr->expr_data.function_call_data.id);
+                        expr->expr_data.function_call_data.id = strdup("kgpc_lowercase_char");
+                        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_lowercase_char");
+                        semcheck_reset_function_call_cache(expr);
+                        if (expr->resolved_kgpc_type != NULL)
+                        {
+                            destroy_kgpc_type(expr->resolved_kgpc_type);
+                            expr->resolved_kgpc_type = NULL;
+                        }
+                        expr->resolved_kgpc_type = create_primitive_type(CHAR_TYPE);
+                        semcheck_expr_set_resolved_type(expr, CHAR_TYPE);
+                        *type_return = CHAR_TYPE;
+                        return 0;
+                    }
+                    else
+                    {
+                        return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+                    }
+                }
+                if (uc_err == 0 && uc_tag == STRING_TYPE &&
+                    uc_arg != NULL && uc_arg->type == EXPR_STRING &&
+                    uc_arg->expr_data.string != NULL &&
+                    strlen(uc_arg->expr_data.string) == 1)
+                {
+                    return semcheck_builtin_upcase(type_return, symtab, expr, max_scope_lev);
+                }
+            }
+        }
         if (pascal_identifier_equals(id, "ArrayStringToPPchar"))
         {
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;

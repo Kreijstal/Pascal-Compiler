@@ -2341,7 +2341,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             if (arg_expr != NULL &&
                 (arg_expr->type == EXPR_SET || arg_expr->type == EXPR_ARRAY_LITERAL ||
                  arg_expr->array_element_type != UNKNOWN_TYPE ||
-                 arg_expr->array_element_type_id != NULL))
+                 (arg_expr->array_element_type_id != NULL && arg_expr->is_array_expr)))
             {
                 arg_is_array = 1;
             }
