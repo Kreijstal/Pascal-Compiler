@@ -7267,6 +7267,13 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                      * so do not inject their literals as global constants in this scope. */
                     if (alias_info->kgpc_type != NULL && !alias_info->enum_is_scoped)
                     {
+                        /* Route unit enum literals to the per-unit table so they're
+                         * accessible via dep_scopes and not filtered by scope isolation. */
+                        int saved_push_target = symtab->push_target_unit;
+                        int unit_idx = tree->tree_data.type_decl_data.source_unit_index;
+                        if (tree->tree_data.type_decl_data.defined_in_unit && unit_idx > 0)
+                            symtab->push_target_unit = unit_idx;
+
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->enum_literals;
                         while (literal_node != NULL)
@@ -7274,10 +7281,13 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             if (literal_node->cur != NULL)
                             {
                                 char *literal_name = (char *)literal_node->cur;
-                                
-                                /* Check for collisions in the current scope only (allow shadowing). */
-                                HashNode_t *existing = FindIdentInTable(
-                                    (HashTable_t *)symtab->stack_head->cur, literal_name);
+
+                                /* Check for collisions in the target table. */
+                                HashTable_t *target_table = (symtab->push_target_unit > 0 &&
+                                    symtab->unit_tables[symtab->push_target_unit] != NULL)
+                                    ? symtab->unit_tables[symtab->push_target_unit]
+                                    : (HashTable_t *)symtab->stack_head->cur;
+                                HashNode_t *existing = FindIdentInTable(target_table, literal_name);
                                 if (existing != NULL)
                                 {
                                     /* Allow local enum literals to shadow imported unit literals. */
@@ -7330,18 +7340,20 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 else if (tree->tree_data.type_decl_data.defined_in_unit)
                                 {
                                     HashNode_t *literal_node_entry = FindIdentInTable(
-                                        (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                        target_table, literal_name);
                                     if (literal_node_entry != NULL)
                                     {
                                         literal_node_entry->defined_in_unit = 1;
                                         literal_node_entry->unit_is_public =
                                             tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                        mark_hashnode_source_unit(literal_node_entry, unit_idx);
                                     }
                                 }
                             }
                             ++ordinal;
                             literal_node = literal_node->next;
                         }
+                        symtab->push_target_unit = saved_push_target;
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
                 }
