@@ -1479,19 +1479,9 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         current->is_class && superclass != NULL && superclass->type_id != NULL &&
         strcasecmp(superclass->type_id, "TObject") == 0)
     {
-        if (kgpc_getenv("KGPC_DEBUG_SUBCLASS") != NULL)
-            fprintf(stderr, "[SUBCLASS] implicit TObject: subclass=%s current=%s\n",
-                (subclass && subclass->type_id) ? subclass->type_id : "?",
-                (current && current->type_id) ? current->type_id : "?");
         return 1;
     }
 
-    if (kgpc_getenv("KGPC_DEBUG_SUBCLASS") != NULL)
-        fprintf(stderr, "[SUBCLASS] NOT found: subclass=%s superclass=%s current=%s current_parent=%s\n",
-            (subclass && subclass->type_id) ? subclass->type_id : "?",
-            (superclass && superclass->type_id) ? superclass->type_id : "?",
-            (current && current->type_id) ? current->type_id : "?",
-            (current && current->parent_class_name) ? current->parent_class_name : "<null>");
     return 0;
 }
 
