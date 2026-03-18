@@ -8712,7 +8712,30 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* When assigning an extended-returning function call to a Real variable,
+         * value_reg holds a pointer to the sret buffer containing the 10-byte
+         * extended value.  Convert it to a double via kgpc_load_extended_to_bits
+         * so the store below writes the correct IEEE-754 double bits. */
         int var_type = expr_get_type_tag(var_expr);
+        if (var_type == REAL_TYPE &&
+            assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL &&
+            expr_returns_sret(assign_expr) &&
+            codegen_expr_involves_extended(assign_expr))
+        {
+            char ext_buf[128];
+            if (codegen_target_is_windows())
+                snprintf(ext_buf, sizeof(ext_buf), "\tmovq\t%s, %%rcx\n", value_reg->bit_64);
+            else
+                snprintf(ext_buf, sizeof(ext_buf), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, ext_buf);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_load_extended_to_bits");
+            free_arg_regs();
+            /* Result is in %rax as double-bit-pattern; move to value_reg */
+            snprintf(ext_buf, sizeof(ext_buf), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, ext_buf);
+        }
+
         int assign_type = expr_get_type_tag(assign_expr);
         int skip_real_coercion = 0;
         if (var != NULL && var_type == REAL_TYPE)
