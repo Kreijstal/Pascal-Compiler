@@ -13950,13 +13950,15 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
 
-    EnterScope(symtab, SCOPE_UNIT, 0);  /* unit_index set below once we know it */
+    EnterScope(symtab, SCOPE_UNIT, 0);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
     if (tree->tree_data.unit_data.unit_id != NULL)
         g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
+    /* Fix up unit_index now that we know it */
+    symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
@@ -14220,6 +14222,8 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
     if (tree->tree_data.unit_data.unit_id != NULL)
         g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
+    /* Fix up unit_index now that we know it */
+    symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
 
