@@ -103,6 +103,9 @@ int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
 /* Pushes a new procedure with a KgpcType onto the current scope */
 int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
 
+/* Returns the hash table that Push* operations currently target */
+HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab);
+
 /* Pushes a new function with a KgpcType onto the current scope */
 int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
 

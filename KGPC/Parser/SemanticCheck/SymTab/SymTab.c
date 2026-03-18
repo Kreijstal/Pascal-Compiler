@@ -24,7 +24,7 @@
  * When push_target_unit > 0, routes to the per-unit table (lazily created).
  * Otherwise, routes to the current scope stack head.
  * ======================================================================== */
-static HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
+HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
 {
     int idx = symtab->push_target_unit;
     if (idx > 0 && idx < SYMTAB_MAX_UNITS)
