@@ -16780,6 +16780,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (subprogram->tree_data.subprogram_data.owner_class_full != NULL)
             add_outer_class_vars_to_method_scope(symtab, subprogram);
 
+        /* Self-push: make procedure visible in its own body for recursive
+         * and sibling overload calls (e.g. TThread.ForceQueue calling static
+         * ForceQueue from instance ForceQueue).  semcheck_scope_level_for_candidate
+         * skips SCOPE_SUBPROGRAM proc/func entries to find the real declaring
+         * scope level. */
         if (existing_decl != NULL && existing_decl->type != NULL)
         {
             PushProcedureOntoScope_Typed(symtab, id_to_use_for_lookup,

@@ -59,13 +59,10 @@ static int candidate_in_table(HashTable_t *table, HashNode_t *candidate)
 
 /* Walk the scope tree to determine the candidate's scope level.
  *
- * Returns a scope level where lower = closer/more preferred:
- *   - Each step up the parent chain adds 1
- *   - At SCOPE_UNIT/SCOPE_PROGRAM boundaries, dep_scopes are searched
- *     in reverse order (last `uses` clause entry wins = lowest dep level)
- *   - Builtins get the highest level
- *
- * This replaces the legacy flat-stack walk and eliminates the INT_MAX/2 hack. */
+ * Pure tree walk with pointer identity.  When a proc/func candidate is
+ * found in a SCOPE_SUBPROGRAM body scope, it was self-pushed for recursion
+ * support — skip it and keep walking to find the original declaration at
+ * the declaring scope (parent/dep_scope). */
 static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (symtab == NULL || candidate == NULL || candidate->id == NULL)
@@ -74,26 +71,31 @@ static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *cand
     int level = 0;
     for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        /* Check this scope's own table */
         if (candidate_in_table(scope->table, candidate))
+        {
+            /* Self-pushed proc/func in body scope: skip to find real level */
+            if (scope->kind == SCOPE_SUBPROGRAM &&
+                (candidate->hash_type == HASHTYPE_PROCEDURE ||
+                 candidate->hash_type == HASHTYPE_FUNCTION))
+            {
+                level++;
+                continue;
+            }
             return level;
+        }
 
-        /* At unit/program boundary, check dep_scopes in reverse order
-         * (last uses clause entry = dep_scopes[num_deps-1] searched first = lowest level) */
         if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
         {
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
                 if (candidate_in_table(scope->dep_scopes[i]->table, candidate))
-                {
-                    /* dep_scopes[num_deps-1] (last in uses) gets level+1,
-                     * dep_scopes[num_deps-2] gets level+2, etc.
-                     * dep_scopes[0] (typically System) gets level+num_deps */
                     return level + 1 + (scope->num_deps - 1 - i);
-                }
             }
-            /* Skip past all dep levels when continuing to parent */
             level += 1 + scope->num_deps;
+        }
+        else if (scope->kind == SCOPE_BUILTIN)
+        {
+            return INT_MAX / 2;
         }
         else
         {
@@ -101,7 +103,6 @@ static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *cand
         }
     }
 
-    /* Not found in any reachable scope */
     return INT_MAX / 2;
 }
 
@@ -3043,46 +3044,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
-        /* For class method overloads (id contains "__"), the current method
-         * being compiled sits at scope 0 (method body) while sibling overloads
-         * are at scope 1 (class level). Normalize them to prevent the scope
-         * filter from excluding sibling overloads. */
-        if (candidate->owner_class != NULL && candidate_scope == 0)
-            candidate_scope = 1;
-        /* Unit-defined procedures are self-pushed into the procedure body scope
-         * (current_scope at level 0) for recursion support, making them appear
-         * at scope 0.  Find their real level from the unit table in dep_scopes
-         * so they compete with sibling overloads on quality alone. */
-        if (candidate->owner_class == NULL &&
-            candidate->source_unit_index > 0 &&
-            candidate_scope == 0)
-        {
-            /* Walk the scope tree to find which dep_scope contains this
-             * candidate's unit table, using the same reverse-uses ordering. */
-            int real_level = INT_MAX / 2;
-            int lvl = 0;
-            for (ScopeNode *sc = symtab->current_scope; sc != NULL; sc = sc->parent)
-            {
-                if (sc->kind == SCOPE_UNIT || sc->kind == SCOPE_PROGRAM)
-                {
-                    for (int di = sc->num_deps - 1; di >= 0; di--)
-                    {
-                        if (sc->dep_scopes[di]->unit_index == candidate->source_unit_index)
-                        {
-                            real_level = lvl + 1 + (sc->num_deps - 1 - di);
-                            goto found_real_level;
-                        }
-                    }
-                    lvl += 1 + sc->num_deps;
-                }
-                else
-                {
-                    lvl++;
-                }
-            }
-            found_real_level:
-            candidate_scope = real_level;
-        }
+        /* semcheck_scope_level_for_candidate skips self-pushed proc/func
+         * entries in SCOPE_SUBPROGRAM, so both class methods and unit
+         * procedures are attributed to their declaring scope. */
         if (candidate_scope < best_scope_level)
         {
             best_scope_level = candidate_scope;
