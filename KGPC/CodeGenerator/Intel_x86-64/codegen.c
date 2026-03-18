@@ -30,6 +30,7 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 
 #include "../../identifier_utils.h"
+#include "../../unit_registry.h"
 
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
@@ -4677,16 +4678,15 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
          * a body, skip this one.  This handles platform-specific overrides:
          * e.g. Unix sysutils.pp defines FileExists(RawByteString) after the
          * generic filutil.inc version.  The later definition wins.
-         * We restrict to same-unit to avoid cross-unit mangling collisions
-         * (e.g. FpClosedir(var TDirRec) vs FpClosedir(PDirRec) from different
-         * units may collide in mangled name but are distinct functions).
          *
-         * Exception: if a LATER subprogram from a MORE FUNDAMENTAL unit (lower
-         * source_unit_index) has the same mangled_id, prefer the fundamental unit.
-         * This handles the case where a wrapper unit (e.g. objpas) defines a
-         * same-named function that wraps the system unit's implementation — both
-         * compile to the same mangled name, but the system unit's version is the
-         * real implementation that should be compiled. */
+         * Cross-unit: if a LATER subprogram from a unit that this function's
+         * unit depends on (i.e. a more fundamental unit) has the same mangled_id,
+         * prefer the fundamental unit's version.  This handles the case where a
+         * wrapper unit (e.g. objpas) defines a same-named function that wraps
+         * the system unit's implementation — both compile to the same mangled
+         * name, but the system unit's version is the real implementation.
+         * We check the actual dependency graph via unit_registry_is_dep()
+         * instead of assuming lower source_unit_index = more fundamental. */
         if (mangled_id != NULL)
         {
             int this_unit = sub->tree_data.subprogram_data.source_unit_index;
@@ -4708,7 +4708,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                         later_sub->tree_data.subprogram_data.mangled_id != NULL &&
                         strcmp(later_sub->tree_data.subprogram_data.mangled_id, mangled_id) == 0 &&
                         (later_unit == this_unit ||
-                         (later_unit > 0 && this_unit > 0 && later_unit < this_unit)))
+                         (later_unit > 0 && this_unit > 0 &&
+                          unit_registry_is_dep(this_unit, later_unit))))
                     {
                         int later_dist = codegen_float_native_distance(later_sub);
                         if (later_dist <= current_dist)
