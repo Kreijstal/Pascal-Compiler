@@ -4597,6 +4597,36 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         }
     }
 
+    /* ShortString → AnsiString/RawByteString typecast: build_expr_tree strips
+     * EXPR_TYPECAST, so the conversion would be lost.  Detect it here and emit
+     * a call to kgpc_shortstring_to_string before the generic tree path. */
+    if (expr != NULL && expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.expr != NULL)
+    {
+        int tc_target = expr->expr_data.typecast_data.target_type;
+        struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
+        int inner_is_ss = codegen_expr_is_shortstring_value_ctx(tc_inner, ctx);
+        if (inner_is_ss && tc_target == STRING_TYPE)
+        {
+            /* Evaluate the inner ShortString expression to get a pointer to
+             * the length-prefixed data, then convert it to a heap AnsiString. */
+            Register_t *ss_reg = NULL;
+            inst_list = codegen_expr_tree_value(tc_inner, inst_list, ctx, &ss_reg);
+            if (ss_reg != NULL)
+            {
+                inst_list = codegen_promote_shortstring_reg(inst_list, ctx, ss_reg);
+                if (out_reg != NULL)
+                    *out_reg = ss_reg;
+                else
+                    free_reg(get_reg_stack(), ss_reg);
+            }
+            else if (out_reg != NULL)
+            {
+                *out_reg = NULL;
+            }
+            return inst_list;
+        }
+    }
 
     codegen_begin_expression(ctx);
 
