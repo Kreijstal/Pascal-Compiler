@@ -2202,6 +2202,7 @@ int main(int argc, char **argv)
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        unit_registry_reset();
         arena_destroy(arena);
         return exit_code > 0 ? exit_code : 1;
     }
@@ -2209,6 +2210,7 @@ int main(int argc, char **argv)
     clear_dump_ast_path();
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
+    unit_registry_reset();
     arena_destroy(arena);
     emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;

@@ -3444,7 +3444,19 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     free(alias->pointer_type_id);
     free(alias->set_element_type_id);
     free(alias->file_type_id);
-    
+
+    /* Free cloned TypeRef fields */
+    if (alias->target_type_ref != NULL)
+        type_ref_free(alias->target_type_ref);
+    if (alias->array_element_type_ref != NULL)
+        type_ref_free(alias->array_element_type_ref);
+    if (alias->pointer_type_ref != NULL)
+        type_ref_free(alias->pointer_type_ref);
+    if (alias->set_element_type_ref != NULL)
+        type_ref_free(alias->set_element_type_ref);
+    if (alias->file_type_ref != NULL)
+        type_ref_free(alias->file_type_ref);
+
     /* Free deep-copied lists */
     if (alias->array_dimensions != NULL)
         destroy_list(alias->array_dimensions);
@@ -3485,6 +3497,14 @@ void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias)
     /* Copy the alias to make KgpcType own it, or set to NULL if alias is NULL */
     if (alias != NULL) {
         type->type_alias = copy_type_alias(alias);
+        /* Break circular reference: if the copied alias's kgpc_type points back
+         * to this type, it would create an ownership cycle that prevents the
+         * ref_count from ever reaching zero.  Release the circular retain and
+         * NULL the pointer; destroy_kgpc_type already guards against this case. */
+        if (type->type_alias != NULL && type->type_alias->kgpc_type == type) {
+            type->type_alias->kgpc_type = NULL;
+            kgpc_type_release(type);
+        }
     } else {
         type->type_alias = NULL;
     }

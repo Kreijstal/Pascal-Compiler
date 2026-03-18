@@ -1538,6 +1538,19 @@ static void codegen_reset_except_stack(CodeGenContext *ctx)
     ctx->except_capacity = 0;
 }
 
+static void codegen_reset_with_stack(CodeGenContext *ctx)
+{
+    if (ctx == NULL)
+        return;
+    if (ctx->with_stack != NULL)
+    {
+        free(ctx->with_stack);
+        ctx->with_stack = NULL;
+    }
+    ctx->with_depth = 0;
+    ctx->with_capacity = 0;
+}
+
 static void codegen_reset_loop_stack(CodeGenContext *ctx)
 {
     if (ctx == NULL)
@@ -1548,6 +1561,8 @@ static void codegen_reset_loop_stack(CodeGenContext *ctx)
         {
             free(ctx->loop_frames[i].label);
             ctx->loop_frames[i].label = NULL;
+            free(ctx->loop_frames[i].continue_label);
+            ctx->loop_frames[i].continue_label = NULL;
         }
         free(ctx->loop_frames);
         ctx->loop_frames = NULL;
@@ -2321,6 +2336,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_reset_loop_stack(ctx);
     codegen_reset_finally_stack(ctx);
     codegen_reset_except_stack(ctx);
+    codegen_reset_with_stack(ctx);
 
     CODEGEN_DEBUG("DEBUG: LEAVING codegen\n");
     #ifdef DEBUG_CODEGEN
@@ -2491,6 +2507,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_reset_loop_stack(ctx);
     codegen_reset_finally_stack(ctx);
     codegen_reset_except_stack(ctx);
+    codegen_reset_with_stack(ctx);
 }
 
 static int codegen_is_valid_asm_symbol_name(const char *id)
