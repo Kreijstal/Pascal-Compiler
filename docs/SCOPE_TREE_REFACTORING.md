@@ -196,15 +196,31 @@ Tests pass — no behavioral change.
 
 The merged-AST model (all units flattened into one program tree) is the root cause of scope leaking, symbol collisions, and type corruption across units. This phase eliminates merging.
 
-10. **Per-unit semcheck.** Extract symtab initialization from `semcheck_program_or_unit()`. In `load_unit()`, after parsing and loading deps but BEFORE merging, process each unit's declarations in its own scope. The symtab persists between calls so later units see earlier units' symbols via `dep_scopes`. Split into sequential sub-steps (each depends on the previous):
+10. **Per-unit semcheck.** Process each unit's declarations in its own scope so symbols go to per-unit tables, not the PROGRAM table. This eliminates the need for the scope isolation filter (`FindIdentInTable_UnitOnly` / `skip_program_locals`).
 
-    a. **Types + enums.** Predeclare types and enum literals into `unit_tables[unit_index]` via `push_target_unit`. Already partly done via `semcheck_unit_decls_only` — needs correct routing so types survive `LeaveScope`.
+    **Critical constraint: cyclic dependencies.** System.pp loads ObjPas internally (`{$mode objfpc}`), creating a cycle: System → ObjPas → System. Full per-unit semcheck cannot process System before ObjPas or vice versa. The solution is a two-pass approach:
 
-    b. **Constants + variables.** Process `const` and `var` declarations per-unit. Constants can reference types (must be done after 10a). Variables can reference types and constants.
+    **Pass 1 (during load_unit, handles cycles):** Lightweight predeclaration via `semcheck_unit_decls_only` — only type stubs, enum literals, subprogram signatures, trivial constants. This is what currently exists. It handles the System↔ObjPas cycle because stubs are enough for the other unit's predeclaration. Symbols must be routed to `unit_tables[unit_index]` via `push_target_unit` so they survive `LeaveScope` and are accessible via `dep_scopes`.
 
-    c. **Subprogram signatures.** Predeclare procedure/function signatures per-unit. Already partly done via `predeclare_subprograms` in `semcheck_unit_decls_only`.
+    **Pass 2+ (in semcheck_program, on merged tree):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) already runs across all declarations. The fix: set `push_target_unit = source_unit_index` before processing each unit declaration so symbols route to `unit_tables[source_unit_index]` instead of the PROGRAM table. Do NOT skip processing — the passes do more than push symbols (they resolve type bodies, wire pointers, complete forward declarations). Just route the output to the right table.
 
-    d. **Subprogram bodies.** Full semcheck of procedure/function bodies per-unit. This is the hardest sub-step — Self leak, scope leaking, and overload resolution all happen here. Previous attempts hit SIGSEGV in pp-cache deserialization and 214+ errors from destructive AST modifications. Approach incrementally.
+    The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections). This is why per-unit full semcheck in load order is impossible. But multi-pass across ALL units works because each pass only needs the PREVIOUS pass's output — cycles don't matter.
+
+    Passes (same as current `semcheck_program_or_unit` order):
+    a. `predeclare_enum_literals` — route unit enums to per-unit tables
+    b. `predeclare_types` — route unit type stubs to per-unit tables
+    c. `predeclare_subprograms` — route unit signatures to per-unit tables
+    d. `semcheck_type_decls` — resolve type bodies, route to per-unit tables
+    e. `semcheck_const_decls` / `semcheck_decls` — route to per-unit tables
+    f. `semcheck_subprograms` — process bodies in unit scope context
+
+    **What 16+ agents tried and why they failed:**
+    - Setting `push_target_unit` in `load_unit` without fixing `FindIdentInCurrentScope` → duplicate detection fails
+    - Skipping unit declarations in `predeclare_types` without skipping in `semcheck_type_decls` → 57+ redeclaration errors
+    - Skipping `semcheck_type_decls`/`semcheck_decls` for unit declarations → types like Currency become undefined (these functions do MORE than predeclare — they resolve type bodies)
+    - Removing the scope isolation filter without routing symbols to per-unit tables → 17+ regressions
+    - Calling full `semcheck_unit()` during `load_unit` → 150 errors because System↔ObjPas cycle means ObjPas is loaded mid-System-semcheck before System's types are resolved
+    - All agents that hit cascading failures reverted instead of debugging through them
 
 11. **Skip re-semchecking merged unit declarations.** After per-unit semcheck, `semcheck_program()` must not re-process unit declarations. Declarations with `defined_in_unit=1` can be skipped in `predeclare_types`, `semcheck_type_decls`, `semcheck_decls`, `semcheck_const_decls`.
 
