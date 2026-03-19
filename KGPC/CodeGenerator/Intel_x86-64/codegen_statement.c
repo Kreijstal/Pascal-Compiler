@@ -12514,8 +12514,8 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
          * find_label resolves to the correct stack offset.  After the handler,
          * remove it from the stack manager so lookups of the same name fall
          * back to any outer variable. */
-        PushScope(symtab);
-        
+        EnterScope(symtab, 0);
+
         /* Add the exception variable to the stack manager (8 bytes for pointer) */
         exception_var_node = add_l_x(stmt->stmt_data.try_except_data.exception_var_name, 8);
         
@@ -12537,7 +12537,7 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
          * variables with the same name are visible again, then pop the
          * symbol table scope. */
         remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
-        PopScope(symtab);
+        LeaveScope(symtab);
     } else {
         /* No exception variable - just generate the except statements normally */
         if (except_stmts != NULL)

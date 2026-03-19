@@ -820,9 +820,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
 
         /* Caller's own unit table */
         if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[caller_unit_index] != NULL)
+            symtab->unit_scopes[caller_unit_index] != NULL)
         {
-            HashTable_t *table = symtab->unit_tables[caller_unit_index];
+            HashTable_t *table = symtab->unit_scopes[caller_unit_index]->table;
             for (int i = 0; i < TABLE_SIZE; ++i)
             {
                 for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -844,9 +844,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
                 continue;
             if (!unit_registry_is_dep(caller_unit_index, dep))
                 continue;
-            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_scopes[dep] == NULL)
                 continue;
-            HashTable_t *table = symtab->unit_tables[dep];
+            HashTable_t *table = symtab->unit_scopes[dep]->table;
             for (int i = 0; i < TABLE_SIZE; ++i)
             {
                 for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -865,9 +865,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
             {
-                if (symtab->unit_tables[u] == NULL)
+                if (symtab->unit_scopes[u] == NULL)
                     continue;
-                HashTable_t *table = symtab->unit_tables[u];
+                HashTable_t *table = symtab->unit_scopes[u]->table;
                 for (int i = 0; i < TABLE_SIZE; ++i)
                 {
                     for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)

@@ -37,18 +37,16 @@ typedef struct ScopeNode {
 } ScopeNode;
 
 /* ========================================================================
- * Symbol table: flat stack (legacy) + scope tree (new)
+ * Symbol table: scope tree (primary)
  * ======================================================================== */
 
 typedef struct SymTab
 {
-    /* --- Legacy flat stack (all existing code uses these) --- */
-    HashTable_t *builtins;
-    int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
-    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
+    int unit_context;           /* Active unit index for unit-aware resolution (0 = program) */
+    int push_target_unit;       /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
 
-    /* --- Scope tree (used for all lookups via FindSymbol) --- */
-    ScopeNode *builtin_scope;                 /* Root of the tree (NULL until initialized) */
+    /* --- Scope tree (used for all lookups and insertions) --- */
+    ScopeNode *builtin_scope;                 /* Root of the tree; owns its table (builtins) */
     ScopeNode *current_scope;                 /* Active scope node */
     ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
 } SymTab_t;
@@ -164,13 +162,11 @@ HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id);
 void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 
 /* ========================================================================
- * Scope tree API (Phase 1: infrastructure alongside legacy)
+ * Scope tree API
  * ======================================================================== */
 
-/* Create a scope node.  owns_table controls whether DestroyScope frees the table.
- * For unit scopes created by GetOrCreateUnitScope, owns_table is 1.
- * For scopes sharing a table with the flat stack or builtins, owns_table is 0. */
-ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table, int owns_table);
+/* Create a scope node. DestroyScope always frees the table. */
+ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table);
 void DestroyScope(ScopeNode *scope);
 
 /* Get (or lazily create) the unit scope for the given unit registry index.
@@ -184,7 +180,7 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
 /* Push a new child scope under current_scope and make it current. */
 void EnterScope(SymTab_t *symtab, int unit_index);
 
-/* Pop current_scope to its parent. */
+/* Pop current_scope to its parent (never leaves the root). */
 void LeaveScope(SymTab_t *symtab);
 
 #endif

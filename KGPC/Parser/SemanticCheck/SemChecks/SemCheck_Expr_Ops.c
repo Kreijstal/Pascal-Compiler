@@ -1482,10 +1482,10 @@ int semcheck_addop(int *type_return,
                     if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                     {
                         fprintf(stderr,
-                            "[SemCheck] addop operator key=%s candidates=%d unit_ctx=%d lookup_unit=%d\n",
+                            "[SemCheck] addop operator key=%s candidates=%d scope_unit=%d lookup_unit=%d\n",
                             operator_method,
                             ListLength(operator_candidates),
-                            symtab != NULL ? symtab->unit_context : -1,
+                            (symtab != NULL && symtab->current_scope != NULL) ? symtab->current_scope->unit_index : -1,
                             semcheck_operator_lookup_unit_index(symtab));
                     }
                     if (operator_candidates != NULL)

@@ -741,15 +741,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                     struct RecordType *record_info = record_type->info.record_info;
                     if (record_info != NULL)
                     {
-                    /* Temporarily set unit context to the record's defining unit
-                     * so field type lookups prefer same-unit types (e.g., system's
-                     * pstring vs objpas's PString). */
-                    int saved_unit_ctx = 0;
-                    if (record_info->source_unit_index > 0)
-                    {
-                        saved_unit_ctx = semcheck_save_unit_context();
-                        semcheck_restore_unit_context(record_info->source_unit_index);
-                    }
                     ListNode_t *field_cursor = record_info->fields;
                     while (field_cursor != NULL)
                     {

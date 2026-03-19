@@ -247,16 +247,6 @@ static void semcheck_unit_names_reset(void)
     g_semcheck_current_unit_index = 0;
 }
 
-int semcheck_save_unit_context(void)
-{
-    return g_semcheck_current_unit_index;
-}
-
-void semcheck_restore_unit_context(int saved)
-{
-    g_semcheck_current_unit_index = saved;
-}
-
 static void semcheck_unit_name_add(const char *name)
 {
     if (name == NULL || name[0] == '\0')
@@ -807,9 +797,9 @@ static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t 
         return INT_MAX / 2;
 
     int level = 0;
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next, ++level)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL && scope != symtab->builtin_scope; scope = scope->parent, ++level)
     {
-        ListNode_t *matches = FindAllIdentsInTable((HashTable_t *)scope->cur, candidate->id);
+        ListNode_t *matches = FindAllIdentsInTable(scope->table, candidate->id);
         for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
         {
             if (cur->cur == candidate)
@@ -2842,8 +2832,8 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 continue;
             }
             HashNode_t *existing = NULL;
-            if (symtab->stack_head != NULL)
-                existing = FindIdentInTable((HashTable_t *)symtab->stack_head->cur, field->name);
+            if (symtab->current_scope != NULL && symtab->current_scope != symtab->builtin_scope)
+                existing = FindIdentInTable(symtab->current_scope->table, field->name);
             if (existing == NULL)
             {
                 /* Build a KgpcType for this field if needed */
@@ -3536,11 +3526,11 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
             int same_unit = 0;
             int effective_unit_index = override_unit_index;
-            /* Prefer the active semantic unit context when available. Imported
-             * declarations and unit subprogram bodies run under symtab->unit_context,
-             * while g_semcheck_current_unit_index remains the root unit being loaded. */
-            if (effective_unit_index == 0 && symtab->unit_context > 0)
-                effective_unit_index = symtab->unit_context;
+            /* Prefer the active semantic unit context when available. The current
+             * scope's unit_index tracks which unit we're analysing. */
+            if (effective_unit_index == 0 && symtab->current_scope != NULL &&
+                symtab->current_scope->unit_index > 0)
+                effective_unit_index = symtab->current_scope->unit_index;
             if (effective_unit_index == 0)
                 effective_unit_index = g_semcheck_current_unit_index;
             int unit_rank = 0;
@@ -3559,11 +3549,11 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             {
                 const char *uname = unit_registry_get(node->source_unit_index);
                 fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
-                    "unit_rank=%d scope_level=%d same_unit=%d forward_stub=%d effective_unit=%d unit_context=%d type=%p kind=%d\n",
+                    "unit_rank=%d scope_level=%d same_unit=%d forward_stub=%d effective_unit=%d scope_unit=%d type=%p kind=%d\n",
                     node->id ? node->id : "<null>", node->defined_in_unit,
                     node->source_unit_index, uname ? uname : "?",
                     unit_rank, scope_level, same_unit, is_forward_stub, effective_unit_index,
-                    symtab->unit_context,
+                    symtab->current_scope != NULL ? symtab->current_scope->unit_index : -1,
                     (void *)node->type, node->type ? node->type->kind : -1);
             }
 
@@ -3800,11 +3790,11 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     HashNode_t *existing = NULL;
     if (FindSymbol(&existing, symtab, qualified_id) == 0 || existing == NULL)
     {
-        if (symtab->stack_head != NULL && symtab->stack_head->cur != NULL)
+        if (symtab->current_scope != NULL && symtab->current_scope != symtab->builtin_scope)
         {
             if (node->type != NULL)
                 kgpc_type_retain(node->type);
-            int add_result = AddIdentToTable((HashTable_t *)symtab->stack_head->cur, qualified_id,
+            int add_result = AddIdentToTable(symtab->current_scope->table, qualified_id,
                 NULL, HASHTYPE_TYPE, node->type);
             if (add_result != 0 && node->type != NULL)
                 kgpc_type_release(node->type);
@@ -3853,6 +3843,16 @@ const char *semcheck_get_current_subprogram_id(void)
 int semcheck_get_current_unit_index(void)
 {
     return g_semcheck_current_unit_index;
+}
+
+int semcheck_save_unit_context(void)
+{
+    return g_semcheck_current_unit_index;
+}
+
+void semcheck_restore_unit_context(int saved)
+{
+    g_semcheck_current_unit_index = saved;
 }
 
 const char *semcheck_get_current_subprogram_result_var_name(void)
@@ -7343,10 +7343,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 char *literal_name = (char *)literal_node->cur;
 
                                 /* Check for collisions in the target table. */
-                                HashTable_t *target_table = (symtab->push_target_unit > 0 &&
-                                    symtab->unit_tables[symtab->push_target_unit] != NULL)
-                                    ? symtab->unit_tables[symtab->push_target_unit]
-                                    : (HashTable_t *)symtab->stack_head->cur;
+                                HashTable_t *target_table = SymTab_GetTargetTable(symtab);
                                 HashNode_t *existing = FindIdentInTable(target_table, literal_name);
                                 if (existing != NULL)
                                 {
@@ -7442,7 +7439,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 
                                 /* Check for collisions in the current scope only (allow shadowing). */
                                 HashNode_t *existing = FindIdentInTable(
-                                    (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                    symtab->current_scope->table, literal_name);
                                 if (existing != NULL)
                                 {
                                     /* Allow local enum literals to shadow imported unit literals. */
@@ -7493,7 +7490,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 else if (tree->tree_data.type_decl_data.defined_in_unit)
                                 {
                                     HashNode_t *literal_node_entry = FindIdentInTable(
-                                        (HashTable_t *)symtab->stack_head->cur, literal_name);
+                                        symtab->current_scope->table, literal_name);
                                     if (literal_node_entry != NULL)
                                     {
                                         literal_node_entry->defined_in_unit = 1;
@@ -10165,8 +10162,9 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
             int has_alias_target = (candidate_alias != NULL &&
                 (candidate_alias->target_type_ref != NULL ||
                  candidate_alias->target_type_id != NULL));
-            int unit_match = (symtab->unit_context > 0 &&
-                candidate->source_unit_index == symtab->unit_context);
+            int cur_unit_idx = symtab->current_scope != NULL ? symtab->current_scope->unit_index : 0;
+            int unit_match = (cur_unit_idx > 0 &&
+                candidate->source_unit_index == cur_unit_idx);
 
             if (best_type_node == NULL)
             {
@@ -10183,8 +10181,8 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
             int best_has_alias_target = (best_alias != NULL &&
                 (best_alias->target_type_ref != NULL ||
                  best_alias->target_type_id != NULL));
-            int best_unit_match = (symtab->unit_context > 0 &&
-                best_type_node->source_unit_index == symtab->unit_context);
+            int best_unit_match = (cur_unit_idx > 0 &&
+                best_type_node->source_unit_index == cur_unit_idx);
 
             if ((has_enum_literals && !best_has_enum_literals) ||
                 (unit_match && !best_unit_match) ||
@@ -12196,7 +12194,6 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree != NULL);
     assert(tree->type == TREE_CONST_DECL);
 
-    int saved_unit_context = symtab->unit_context;
     int saved_push_target = symtab->push_target_unit;
     int saved_imported_unit = g_semcheck_imported_decl_unit_index;
     /* Route consts to per-unit tables whenever source_unit_index > 0,
@@ -12205,7 +12202,6 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
      * when semcheck_subprogram switches scope. */
     if (tree->tree_data.const_decl_data.source_unit_index > 0)
     {
-        symtab->unit_context = tree->tree_data.const_decl_data.source_unit_index;
         symtab->push_target_unit = tree->tree_data.const_decl_data.source_unit_index;
         g_semcheck_imported_decl_unit_index =
             tree->tree_data.const_decl_data.source_unit_index;
@@ -12540,7 +12536,6 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                 {
                     /* Same constant with same value - treat as re-export, skip silently */
                     g_semcheck_imported_decl_unit_index = saved_imported_unit;
-                    symtab->unit_context = saved_unit_context;
                     symtab->push_target_unit = saved_push_target;
                     return 0;
                 }
@@ -12637,7 +12632,6 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
         }
 
     g_semcheck_imported_decl_unit_index = saved_imported_unit;
-    symtab->unit_context = saved_unit_context;
     symtab->push_target_unit = saved_push_target;
     return return_val;
 }
@@ -17240,7 +17234,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 /* Also add "Result" as an alias for the return variable for Pascal compatibility */
         /* Check if "Result" is already used in the current scope */
         HashNode_t *result_check = NULL;
-        HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+        HashTable_t *cur_hash = symtab->current_scope->table;
         result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
         if (result_check == NULL)
         {
@@ -17411,16 +17405,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
         }
     }
-    /* Set unit_context early — before args processing — so type resolution
-     * for parameter types (e.g. TSize) picks the correct unit-specific type
-     * rather than a shadowing local program type. */
-    int saved_unit_context = symtab->unit_context;
-    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
-        subprogram->tree_data.subprogram_data.source_unit_index > 0)
-    {
-        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
-    }
-
     {
         int before_args = return_val;
         int saved_imported_unit = g_semcheck_imported_decl_unit_index;
@@ -17647,7 +17631,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (body == NULL)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
-        symtab->unit_context = saved_unit_context;
         symtab->push_target_unit = saved_push_target_body;
         LeaveScope(symtab);
         if (saved_scope_for_unit != NULL)
@@ -17676,9 +17659,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         {
             const char *uname = unit_registry_get(subprogram->tree_data.subprogram_data.source_unit_index);
             g_semcheck_error_unit_context = uname ? uname : "<unit>";
-            /* Set unit context so FindIdent resolves to this unit's symbols
-             * when variable names collide across units (e.g., Input: Text vs Input: String) */
-            symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
         }
     }
 
@@ -17783,7 +17763,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     g_semcheck_error_suppress_source_index = saved_suppress;
     g_semcheck_error_source_index = saved_error_source_index;
     g_semcheck_error_unit_context = saved_error_unit_context;
-    symtab->unit_context = saved_unit_context;
 
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
@@ -17815,15 +17794,12 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
-    /* Set unit_context and push_target_unit during predeclaration so type
-     * resolution picks the correct unit-specific type and the pushed
+    /* Set push_target_unit during predeclaration so the pushed
      * procedure/function goes into the correct per-unit table. */
-    int saved_unit_context = symtab->unit_context;
     int saved_push_target = symtab->push_target_unit;
     if (subprogram->tree_data.subprogram_data.defined_in_unit &&
         subprogram->tree_data.subprogram_data.source_unit_index > 0)
     {
-        symtab->unit_context = subprogram->tree_data.subprogram_data.source_unit_index;
         symtab->push_target_unit = subprogram->tree_data.subprogram_data.source_unit_index;
     }
 
@@ -17902,7 +17878,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.tree_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
-        symtab->unit_context = saved_unit_context;
         symtab->push_target_unit = saved_push_target;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
@@ -17911,7 +17886,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.exact_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
-        symtab->unit_context = saved_unit_context;
         symtab->push_target_unit = saved_push_target;
         return 0;  /* Already declared - skip to avoid duplicates */
     }
@@ -17920,7 +17894,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.body_pair_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
-        symtab->unit_context = saved_unit_context;
         symtab->push_target_unit = saved_push_target;
         return 0;  /* Declaration/body pair already tracked */
     }
@@ -18052,7 +18025,6 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s returning error: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
 
-    symtab->unit_context = saved_unit_context;
     symtab->push_target_unit = saved_push_target;
     return return_val;
 }

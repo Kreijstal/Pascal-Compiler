@@ -22,7 +22,7 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     if (symtab == NULL || node == NULL || node->id == NULL)
         return 0;
 
-    ListNode_t *matches = FindAllIdentsInTable(symtab->builtins, node->id);
+    ListNode_t *matches = FindAllIdentsInTable(symtab->builtin_scope->table, node->id);
     int is_builtin = 0;
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
     {
@@ -1188,9 +1188,9 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
 
     if (!found)
     {
-        for (ListNode_t *scope = symtab->stack_head; scope != NULL && !found; scope = scope->next)
+        for (ScopeNode *scope = symtab->current_scope; scope != NULL && scope != symtab->builtin_scope && !found; scope = scope->parent)
         {
-            HashTable_t *table = (HashTable_t *)scope->cur;
+            HashTable_t *table = scope->table;
             if (table == NULL)
                 continue;
             for (int i = 0; i < TABLE_SIZE && !found; ++i)
@@ -1211,11 +1211,11 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
         }
     }
 
-    if (!found && symtab->builtins != NULL)
+    if (!found && symtab->builtin_scope->table != NULL)
     {
         for (int i = 0; i < TABLE_SIZE && !found; ++i)
         {
-            for (ListNode_t *cur = symtab->builtins->table[i]; cur != NULL; cur = cur->next)
+            for (ListNode_t *cur = symtab->builtin_scope->table->table[i]; cur != NULL; cur = cur->next)
             {
                 HashNode_t *cand = (HashNode_t *)cur->cur;
                 if (!semcheck_overload_symbol_is_assign_operator(cand))

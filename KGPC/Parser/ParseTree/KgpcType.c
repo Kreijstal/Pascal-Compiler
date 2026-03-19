@@ -104,18 +104,16 @@ static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    /* Prefer type identifiers even if a variable with the same name exists. */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    /* Prefer type identifiers even if a variable with the same name exists.
+     * Walk the scope tree from current_scope up to (but not including) builtin_scope. */
+    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = FindIdentInTable(table, type_id);
+        HashNode_t *node = FindIdentInTable(sc->table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             return node;
-        cur = cur->next;
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
         return builtin;
 
@@ -515,11 +513,10 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     HashNode_t *fallback_outermost = NULL;
     HashNode_t *fallback_resolved = NULL; /* best non-UNKNOWN fallback (cross-unit resolved type) */
     HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record or UNKNOWN stub) */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    /* Walk scope tree from current_scope up to (but not including) builtin_scope. */
+    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = find_best_type_in_table(table, type_id);
+        HashNode_t *node = find_best_type_in_table(sc->table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             if (node->defined_in_unit == defined_in_unit)
@@ -540,7 +537,6 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                 fallback_resolved = node;
             fallback_outermost = node;
         }
-        cur = cur->next;
     }
 
     /* Search per-unit tables (types from imported units live here) */
@@ -548,9 +544,9 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         int n_units = unit_registry_count();
         for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++)
         {
-            if (symtab->unit_tables[i] == NULL)
+            if (symtab->unit_scopes[i] == NULL)
                 continue;
-            HashNode_t *node = find_best_type_in_table(symtab->unit_tables[i], type_id);
+            HashNode_t *node = find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
             if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             {
                 if (node->defined_in_unit == defined_in_unit)
@@ -573,7 +569,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         }
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
     {
         if (builtin->defined_in_unit == defined_in_unit)
