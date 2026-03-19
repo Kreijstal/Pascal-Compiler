@@ -850,10 +850,15 @@ void LeaveScope(SymTab_t *symtab)
 static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
 {
     ScopeNode *scope = symtab->current_scope;
+    int trace_flush = (id != NULL && strcasecmp(id, "Flush") == 0 && getenv("KGPC_DEBUG_FLUSH") != NULL);
 
     while (scope != NULL)
     {
         HashNode_t *node = FindIdentInTable(scope->table, id);
+
+        if (trace_flush)
+            fprintf(stderr, "[FLUSH] scope=%p unit_idx=%d table=%p node=%p num_deps=%d parent=%p\n",
+                (void*)scope, scope->unit_index, (void*)scope->table, (void*)node, scope->num_deps, (void*)scope->parent);
 
         if (node != NULL)
         {
@@ -868,6 +873,9 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
                 node = FindIdentInTable(scope->dep_scopes[i]->table, id);
+                if (trace_flush)
+                    fprintf(stderr, "[FLUSH]   dep[%d] unit_idx=%d table=%p node=%p\n",
+                        i, scope->dep_scopes[i]->unit_index, (void*)scope->dep_scopes[i]->table, (void*)node);
                 if (node != NULL)
                 {
                     *hash_return = node;

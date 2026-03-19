@@ -16557,6 +16557,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
 
     char *id_to_use_for_lookup;
+    /* Saved push_target_unit for function body processing — set in the func path. */
+    int saved_push_target_body = symtab->push_target_unit;
 
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
     assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
@@ -16831,6 +16833,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         EnterScope(symtab,
             subprogram->tree_data.subprogram_data.source_unit_index);
 
+        /* Clear push_target_unit for the procedure body (see func path comment). */
+        saved_push_target_body = symtab->push_target_unit;
+        symtab->push_target_unit = 0;
+
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram);
         /* For nested types (e.g. TOuter.TInner), also add outer class
@@ -17008,6 +17014,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             fprintf(stderr, "[KGPC] semcheck_subprogram (func): EnterScope for %s\n",
                 subprogram->tree_data.subprogram_data.id);
+
+        /* Clear push_target_unit for the function body so that all body-scope
+         * pushes (return variable, Result alias, args, local vars) go to the
+         * body scope's table — not to a unit table.  Inherited push_target_unit
+         * from an outer context (e.g. a type/const decl pass that didn't restore
+         * correctly, or a nested call) would otherwise route the return variable
+         * to a unit table that is not reachable via the body scope's parent chain,
+         * making FindSymbol fail at the assertion below. */
+        saved_push_target_body = symtab->push_target_unit;
+        symtab->push_target_unit = 0;
 
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram);
@@ -17432,6 +17448,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
         symtab->unit_context = saved_unit_context;
+        symtab->push_target_unit = saved_push_target_body;
         LeaveScope(symtab);
         if (saved_scope_for_unit != NULL)
             symtab->current_scope = saved_scope_for_unit;
@@ -17476,19 +17493,8 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     else
     {
-        if (FindSymbol(&hash_return, symtab, subprogram->tree_data.subprogram_data.id) == 0)
-        {
-            fprintf(stderr, "[ASSERT_FAIL] semcheck_subprogram: cannot find return var for func '%s'"
-                " (source_unit=%d, push_target=%d, current_scope=%p, unit_scope=%p)\n",
-                subprogram->tree_data.subprogram_data.id,
-                subprogram->tree_data.subprogram_data.source_unit_index,
-                symtab->push_target_unit,
-                (void*)symtab->current_scope,
-                (void*)(subprogram->tree_data.subprogram_data.source_unit_index > 0
-                    ? symtab->unit_scopes[subprogram->tree_data.subprogram_data.source_unit_index]
-                    : NULL));
-            abort();
-        }
+        assert(FindSymbol(&hash_return, symtab, subprogram->tree_data.subprogram_data.id)
+                    != 0);
 
         ResetHashNodeStatus(hash_return);
         int func_stmt_ret = 0;
@@ -17568,6 +17574,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     g_semcheck_current_subprogram = prev_current_subprogram;
+    symtab->push_target_unit = saved_push_target_body;
     LeaveScope(symtab);
     if (saved_scope_for_unit != NULL)
         symtab->current_scope = saved_scope_for_unit;
