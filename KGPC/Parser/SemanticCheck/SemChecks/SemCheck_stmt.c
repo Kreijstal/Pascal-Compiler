@@ -814,7 +814,7 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         scope = scope->next;
     }
 
-    /* Search unit tables — same pattern as FindIdentInUnit. */
+    /* Search unit tables — walk unit tables for unit-aware lookup. */
     {
         int caller_unit_index = symtab->unit_context > 0
             ? symtab->unit_context

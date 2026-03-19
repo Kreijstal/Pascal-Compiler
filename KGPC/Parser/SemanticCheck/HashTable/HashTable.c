@@ -785,7 +785,7 @@ static int check_collision_allowance(HashNode_t* existing_node, enum HashType ne
     }
     
     /* Allow variables/arrays to coexist when at least one is from a unit.
-     * Unit-aware FindIdentInUnit resolves which one is visible.
+     * FindSymbol (scope tree walk) resolves which one is visible.
      * Two program-local vars with the same name would still be caught by
      * semcheck's duplicate-declaration check before reaching here. */
     if ((existing_node->hash_type == HASHTYPE_VAR || existing_node->hash_type == HASHTYPE_ARRAY) &&

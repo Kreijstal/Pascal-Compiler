@@ -57,8 +57,7 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         cur = cur->next;
     }
 
-    /* 2. Unit tables — same search order as FindIdentInUnit:
-     *    own unit first, then dependency units. */
+    /* 2. Unit tables — own unit first, then dependency units. */
     {
         int global_level = 0;
 
@@ -1621,9 +1620,8 @@ int semcheck_addop(int *type_return,
                         if (operator_exact != NULL)
                         {
                             snprintf(operator_exact, exact_len, "%s_%s", operator_method, record_type_name);
-                            if (FindIdentInUnit(&operator_node, symtab, operator_exact,
-                                    semcheck_operator_lookup_unit_index(symtab)) >= 0 &&
-                                operator_node != NULL &&
+                            FindSymbol(&operator_node, symtab, operator_exact);
+                            if (operator_node != NULL &&
                                 kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                             {
                                 fprintf(stderr,

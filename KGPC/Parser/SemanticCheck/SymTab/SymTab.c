@@ -548,9 +548,8 @@ int FindSymbol(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     assert(symtab != NULL);
     assert(id != NULL);
 
-    /* Phase 3: tree-walking path is unconditional.
-     * The tree walk handles unit-aware lookup via parent chain + dep_scopes,
-     * making FindIdentInUnit / unit_context dispatch unnecessary. */
+    /* Tree-walking path is unconditional.
+     * The tree walk handles unit-aware lookup via parent chain + dep_scopes. */
     if (symtab->current_scope != NULL)
         return FindIdent_Tree(hash_return, symtab, id);
 
@@ -559,69 +558,6 @@ int FindSymbol(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     return 0;
 }
 
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    HashNode_t *hash_node;
-
-    /* 1. Scope stack (inner scopes — local variables, parameters) */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
-    {
-        hash_node = FindIdentInTable((HashTable_t *)cur->cur, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return 1;
-        }
-        cur = cur->next;
-    }
-
-    /* 2. Caller's own unit table + deps + builtins (all global scope) */
-    {
-        if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[caller_unit_index] != NULL)
-        {
-            hash_node = FindIdentInTable(symtab->unit_tables[caller_unit_index], id);
-            if (hash_node != NULL)
-            {
-                *hash_return = hash_node;
-                return 1;
-            }
-        }
-
-        /* 3. Dependency unit tables */
-        int num_units = unit_registry_count();
-        for (int dep = 1; dep <= num_units; dep++)
-        {
-            if (dep == caller_unit_index)
-                continue;
-            if (!unit_registry_is_dep(caller_unit_index, dep))
-                continue;
-            if (symtab->unit_tables[dep] == NULL)
-                continue;
-            hash_node = FindIdentInTable(symtab->unit_tables[dep], id);
-            if (hash_node != NULL)
-            {
-                *hash_return = hash_node;
-                return 1;
-            }
-        }
-
-        /* 4. Builtins */
-        hash_node = FindIdentInTable(symtab->builtins, id);
-        if (hash_node != NULL)
-        {
-            *hash_return = hash_node;
-            return 1;
-        }
-    }
-
-    *hash_return = NULL;
-    return 0;
-}
 
 HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
 {

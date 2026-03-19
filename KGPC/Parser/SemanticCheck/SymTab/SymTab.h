@@ -1,11 +1,9 @@
 /*
-    Symbol table: parent-pointer scope tree (primary) with legacy flat stack
-    kept for Push*OntoScope routing during migration.
+    Symbol table: parent-pointer scope tree (primary).
     See docs/SCOPE_TREE_REFACTORING.md.
 
-    Phase 3: FindSymbol (formerly FindIdent) and all lookup functions use the tree path unconditionally.
-    PushScope/PopScope maintain the tree in parallel. Legacy flat stack + unit_tables
-    + push_target_unit are still used for symbol insertion routing (Phase 4 removes them).
+    Phase 4: Legacy flat stack removed. All lookups and insertions use the scope tree.
+    push_target_unit is still used for per-unit symbol routing (routes to unit_scopes[i]->table).
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually
@@ -28,8 +26,10 @@
  * ======================================================================== */
 
 typedef struct ScopeNode {
-    HashTable_t *table;          /* Symbols declared in this scope (NOT owned — points to
-                                  * the same table as the flat stack or unit_tables entry) */
+    HashTable_t *table;          /* Symbols declared in this scope.
+                                  * For unit scopes (unit_index > 0): OWNED by this node (freed in DestroyScope).
+                                  * For other scopes: NOT owned (freed by the flat stack or builtins). */
+    int owns_table;              /* 1 if this scope owns and must free its table, 0 otherwise */
     struct ScopeNode *parent;    /* Walk this chain for FindIdent */
     int unit_index;              /* Which unit this scope belongs to (0 = program) */
 
@@ -49,13 +49,12 @@ typedef struct SymTab
     ListNode_t *stack_head;
     HashTable_t *builtins;
     int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
-    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_tables[this] */
-    HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
+    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
 
-    /* --- Scope tree (Phase 3: used for all lookups via FindSymbol) --- */
+    /* --- Scope tree (used for all lookups via FindSymbol) --- */
     ScopeNode *builtin_scope;                 /* Root of the tree (NULL until initialized) */
     ScopeNode *current_scope;                 /* Active scope node */
-    ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index */
+    ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
 } SymTab_t;
 
 /* Initializes the SymTab with stack_head pointing to NULL */
@@ -133,10 +132,6 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Returns 0 (false) if not found, 1 (true) if found */
 int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
-/* Like FindIdent but uses unit-aware resolution.
- * Prefers symbols from caller_unit_index, then program-local, then any.
- * Returns 0 if not found, 1 if found. */
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix */
 /* Returns 0 and sets hash_return to NULL if not found */
@@ -172,15 +167,15 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
  * Scope tree API (Phase 1: infrastructure alongside legacy)
  * ======================================================================== */
 
-/* Create a scope node.  The table pointer is NOT owned by the scope node —
- * it points into the flat stack or unit_tables.  DestroyScope frees the
- * ScopeNode itself and the dep_scopes array, but NOT the table. */
-ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table);
+/* Create a scope node.  owns_table controls whether DestroyScope frees the table.
+ * For unit scopes created by GetOrCreateUnitScope, owns_table is 1.
+ * For scopes sharing a table with the flat stack or builtins, owns_table is 0. */
+ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table, int owns_table);
 void DestroyScope(ScopeNode *scope);
 
 /* Get (or lazily create) the unit scope for the given unit registry index.
- * The scope's table pointer is set to symtab->unit_tables[unit_index]
- * (lazily allocated if NULL). */
+ * Allocates a new HashTable for the scope if it does not exist yet.
+ * The scope OWNS its table (freed in DestroyScope). */
 ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
 
 /* Add a dependency edge: scope can see dep_scope's symbols. */
