@@ -74,7 +74,7 @@ SymTab_t *InitSymTab()
 
     /* Phase 1: Initialize scope tree alongside flat stack.
      * builtin_scope->table points to the same builtins hash table. */
-    new_symtab->builtin_scope = CreateScope(SCOPE_BUILTIN, NULL, 0, new_symtab->builtins);
+    new_symtab->builtin_scope = CreateScope(NULL, 0, new_symtab->builtins);
     new_symtab->current_scope = new_symtab->builtin_scope;
     memset(new_symtab->unit_scopes, 0, sizeof(new_symtab->unit_scopes));
 
@@ -99,7 +99,7 @@ void PushScope(SymTab_t *symtab)
      * callers that need precise kinds should use EnterScope() instead. */
     if (symtab->current_scope != NULL)
     {
-        ScopeNode *scope = CreateScope(SCOPE_BLOCK, symtab->current_scope, 0, new_hash);
+        ScopeNode *scope = CreateScope(symtab->current_scope, 0, new_hash);
         symtab->current_scope = scope;
     }
 }
@@ -748,14 +748,13 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node)
  * Phase 4 will remove the legacy flat stack entirely.
  * ======================================================================== */
 
-ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index, HashTable_t *table)
+ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table)
 {
     assert(table != NULL);
     ScopeNode *scope = (ScopeNode *)calloc(1, sizeof(ScopeNode));
     assert(scope != NULL);
     scope->table = table;  /* NOT owned — shared with flat stack or unit_tables */
     scope->parent = parent;
-    scope->kind = kind;
     scope->unit_index = unit_index;
     scope->dep_scopes = NULL;
     scope->num_deps = 0;
@@ -783,7 +782,7 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index)
     if (symtab->unit_tables[unit_index] == NULL)
         symtab->unit_tables[unit_index] = InitHashTable();
 
-    ScopeNode *scope = CreateScope(SCOPE_UNIT, symtab->builtin_scope, unit_index,
+    ScopeNode *scope = CreateScope(symtab->builtin_scope, unit_index,
                                     symtab->unit_tables[unit_index]);
     symtab->unit_scopes[unit_index] = scope;
     return scope;
@@ -814,17 +813,16 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
     scope->dep_scopes[scope->num_deps++] = dep_scope;
 }
 
-void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index)
+void EnterScope(SymTab_t *symtab, int unit_index)
 {
     assert(symtab != NULL);
     assert(symtab->current_scope != NULL);
 
-    /* PushScope creates both the flat-stack entry and a SCOPE_BLOCK tree node.
-     * We just fix up the tree node's kind and unit_index to the precise values. */
+    /* PushScope creates both the flat-stack entry and a child tree node.
+     * Fix up the tree node's unit_index to the precise value. */
     PushScope(symtab);
 
     /* Fix up the scope node created by PushScope */
-    symtab->current_scope->kind = kind;
     symtab->current_scope->unit_index = unit_index;
 }
 
@@ -865,7 +863,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
 
         /* At unit/program scope, also search dependency unit scopes.
          * Search in reverse order: last `uses` clause entry wins (Pascal semantics). */
-        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        if (scope->num_deps > 0)
         {
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
@@ -899,7 +897,7 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
             return 1;
         }
 
-        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        if (scope->num_deps > 0)
         {
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
@@ -929,7 +927,7 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
     {
         all = append_list(all, FindAllIdentsInTable(scope->table, id));
 
-        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        if (scope->num_deps > 0)
         {
             for (int i = 0; i < scope->num_deps; i++)
                 all = append_list(all, FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
@@ -954,7 +952,7 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
         if (matches != NULL)
         {
             /* Also collect from dep_scopes at this level for completeness */
-            if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+            if (scope->num_deps > 0)
             {
                 for (int i = 0; i < scope->num_deps; i++)
                     matches = append_list(matches,
@@ -964,7 +962,7 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
         }
 
         /* Check dep_scopes as part of this scope level */
-        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        if (scope->num_deps > 0)
         {
             ListNode_t *dep_matches = NULL;
             for (int i = 0; i < scope->num_deps; i++)

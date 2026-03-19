@@ -3715,7 +3715,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 stmt->stmt_data.try_except_data.exception_var_name != NULL) {
                 
                 /* Push a new scope for the exception variable */
-                EnterScope(symtab, SCOPE_BLOCK, 0);
+                EnterScope(symtab, 0);
                 
                 /* Add the exception variable to the symbol table */
                 char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
@@ -5879,7 +5879,7 @@ skip_type_receiver_rewrite:
             const char *dbg_owner = semcheck_get_current_method_owner();
             fprintf(stderr, "[ASSIGN-TRACE] Self_found=%d owner=%s scope_kind=%d proc_owner=%s proc_hash=%d\n",
                 dbg_found != 0, dbg_owner ? dbg_owner : "<null>",
-                symtab->current_scope ? symtab->current_scope->kind : -1,
+                symtab->current_scope ? symtab->current_scope->num_deps : -1,
                 (dbg_proc && dbg_proc->owner_class) ? dbg_proc->owner_class : "<null>",
                 dbg_proc ? dbg_proc->hash_type : -1);
         }

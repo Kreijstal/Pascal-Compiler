@@ -59,19 +59,9 @@ static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *cand
     for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
         if (candidate_in_table(scope->table, candidate))
-        {
-            /* Self-pushed proc/func in body scope: skip to find real level */
-            if (scope->kind == SCOPE_SUBPROGRAM &&
-                (candidate->hash_type == HASHTYPE_PROCEDURE ||
-                 candidate->hash_type == HASHTYPE_FUNCTION))
-            {
-                level++;
-                continue;
-            }
             return level;
-        }
 
-        if (scope->kind == SCOPE_UNIT || scope->kind == SCOPE_PROGRAM)
+        if (scope->num_deps > 0)
         {
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
@@ -80,7 +70,7 @@ static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *cand
             }
             level += 1 + scope->num_deps;
         }
-        else if (scope->kind == SCOPE_BUILTIN)
+        else if (scope->parent == NULL)
         {
             return INT_MAX / 2;
         }

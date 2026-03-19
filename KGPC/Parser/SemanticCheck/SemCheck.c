@@ -7001,7 +7001,7 @@ SymTab_t *semcheck_init_symtab(void)
 {
     double t0 = 0.0;
     SymTab_t *symtab = InitSymTab();
-    EnterScope(symtab, SCOPE_BLOCK, 0);  /* Global pre-program scope (builtins are
+    EnterScope(symtab, 0);  /* Global pre-program scope (builtins are
                                            * registered into unit_tables[System] via
                                            * push_target_unit, not into this scope) */
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
@@ -7046,18 +7046,11 @@ void wire_all_unit_scope_deps(SymTab_t *symtab)
             }
         }
     }
-    /* Program scope sees all units (program uses everything that was loaded) */
-    if (symtab->current_scope != NULL &&
-        (symtab->current_scope->kind == SCOPE_BLOCK ||
-         symtab->current_scope->kind == SCOPE_PROGRAM))
-    {
-        for (int u = 1; u <= num_units; u++)
-        {
-            ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
-            if (unit_scope != NULL)
-                ScopeAddDependency(symtab->current_scope, unit_scope);
-        }
-    }
+    /* NOTE: We do NOT add unit deps to current_scope (the global pre-program
+     * BLOCK scope) here. The program-level scope gets its deps wired separately
+     * in semcheck_program / semcheck_unit via the EnterScope(0) call.
+     * Adding deps here would cause duplicate symbol searches because
+     * any scope with num_deps > 0 now triggers dep search. */
 }
 
 SymTab_t *start_semcheck(Tree_t *parse_tree, int *sem_result)
@@ -13771,7 +13764,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (SEMCHECK_TIMINGS_ENABLED())
         t0 = semcheck_now_ms();
 
-    EnterScope(symtab, SCOPE_PROGRAM, 0);
+    EnterScope(symtab, 0);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
@@ -13963,7 +13956,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
 
-    EnterScope(symtab, SCOPE_UNIT, 0);
+    EnterScope(symtab, 0);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
@@ -14228,7 +14221,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
 
-    EnterScope(symtab, SCOPE_UNIT, 0);
+    EnterScope(symtab, 0);
 
     semcheck_unit_names_reset();
     semcheck_unit_name_add("System");
@@ -16835,7 +16828,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
         }
 
-        EnterScope(symtab, SCOPE_SUBPROGRAM,
+        EnterScope(symtab,
             subprogram->tree_data.subprogram_data.source_unit_index);
 
         /* For method implementations, add class vars to scope */
@@ -17010,7 +17003,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
         }
 
-        EnterScope(symtab, SCOPE_SUBPROGRAM,
+        EnterScope(symtab,
             subprogram->tree_data.subprogram_data.source_unit_index);
         if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             fprintf(stderr, "[KGPC] semcheck_subprogram (func): EnterScope for %s\n",

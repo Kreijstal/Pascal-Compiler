@@ -27,22 +27,13 @@
  * Scope tree types (Phase 1: coexists with flat stack)
  * ======================================================================== */
 
-typedef enum ScopeKind {
-    SCOPE_BUILTIN,      /* Root: compiler builtins */
-    SCOPE_UNIT,         /* Unit-level scope (one per unit) */
-    SCOPE_PROGRAM,      /* Program-level scope (globals) */
-    SCOPE_SUBPROGRAM,   /* Procedure/function body */
-    SCOPE_BLOCK,        /* Nested block: try-except, with, anonymous method */
-} ScopeKind;
-
 typedef struct ScopeNode {
     HashTable_t *table;          /* Symbols declared in this scope (NOT owned — points to
                                   * the same table as the flat stack or unit_tables entry) */
     struct ScopeNode *parent;    /* Walk this chain for FindIdent */
-    ScopeKind kind;
     int unit_index;              /* Which unit this scope belongs to (0 = program) */
 
-    /* For SCOPE_UNIT / SCOPE_PROGRAM: dependency edges from `uses` clause */
+    /* Dependency edges from `uses` clause (only on unit/program scopes) */
     struct ScopeNode **dep_scopes;
     int num_deps;
     int cap_deps;
@@ -61,7 +52,7 @@ typedef struct SymTab
     int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_tables[this] */
     HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
 
-    /* --- Scope tree (Phase 1: maintained in parallel, not yet used for lookup) --- */
+    /* --- Scope tree (Phase 3: used for all lookups via FindSymbol) --- */
     ScopeNode *builtin_scope;                 /* Root of the tree (NULL until initialized) */
     ScopeNode *current_scope;                 /* Active scope node */
     ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index */
@@ -184,7 +175,7 @@ void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
 /* Create a scope node.  The table pointer is NOT owned by the scope node —
  * it points into the flat stack or unit_tables.  DestroyScope frees the
  * ScopeNode itself and the dep_scopes array, but NOT the table. */
-ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index, HashTable_t *table);
+ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table);
 void DestroyScope(ScopeNode *scope);
 
 /* Get (or lazily create) the unit scope for the given unit registry index.
@@ -197,7 +188,7 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
 
 /* Push a new child scope under current_scope and make it current.
  * Also calls PushScope() to keep the flat stack in sync. */
-void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
+void EnterScope(SymTab_t *symtab, int unit_index);
 
 /* Pop current_scope to its parent.
  * Also calls PopScope() to keep the flat stack in sync. */
