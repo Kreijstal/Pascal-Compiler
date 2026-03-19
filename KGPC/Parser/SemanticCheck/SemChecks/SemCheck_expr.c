@@ -866,10 +866,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         field_type = create_primitive_type(field->type);
                                     }
                                     
-                                    /* Restore unit context before returning */
-                                    if (record_info->source_unit_index > 0)
-                                        semcheck_restore_unit_context(saved_unit_ctx);
-
                                     /* Clean up record type if we owned it */
                                     if (record_type_owned)
                                         destroy_kgpc_type(record_type);
@@ -899,9 +895,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         }
                         field_cursor = field_cursor->next;
                     }
-                    /* Restore unit context after field lookup */
-                    if (record_info->source_unit_index > 0)
-                        semcheck_restore_unit_context(saved_unit_ctx);
                     }
                 }
                 

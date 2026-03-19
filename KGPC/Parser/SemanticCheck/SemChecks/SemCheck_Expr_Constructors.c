@@ -717,16 +717,6 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = create_record_type(record_type);
 
-    /* Temporarily set unit context to the record's defining unit so field
-     * type lookups prefer same-unit types. */
-    int saved_unit_ctx = 0;
-    int has_unit_ctx = (record_type->source_unit_index > 0);
-    if (has_unit_ctx)
-    {
-        saved_unit_ctx = semcheck_save_unit_context();
-        semcheck_restore_unit_context(record_type->source_unit_index);
-    }
-
     int error_count = 0;
     ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
     while (cur != NULL)
@@ -1043,10 +1033,6 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
 
         cur = cur->next;
     }
-
-    /* Restore unit context */
-    if (has_unit_ctx)
-        semcheck_restore_unit_context(saved_unit_ctx);
 
     expr->expr_data.record_constructor_data.fields_semchecked = 1;
     return error_count;
