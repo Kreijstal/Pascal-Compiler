@@ -86,8 +86,6 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const struct Qual
     const char *literal_name, long long *out_value);
 const char *semcheck_get_current_subprogram_id(void);
 int semcheck_get_current_unit_index(void);
-int semcheck_save_unit_context(void);
-void semcheck_restore_unit_context(int saved);
 const char *semcheck_get_current_subprogram_result_var_name(void);
 const char *semcheck_get_current_subprogram_method_name(void);
 const char *semcheck_get_current_subprogram_owner_class(void);

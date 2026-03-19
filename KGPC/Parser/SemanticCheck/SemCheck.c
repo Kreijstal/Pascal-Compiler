@@ -3845,16 +3845,6 @@ int semcheck_get_current_unit_index(void)
     return g_semcheck_current_unit_index;
 }
 
-int semcheck_save_unit_context(void)
-{
-    return g_semcheck_current_unit_index;
-}
-
-void semcheck_restore_unit_context(int saved)
-{
-    g_semcheck_current_unit_index = saved;
-}
-
 const char *semcheck_get_current_subprogram_result_var_name(void)
 {
     if (g_semcheck_current_subprogram == NULL)
@@ -7048,7 +7038,7 @@ SymTab_t *semcheck_init_symtab(void)
     double t0 = 0.0;
     SymTab_t *symtab = InitSymTab();
     EnterScope(symtab, 0);  /* Global pre-program scope (builtins are
-                                           * registered into unit_tables[System] via
+                                           * registered into unit_scopes[System]->table via
                                            * push_target_unit, not into this scope) */
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
@@ -14065,7 +14055,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
      * FindIdent_Tree can see entries pushed via push_target_unit into
-     * unit_tables[unit_idx].  This mirrors what semcheck_unit_decls_only does
+     * unit_scopes[unit_idx]->table.  This mirrors what semcheck_unit_decls_only does
      * and ensures that type lookups during semcheck_decls/semcheck_subprogram
      * can find per-unit types (e.g. TResourceStringTableList in objpas). */
     if (g_semcheck_current_unit_index > 0)
@@ -14371,7 +14361,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
      * FindAllIdents_Tree can see entries pushed via push_target_unit into
-     * unit_tables[unit_idx].  Without this, predeclare_subprogram's duplicate
+     * unit_scopes[unit_idx]->table.  Without this, predeclare_subprogram's duplicate
      * detection misses entries already in the unit table, creating duplicates.
      *
      * Also wire the unit's dependencies (interface + implementation uses) into
@@ -15258,8 +15248,8 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                              * like PString = ObjPas.PString that failed to resolve at predeclare
                              * time but whose target may now be available), try re-resolving via
                              * the alias target.  This handles per-unit scoping where SysUtils's
-                             * PString stub is in unit_tables[sysutils] but ObjPas's resolved
-                             * pointer type is in unit_tables[objpas]. */
+                             * PString stub is in unit_scopes[sysutils]->table but ObjPas's resolved
+                             * pointer type is in unit_scopes[objpas]->table. */
                             else if (var_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
                                      var_kgpc_type->info.primitive_type_tag == UNKNOWN_TYPE &&
                                      alias != NULL &&

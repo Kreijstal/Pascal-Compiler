@@ -814,8 +814,8 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
 
     /* Search unit tables — walk unit tables for unit-aware lookup. */
     {
-        int caller_unit_index = symtab->unit_context > 0
-            ? symtab->unit_context
+        int caller_unit_index = (symtab->current_scope != NULL && symtab->current_scope->unit_index > 0)
+            ? symtab->current_scope->unit_index
             : semcheck_get_current_unit_index();
 
         /* Caller's own unit table */
@@ -860,7 +860,7 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
             }
         }
 
-        /* When unit_context is 0 (main program), search all unit tables */
+        /* When current scope is program-level (unit_index == 0), search all unit tables */
         if (caller_unit_index == 0)
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)

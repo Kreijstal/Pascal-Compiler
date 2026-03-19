@@ -54,9 +54,6 @@ typedef struct SymTab
 /* Initializes the SymTab */
 SymTab_t *InitSymTab();
 
-/* Pushes a new scope (with a fresh hash table) onto the scope tree */
-void PushScope(SymTab_t *symtab);
-
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
 
 /* Pushes a constant with explicit KgpcType onto the current scope (head) */
@@ -143,9 +140,6 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 /* Searches for all instances of an identifier in the nearest scope that defines it */
 /* Returns NULL if not found */
 ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
-
-/* Pops the current scope and frees its hash table */
-void PopScope(SymTab_t *symtab);
 
 /* Destroys the SymTab and all associated hash tables */
 /* WARNING: Does not free given identifier strings */

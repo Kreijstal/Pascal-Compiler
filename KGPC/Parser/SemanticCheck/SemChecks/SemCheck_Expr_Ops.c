@@ -90,8 +90,7 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
             }
         }
 
-        /* 2c. When unit_context is 0 (main program), search all unit scopes
-         *     that FindIdentInAnyUnitTable would cover. */
+        /* 2c. When current scope is program-level (unit_index == 0), search all unit scopes. */
         if (caller_unit_index == 0)
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)

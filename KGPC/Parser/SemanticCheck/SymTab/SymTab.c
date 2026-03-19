@@ -65,7 +65,6 @@ SymTab_t *InitSymTab()
 
     new_symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
     assert(new_symtab != NULL);
-    new_symtab->unit_context = 0;
     new_symtab->push_target_unit = 0;
 
     /* Initialize scope tree.
@@ -664,33 +663,13 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
     scope->dep_scopes[scope->num_deps++] = dep_scope;
 }
 
-void PushScope(SymTab_t *symtab)
-{
-    assert(symtab != NULL);
-    assert(symtab->current_scope != NULL);
-
-    ScopeNode *new_scope = CreateScope(symtab->current_scope, 0, InitHashTable());
-    symtab->current_scope = new_scope;
-}
-
-void PopScope(SymTab_t *symtab)
-{
-    assert(symtab != NULL);
-    assert(symtab->current_scope != NULL);
-    assert(symtab->current_scope->parent != NULL);  /* never pop the root */
-
-    ScopeNode *old_scope = symtab->current_scope;
-    symtab->current_scope = old_scope->parent;
-    DestroyScope(old_scope);
-}
-
 void EnterScope(SymTab_t *symtab, int unit_index)
 {
     assert(symtab != NULL);
     assert(symtab->current_scope != NULL);
 
-    PushScope(symtab);
-    symtab->current_scope->unit_index = unit_index;
+    ScopeNode *new_scope = CreateScope(symtab->current_scope, unit_index, InitHashTable());
+    symtab->current_scope = new_scope;
 }
 
 void LeaveScope(SymTab_t *symtab)
@@ -699,7 +678,9 @@ void LeaveScope(SymTab_t *symtab)
     assert(symtab->current_scope != NULL);
     assert(symtab->current_scope->parent != NULL);  /* never leave the root */
 
-    PopScope(symtab);
+    ScopeNode *old_scope = symtab->current_scope;
+    symtab->current_scope = old_scope->parent;
+    DestroyScope(old_scope);
 }
 
 /* ========================================================================
