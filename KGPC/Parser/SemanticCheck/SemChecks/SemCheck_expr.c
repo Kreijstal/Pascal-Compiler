@@ -1739,7 +1739,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                     
                     /* Also add "Result" as an alias in the current scope */
                     HashNode_t *result_check = NULL;
-                    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+                    HashTable_t *cur_hash = SymTab_GetTargetTable(symtab);
                     result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
                     if (result_check == NULL)
                     {

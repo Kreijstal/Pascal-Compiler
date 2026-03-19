@@ -1721,17 +1721,17 @@ static void codegen_emit_semantic_debug_block(CodeGenContext *ctx)
 
     FILE *out = ctx->output_file;
     asm_debug_comment(out, "semcheck", 0, "--- symbol table snapshot ---");
-    codegen_emit_semantic_scope_comments(out, ctx->symtab->builtins, "builtins", 0);
+    codegen_emit_semantic_scope_comments(out, ctx->symtab->builtin_scope->table, "builtins", 0);
 
-    ListNode_t *scope = ctx->symtab->stack_head;
+    ScopeNode *scope = ctx->symtab->current_scope;
     int depth = 0;
     while (scope != NULL)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         char label[32];
         snprintf(label, sizeof(label), "scope %d", depth);
         codegen_emit_semantic_scope_comments(out, table, label, 0);
-        scope = scope->next;
+        scope = scope->parent;
         ++depth;
     }
 
@@ -2015,17 +2015,17 @@ static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab, in
     for (int i = 0; i < 512; ++i)
         emitted_labels[i] = NULL;
 
-    if (symtab->builtins != NULL)
-        codegen_emit_enum_typeinfo_from_table(ctx, symtab->builtins, emit_unit_types,
+    if (symtab->builtin_scope->table != NULL)
+        codegen_emit_enum_typeinfo_from_table(ctx, symtab->builtin_scope->table, emit_unit_types,
             emitted_labels, &emitted_count, &emitted_any);
 
-    ListNode_t *scope = symtab->stack_head;
+    ScopeNode *scope = symtab->current_scope;
     while (scope != NULL)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         codegen_emit_enum_typeinfo_from_table(ctx, table, emit_unit_types,
             emitted_labels, &emitted_count, &emitted_any);
-        scope = scope->next;
+        scope = scope->parent;
     }
 
     if (emitted_any)
@@ -2591,14 +2591,14 @@ static void codegen_emit_integer_const_equivs(CodeGenContext *ctx, SymTab_t *sym
     ListNode_t *emitted_symbols = NULL;
 
     /* Prefer user/global scopes first, then builtins. */
-    ListNode_t *scope_node = symtab->stack_head;
+    ScopeNode *scope_node = symtab->current_scope;
     while (scope_node != NULL)
     {
-        codegen_emit_integer_const_equivs_from_table(ctx, (HashTable_t *)scope_node->cur,
+        codegen_emit_integer_const_equivs_from_table(ctx, scope_node->table,
             &emitted_symbols);
-        scope_node = scope_node->next;
+        scope_node = scope_node->parent;
     }
-    codegen_emit_integer_const_equivs_from_table(ctx, symtab->builtins, &emitted_symbols);
+    codegen_emit_integer_const_equivs_from_table(ctx, symtab->builtin_scope->table, &emitted_symbols);
 
     ListNode_t *cur = emitted_symbols;
     while (cur != NULL)
@@ -2614,11 +2614,11 @@ static void codegen_emit_local_const_equivs(CodeGenContext *ctx, SymTab_t *symta
     assert(ctx != NULL);
     assert(symtab != NULL);
 
-    if (symtab->stack_head == NULL || symtab->stack_head->cur == NULL)
+    if (symtab->current_scope == NULL || symtab->current_scope->table == NULL)
         return;
 
     ListNode_t *emitted_symbols = NULL;
-    codegen_emit_integer_const_equivs_from_table(ctx, (HashTable_t *)symtab->stack_head->cur,
+    codegen_emit_integer_const_equivs_from_table(ctx, symtab->current_scope->table,
         &emitted_symbols);
 
     ListNode_t *cur = emitted_symbols;
@@ -3365,9 +3365,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
 
     /* Also emit VMTs for class types that exist only in the symbol table
      * (e.g., specializations pulled in from units like FGL). */
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         if (table == NULL)
             continue;
         for (int b = 0; b < TABLE_SIZE; b++)
@@ -4843,7 +4843,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_is_nonstatic_class_method =
         (proc->owner_class != NULL && proc->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
-    PushScope(symtab);
+    EnterScope(symtab, 0);
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(proc->args_var, symtab, 1);
     codegen_register_decl_list(proc->declarations, symtab, 0);
@@ -4998,7 +4998,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     free_inst_list(inst_list);
     pop_stackscope();
-    PopScope(symtab);
+    LeaveScope(symtab);
 
     ctx->is_nostackframe = prev_is_nostackframe;
     ctx->asm_param_count = prev_asm_param_count;
@@ -5091,7 +5091,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_is_nonstatic_class_method =
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
-    PushScope(symtab);
+    EnterScope(symtab, 0);
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(func->args_var, symtab, 1);
     codegen_register_decl_list(func->declarations, symtab, 0);
@@ -5839,7 +5839,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     free_inst_list(inst_list);
     pop_stackscope();
-    PopScope(symtab);
+    LeaveScope(symtab);
 
     ctx->is_nostackframe = prev_is_nostackframe;
     ctx->asm_param_count = prev_asm_param_count;

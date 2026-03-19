@@ -3,7 +3,7 @@
     See docs/SCOPE_TREE_REFACTORING.md.
 
     Phase 4: Legacy flat stack removed. All lookups and insertions use the scope tree.
-    push_target_unit is still used for per-unit symbol routing (routes to unit_scopes[i]->table).
+    push_target_unit routes to unit_scopes[i]->table for per-unit symbol routing.
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually
@@ -22,14 +22,11 @@
 #define SYMTAB_MAX_UNITS 256
 
 /* ========================================================================
- * Scope tree types (Phase 1: coexists with flat stack)
+ * Scope tree types
  * ======================================================================== */
 
 typedef struct ScopeNode {
-    HashTable_t *table;          /* Symbols declared in this scope.
-                                  * For unit scopes (unit_index > 0): OWNED by this node (freed in DestroyScope).
-                                  * For other scopes: NOT owned (freed by the flat stack or builtins). */
-    int owns_table;              /* 1 if this scope owns and must free its table, 0 otherwise */
+    HashTable_t *table;          /* Symbols declared in this scope (owned by this node, freed in DestroyScope) */
     struct ScopeNode *parent;    /* Walk this chain for FindIdent */
     int unit_index;              /* Which unit this scope belongs to (0 = program) */
 
@@ -46,7 +43,6 @@ typedef struct ScopeNode {
 typedef struct SymTab
 {
     /* --- Legacy flat stack (all existing code uses these) --- */
-    ListNode_t *stack_head;
     HashTable_t *builtins;
     int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
     int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
@@ -57,10 +53,10 @@ typedef struct SymTab
     ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
 } SymTab_t;
 
-/* Initializes the SymTab with stack_head pointing to NULL */
+/* Initializes the SymTab */
 SymTab_t *InitSymTab();
 
-/* Pushes a new scope onto the stack (FIFO) */
+/* Pushes a new scope (with a fresh hash table) onto the scope tree */
 void PushScope(SymTab_t *symtab);
 
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
@@ -132,6 +128,10 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Returns 0 (false) if not found, 1 (true) if found */
 int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
+/* Like FindIdent but uses unit-aware resolution.
+ * Prefers symbols from caller_unit_index, then program-local, then any.
+ * Returns 0 if not found, 1 if found. */
+int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix */
 /* Returns 0 and sets hash_return to NULL if not found */
@@ -146,7 +146,7 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 /* Returns NULL if not found */
 ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
 
-/* Pops the current scope */
+/* Pops the current scope and frees its hash table */
 void PopScope(SymTab_t *symtab);
 
 /* Destroys the SymTab and all associated hash tables */
@@ -181,12 +181,10 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
 /* Add a dependency edge: scope can see dep_scope's symbols. */
 void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
 
-/* Push a new child scope under current_scope and make it current.
- * Also calls PushScope() to keep the flat stack in sync. */
+/* Push a new child scope under current_scope and make it current. */
 void EnterScope(SymTab_t *symtab, int unit_index);
 
-/* Pop current_scope to its parent.
- * Also calls PopScope() to keep the flat stack in sync. */
+/* Pop current_scope to its parent. */
 void LeaveScope(SymTab_t *symtab);
 
 #endif

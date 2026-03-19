@@ -4245,13 +4245,13 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
     struct RecordType *found_record = NULL;
 
     HashTable_t *tables[2];
-    tables[0] = symtab->builtins;
+    tables[0] = symtab->builtin_scope->table;
     tables[1] = NULL;
 
-    ListNode_t *scope = symtab->stack_head;
+    ScopeNode *scope = symtab->current_scope;
     while (scope != NULL)
     {
-        tables[1] = (HashTable_t *)scope->cur;
+        tables[1] = scope->table;
         for (int t = 0; t < 2; ++t)
         {
             HashTable_t *table = tables[t];
@@ -4300,7 +4300,7 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
                 }
             }
         }
-        scope = scope->next;
+        scope = scope->parent;
     }
 
     if (found_field != NULL && out_record != NULL)

@@ -793,10 +793,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
     semcheck_record_assign_consider_id(symtab, "op_assign", target_type, source_type,
         &best_node, &best_return_type, &best_score);
 
-    ListNode_t *scope = symtab->stack_head;
-    while (scope != NULL)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         if (table != NULL)
         {
             for (int i = 0; i < TABLE_SIZE; ++i)
@@ -811,7 +810,6 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
                 }
             }
         }
-        scope = scope->next;
     }
 
     /* Search unit tables — walk unit tables for unit-aware lookup. */
@@ -885,9 +883,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         }
     }
 
-    if (symtab->builtins != NULL)
+    if (symtab->builtin_scope->table != NULL)
     {
-        HashTable_t *table = symtab->builtins;
+        HashTable_t *table = symtab->builtin_scope->table;
         for (int i = 0; i < TABLE_SIZE; ++i)
         {
             for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -1899,17 +1897,17 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         return 0;
     }
 
-    HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, proc_id);
-    /* Also check unit_tables[System] — builtin procedures live there since
+    HashNode_t *builtin_node = FindIdentInTable(symtab->builtin_scope->table, proc_id);
+    /* Also check unit_scopes[System]->table — builtin procedures live there since
      * per-unit scoping was added. */
     if (builtin_node == NULL)
     {
         int sys_idx = unit_registry_add("System");
         if (sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[sys_idx] != NULL)
+            symtab->unit_scopes[sys_idx] != NULL)
         {
             HashNode_t *sys_node = FindIdentInTable(
-                symtab->unit_tables[sys_idx], proc_id);
+                symtab->unit_scopes[sys_idx]->table, proc_id);
             if (sys_node != NULL &&
                 sys_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 builtin_node = sys_node;

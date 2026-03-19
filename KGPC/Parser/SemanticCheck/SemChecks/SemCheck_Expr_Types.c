@@ -77,9 +77,9 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
     if (symtab == NULL || id == NULL)
         return 0;
 
-    for (ListNode_t *cur_scope = symtab->stack_head; cur_scope != NULL; cur_scope = cur_scope->next)
+    for (ScopeNode *cur_scope = symtab->current_scope; cur_scope != NULL; cur_scope = cur_scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur_scope->cur;
+        HashTable_t *table = cur_scope->table;
         ListNode_t *matches = FindAllIdentsInTable(table, id);
         if (matches != NULL)
         {
@@ -100,7 +100,7 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
         }
     }
 
-    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, id);
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtin_scope->table, id);
     if (builtin_matches != NULL)
     {
         for (ListNode_t *cur = builtin_matches; cur != NULL; cur = cur->next)
@@ -450,9 +450,9 @@ static HashNode_t *semcheck_find_any_proc_symbol(SymTab_t *symtab, const char *i
     if (symtab == NULL || id == NULL)
         return NULL;
 
-    for (ListNode_t *cur_scope = symtab->stack_head; cur_scope != NULL; cur_scope = cur_scope->next)
+    for (ScopeNode *cur_scope = symtab->current_scope; cur_scope != NULL; cur_scope = cur_scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur_scope->cur;
+        HashTable_t *table = cur_scope->table;
         ListNode_t *matches = FindAllIdentsInTable(table, id);
         if (matches != NULL)
         {
@@ -2278,9 +2278,9 @@ int semcheck_recordaccess(int *type_return,
             HashNode_t *field_node = NULL;
             int unit_idx = unit_registry_add(unit_id);
             if (unit_idx > 0 && unit_idx < SYMTAB_MAX_UNITS &&
-                symtab->unit_tables[unit_idx] != NULL)
+                symtab->unit_scopes[unit_idx] != NULL)
             {
-                field_node = FindIdentInTable(symtab->unit_tables[unit_idx], field_id);
+                field_node = FindIdentInTable(symtab->unit_scopes[unit_idx]->table, field_id);
             }
             /* No fallback to FindSymbol — if the unit's own table doesn't
              * have the identifier, it's genuinely not exported by that unit.

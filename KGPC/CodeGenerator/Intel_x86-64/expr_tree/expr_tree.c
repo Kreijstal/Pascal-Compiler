@@ -3724,10 +3724,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 {
                     /* Check user scope for a constant with the same name */
                     HashNode_t *user_const = NULL;
-                    ListNode_t *scope = ctx->symtab->stack_head;
+                    ScopeNode *scope = ctx->symtab->current_scope;
                     while (scope != NULL && user_const == NULL)
                     {
-                        ListNode_t *all = FindAllIdentsInTable((HashTable_t *)scope->cur,
+                        ListNode_t *all = FindAllIdentsInTable(scope->table,
                             expr->expr_data.id);
                         for (ListNode_t *a = all; a != NULL; a = a->next)
                         {
@@ -3739,15 +3739,15 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             }
                         }
                         DestroyList(all);
-                        scope = scope->next;
+                        scope = scope->parent;
                     }
                     if (user_const != NULL)
                     {
                         node = user_const;
                     }
-                    else if (ctx->symtab->builtins != NULL)
+                    else if (ctx->symtab->builtin_scope->table != NULL)
                     {
-                        HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
+                        HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtin_scope->table,
                             expr->expr_data.id);
                         if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
                             node = builtin_node;

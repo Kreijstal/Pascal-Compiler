@@ -25,8 +25,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
 static int semcheck_operator_lookup_unit_index(SymTab_t *symtab)
 {
-    if (symtab != NULL && symtab->unit_context > 0)
-        return symtab->unit_context;
+    if (symtab != NULL && symtab->current_scope != NULL && symtab->current_scope->unit_index > 0)
+        return symtab->current_scope->unit_index;
     return semcheck_get_current_unit_index();
 }
 
@@ -35,7 +35,6 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
 {
     int return_val = 0;
     int caller_unit_index;
-    ListNode_t *cur;
 
     if (hash_return == NULL || symtab == NULL || prefix == NULL)
         return -1;
@@ -43,10 +42,9 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
     caller_unit_index = semcheck_operator_lookup_unit_index(symtab);
 
     /* 1. Scope stack (local scopes, parameters, WITH contexts) */
-    cur = symtab->stack_head;
-    while (cur != NULL)
+    for (ScopeNode *cur = symtab->current_scope; cur != NULL; cur = cur->parent)
     {
-        HashNode_t *node = FindIdentByPrefixInTableForUnit((HashTable_t *)cur->cur,
+        HashNode_t *node = FindIdentByPrefixInTableForUnit(cur->table,
             prefix, caller_unit_index);
         if (node != NULL)
         {
@@ -54,19 +52,18 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
             return return_val;
         }
         ++return_val;
-        cur = cur->next;
     }
 
-    /* 2. Unit tables — own unit first, then dependency units. */
+    /* 2. Unit scopes — own unit first, then dependency units. */
     {
         int global_level = 0;
 
-        /* 2a. Caller's own unit table */
+        /* 2a. Caller's own unit scope table */
         if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[caller_unit_index] != NULL)
+            symtab->unit_scopes[caller_unit_index] != NULL)
         {
             HashNode_t *node = FindIdentByPrefixInTableForUnit(
-                symtab->unit_tables[caller_unit_index], prefix, caller_unit_index);
+                symtab->unit_scopes[caller_unit_index]->table, prefix, caller_unit_index);
             if (node != NULL)
             {
                 *hash_return = node;
@@ -74,7 +71,7 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
             }
         }
 
-        /* 2b. Dependency unit tables */
+        /* 2b. Dependency unit scope tables */
         int num_units = unit_registry_count();
         for (int dep = 1; dep <= num_units; dep++)
         {
@@ -82,10 +79,10 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
                 continue;
             if (!unit_registry_is_dep(caller_unit_index, dep))
                 continue;
-            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_scopes[dep]->table == NULL)
                 continue;
             HashNode_t *node = FindIdentByPrefixInTableForUnit(
-                symtab->unit_tables[dep], prefix, caller_unit_index);
+                symtab->unit_scopes[dep]->table, prefix, caller_unit_index);
             if (node != NULL)
             {
                 *hash_return = node;
@@ -93,16 +90,16 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
             }
         }
 
-        /* 2c. When unit_context is 0 (main program), search all unit tables
+        /* 2c. When unit_context is 0 (main program), search all unit scopes
          *     that FindIdentInAnyUnitTable would cover. */
         if (caller_unit_index == 0)
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
             {
-                if (symtab->unit_tables[u] == NULL)
+                if (symtab->unit_scopes[u]->table == NULL)
                     continue;
                 HashNode_t *node = FindIdentByPrefixInTableForUnit(
-                    symtab->unit_tables[u], prefix, caller_unit_index);
+                    symtab->unit_scopes[u]->table, prefix, caller_unit_index);
                 if (node != NULL)
                 {
                     *hash_return = node;
@@ -114,7 +111,7 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
 
     /* 3. Builtins */
     {
-        HashNode_t *node = FindIdentByPrefixInTable(symtab->builtins, prefix);
+        HashNode_t *node = FindIdentByPrefixInTable(symtab->builtin_scope->table, prefix);
         if (node != NULL)
         {
             *hash_return = node;
@@ -288,9 +285,9 @@ static HashNode_t *semcheck_find_preferred_value_ident(
         return NULL;
 
     int scope = 0;
-    for (ListNode_t *cur_scope = symtab->stack_head; cur_scope != NULL; cur_scope = cur_scope->next)
+    for (ScopeNode *cur_scope = symtab->current_scope; cur_scope != NULL; cur_scope = cur_scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur_scope->cur;
+        HashTable_t *table = cur_scope->table;
         ListNode_t *matches = FindAllIdentsInTable(table, id);
         if (matches != NULL)
         {
@@ -310,7 +307,7 @@ static HashNode_t *semcheck_find_preferred_value_ident(
         ++scope;
     }
 
-    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, id);
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtin_scope->table, id);
     if (builtin_matches != NULL)
     {
         for (ListNode_t *cur = builtin_matches; cur != NULL; cur = cur->next)

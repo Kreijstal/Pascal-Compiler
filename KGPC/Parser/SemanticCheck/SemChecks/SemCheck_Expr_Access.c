@@ -92,8 +92,8 @@ static int semcheck_candidate_source_unit_index(HashNode_t *candidate)
 
 static int semcheck_candidate_current_unit_index(SymTab_t *symtab)
 {
-    if (symtab != NULL && symtab->unit_context > 0)
-        return symtab->unit_context;
+    if (symtab != NULL && symtab->current_scope != NULL && symtab->current_scope->unit_index > 0)
+        return symtab->current_scope->unit_index;
     return semcheck_get_current_unit_index();
 }
 
@@ -312,9 +312,9 @@ static ListNode_t *semcheck_find_outer_idents_excluding_owner_methods(
     if (symtab == NULL || id == NULL || owner_type_id == NULL || owner_type_id[0] == '\0')
         return NULL;
 
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         if (table == NULL)
             continue;
 
@@ -345,7 +345,7 @@ static ListNode_t *semcheck_find_outer_idents_excluding_owner_methods(
             return filtered;
     }
 
-    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtins, (char *)id);
+    ListNode_t *builtin_matches = FindAllIdentsInTable(symtab->builtin_scope->table, (char *)id);
     if (builtin_matches == NULL)
         return NULL;
 
@@ -1372,7 +1372,7 @@ int semcheck_funccall(int *type_return,
             first_arg->expr_data.id != NULL &&
             semcheck_is_unit_name(first_arg->expr_data.id))
         {
-            HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
+            HashNode_t *builtin_node = FindIdentInTable(symtab->builtin_scope->table, id);
             if (builtin_node != NULL)
             {
                 ListNode_t *remaining_args = args_given->next;
@@ -1400,17 +1400,17 @@ int semcheck_funccall(int *type_return,
     int allow_early_builtins = 0;
     if (id != NULL && !expr->expr_data.function_call_data.is_method_call_placeholder)
     {
-        HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, id);
+        HashNode_t *builtin_node = FindIdentInTable(symtab->builtin_scope->table, id);
         /* Also check the System unit table — compiler intrinsics (Ord, Chr,
          * Length, High, etc.) live there since per-unit scoping was added. */
         if (builtin_node == NULL)
         {
             int sys_idx = unit_registry_add("System");
             if (sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS &&
-                symtab->unit_tables[sys_idx] != NULL)
+                symtab->unit_scopes[sys_idx] != NULL)
             {
                 HashNode_t *sys_node = FindIdentInTable(
-                    symtab->unit_tables[sys_idx], id);
+                    symtab->unit_scopes[sys_idx]->table, id);
                 if (sys_node != NULL &&
                     (sys_node->hash_type == HASHTYPE_FUNCTION ||
                      sys_node->hash_type == HASHTYPE_PROCEDURE ||
