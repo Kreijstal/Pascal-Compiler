@@ -346,6 +346,46 @@ static void semcheck_mark_subprogram_units(ListNode_t *subprograms, int unit_ind
     }
 }
 
+static void semcheck_mark_const_decl_units(ListNode_t *const_decls, int unit_index)
+{
+    if (const_decls == NULL || unit_index <= 0)
+        return;
+
+    for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type != TREE_CONST_DECL)
+            continue;
+        if (tree->tree_data.const_decl_data.source_unit_index == 0)
+            tree->tree_data.const_decl_data.source_unit_index = unit_index;
+    }
+}
+
+static void semcheck_mark_var_decl_units(ListNode_t *var_decls, int unit_index)
+{
+    if (var_decls == NULL || unit_index <= 0)
+        return;
+
+    for (ListNode_t *cur = var_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)cur->cur;
+        if (tree->type == TREE_VAR_DECL)
+        {
+            if (tree->tree_data.var_decl_data.source_unit_index == 0)
+                tree->tree_data.var_decl_data.source_unit_index = unit_index;
+        }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            if (tree->tree_data.arr_decl_data.source_unit_index == 0)
+                tree->tree_data.arr_decl_data.source_unit_index = unit_index;
+        }
+    }
+}
+
 static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode_t *limit,
     const char *type_id, int source_unit_index, const struct RecordType *canonical_record)
 {
@@ -4162,9 +4202,15 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type_ref(SymTab_t *symtab,
         return NULL;
 
     /* Prefer the generic-aware lookup so we can instantiate types like
-     * TFPGListEnumerator$TMyRecord on demand for function return types. */
+     * TFPGListEnumerator$TMyRecord on demand for function return types.
+     * However, do not return a same-unit UNKNOWN_TYPE placeholder — fall
+     * through to FindAllIdents so we can pick up a resolved type from another
+     * unit (e.g., system's TDateTime=Real over sysutils's stub
+     * TDateTime=System.TDateTime that failed to resolve at predeclare time). */
     HashNode_t *preferred = semcheck_find_preferred_type_node_with_ref(symtab, type_ref, type_id);
-    if (preferred != NULL && preferred->type != NULL)
+    if (preferred != NULL && preferred->type != NULL &&
+        !(preferred->type->kind == TYPE_KIND_PRIMITIVE &&
+          preferred->type->info.primitive_type_tag == UNKNOWN_TYPE))
         return preferred;
 
     char *rendered = NULL;
@@ -7244,6 +7290,16 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
                     }
 
+                    /* Route both the enum type and its literals to per-unit table when
+                     * source_unit_index > 0, so they are accessible via dep_scopes when
+                     * semcheck_subprogram swaps current_scope to unit_scopes[unit_idx]. */
+                    int saved_push_target_enum = symtab->push_target_unit;
+                    {
+                        int unit_idx_for_type = tree->tree_data.type_decl_data.source_unit_index;
+                        if (unit_idx_for_type > 0)
+                            symtab->push_target_unit = unit_idx_for_type;
+                    }
+
                     /* Predeclare the enum type itself so consts can reference it
                      * before full type processing (e.g., array[TEnum] in consts). */
                     if (tree->tree_data.type_decl_data.id != NULL)
@@ -7275,7 +7331,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                          * accessible via dep_scopes and not filtered by scope isolation. */
                         int saved_push_target = symtab->push_target_unit;
                         int unit_idx = tree->tree_data.type_decl_data.source_unit_index;
-                        if (tree->tree_data.type_decl_data.defined_in_unit && unit_idx > 0)
+                        if (unit_idx > 0)
                             symtab->push_target_unit = unit_idx;
 
                         int ordinal = 0;
@@ -7360,6 +7416,7 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         symtab->push_target_unit = saved_push_target;
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
+                    symtab->push_target_unit = saved_push_target_enum;
                 }
                 /* Also handle set types with inline anonymous enum: set of (val1, val2, ...) */
                 if (alias_info != NULL && alias_info->is_enum_set && alias_info->inline_enum_values != NULL)
@@ -7519,17 +7576,25 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
     int errors = 0;
     ListNode_t *cur = type_decls;
+    int predeclare_saved_push = symtab->push_target_unit;
     while (cur != NULL)
     {
+        /* Restore push_target_unit at start of each iteration so types don't
+         * inherit the target from the previous type in the list. */
+        symtab->push_target_unit = predeclare_saved_push;
         if (cur->type == LIST_TREE && cur->cur != NULL)
         {
             Tree_t *tree = (Tree_t *)cur->cur;
 
             if (tree->type == TREE_TYPE_DECL)
             {
-                /* Route unit types to per-unit table */
-                if (tree->tree_data.type_decl_data.defined_in_unit &&
-                    tree->tree_data.type_decl_data.source_unit_index > 0)
+                /* Route unit types to per-unit table.
+                 * Use source_unit_index > 0 regardless of defined_in_unit so that
+                 * the primary compiled unit's own types (defined_in_unit=0 but
+                 * source_unit_index=primary_unit_idx) are also visible from
+                 * unit_scopes[primary_unit_idx] when semcheck_subprogram runs. */
+                int saved_push_target_type = symtab->push_target_unit;
+                if (tree->tree_data.type_decl_data.source_unit_index > 0)
                     symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
                 const char *type_id = tree->tree_data.type_decl_data.id;
 
@@ -7914,7 +7979,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                              * update those existing references. */
                             struct RecordType *new_record = tree->tree_data.type_decl_data.info.record;
                             struct RecordType *existing_record = get_record_type_from_node(existing);
-                            if (existing_record != NULL && new_record != NULL)
+                            if (existing_record != NULL && new_record != NULL &&
+                                existing_record != new_record)
                             {
                                 /* Move new fields into existing record, keeping hidden fields at front */
                                 ListNode_t *old_fields = existing_record->fields;
@@ -7981,15 +8047,16 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     existing_record->properties = new_record->properties;
                                     new_record->properties = NULL;
                                 }
-                                if (new_record->parent_class_name != NULL)
+                                if (new_record->parent_class_name != NULL &&
+                                    existing_record != new_record &&
+                                    existing_record->parent_class_name != new_record->parent_class_name)
                                 {
-                                    if (existing_record->parent_class_name != new_record->parent_class_name)
-                                    {
-                                        free(existing_record->parent_class_name);
-                                        existing_record->parent_class_name = strdup(new_record->parent_class_name);
-                                    }
+                                    char *new_parent_copy = strdup(new_record->parent_class_name);
+                                    free(existing_record->parent_class_name);
+                                    existing_record->parent_class_name = new_parent_copy;
                                 }
-                                if (new_record->interface_names != NULL)
+                                if (new_record->interface_names != NULL &&
+                                    existing_record != new_record)
                                 {
                                     existing_record->interface_names = new_record->interface_names;
                                     existing_record->num_interfaces = new_record->num_interfaces;
@@ -10566,10 +10633,12 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        /* Route unit types to per-unit table */
+        /* Route unit types to per-unit table.
+         * Use source_unit_index > 0 regardless of defined_in_unit so that a unit's
+         * own types are visible from unit_scopes[unit_idx] when semcheck_subprogram
+         * switches scope. */
         int saved_push_target_type = symtab->push_target_unit;
-        if (tree->tree_data.type_decl_data.defined_in_unit &&
-            tree->tree_data.type_decl_data.source_unit_index > 0)
+        if (tree->tree_data.type_decl_data.source_unit_index > 0)
             symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
 
         const char *debug_pss = kgpc_getenv("KGPC_DEBUG_PSHORTSTRING");
@@ -12130,8 +12199,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     int saved_unit_context = symtab->unit_context;
     int saved_push_target = symtab->push_target_unit;
     int saved_imported_unit = g_semcheck_imported_decl_unit_index;
-    if (tree->tree_data.const_decl_data.defined_in_unit &&
-        tree->tree_data.const_decl_data.source_unit_index > 0)
+    /* Route consts to per-unit tables whenever source_unit_index > 0,
+     * regardless of defined_in_unit. A unit's own consts (defined_in_unit=0 but
+     * source_unit_index=unit_idx) must also be visible from unit_scopes[unit_idx]
+     * when semcheck_subprogram switches scope. */
+    if (tree->tree_data.const_decl_data.source_unit_index > 0)
     {
         symtab->unit_context = tree->tree_data.const_decl_data.source_unit_index;
         symtab->push_target_unit = tree->tree_data.const_decl_data.source_unit_index;
@@ -13991,11 +14063,34 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         }
     }
 
+    /* Wire the unit's own scope table as a dep of this UNIT scope so that
+     * FindIdent_Tree can see entries pushed via push_target_unit into
+     * unit_tables[unit_idx].  This mirrors what semcheck_unit_decls_only does
+     * and ensures that type lookups during semcheck_decls/semcheck_subprogram
+     * can find per-unit types (e.g. TResourceStringTableList in objpas). */
+    if (g_semcheck_current_unit_index > 0)
+    {
+        ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
+        if (own_unit_scope != NULL && symtab->current_scope != NULL)
+            ScopeAddDependency(symtab->current_scope, own_unit_scope);
+    }
+
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.interface_type_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.implementation_type_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
+        g_semcheck_current_unit_index);
+    /* Mark const and var decls so source_unit_index is set for the unit's own decls
+     * (defined_in_unit=0). Needed so push_target_unit routing works in
+     * semcheck_single_const_decl and semcheck_decls when source_unit_index > 0. */
+    semcheck_mark_const_decl_units(tree->tree_data.unit_data.interface_const_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_const_decl_units(tree->tree_data.unit_data.implementation_const_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_var_decl_units(tree->tree_data.unit_data.interface_var_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_var_decl_units(tree->tree_data.unit_data.implementation_var_decls,
         g_semcheck_current_unit_index);
 
     /* Check interface section */
@@ -14261,16 +14356,53 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
         g_semcheck_current_unit_index);
     semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
         g_semcheck_current_unit_index);
+    /* Mark const and var decls so that source_unit_index is set even for the
+     * unit's own decls (defined_in_unit=0). This is needed so that
+     * semcheck_single_const_decl and semcheck_decls can route them to the
+     * per-unit table via push_target_unit when source_unit_index > 0. */
+    semcheck_mark_const_decl_units(tree->tree_data.unit_data.interface_const_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_const_decl_units(tree->tree_data.unit_data.implementation_const_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_var_decl_units(tree->tree_data.unit_data.interface_var_decls,
+        g_semcheck_current_unit_index);
+    semcheck_mark_var_decl_units(tree->tree_data.unit_data.implementation_var_decls,
+        g_semcheck_current_unit_index);
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
      * FindAllIdents_Tree can see entries pushed via push_target_unit into
      * unit_tables[unit_idx].  Without this, predeclare_subprogram's duplicate
-     * detection misses entries already in the unit table, creating duplicates. */
+     * detection misses entries already in the unit table, creating duplicates.
+     *
+     * Also wire the unit's dependencies (interface + implementation uses) into
+     * the stable own_unit_scope so that semcheck_subprogram, which sets
+     * current_scope = unit_scopes[unit_idx], can find symbols from dependencies
+     * (e.g. Argv, argc from System) when processing the unit's procedure bodies. */
     if (g_semcheck_current_unit_index > 0)
     {
         ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
         if (own_unit_scope != NULL && symtab->current_scope != NULL)
+        {
             ScopeAddDependency(symtab->current_scope, own_unit_scope);
+            /* Wire the interface + implementation uses as deps of own_unit_scope */
+            wire_scope_deps(symtab, own_unit_scope,
+                            tree->tree_data.unit_data.interface_uses);
+            {
+                ListNode_t *dep_cur = tree->tree_data.unit_data.implementation_uses;
+                while (dep_cur != NULL)
+                {
+                    if (dep_cur->type == LIST_STRING && dep_cur->cur != NULL)
+                    {
+                        const char *dep_name = (const char *)dep_cur->cur;
+                        int dep_idx = unit_registry_add(dep_name);
+                        if (dep_idx > 0)
+                            ScopeAddDependency(own_unit_scope,
+                                               GetOrCreateUnitScope(symtab, dep_idx));
+                    }
+                    dep_cur = dep_cur->next;
+                }
+            }
+        }
     }
 
     /* Only predeclare types (push names) and enum literals -- this is lightweight
@@ -14355,15 +14487,19 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
         /* Route unit vars to per-unit table, but NOT function parameters/locals.
-         * Function parameters also have defined_in_unit=1 from mark_unit_var_decls,
-         * but they should go to the local scope stack. We detect "inside a function"
-         * by checking if there's more than one scope (the outermost + function scope). */
+         * Unit-level vars use source_unit_index > 0. Function parameters (processed
+         * inside a subprogram body) are excluded by checking g_semcheck_current_subprogram.
+         * We use source_unit_index > 0 regardless of defined_in_unit so that a unit's
+         * own vars (defined_in_unit=0 but source_unit_index=unit_idx) are also visible
+         * from unit_scopes[unit_idx] when semcheck_subprogram switches scope. */
         int saved_push_target_var = symtab->push_target_unit;
-        if (tree->type == TREE_VAR_DECL &&
-            tree->tree_data.var_decl_data.defined_in_unit &&
-            tree->tree_data.var_decl_data.source_unit_index > 0 &&
-            symtab->stack_head != NULL && symtab->stack_head->next == NULL)
-            symtab->push_target_unit = tree->tree_data.var_decl_data.source_unit_index;
+        {
+            int src_unit_idx = (tree->type == TREE_VAR_DECL)
+                ? tree->tree_data.var_decl_data.source_unit_index
+                : tree->tree_data.arr_decl_data.source_unit_index;
+            if (src_unit_idx > 0 && g_semcheck_current_subprogram == NULL)
+                symtab->push_target_unit = src_unit_idx;
+        }
 
         if (tree->type == TREE_VAR_DECL)
             ids_head = tree->tree_data.var_decl_data.ids;
@@ -14461,28 +14597,54 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (debug_imported)
                                 fprintf(stderr, "[IMPORTED_DECL]   candidate src_idx=%d kind=%d\n",
                                     n->source_unit_index, n->type ? n->type->kind : -1);
+                            int n_is_unknown = (n->type != NULL &&
+                                n->type->kind == TYPE_KIND_PRIMITIVE &&
+                                n->type->info.primitive_type_tag == UNKNOWN_TYPE);
                             if (n->source_unit_index == g_semcheck_imported_decl_unit_index)
                             {
-                                resolved_type = n;
-                                break;
+                                /* Exact unit match — accept immediately unless it's an
+                                 * UNKNOWN_TYPE stub (cross-unit alias that failed to resolve
+                                 * at predeclare time). In that case, keep scanning for a
+                                 * resolved type from a dependency unit. */
+                                if (!n_is_unknown)
+                                {
+                                    resolved_type = n;
+                                    break;
+                                }
+                                /* Save as fallback in case no resolved type is found */
+                                if (closest_ancestor == NULL)
+                                    closest_ancestor = n;
                             }
+#define candidate_is_unknown_stub(nd) ((nd) != NULL && (nd)->type != NULL && \
+    (nd)->type->kind == TYPE_KIND_PRIMITIVE && \
+    (nd)->type->info.primitive_type_tag == UNKNOWN_TYPE)
                             /* Prefer symbol from a unit that the importing unit uses */
-                            if (n->source_unit_index > 0 &&
+                            else if (!n_is_unknown && n->source_unit_index > 0 &&
                                 unit_registry_is_dep(g_semcheck_imported_decl_unit_index,
                                                      n->source_unit_index))
                             {
-                                closest_ancestor = n;
-                                closest_idx = n->source_unit_index;
+                                /* Only upgrade if we don't already have a dep match,
+                                 * or this dep has a higher (more specific) index. */
+                                if (closest_ancestor == NULL ||
+                                    candidate_is_unknown_stub(closest_ancestor) ||
+                                    n->source_unit_index > closest_idx)
+                                {
+                                    closest_ancestor = n;
+                                    closest_idx = n->source_unit_index;
+                                }
                                 /* Don't break — exact match still wins */
                             }
-                            else if (closest_ancestor == NULL &&
-                                     n->source_unit_index > 0 &&
+                            else if (!n_is_unknown &&
+                                     (closest_ancestor == NULL ||
+                                      candidate_is_unknown_stub(closest_ancestor)) &&
                                      n->source_unit_index <= g_semcheck_imported_decl_unit_index)
                             {
-                                /* Fallback: highest index still <= function's unit */
+                                /* Fallback: accept any non-UNKNOWN type visible to the importing unit,
+                                 * including src_idx=0 (System builtins/prelude types). */
                                 closest_ancestor = n;
                                 closest_idx = n->source_unit_index;
                             }
+#undef candidate_is_unknown_stub
                         }
                         c = c->next;
                     }
@@ -14562,9 +14724,20 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         }
         if (tree->type == TREE_VAR_DECL)
         {
+            /* Determine whether to retain the pre-existing cached type.
+             * Normally imported declarations keep their cached type to prevent
+             * late scope rebinding from corrupting aliases like BaseUnix.TSize.
+             * Exception: if the cached type is an UNKNOWN_TYPE stub (cross-unit
+             * alias that failed to resolve at predeclare time), allow replacing it
+             * with a resolved type found now that all unit scopes are wired. */
+            KgpcType *cached_existing = tree->tree_data.var_decl_data.cached_kgpc_type;
+            int cached_is_unknown = (cached_existing != NULL &&
+                cached_existing->kind == TYPE_KIND_PRIMITIVE &&
+                cached_existing->info.primitive_type_tag == UNKNOWN_TYPE);
             int keep_imported_cached =
                 (tree->tree_data.var_decl_data.defined_in_unit &&
-                 tree->tree_data.var_decl_data.cached_kgpc_type != NULL);
+                 cached_existing != NULL &&
+                 !cached_is_unknown);
             if (resolved_type != NULL && resolved_type->type != NULL)
             {
                 if (keep_imported_cached)
@@ -15080,6 +15253,24 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                     var_kgpc_type = type_node->type;
                                     kgpc_type_retain(var_kgpc_type);
                                 }
+                            }
+                            /* If the type node is an UNKNOWN primitive stub (e.g., a plain alias
+                             * like PString = ObjPas.PString that failed to resolve at predeclare
+                             * time but whose target may now be available), try re-resolving via
+                             * the alias target.  This handles per-unit scoping where SysUtils's
+                             * PString stub is in unit_tables[sysutils] but ObjPas's resolved
+                             * pointer type is in unit_tables[objpas]. */
+                            else if (var_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                                     var_kgpc_type->info.primitive_type_tag == UNKNOWN_TYPE &&
+                                     alias != NULL &&
+                                     (alias->target_type_id != NULL || alias->target_type_ref != NULL))
+                            {
+                                KgpcType *resolved_via_alias = create_kgpc_type_from_type_alias(
+                                    alias, symtab, tree->tree_data.var_decl_data.defined_in_unit);
+                                if (resolved_via_alias != NULL)
+                                    var_kgpc_type = resolved_via_alias;
+                                else
+                                    kgpc_type_retain(var_kgpc_type);
                             }
                             else
                             {

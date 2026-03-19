@@ -496,6 +496,15 @@ static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
     return single;
 }
 
+/* Helper: return 1 if node's type is an UNKNOWN_TYPE primitive stub */
+static int hashnode_is_unknown_type_stub(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL)
+        return 0;
+    return (node->type->kind == TYPE_KIND_PRIMITIVE &&
+            node->type->info.primitive_type_tag == UNKNOWN_TYPE);
+}
+
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit)
 {
@@ -504,7 +513,8 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 
     HashNode_t *fallback = NULL;
     HashNode_t *fallback_outermost = NULL;
-    HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record) */
+    HashNode_t *fallback_resolved = NULL; /* best non-UNKNOWN fallback (cross-unit resolved type) */
+    HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record or UNKNOWN stub) */
     ListNode_t *cur = symtab->stack_head;
     while (cur != NULL)
     {
@@ -514,16 +524,20 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
         {
             if (node->defined_in_unit == defined_in_unit)
             {
-                /* If this is a class type, return immediately. If it's a plain
-                 * record, save it — a class type with the same name from another
-                 * table should take precedence. */
-                if (!hashnode_is_plain_record(node))
+                /* If this is a class type, return immediately.
+                 * If it's a plain record or an UNKNOWN_TYPE stub (cross-unit
+                 * alias that failed to resolve at predeclare time), save it
+                 * as a fallback — a resolved type from another unit is better.
+                 */
+                if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
                     return node;
                 if (unit_match == NULL)
                     unit_match = node;
             }
             if (fallback == NULL)
                 fallback = node;
+            if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+                fallback_resolved = node;
             fallback_outermost = node;
         }
         cur = cur->next;
@@ -541,7 +555,7 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
             {
                 if (node->defined_in_unit == defined_in_unit)
                 {
-                    if (!hashnode_is_plain_record(node))
+                    if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
                         return node;
                     if (unit_match == NULL)
                         unit_match = node;
@@ -552,6 +566,8 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
                     fallback = node;
                 else if (hashnode_is_plain_record(fallback) && hashnode_is_class_type(node))
                     fallback = node;
+                if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+                    fallback_resolved = node;
                 fallback_outermost = node;
             }
         }
@@ -569,18 +585,27 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     /* Imported declarations should prefer unit-defined symbols, but if absent
      * they must bind to outer/prelude types rather than local shadows.
      * Example: prefer UnixType.TSize over local Types.TSize; if UnixType.TSize
-     * is absent, still allow global System aliases. */
+     * is absent, still allow global System aliases.
+     * Additionally, prefer a resolved (non-UNKNOWN) type over an UNKNOWN stub
+     * so cross-unit aliases like TDateTime=System.TDateTime resolve correctly. */
     if (defined_in_unit)
     {
         if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
             return builtin;
+        if (fallback_resolved != NULL)
+            return fallback_resolved;
         return fallback_outermost;
     }
 
-    /* If we found a unit_match (plain record) but no class in the same table,
-     * check if a class was found in another table. */
+    /* If we found a unit_match (plain record or UNKNOWN stub) but a resolved
+     * type exists from another unit (e.g. System.TDateTime resolves TDateTime
+     * while SysUtils only has an UNKNOWN alias stub), prefer the resolved one.
+     * Also, if a class type was found in another table, prefer it over a plain
+     * record unit_match. */
     if (unit_match != NULL)
     {
+        if (hashnode_is_unknown_type_stub(unit_match) && fallback_resolved != NULL)
+            return fallback_resolved;
         if (fallback != NULL && hashnode_is_class_type(fallback))
             return fallback;
         return unit_match;
@@ -1183,6 +1208,21 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                             *owns_type = 1;
                         return alias_type;
                     }
+                }
+                /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias
+                 * that couldn't be resolved at predeclare time), try to get a
+                 * resolved type from the freshly looked-up type_node now that
+                 * all unit scopes are wired. */
+                KgpcType *cached = var_decl->tree_data.var_decl_data.cached_kgpc_type;
+                if (cached != NULL &&
+                    cached->kind == TYPE_KIND_PRIMITIVE &&
+                    cached->info.primitive_type_tag == UNKNOWN_TYPE &&
+                    type_node->type != NULL &&
+                    !(type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                      type_node->type->info.primitive_type_tag == UNKNOWN_TYPE))
+                {
+                    kgpc_type_retain(type_node->type);
+                    return type_node->type;
                 }
             }
         }
@@ -3824,6 +3864,25 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
     else if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
         kgpc_type_retain(resolved_type_node->type);
         result = resolved_type_node->type;
+        /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias that
+         * couldn't be resolved at predeclare time), try to re-resolve it via
+         * the node's alias now that all unit scopes are wired as deps. */
+        if (result->kind == TYPE_KIND_PRIMITIVE &&
+            result->info.primitive_type_tag == UNKNOWN_TYPE)
+        {
+            struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
+            if (alias != NULL &&
+                (alias->target_type_id != NULL || alias->target_type_ref != NULL))
+            {
+                KgpcType *resolved = create_kgpc_type_from_type_alias(alias, symtab,
+                    resolved_type_node->source_unit_index);
+                if (resolved != NULL)
+                {
+                    destroy_kgpc_type(result);
+                    result = resolved;
+                }
+            }
+        }
     }
     else if (resolved_type_node != NULL) {
         struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);

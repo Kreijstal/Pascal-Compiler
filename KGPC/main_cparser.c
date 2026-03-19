@@ -1422,15 +1422,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited, 
         file_to_parse = path;
         semcheck_unit_decls_only(symtab, unit_tree);
         LeaveScope(symtab);
-        /* Debug: check unit table state */
-        fprintf(stderr, "[DEBUG] after load_unit(%s): unit_idx=%d unit_tables[%d]=%p push_target was %d\n",
-            unit_name, unit_idx, unit_idx,
-            unit_idx > 0 ? (void*)symtab->unit_tables[unit_idx] : NULL,
-            unit_idx);
-        if (unit_idx > 0 && symtab->unit_tables[unit_idx] != NULL) {
-            HashNode_t *dbg = FindIdentInTable(symtab->unit_tables[unit_idx], "Flush");
-            fprintf(stderr, "[DEBUG] Flush in unit_tables[%d] = %p\n", unit_idx, (void*)dbg);
-        }
         file_to_parse = saved_file_to_parse;
         symtab->push_target_unit = saved_push;
     }

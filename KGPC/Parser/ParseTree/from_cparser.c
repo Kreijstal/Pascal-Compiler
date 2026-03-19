@@ -8342,9 +8342,8 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
 
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         // First child is parent class name, extract it
-        if (body_start->sym != NULL && body_start->sym->name != NULL) {
+        if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_class_name = strdup(body_start->sym->name);
-        }
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
     }
