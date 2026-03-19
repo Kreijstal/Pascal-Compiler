@@ -7983,8 +7983,11 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 }
                                 if (new_record->parent_class_name != NULL)
                                 {
-                                    free(existing_record->parent_class_name);
-                                    existing_record->parent_class_name = strdup(new_record->parent_class_name);
+                                    if (existing_record->parent_class_name != new_record->parent_class_name)
+                                    {
+                                        free(existing_record->parent_class_name);
+                                        existing_record->parent_class_name = strdup(new_record->parent_class_name);
+                                    }
                                 }
                                 if (new_record->interface_names != NULL)
                                 {
