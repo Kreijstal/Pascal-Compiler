@@ -17476,8 +17476,19 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
     else
     {
-        assert(FindSymbol(&hash_return, symtab, subprogram->tree_data.subprogram_data.id)
-                    != 0);
+        if (FindSymbol(&hash_return, symtab, subprogram->tree_data.subprogram_data.id) == 0)
+        {
+            fprintf(stderr, "[ASSERT_FAIL] semcheck_subprogram: cannot find return var for func '%s'"
+                " (source_unit=%d, push_target=%d, current_scope=%p, unit_scope=%p)\n",
+                subprogram->tree_data.subprogram_data.id,
+                subprogram->tree_data.subprogram_data.source_unit_index,
+                symtab->push_target_unit,
+                (void*)symtab->current_scope,
+                (void*)(subprogram->tree_data.subprogram_data.source_unit_index > 0
+                    ? symtab->unit_scopes[subprogram->tree_data.subprogram_data.source_unit_index]
+                    : NULL));
+            abort();
+        }
 
         ResetHashNodeStatus(hash_return);
         int func_stmt_ret = 0;
