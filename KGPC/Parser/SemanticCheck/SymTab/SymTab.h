@@ -42,7 +42,6 @@ typedef struct ScopeNode {
 
 typedef struct SymTab
 {
-    int unit_context;           /* Active unit index for unit-aware resolution (0 = program) */
     int push_target_unit;       /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
 
     /* --- Scope tree (used for all lookups and insertions) --- */
