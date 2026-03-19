@@ -13943,12 +13943,18 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
+    /* Reset push_target_unit before processing program-level var declarations.
+     * Earlier type/const declaration passes may leave push_target_unit pointing
+     * at a unit table.  Program vars (source_unit_index == 0) must go into the
+     * program scope, not a unit table, so reset here. */
+    symtab->push_target_unit = 0;
     ListNode_t *program_vars = collect_non_typed_var_decls(tree->tree_data.program_data.var_declaration);
     if (program_vars != NULL)
     {
         return_val += semcheck_decls(symtab, program_vars);
         DestroyList(program_vars);
     }
+    symtab->push_target_unit = 0;
     semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
