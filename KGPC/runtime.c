@@ -2907,6 +2907,30 @@ static void kgpc_string_release(char *value)
     }
 }
 
+void FPC_ANSISTR_UNIQUE(char **value)
+{
+    if (value == NULL || *value == NULL)
+        return;
+    KgpcStringHeader *hdr = kgpc_string_header(*value);
+    if (hdr == NULL)
+        return;
+    if (hdr->refcount == 1 || hdr->refcount < 0)
+        return;
+    size_t len = (size_t)hdr->length;
+    char *new_str = (char *)malloc(sizeof(KgpcStringHeader) + len + 1);
+    if (new_str == NULL)
+        return;
+    KgpcStringHeader *new_hdr = (KgpcStringHeader *)new_str;
+    new_hdr->codepage = hdr->codepage;
+    new_hdr->elementsize = hdr->elementsize;
+    new_hdr->refcount = 1;
+    new_hdr->length = len;
+    char *new_data = new_str + sizeof(KgpcStringHeader);
+    memcpy(new_data, *value, len + 1);
+    kgpc_string_release(*value);
+    *value = new_data;
+}
+
 char *kgpc_alloc_empty_string(void)
 {
     static struct {
@@ -5643,12 +5667,27 @@ int64_t kgpc_is_odd(int64_t value)
     return (value & 1) ? 1 : 0;
 }
 
+int64_t fpc_in_const_odd(int64_t value)
+{
+    return (value & 1) ? 1 : 0;
+}
+
+void *fpc_in_const_ptr(void *value)
+{
+    return value;
+}
+
 int32_t kgpc_sqr_int32(int32_t value)
 {
     return value * value;
 }
 
 int64_t kgpc_sqr_int64(int64_t value)
+{
+    return value * value;
+}
+
+int64_t fpc_in_const_sqr(int64_t value)
 {
     return value * value;
 }
@@ -7190,7 +7229,11 @@ int64_t kgpc_abs_longint(int64_t value)
     return (value < 0) ? -value : value;
 }
 
-/* Abs for unsigned types is a no-op (identity function) */
+int64_t fpc_in_const_abs(int64_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
 uint64_t kgpc_abs_unsigned(uint64_t value)
 {
     return value;

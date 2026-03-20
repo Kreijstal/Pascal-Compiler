@@ -4830,7 +4830,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                     pascal_strcasestr(src, "word ptr")  != NULL)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
-                     * kgpc_sin / kgpc_cos so the function body is not empty.
+                     * fpc_in_sin_real / fpc_in_cos_real so the function body is not empty.
                      * The Intel-mode asm in FPC's mathu.inc computes:
                      *   sinus   := sin(theta)
                      *   cosinus := cos(theta)
@@ -4860,19 +4860,19 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             inst_list = add_inst(inst_list, strdup(buf));
                             snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", cosinus_off);
                             inst_list = add_inst(inst_list, strdup(buf));
-                            /* Call kgpc_sin; write Double result to *sinus */
+                            /* Call fpc_in_sin_real; write Double result to *sinus */
                             inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_sin\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_sin_real\n"));
                             inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r12)\n"));
-                            /* Reload theta for kgpc_cos */
+                            /* Reload theta for fpc_in_cos_real */
                             if (theta_size == 4)
                                 snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
                             else
                                 snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
                             inst_list = add_inst(inst_list, strdup(buf));
-                            /* Call kgpc_cos; write Double result to *cosinus */
+                            /* Call fpc_in_cos_real; write Double result to *cosinus */
                             inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tkgpc_cos\n"));
+                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_cos_real\n"));
                             inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
                             break;
                         }
