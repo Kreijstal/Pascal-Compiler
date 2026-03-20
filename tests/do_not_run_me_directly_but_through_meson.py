@@ -1961,6 +1961,9 @@ class TestCompiler(unittest.TestCase):
 
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
+            stderr = result.stderr or ""
+            if "Fatal error at startup" in stderr and "cannot be set up" in stderr:
+                self.skipTest("valgrind is not usable on this host (missing loader debug symbols)")
             self.fail(
                 "Valgrind reported memory issues:\n"
                 f"STDOUT:\n{result.stdout}\nSTDERR:\n{result.stderr}"
