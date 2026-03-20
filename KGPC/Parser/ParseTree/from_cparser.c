@@ -17520,14 +17520,17 @@ static char *extract_external_name_from_node(ast_t *node)
     if (node->child->typ == PASCAL_T_STRING)
         return dup_symbol(node->child);
 
+    if (node->child->typ == PASCAL_T_IDENTIFIER)
+        return dup_symbol(node->child);
+
     if (node->child->typ == PASCAL_T_EXTERNAL_NAME_EXPR &&
         node->child->child != NULL &&
-        node->child->child->typ == PASCAL_T_STRING)
+        (node->child->child->typ == PASCAL_T_STRING ||
+         node->child->child->typ == PASCAL_T_IDENTIFIER))
         return dup_symbol(node->child->child);
 
-    /* Handle bracket form: [external name 'X'] — children are keyword, keyword, string */
     for (ast_t *c = node->child; c != NULL; c = c->next) {
-        if (c->typ == PASCAL_T_STRING)
+        if (c->typ == PASCAL_T_STRING || c->typ == PASCAL_T_IDENTIFIER)
             return dup_symbol(c);
     }
 
@@ -17739,6 +17742,46 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                     external_alias = name;
                 }
                 is_external = 1;
+            }
+            break;
+        case PASCAL_T_NONE:
+            {
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
+                        char *kw = child->sym->name;
+                        if (strcasecmp(kw, "internproc") == 0 || strcasecmp(kw, "compilerproc") == 0) {
+                            is_external = 1;
+                            ast_t *val = child->next;
+                            while (val != NULL && val->typ == PASCAL_T_NONE)
+                                val = val->child;
+                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
+                                if (internproc_id_str != NULL)
+                                    free(internproc_id_str);
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                internproc_id_str = dup_symbol(val);
+                                external_alias = dup_symbol(val);
+                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
+                                if (internproc_id_str != NULL)
+                                    free(internproc_id_str);
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                internproc_id_str = dup_symbol(val);
+                                external_alias = dup_symbol(val);
+                            }
+                        } else if (strcasecmp(kw, "external") == 0) {
+                            is_external = 1;
+                        }
+                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
+                        char *name = extract_external_name_from_node(child);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        is_external = 1;
+                    }
+                }
             }
             break;
         default:
@@ -18068,6 +18111,46 @@ static Tree_t *convert_function(ast_t *func_node) {
                     external_alias = name;
                 }
                 is_external = 1;
+            }
+            break;
+        case PASCAL_T_NONE:
+            {
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
+                        char *kw = child->sym->name;
+                        if (strcasecmp(kw, "internproc") == 0 || strcasecmp(kw, "compilerproc") == 0) {
+                            is_external = 1;
+                            ast_t *val = child->next;
+                            while (val != NULL && val->typ == PASCAL_T_NONE)
+                                val = val->child;
+                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
+                                if (internproc_id_str != NULL)
+                                    free(internproc_id_str);
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                internproc_id_str = dup_symbol(val);
+                                external_alias = dup_symbol(val);
+                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
+                                if (internproc_id_str != NULL)
+                                    free(internproc_id_str);
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                internproc_id_str = dup_symbol(val);
+                                external_alias = dup_symbol(val);
+                            }
+                        } else if (strcasecmp(kw, "external") == 0) {
+                            is_external = 1;
+                        }
+                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
+                        char *name = extract_external_name_from_node(child);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        is_external = 1;
+                    }
+                }
             }
             break;
         default:

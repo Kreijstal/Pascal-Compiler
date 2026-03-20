@@ -567,27 +567,27 @@ var
 { Internal string conversion helper }
 procedure fpc_pchar_to_shortstr(var res: shortstring; p: PAnsiChar); cdecl; external name 'fpc_pchar_to_shortstr';
 
-{ Math intrinsics — declared with external name to map to runtime functions }
-{ Pi is injected as a builtin constant by the semantic checker }
+{ Math intrinsics — declared with internproc or external name to map to runtime functions }
+function Pi: ValReal; [internproc:fpc_in_pi_real];
 
-function Sqrt(x: Real): Real; cdecl; external name 'kgpc_sqrt';
-function Sin(x: Real): Real; cdecl; external name 'kgpc_sin';
-function Cos(x: Real): Real; cdecl; external name 'kgpc_cos';
-function ArcTan(x: Real): Real; cdecl; external name 'kgpc_arctan';
-function Ln(x: Real): Real; cdecl; external name 'kgpc_ln';
-function Exp(x: Real): Real; cdecl; external name 'kgpc_exp';
-function Frac(x: Real): Real; cdecl; external name 'kgpc_frac';
-function Int(x: Real): Real; cdecl; external name 'kgpc_int_real';
-function Round(x: Real): Int64; cdecl; external name 'kgpc_round';
-function Trunc(x: Real): Int64; cdecl; external name 'kgpc_trunc';
+function Sqrt(x: Real): Real; cdecl; external name 'fpc_in_sqrt_real';
+function Sin(x: Real): Real; cdecl; external name 'fpc_in_sin_real';
+function Cos(x: Real): Real; cdecl; external name 'fpc_in_cos_real';
+function ArcTan(x: Real): Real; cdecl; external name 'fpc_in_arctan_real';
+function Ln(x: Real): Real; cdecl; external name 'fpc_in_ln_real';
+function Exp(x: Real): Real; cdecl; external name 'fpc_in_exp_real';
+function Frac(x: Real): Real; cdecl; external name 'fpc_in_frac_real';
+function Int(x: Real): Real; cdecl; external name 'fpc_in_int_real';
+function Round(x: Real): Int64; cdecl; external name 'fpc_in_round_real';
+function Trunc(x: Real): Int64; cdecl; external name 'fpc_in_trunc_real';
 
-function Abs(x: LongInt): LongInt; cdecl; external name 'kgpc_abs_int';
+function Abs(x: LongInt): LongInt; cdecl; external name 'fpc_in_abs_long';
 function Abs(x: Int64): Int64; cdecl; external name 'kgpc_abs_longint';
-function Abs(x: Real): Real; cdecl; external name 'kgpc_abs_real';
+function Abs(x: Real): Real; cdecl; external name 'fpc_in_abs_real';
 
 function Sqr(x: LongInt): LongInt; cdecl; external name 'kgpc_sqr_int64';
 function Sqr(x: Int64): Int64; cdecl; external name 'kgpc_sqr_int64';
-function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
+function Sqr(x: Real): Real; cdecl; external name 'fpc_in_sqr_real';
 
 function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
 

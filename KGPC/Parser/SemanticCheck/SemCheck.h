@@ -95,6 +95,11 @@ int semcheck_get_current_subprogram_is_constructor(void);
 KgpcType *semcheck_get_current_subprogram_return_kgpc_type(struct SymTab *symtab, int *owns_type);
 ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self);
 
+int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr);
+int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
+    unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
+    long long *out_mask, int *is_char_set);
+
 /* Cached getenv() for KGPC_* environment variables.
  * getenv() does a linear scan of the environment on each call; with hundreds of
  * debug checks in hot loops, this was consuming 9% of total CPU time.

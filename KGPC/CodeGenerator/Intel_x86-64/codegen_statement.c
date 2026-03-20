@@ -1375,6 +1375,43 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
+        /* Check if this is a set constant - need to emit rodata even if var_node is found */
+        if (ctx->symtab != NULL)
+        {
+            HashNode_t *const_node = NULL;
+            if (FindSymbol(&const_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                const_node->const_set_value != NULL && const_node->const_set_size > 0)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for set constant.");
+                        goto cleanup;
+                    }
+                }
+
+                inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                if (const_node->const_set_label == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Failed to materialize set constant.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    const_node->const_set_label, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
         /* Fallback: resolve via symbol table mangled_id (e.g. class constants
            registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
         if (var_node == NULL && ctx->symtab != NULL)
@@ -4973,13 +5010,21 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                         /* Try resolving as a global variable (case-insensitive) */
                                         if (!did_substitute) {
                                             StackNode_t *var = find_label(id_buf);
-                                            if (var != NULL && var->is_static && var->static_label != NULL) {
-                                                const char *label = var->static_label;
-                                                size_t llen = strlen(label);
-                                                if (sj + llen < sub_alloc - 64) {
-                                                    memcpy(substituted + sj, label, llen);
-                                                    sj += llen;
-                                                    did_substitute = 1;
+                                            if (var != NULL) {
+                                                if (var->is_static && var->static_label != NULL) {
+                                                    const char *label = var->static_label;
+                                                    size_t llen = strlen(label);
+                                                    if (sj + llen < sub_alloc - 64) {
+                                                        memcpy(substituted + sj, label, llen);
+                                                        sj += llen;
+                                                        did_substitute = 1;
+                                                    }
+                                                } else if (var->offset > 0) {
+                                                    int n = snprintf(substituted + sj, sub_alloc - sj, "-%d(%%rbp)", var->offset);
+                                                    if (n > 0) {
+                                                        sj += (size_t)n;
+                                                        did_substitute = 1;
+                                                    }
                                                 }
                                             }
                                         }

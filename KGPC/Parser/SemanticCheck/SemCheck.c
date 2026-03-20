@@ -4491,7 +4491,7 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
 static char *build_qualified_identifier_from_expr(struct Expression *expr);
 static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr);
 
-static int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
+int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -4538,7 +4538,7 @@ static int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *exp
 }
 
 /* Evaluate a set literal into a byte array (supports up to 0..255) */
-static int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
+int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
     unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
     long long *out_mask, int *is_char_set)
 {
@@ -13207,7 +13207,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             free(name);
         }
     }
-
+    
     {
         KgpcType *pchar = create_pointer_type(create_primitive_type(CHAR_TYPE));
         KgpcType *ppchar = create_pointer_type(pchar);

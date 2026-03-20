@@ -28,6 +28,7 @@
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 
 #include "../../identifier_utils.h"
 #include "../../unit_registry.h"
@@ -1250,9 +1251,6 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
 
 static int codegen_eval_const_expr(struct Expression *expr, long long *out_value);
 
-/* Register local const declarations in the symbol table so that nested functions
- * (and the function itself) can find them via FindIdent as HASHTYPE_CONST.
- * Without this, constants emitted as .equ are treated as memory references. */
 static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
 {
     if (const_decls == NULL || symtab == NULL)
@@ -1269,6 +1267,27 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
 
         if (id == NULL || value == NULL)
             continue;
+
+        unsigned char set_bytes[32];
+        size_t set_size = 0;
+        long long set_mask = 0;
+        int is_char_set = 0;
+
+        if (expression_is_set_const_expr(symtab, value) &&
+            evaluate_set_const_bytes(symtab, value, set_bytes, sizeof(set_bytes),
+                &set_size, &set_mask, &is_char_set) == 0)
+        {
+            KgpcType *set_type = create_primitive_type(SET_TYPE);
+            if (set_type != NULL)
+            {
+                if (is_char_set)
+                    set_type->size_in_bytes = 32;
+                else
+                    set_type->size_in_bytes = 4;
+            }
+            PushSetConstOntoScope(symtab, (char *)id, set_bytes, (int)set_size, set_type);
+            continue;
+        }
 
         long long const_value = 0;
         if (codegen_eval_const_expr(value, &const_value))

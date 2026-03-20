@@ -252,6 +252,9 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
 /* Reset function call cache on expression */
 void semcheck_reset_function_call_cache(struct Expression *expr);
 
+/* Duplicate the canonical callee symbol for a resolved function target. */
+char *semcheck_dup_function_call_target_symbol(HashNode_t *target);
+
 /* Set function call target on expression */
 void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target);
 
