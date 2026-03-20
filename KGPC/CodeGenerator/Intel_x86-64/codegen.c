@@ -2099,7 +2099,7 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 
 /* Adds instruction to instruction list */
 /* WARNING: Makes copy of given char * */
-ListNode_t *add_inst(ListNode_t *inst_list, char *inst)
+ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);

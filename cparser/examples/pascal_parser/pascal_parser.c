@@ -151,7 +151,6 @@ static ParseResult pascal_layout_fn(input_t* in, void* args, char* parser_name) 
 
         if (c == '{') {
             /* Check for #line directive first — need to update input state for it */
-            int saved_pos = pos;
             advance_input_pos(in, in->start, pos);
             if (try_parse_line_directive(in)) {
                 pos = in->start;  /* directive advanced the position */

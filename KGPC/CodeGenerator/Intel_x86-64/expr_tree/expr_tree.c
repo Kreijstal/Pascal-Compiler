@@ -51,8 +51,11 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
     if (buffer == NULL || size == 0)
         return;
     char sanitized[CODEGEN_MAX_INST_BUF];
+    const char *prefix = "__kgpc_enum_typeinfo_";
     codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
+    snprintf(buffer, size, "%s%.*s", prefix,
+        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
+        sanitized);
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"

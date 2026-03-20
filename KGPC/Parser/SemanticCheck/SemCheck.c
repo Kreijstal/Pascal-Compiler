@@ -977,7 +977,7 @@ static enum VarType map_type_tag_to_var_type(int type_tag)
     }
 }
 
-static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_t *symtab,
+__attribute__((unused)) static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_t *symtab,
     const char *id)
 {
     if (out == NULL || symtab == NULL || id == NULL)
@@ -986,7 +986,7 @@ static int semcheck_find_ident_with_qualified_fallback(HashNode_t **out, SymTab_
     return FindSymbol(out, symtab, id);
 }
 
-static int semcheck_find_ident_with_qualified_fallback_ref(HashNode_t **out, SymTab_t *symtab,
+__attribute__((unused)) static int semcheck_find_ident_with_qualified_fallback_ref(HashNode_t **out, SymTab_t *symtab,
     const QualifiedIdent *id_ref)
 {
     if (out == NULL || symtab == NULL || id_ref == NULL || id_ref->count <= 0)
@@ -1304,7 +1304,7 @@ static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_
     return CreateListNode(decl, LIST_TREE);
 }
 
-static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int type_tag,
+__attribute__((unused)) static ListNode_t *semcheck_create_builtin_param_with_id(const char *name, int type_tag,
     const char *type_id, int is_var_param)
 {
     char *param_name = strdup(name);
@@ -1492,7 +1492,7 @@ static int semcheck_line_from_source_offset(const char *buffer, size_t length, i
 }
 
 /* Find the file from a source byte offset by scanning backwards for line directives */
-static void semcheck_file_from_source_index(int source_index, char *file_out, size_t file_out_size)
+__attribute__((unused)) static void semcheck_file_from_source_index(int source_index, char *file_out, size_t file_out_size)
 {
     if (file_out == NULL || file_out_size == 0)
         return;
@@ -1588,7 +1588,7 @@ static void semcheck_file_from_buffer_line_number(int line_num, char *file_out, 
         {
             if (directive_file[0] != '\0')
             {
-                strncpy(last_file, directive_file, sizeof(last_file) - 1);
+                memcpy(last_file, directive_file, sizeof(last_file) - 1);
                 last_file[sizeof(last_file) - 1] = '\0';
             }
             current_line = directive_line;
@@ -2998,7 +2998,7 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                         {
                             const char *real_mangled = method_node->mangled_id ? method_node->mangled_id : mangled_name;
                             PushFunctionOntoScope_Typed(symtab, binding->method_name,
-                                                        real_mangled, method_node->type);
+                                                        (char *)real_mangled, method_node->type);
                         }
                     }
                 }
@@ -3594,13 +3594,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 take = 1;
             }
             else if (same_unit == best_same_unit &&
-                     (is_forward_stub < best_is_forward_stub) ||
+                     ((is_forward_stub < best_is_forward_stub) ||
                       (is_forward_stub == best_is_forward_stub &&
                        (scope_level < best_scope_level ||
-                      (scope_level == best_scope_level && unit_rank < best_unit_rank) ||
-                      (scope_level == best_scope_level && unit_rank == best_unit_rank &&
-                       node->source_unit_index > 0 && best->source_unit_index > 0 &&
-                       node->source_unit_index > best->source_unit_index))))
+                        (scope_level == best_scope_level && unit_rank < best_unit_rank) ||
+                        (scope_level == best_scope_level && unit_rank == best_unit_rank &&
+                         node->source_unit_index > 0 && best->source_unit_index > 0 &&
+                         node->source_unit_index > best->source_unit_index)))))
             {
                 take = 1;
             }
@@ -8884,7 +8884,7 @@ predeclare_types_next:
 }
 
 /* Helper function to check if a statement contains an asm block */
-static int statement_contains_asm_block(struct Statement *stmt)
+__attribute__((unused)) static int statement_contains_asm_block(struct Statement *stmt)
 {
     if (stmt == NULL)
         return 0;
@@ -10598,7 +10598,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 {
     ListNode_t *cur;
     Tree_t *tree;
-    int return_val, func_return;
+    int return_val, func_return = 0;
     enum VarType var_type;
 
     assert(symtab != NULL);
@@ -13092,7 +13092,7 @@ static void register_unary_builtin_func(SymTab_t *symtab, const char *name,
 /* Register an overloaded binary built-in function:
  * name(p1_name: p1_type; p2_name: p2_type): ret_type.
  * Caller may invoke multiple times with different types for overloads. */
-static void register_binary_builtin_func(SymTab_t *symtab, const char *name,
+__attribute__((unused)) static void register_binary_builtin_func(SymTab_t *symtab, const char *name,
     const char *p1_name, int p1_type_tag,
     const char *p2_name, int p2_type_tag,
     int return_type_tag)
@@ -14433,7 +14433,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
 int semcheck_args(SymTab_t *symtab, ListNode_t *args, int line_num)
 {
     ListNode_t *cur;
-    int return_val, func_return;
+    int return_val, func_return = 0;
     assert(symtab != NULL);
 
     return_val = 0;
@@ -14474,7 +14474,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 {
     ListNode_t *cur, *ids, *ids_head;
     Tree_t *tree;
-    int return_val, func_return;
+    int return_val, func_return = 0;
 
     enum VarType var_type;
 
@@ -17675,8 +17675,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 #endif
 
         /* Allow functions with asm blocks to skip explicit return assignment */
-        int has_asm = statement_contains_asm_block(body);
-        
         /* Constructors implicitly yield the constructed instance, so do not
          * require an explicit assignment to the return variable. */
         int is_constructor = subprogram->tree_data.subprogram_data.is_constructor;

@@ -1420,13 +1420,6 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
     ), build_array_or_pointer_chain);
 
     // specialize TypeName<T> without (args) - for @specialize and member access
-    combinator_t* specialize_bare = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
-        token(keyword_ci("specialize")),
-        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
-        type_arg_list,
-        NULL
-    );
-
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p, stmt_parser)),  // Anonymous functions
         token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p, stmt_parser)), // Anonymous procedures

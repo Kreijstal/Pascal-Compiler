@@ -349,7 +349,7 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
                 ++idx;
             current_line = directive_line;
             if (directive_file[0] != '\0') {
-                strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                memcpy(current_file, directive_file, sizeof(current_file) - 1);
                 current_file[sizeof(current_file) - 1] = '\0';
             }
             continue;
@@ -488,7 +488,7 @@ int print_source_context_at_offset(const char *buffer, size_t length,
             }
             current_line_at_offset = directive_line + lines_after_directive;
             if (directive_file[0] != '\0') {
-                strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                memcpy(current_file, directive_file, sizeof(current_file) - 1);
                 current_file[sizeof(current_file) - 1] = '\0';
             }
             break;

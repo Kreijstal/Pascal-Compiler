@@ -1709,8 +1709,10 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         {
             if (var_node->is_static)
             {
+                const char *label = var_node->static_label != NULL ?
+                    var_node->static_label : var_node->label;
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
-                    var_node->static_label != NULL ? var_node->static_label : var_node->label,
+                    label != NULL ? label : "",
                     addr_reg->bit_64);
             }
             else
@@ -1726,7 +1728,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         {
             const char *label = var_node->static_label != NULL ?
                 var_node->static_label : var_node->label;
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label != NULL ? label : "",
                 addr_reg->bit_64);
         }
         else
@@ -4985,7 +4988,6 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                              src[i-1] == ',' || src[i-1] == '$'))
                         {
                             /* Copy the label name */
-                            size_t label_start = j;
                             while (i < len && j < alloc_size - 32 &&
                                    (isalnum((unsigned char)src[i]) || src[i] == '.' || src[i] == '_' || src[i] == 'L'))
                             {
@@ -7050,7 +7052,6 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     }
 
     int target_type_tag = (target_expr != NULL) ? expr_get_type_tag(target_expr) : UNKNOWN_TYPE;
-    int target_is_long = (target_type_tag == LONGINT_TYPE);
     int target_is_pointer = (target_type_tag == POINTER_TYPE);
     int target_uses_qword = target_is_pointer;
     if (!target_uses_qword && target_expr != NULL)

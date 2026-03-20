@@ -1182,6 +1182,10 @@ int semcheck_funccall(int *type_return,
     Tree_t *arg_decl;
     int was_unit_qualified = 0;
     char *unit_qualifier_name = NULL;
+    double timing_start_ms = 0.0;
+    int injected_self = 0;
+    int is_operator_dispatch = 0;
+    int prefer_non_builtin = 0;
     assert(symtab != NULL);
     assert(expr != NULL);
     assert(expr->type == EXPR_FUNCTION_CALL);
@@ -1585,7 +1589,6 @@ int semcheck_funccall(int *type_return,
         }
     }
 
-    double timing_start_ms = 0.0;
     if (FUNCCALL_TIMINGS_ENABLED()) {
         timing_start_ms = funccall_now_ms();
         fprintf(stderr, "[timing] funccall enter id=%s line=%d\n",
@@ -1689,8 +1692,8 @@ int semcheck_funccall(int *type_return,
         return semcheck_builtin_typeinfo(type_return, symtab, expr, max_scope_lev);
 
     args_given = expr->expr_data.function_call_data.args_expr;
-    int injected_self = 0;
-    int is_operator_dispatch = expr->expr_data.function_call_data.is_operator_call;
+    if (expr != NULL)
+        is_operator_dispatch = expr->expr_data.function_call_data.is_operator_call;
     if (id != NULL)
     {
         const char *qualifier = expr->expr_data.function_call_data.call_qualifier;
@@ -2894,7 +2897,6 @@ int semcheck_funccall(int *type_return,
 
                         ListNode_t *formal = formal_params;
                         ListNode_t *actual = remaining_args;
-                        int arg_idx = 0;
                         while (formal != NULL && actual != NULL)
                         {
                             Tree_t *formal_decl = (Tree_t *)formal->cur;
@@ -2935,7 +2937,6 @@ int semcheck_funccall(int *type_return,
                             
                             formal = formal->next;
                             actual = actual->next;
-                            arg_idx++;
                         }
 
                         /* Cache call info for codegen */
@@ -5203,7 +5204,6 @@ int semcheck_funccall(int *type_return,
             cand && cand->type ? kgpc_type_to_string(cand->type) : "<null>");
     }
 
-    int prefer_non_builtin = 0;
     if (overload_candidates != NULL)
     {
         ListNode_t *cur = overload_candidates;
@@ -5259,7 +5259,6 @@ int semcheck_funccall(int *type_return,
             /* Check argument types */
             ListNode_t *formal = formal_params;
             ListNode_t *actual = args_given;
-            int arg_idx = 0;
             while (formal != NULL && actual != NULL)
             {
                 Tree_t *formal_decl = (Tree_t *)formal->cur;
@@ -5303,7 +5302,6 @@ int semcheck_funccall(int *type_return,
                 
                 formal = formal->next;
                 actual = actual->next;
-                arg_idx++;
             }
             
             /* Set the return type */

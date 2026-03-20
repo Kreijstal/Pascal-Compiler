@@ -2470,8 +2470,11 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
     if (buffer == NULL || size == 0)
         return;
     char sanitized[CODEGEN_MAX_INST_BUF];
+    const char *prefix = "__kgpc_enum_typeinfo_";
     codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
+    snprintf(buffer, size, "%s%.*s", prefix,
+        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
+        sanitized);
 }
 
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.
@@ -7972,9 +7975,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         char done_label[32];
         gen_label(true_label, sizeof(true_label), ctx);
         gen_label(done_label, sizeof(done_label), ctx);
-        long long right_real_size = (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE)) ?
-            codegen_expr_real_storage_size(right_expr, ctx) : 0;
-
         const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", left_name);
         inst_list = add_inst(inst_list, buffer);

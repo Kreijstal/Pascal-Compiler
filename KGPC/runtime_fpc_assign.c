@@ -190,14 +190,14 @@ void kgpc_assign_t_s(void *textrec, const char *path)
 }
 
 /* FPC RTL path — FPC system.pp mangles Assign(text,string) as assign_t_s. */
-static void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
+__attribute__((unused)) static void assign_t_s(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
 
 /* ------------------------------------------------------------------ */
 /* assign_t_c: Assign(var t: Text; c: AnsiChar)                        */
 /* FPC mangles this as assign_t_c.  The char value arrives in %rsi as  */
 /* an integer; we convert it to a 1-char string and delegate.          */
 /* ------------------------------------------------------------------ */
-static void assign_t_c(void *textrec, char c)
+__attribute__((unused)) static void assign_t_c(void *textrec, char c)
 {
     char buf[2];
     buf[0] = c;
@@ -232,13 +232,13 @@ void kgpc_assign_f_s(void *filerec, const char *path)
     }
 }
 
-static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
+__attribute__((unused)) static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
 /* RawByteString variants — kept as static stubs in case they're needed
  * internally.  The compiler now emits .globl (not .weak) for all unit
  * functions, so the compiler's own versions are used directly. */
-static void assign_t_rbs(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
-static void assign_f_rbs(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
+__attribute__((unused)) static void assign_t_rbs(void *textrec, const char *path) { kgpc_assign_t_s(textrec, path); }
+__attribute__((unused)) static void assign_f_rbs(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }
 
 /* ------------------------------------------------------------------ */
 /* FileOpen / FileCreate — strong implementations for KGPC runtime.    */
@@ -320,7 +320,7 @@ int32_t fileopen_us_i(const char *filename, int32_t mode)
 
 /* fileopen_rbs_i: Now provided by compiler-emitted FPC Pascal code.
  * Renamed to kgpc_ prefix to avoid duplicate symbol conflict. */
-static int32_t kgpc_fileopen_rbs_i(const char *filename, int32_t mode)
+__attribute__((unused)) static int32_t kgpc_fileopen_rbs_i(const char *filename, int32_t mode)
 {
     if (filename == NULL)
         return -1;
@@ -356,12 +356,12 @@ extern int  kgpc_tfile_seek(KGPCFileRec *file, long long index);
 extern int  kgpc_tfile_filepos(KGPCFileRec *file, long long *pos);
 extern int  kgpc_tfile_truncate_current(KGPCFileRec *file);
 
-static void rewrite_f(void *filerec)
+__attribute__((unused)) static void rewrite_f(void *filerec)
 {
     kgpc_tfile_rewrite((KGPCFileRec *)filerec);
 }
 
-static void rewrite_f_li(void *filerec, int32_t recsize)
+__attribute__((unused)) static void rewrite_f_li(void *filerec, int32_t recsize)
 {
     KGPCFileRec *f = (KGPCFileRec *)filerec;
     kgpc_tfile_rewrite(f);
@@ -372,12 +372,12 @@ static void rewrite_f_li(void *filerec, int32_t recsize)
     }
 }
 
-static void reset_f(void *filerec)
+__attribute__((unused)) static void reset_f(void *filerec)
 {
     kgpc_tfile_reset((KGPCFileRec *)filerec);
 }
 
-static void reset_f_li(void *filerec, int32_t recsize)
+__attribute__((unused)) static void reset_f_li(void *filerec, int32_t recsize)
 {
     KGPCFileRec *f = (KGPCFileRec *)filerec;
     kgpc_tfile_reset(f);
@@ -387,12 +387,12 @@ static void reset_f_li(void *filerec, int32_t recsize)
     }
 }
 
-static void close_f(void *filerec)
+__attribute__((unused)) static void close_f(void *filerec)
 {
     kgpc_tfile_close((KGPCFileRec *)filerec);
 }
 
-static void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *result)
+__attribute__((unused)) static void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -400,7 +400,7 @@ static void blockread_f_u_li_li(void *filerec, void *buf, int32_t count, int32_t
         *result = (int32_t)actual;
 }
 
-static void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *result)
+__attribute__((unused)) static void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockread((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -408,7 +408,7 @@ static void blockread_f_u_i64_i64(void *filerec, void *buf, int64_t count, int64
         *result = actual;
 }
 
-static void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t *result)
+__attribute__((unused)) static void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, int32_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -416,7 +416,7 @@ static void blockwrite_f_u_li_li(void *filerec, const void *buf, int32_t count, 
         *result = (int32_t)actual;
 }
 
-static void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64_t *result)
+__attribute__((unused)) static void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count, int64_t *result)
 {
     long long actual = 0;
     kgpc_tfile_blockwrite((KGPCFileRec *)filerec, buf, (size_t)count, &actual);
@@ -424,19 +424,19 @@ static void blockwrite_f_u_i64_i64(void *filerec, const void *buf, int64_t count
         *result = actual;
 }
 
-static void seek_f_i64(void *filerec, int64_t pos)
+__attribute__((unused)) static void seek_f_i64(void *filerec, int64_t pos)
 {
     kgpc_tfile_seek((KGPCFileRec *)filerec, pos);
 }
 
-static int64_t filepos_f(void *filerec)
+__attribute__((unused)) static int64_t filepos_f(void *filerec)
 {
     long long pos = 0;
     kgpc_tfile_filepos((KGPCFileRec *)filerec, &pos);
     return (int64_t)pos;
 }
 
-static void truncate_f(void *filerec)
+__attribute__((unused)) static void truncate_f(void *filerec)
 {
     kgpc_tfile_truncate_current((KGPCFileRec *)filerec);
 }

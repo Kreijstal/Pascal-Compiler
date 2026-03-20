@@ -280,7 +280,7 @@ void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_
 /* Entry function for unit compilation */
 void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
-ListNode_t *add_inst(ListNode_t *, char *);
+ListNode_t *add_inst(ListNode_t *, const char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);

@@ -197,7 +197,7 @@ void kgpc_fpc_init_thread_manager(void)
 typedef struct { int32_t kind; int32_t reserved; union { int64_t v_int; double v_real; void *v_ptr; } data; } kgpc_tvarrec_t;
 extern char *kgpc_format(const char *fmt, const kgpc_tvarrec_t *args, size_t arg_count);
 
-static char *format_s_a(const char *fmt, const void *args_desc)
+__attribute__((unused)) static char *format_s_a(const char *fmt, const void *args_desc)
 {
     const void *const *desc = (const void *const *)args_desc;
     const kgpc_tvarrec_t *args_array = (const kgpc_tvarrec_t *)desc[0];
