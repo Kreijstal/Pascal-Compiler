@@ -16521,6 +16521,18 @@ next_identifier:
                              * Allow typed initializers between String and ShortString. */
                             if (!compatible)
                             {
+                                if (expr_tag == STRING_TYPE || expr_tag == SHORTSTRING_TYPE)
+                                {
+                                    KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                    if (var_type != NULL && kgpc_type_is_shortstring(var_type))
+                                    {
+                                        compatible = 1;
+                                    }
+                                }
+                            }
+
+                            if (!compatible)
+                            {
                                 if ((current_var_type == HASHVAR_PCHAR && inferred_var_type == HASHVAR_SHORTSTRING) ||
                                     (current_var_type == HASHVAR_SHORTSTRING && inferred_var_type == HASHVAR_PCHAR))
                                 {

@@ -619,7 +619,6 @@ function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
-procedure Error(code: LongInt); cdecl; external name 'kgpc_runerror';
 function ArrayStringToPPchar(const S: TAnsiStringArray; reserveentries: LongInt): PPAnsiChar; cdecl; external name 'kgpc_array_string_to_ppchar';
 function SwapEndian(value: LongInt): LongInt; overload;
 function SwapEndian(value: Int64): Int64; overload;
@@ -684,6 +683,11 @@ end;
 procedure SetRandSeed(seed: LongWord);
 begin
     RandSeed := seed;
+end;
+
+procedure SystemErrorShim(dummy: LongInt; code: LongInt); [public,alias:'__Error'];
+begin
+    RunError(code);
 end;
 
 function SwapEndian(value: LongInt): LongInt; overload;

@@ -51,6 +51,10 @@ __attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
 
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
+/* Native stdlib lowering currently materializes a qualifier symbol for
+ * unit-qualified System.Error(...) calls. Provide an addressable symbol so
+ * those references link without reviving the broad System.Error alias. */
+int32_t System = 0;
 
 /* Xoshiro128** state (matching FPC rtl/inc/system.inc). */
 static uint32_t kgpc_xsr_state[4] = {

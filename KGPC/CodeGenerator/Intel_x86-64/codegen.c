@@ -3701,6 +3701,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     push_stackscope();
 
     codegen_function_locals(data->var_declaration, ctx, symtab);
+    codegen_emit_const_decl_equivs_from_list(ctx, data->const_declaration);
 
     /* Allocate callee-save slots AFTER locals so t-section offsets don't collide */
     {
