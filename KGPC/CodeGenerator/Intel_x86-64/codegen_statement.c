@@ -2643,23 +2643,58 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
             upper = kgpc->info.array_info.end_index;
             found = 1;
         }
-        else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+ else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
             if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL &&
-                node->type != NULL && kgpc_type_is_array(node->type) &&
-                node->type->info.array_info.element_type != NULL &&
-                node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
-                node->type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+            node->type != NULL)
             {
-                lower = node->type->info.array_info.start_index;
-                upper = node->type->info.array_info.end_index;
-                found = 1;
-                if (is_shortstring_out != NULL &&
-                    node->type->type_alias != NULL &&
-                    node->type->type_alias->is_shortstring)
+                if (kgpc_type_is_shortstring(node->type))
                 {
-                    *is_shortstring_out = 1;
+                    lower = 0;
+                    upper = 255;
+                    found = 1;
+                    if (is_shortstring_out != NULL)
+                        *is_shortstring_out = 1;
+                }
+                else if (node->type->kind == TYPE_KIND_PROCEDURE &&
+                    node->type->info.proc_info.return_type != NULL &&
+                    kgpc_type_is_shortstring(node->type->info.proc_info.return_type))
+                {
+                    lower = 0;
+                    upper = 255;
+                    found = 1;
+                    if (is_shortstring_out != NULL)
+                        *is_shortstring_out = 1;
+                }
+                else if (node->type->kind == TYPE_KIND_ARRAY &&
+                    node->type->info.array_info.element_type != NULL &&
+                    node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                    node->type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    lower = node->type->info.array_info.start_index;
+                    upper = node->type->info.array_info.end_index;
+                    found = 1;
+                    if (is_shortstring_out != NULL &&
+                        node->type->type_alias != NULL &&
+                        node->type->type_alias->is_shortstring)
+                    {
+                        *is_shortstring_out = 1;
+                    }
+                }
+            }
+            StackNode_t *stack_node = NULL;
+            int scope_depth_unused = 0;
+            stack_node = find_label_with_depth((char *)expr->expr_data.id, &scope_depth_unused);
+            if (stack_node != NULL)
+            {
+                if (stack_node->element_size > 0 || stack_node->size == 256)
+                {
+                    lower = 0;
+                    upper = 255;
+                    found = 1;
+                    if (is_shortstring_out != NULL)
+                        *is_shortstring_out = 1;
                 }
             }
         }

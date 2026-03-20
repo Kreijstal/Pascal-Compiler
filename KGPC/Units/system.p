@@ -152,6 +152,7 @@ type
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
   RTLString = AnsiString;
+  TAnsiStringArray = array of AnsiString;
   PAnsiString = ^AnsiString;
   PUnicodeString = ^UnicodeString;
   { ShortString: length-prefixed string[255] compatible layout.
@@ -618,6 +619,8 @@ function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+function SwapEndian(value: LongInt): LongInt; overload;
+function SwapEndian(value: Int64): Int64; overload;
 
 function Random: Real; cdecl; external name 'kgpc_random_real';
 function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
@@ -680,6 +683,35 @@ procedure SetRandSeed(seed: LongWord);
 begin
     RandSeed := seed;
 end;
+
+function SwapEndian(value: LongInt): LongInt; overload;
+var
+    u: LongWord;
+begin
+    u := LongWord(value);
+    u := ((u and $000000FF) shl 24) or
+         ((u and $0000FF00) shl 8) or
+         ((u and $00FF0000) shr 8) or
+         ((u and $FF000000) shr 24);
+    Result := LongInt(u);
+end;
+
+function SwapEndian(value: Int64): Int64; overload;
+var
+    u: QWord;
+begin
+    u := QWord(value);
+    u := ((u and $00000000000000FF) shl 56) or
+         ((u and $000000000000FF00) shl 40) or
+         ((u and $0000000000FF0000) shl 24) or
+         ((u and $00000000FF000000) shl 8) or
+         ((u and $000000FF00000000) shr 8) or
+         ((u and $0000FF0000000000) shr 24) or
+         ((u and $00FF000000000000) shr 40) or
+         ((u and $FF00000000000000) shr 56);
+    Result := Int64(u);
+end;
+
 
 function succ(i: integer): integer;
 begin

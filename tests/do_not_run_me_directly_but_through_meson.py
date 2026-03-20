@@ -3490,6 +3490,7 @@ FPC_RTL_IMPLICIT_UNIT_TESTS = {
     "tdd_proc_field_dispatch",
     "tdd_propinfo_kind_case",
     "tdd_record_method_no_param_return_type",
+    "tdd_stmt_system_error_unit_qualifier",
     "tdd_upcase_ord",
 }
 
