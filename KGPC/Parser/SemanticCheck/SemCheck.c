@@ -12631,14 +12631,21 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
     for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
     {
         Tree_t *tree = (Tree_t *)cur->cur;
+        int target_unit_index = tree->tree_data.const_decl_data.source_unit_index;
         if (!tree->tree_data.const_decl_data.defined_in_unit)
             continue;
         if (tree->tree_data.const_decl_data.id == NULL)
             continue;
+        if (target_unit_index <= 0)
+            continue;
+
+        ScopeNode *target_scope = GetOrCreateUnitScope(symtab, target_unit_index);
+        if (target_scope == NULL || target_scope->table == NULL)
+            continue;
 
         /* Skip if already in symbol table */
-        HashNode_t *existing = NULL;
-        if (FindSymbol(&existing, symtab, tree->tree_data.const_decl_data.id) != 0 &&
+        HashNode_t *existing = FindIdentInTable(target_scope->table, tree->tree_data.const_decl_data.id);
+        if (existing != NULL &&
             existing != NULL &&
             (existing->hash_type == HASHTYPE_CONST || existing->is_typed_const))
             continue;
@@ -12646,6 +12653,8 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
         struct Expression *value_expr = tree->tree_data.const_decl_data.value;
         if (value_expr == NULL)
             continue;
+
+        ScopeNode *saved_scope_for_prepush = semcheck_switch_to_unit_scope(symtab, target_unit_index);
 
         /* Handle string constants (EXPR_STRING, EXPR_CHAR_CODE) */
         if (value_expr->type == EXPR_STRING && value_expr->expr_data.string != NULL)
@@ -12656,33 +12665,50 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             {
                 long long char_val = (unsigned char)string_value[0];
                 KgpcType *char_type = create_primitive_type(CHAR_TYPE);
-                int push_result = PushConstOntoScope_Typed(symtab,
-                    tree->tree_data.const_decl_data.id, char_val, char_type);
+                int push_result = AddIdentToTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, char_type);
                 destroy_kgpc_type(char_type);
                 if (push_result == 0)
                 {
-                    HashNode_t *node = NULL;
-                    if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
                     {
+                        node->is_constant = 1;
+                        node->const_int_value = char_val;
                         node->const_string_value = strdup(string_value);
                         mark_hashnode_unit_info(symtab, node,
                             tree->tree_data.const_decl_data.defined_in_unit,
                             tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
                     }
                 }
             }
             else
             {
-                PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id,
-                    string_value);
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                KgpcType *string_type = create_primitive_type(STRING_TYPE);
+                if (string_type != NULL)
                 {
-                    mark_hashnode_unit_info(symtab, node,
-                        tree->tree_data.const_decl_data.defined_in_unit,
-                        tree->tree_data.const_decl_data.unit_is_public);
+                    int push_result = AddIdentToTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, string_type);
+                    if (push_result == 0)
+                    {
+                        HashNode_t *node = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (node != NULL)
+                        {
+                            node->is_constant = 1;
+                            node->const_string_value = strdup(string_value);
+                            mark_hashnode_unit_info(symtab, node,
+                                tree->tree_data.const_decl_data.defined_in_unit,
+                                tree->tree_data.const_decl_data.unit_is_public);
+                            mark_hashnode_source_unit(node, target_unit_index);
+                        }
+                    }
+                    destroy_kgpc_type(string_type);
                 }
             }
+            semcheck_restore_scope(symtab, saved_scope_for_prepush);
             continue;
         }
         if (value_expr->type == EXPR_CHAR_CODE)
@@ -12690,22 +12716,27 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             /* Push as typed Char constant (matching normal semcheck behavior) */
             long long char_val = (unsigned char)(value_expr->expr_data.char_code & 0xFF);
             KgpcType *char_type = create_primitive_type(CHAR_TYPE);
-            int push_result = PushConstOntoScope_Typed(symtab,
-                tree->tree_data.const_decl_data.id, char_val, char_type);
+            int push_result = AddIdentToTable(target_scope->table,
+                tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, char_type);
             destroy_kgpc_type(char_type);
             if (push_result == 0)
             {
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
                 {
+                    node->is_constant = 1;
+                    node->const_int_value = char_val;
                     /* Also set string value like normal semcheck does */
                     char str[2] = { (char)(char_val & 0xFF), '\0' };
                     node->const_string_value = strdup(str);
                     mark_hashnode_unit_info(symtab, node,
                         tree->tree_data.const_decl_data.defined_in_unit,
                         tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
                 }
             }
+            semcheck_restore_scope(symtab, saved_scope_for_prepush);
             continue;
         }
 
@@ -12713,26 +12744,47 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
         if (value_expr->type == EXPR_INUM)
         {
             long long val = value_expr->expr_data.i_num;
-            PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+            int type_tag = (val > INT_MAX || val < INT_MIN) ? INT64_TYPE : INT_TYPE;
+            KgpcType *int_type = create_primitive_type(type_tag);
+            if (int_type != NULL &&
+                AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                    NULL, HASHTYPE_CONST, int_type) == 0)
             {
-                mark_hashnode_unit_info(symtab, node,
-                    tree->tree_data.const_decl_data.defined_in_unit,
-                    tree->tree_data.const_decl_data.unit_is_public);
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
+                {
+                    node->is_constant = 1;
+                    node->const_int_value = val;
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
+                }
             }
+            destroy_kgpc_type(int_type);
         }
         else if (value_expr->type == EXPR_RNUM)
         {
             double val = value_expr->expr_data.r_num;
-            PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+            KgpcType *real_type = create_primitive_type(REAL_TYPE);
+            if (real_type != NULL &&
+                AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                    NULL, HASHTYPE_CONST, real_type) == 0)
             {
-                mark_hashnode_unit_info(symtab, node,
-                    tree->tree_data.const_decl_data.defined_in_unit,
-                    tree->tree_data.const_decl_data.unit_is_public);
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
+                {
+                    node->is_constant = 1;
+                    node->const_real_value = val;
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
+                }
             }
+            destroy_kgpc_type(real_type);
         }
         else if (value_expr->type == EXPR_VAR_ID && value_expr->expr_data.id != NULL)
         {
@@ -12750,31 +12802,83 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                         /* Reference to a Char const — push as typed Char */
                         long long char_val = (unsigned char)sv[0];
                         KgpcType *char_type = create_primitive_type(CHAR_TYPE);
-                        int pr = PushConstOntoScope_Typed(symtab,
-                            tree->tree_data.const_decl_data.id, char_val, char_type);
+                        int pr = AddIdentToTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, char_type);
                         destroy_kgpc_type(char_type);
                         if (pr == 0)
                         {
-                            HashNode_t *n2 = NULL;
-                            if (FindSymbol(&n2, symtab, tree->tree_data.const_decl_data.id) != 0 && n2 != NULL)
+                            HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                                tree->tree_data.const_decl_data.id);
+                            if (n2 != NULL)
+                            {
+                                n2->is_constant = 1;
+                                n2->const_int_value = char_val;
                                 n2->const_string_value = strdup(sv);
+                            }
                         }
                     }
                     else
                     {
-                        PushStringConstOntoScope(symtab, tree->tree_data.const_decl_data.id, sv);
+                        KgpcType *string_type = create_primitive_type(STRING_TYPE);
+                        if (string_type != NULL &&
+                            AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                                NULL, HASHTYPE_CONST, string_type) == 0)
+                        {
+                            HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                                tree->tree_data.const_decl_data.id);
+                            if (n2 != NULL)
+                            {
+                                n2->is_constant = 1;
+                                n2->const_string_value = strdup(sv);
+                            }
+                        }
+                        destroy_kgpc_type(string_type);
                     }
                 }
                 else if (ref->type != NULL && kgpc_type_is_real(ref->type))
-                    PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, ref->const_real_value);
+                {
+                    KgpcType *real_type = create_primitive_type(REAL_TYPE);
+                    if (real_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, real_type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_real_value = ref->const_real_value;
+                        }
+                    }
+                    destroy_kgpc_type(real_type);
+                }
                 else
-                    PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, ref->const_int_value);
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                {
+                    int type_tag = (ref->const_int_value > INT_MAX || ref->const_int_value < INT_MIN)
+                        ? INT64_TYPE : INT_TYPE;
+                    KgpcType *int_type = create_primitive_type(type_tag);
+                    if (int_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, int_type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_int_value = ref->const_int_value;
+                        }
+                    }
+                    destroy_kgpc_type(int_type);
+                }
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
                 {
                     mark_hashnode_unit_info(symtab, node,
                         tree->tree_data.const_decl_data.defined_in_unit,
                         tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
                 }
             }
         }
@@ -12782,14 +12886,25 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                  value_expr->expr_data.sign_term->type == EXPR_INUM)
         {
             long long val = -value_expr->expr_data.sign_term->expr_data.i_num;
-            PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+            int type_tag = (val > INT_MAX || val < INT_MIN) ? INT64_TYPE : INT_TYPE;
+            KgpcType *int_type = create_primitive_type(type_tag);
+            if (int_type != NULL &&
+                AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                    NULL, HASHTYPE_CONST, int_type) == 0)
             {
-                mark_hashnode_unit_info(symtab, node,
-                    tree->tree_data.const_decl_data.defined_in_unit,
-                    tree->tree_data.const_decl_data.unit_is_public);
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
+                {
+                    node->is_constant = 1;
+                    node->const_int_value = val;
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
+                }
             }
+            destroy_kgpc_type(int_type);
         }
         else if (value_expr->type == EXPR_FUNCTION_CALL)
         {
@@ -12798,14 +12913,25 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             int ok = const_fold_int_expr(symtab, value_expr, &val);
             if (ok == 0)
             {
-                PushConstOntoScope(symtab, tree->tree_data.const_decl_data.id, val);
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                int type_tag = (val > INT_MAX || val < INT_MIN) ? INT64_TYPE : INT_TYPE;
+                KgpcType *int_type = create_primitive_type(type_tag);
+                if (int_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, int_type) == 0)
                 {
-                    mark_hashnode_unit_info(symtab, node,
-                        tree->tree_data.const_decl_data.defined_in_unit,
-                        tree->tree_data.const_decl_data.unit_is_public);
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_int_value = val;
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
                 }
+                destroy_kgpc_type(int_type);
             }
             else
             {
@@ -12814,17 +12940,29 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                 ok = const_fold_real_expr(symtab, value_expr, &rval);
                 if (ok == 0)
                 {
-                    PushRealConstOntoScope(symtab, tree->tree_data.const_decl_data.id, rval);
-                    HashNode_t *node = NULL;
-                    if (FindSymbol(&node, symtab, tree->tree_data.const_decl_data.id) != 0 && node != NULL)
+                    KgpcType *real_type = create_primitive_type(REAL_TYPE);
+                    if (real_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, real_type) == 0)
                     {
-                        mark_hashnode_unit_info(symtab, node,
-                            tree->tree_data.const_decl_data.defined_in_unit,
-                            tree->tree_data.const_decl_data.unit_is_public);
+                        HashNode_t *node = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (node != NULL)
+                        {
+                            node->is_constant = 1;
+                            node->const_real_value = rval;
+                            mark_hashnode_unit_info(symtab, node,
+                                tree->tree_data.const_decl_data.defined_in_unit,
+                                tree->tree_data.const_decl_data.unit_is_public);
+                            mark_hashnode_source_unit(node, target_unit_index);
+                        }
                     }
+                    destroy_kgpc_type(real_type);
                 }
             }
         }
+
+        semcheck_restore_scope(symtab, saved_scope_for_prepush);
     }
 }
 

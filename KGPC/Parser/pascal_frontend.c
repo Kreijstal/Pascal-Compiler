@@ -626,16 +626,11 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
-    if (cached_unit_parser != NULL)
-    {
-        free_combinator(cached_unit_parser);
-        cached_unit_parser = NULL;
-    }
-    if (cached_program_parser != NULL)
-    {
-        free_combinator(cached_program_parser);
-        cached_program_parser = NULL;
-    }
+    /* Parser graphs still share combinator subtrees in ways free_combinator()
+     * does not model safely. Keep the cached parsers alive until process exit
+     * instead of risking a teardown-time UAF after a successful compile. */
+    cached_unit_parser = NULL;
+    cached_program_parser = NULL;
     if (generic_registry_ready)
     {
         generic_registry_cleanup();
