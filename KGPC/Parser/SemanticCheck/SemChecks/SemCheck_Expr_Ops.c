@@ -79,7 +79,9 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
                 continue;
             if (!unit_registry_is_dep(caller_unit_index, dep))
                 continue;
-            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_scopes[dep]->table == NULL)
+            if (dep >= SYMTAB_MAX_UNITS ||
+                symtab->unit_scopes[dep] == NULL ||
+                symtab->unit_scopes[dep]->table == NULL)
                 continue;
             HashNode_t *node = FindIdentByPrefixInTableForUnit(
                 symtab->unit_scopes[dep]->table, prefix, caller_unit_index);
@@ -95,7 +97,8 @@ static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
             {
-                if (symtab->unit_scopes[u]->table == NULL)
+                if (symtab->unit_scopes[u] == NULL ||
+                    symtab->unit_scopes[u]->table == NULL)
                     continue;
                 HashNode_t *node = FindIdentByPrefixInTableForUnit(
                     symtab->unit_scopes[u]->table, prefix, caller_unit_index);
