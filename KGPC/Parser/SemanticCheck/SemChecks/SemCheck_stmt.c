@@ -6505,7 +6505,6 @@ skip_type_receiver_rewrite:
 
                             ListNode_t *formal = formal_params;
                             ListNode_t *actual = remaining_args;
-                            int arg_idx = 0;
                             while (formal != NULL && actual != NULL)
                             {
                                 Tree_t *formal_decl = (Tree_t *)formal->cur;
@@ -6543,7 +6542,6 @@ skip_type_receiver_rewrite:
                                 }
                                 formal = formal->next;
                                 actual = actual->next;
-                                arg_idx++;
                             }
 
                             kgpc_type_retain(proc_type);
@@ -8878,7 +8876,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     int return_val;
-    int for_type, to_type;
+    int for_type = UNKNOWN_TYPE, to_type = UNKNOWN_TYPE;
     enum StmtType for_assign_type; /* Either var or var_assign */
     struct Statement *for_assign;
     struct Expression *for_var;

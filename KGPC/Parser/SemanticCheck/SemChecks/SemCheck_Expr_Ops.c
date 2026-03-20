@@ -502,18 +502,15 @@ int semcheck_relop(int *type_return,
                 if (type_first == RECORD_TYPE || type_second == RECORD_TYPE)
                 {
                     struct Expression *record_expr = expr1;
-                    struct Expression *other_expr = expr2;
                     const char *record_type_name = NULL;
 
                     if (type_first == POINTER_TYPE && type_second == RECORD_TYPE)
                     {
                         record_expr = expr2;
-                        other_expr = expr1;
                     }
                     else if (type_first != RECORD_TYPE && type_second == RECORD_TYPE)
                     {
                         record_expr = expr2;
-                        other_expr = expr1;
                     }
 
                     record_type_name = get_expr_type_name(record_expr, symtab);
