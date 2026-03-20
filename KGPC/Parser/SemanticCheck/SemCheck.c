@@ -121,6 +121,26 @@ static struct {
 static int g_source_buffer_count = 0;
 static int g_source_buffer_next_global = 0; /* next available global offset */
 
+static ScopeNode *semcheck_switch_to_unit_scope(SymTab_t *symtab, int unit_index)
+{
+    if (symtab == NULL || unit_index <= 0)
+        return NULL;
+
+    ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_index);
+    if (unit_scope == NULL)
+        return NULL;
+
+    ScopeNode *saved_scope = symtab->current_scope;
+    symtab->current_scope = unit_scope;
+    return saved_scope;
+}
+
+static void semcheck_restore_scope(SymTab_t *symtab, ScopeNode *saved_scope)
+{
+    if (symtab != NULL && saved_scope != NULL)
+        symtab->current_scope = saved_scope;
+}
+
 void semcheck_set_source_path(const char *path)
 {
     if (g_semcheck_source_path != NULL)
@@ -1608,7 +1628,7 @@ static int g_semcheck_error_source_index = -1;
 static int g_semcheck_error_suppress_source_index = 0;
 /* When inside a unit subprogram body, holds the unit name for error reporting
  * fallback (e.g., "<unit System>") so errors don't show the main program file. */
-static const char *g_semcheck_error_unit_context = NULL;
+static const char *g_semcheck_error_unit_name = NULL;
 static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
@@ -1932,8 +1952,8 @@ static const char *semcheck_get_error_path(void)
 {
     /* When inside a unit subprogram body, use the unit context path
      * so errors report the unit name instead of the main program file. */
-    if (g_semcheck_error_unit_context != NULL)
-        return g_semcheck_error_unit_context;
+    if (g_semcheck_error_unit_name != NULL)
+        return g_semcheck_error_unit_name;
     const char *file_path = (file_to_parse != NULL && *file_to_parse != '\0')
                                 ? file_to_parse
                                 : ((preprocessed_path != NULL && *preprocessed_path != '\0') ? preprocessed_path
@@ -2074,9 +2094,9 @@ static int resolve_unit_error_location(int source_index, int line_num,
         resolved_line = line_num;
 
     /* Build the include chain annotation */
-    if (unit_chain_out != NULL && chain_size > 0 && g_semcheck_error_unit_context != NULL)
+    if (unit_chain_out != NULL && chain_size > 0 && g_semcheck_error_unit_name != NULL)
     {
-        const char *unit_name = g_semcheck_error_unit_context;
+        const char *unit_name = g_semcheck_error_unit_name;
         /* Find the registered path for this unit's buffer */
         const char *unit_path = NULL;
         if (source_index >= 0)
@@ -2134,7 +2154,7 @@ void semantic_error(int line_num, int col_num, const char *format, ...)
     directive_file[0] = '\0';
     char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
     unit_chain[0] = '\0';
-    if (g_semcheck_error_unit_context != NULL)
+    if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
             effective_source_index, effective_line,
@@ -2191,7 +2211,7 @@ void semantic_error_at(int line_num, int col_num, int source_index, const char *
     directive_file[0] = '\0';
     char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
     unit_chain[0] = '\0';
-    if (g_semcheck_error_unit_context != NULL)
+    if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
             source_index, line_num,
@@ -2317,7 +2337,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     directive_file[0] = '\0';
     char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
     unit_chain[0] = '\0';
-    if (g_semcheck_error_unit_context != NULL)
+    if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
             source_index, effective_line,
@@ -2371,7 +2391,7 @@ void semcheck_error_with_context(const char *format, ...)
     directive_file[0] = '\0';
     char unit_chain[MAX_DIRECTIVE_FILENAME_LEN];
     unit_chain[0] = '\0';
-    if (g_semcheck_error_unit_context != NULL)
+    if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
             effective_source_index, line_num,
@@ -7037,9 +7057,8 @@ SymTab_t *semcheck_init_symtab(void)
 {
     double t0 = 0.0;
     SymTab_t *symtab = InitSymTab();
-    EnterScope(symtab, 0);  /* Global pre-program scope (builtins are
-                                           * registered into unit_scopes[System]->table via
-                                           * push_target_unit, not into this scope) */
+    EnterScope(symtab, 0);  /* Global pre-program scope; builtins live in
+                             * unit_scopes[System]->table, not in this scope. */
     if (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
         t0 = (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
     semcheck_add_builtins(symtab);
@@ -7280,15 +7299,10 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                         kgpc_type_set_type_alias(alias_info->kgpc_type, alias_info);
                     }
 
-                    /* Route both the enum type and its literals to per-unit table when
-                     * source_unit_index > 0, so they are accessible via dep_scopes when
-                     * semcheck_subprogram swaps current_scope to unit_scopes[unit_idx]. */
-                    int saved_push_target_enum = symtab->push_target_unit;
-                    {
-                        int unit_idx_for_type = tree->tree_data.type_decl_data.source_unit_index;
-                        if (unit_idx_for_type > 0)
-                            symtab->push_target_unit = unit_idx_for_type;
-                    }
+                    /* Unit declarations live in their unit scope so subprogram bodies
+                     * see them via the real parent/dependency edges. */
+                    ScopeNode *saved_scope_for_enum_type = semcheck_switch_to_unit_scope(
+                        symtab, tree->tree_data.type_decl_data.source_unit_index);
 
                     /* Predeclare the enum type itself so consts can reference it
                      * before full type processing (e.g., array[TEnum] in consts). */
@@ -7317,12 +7331,9 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                      * so do not inject their literals as global constants in this scope. */
                     if (alias_info->kgpc_type != NULL && !alias_info->enum_is_scoped)
                     {
-                        /* Route unit enum literals to the per-unit table so they're
-                         * accessible via dep_scopes and not filtered by scope isolation. */
-                        int saved_push_target = symtab->push_target_unit;
                         int unit_idx = tree->tree_data.type_decl_data.source_unit_index;
-                        if (unit_idx > 0)
-                            symtab->push_target_unit = unit_idx;
+                        ScopeNode *saved_scope_for_enum_literals =
+                            semcheck_switch_to_unit_scope(symtab, unit_idx);
 
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->enum_literals;
@@ -7400,10 +7411,10 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             ++ordinal;
                             literal_node = literal_node->next;
                         }
-                        symtab->push_target_unit = saved_push_target;
+                        semcheck_restore_scope(symtab, saved_scope_for_enum_literals);
                         /* KgpcType is owned by TypeAlias, will be cleaned up when tree is destroyed */
                     }
-                    symtab->push_target_unit = saved_push_target_enum;
+                    semcheck_restore_scope(symtab, saved_scope_for_enum_type);
                 }
                 /* Also handle set types with inline anonymous enum: set of (val1, val2, ...) */
                 if (alias_info != NULL && alias_info->is_enum_set && alias_info->inline_enum_values != NULL)
@@ -7563,33 +7574,22 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
     int errors = 0;
     ListNode_t *cur = type_decls;
-    int predeclare_saved_push = symtab->push_target_unit;
     while (cur != NULL)
     {
-        /* Restore push_target_unit at start of each iteration so types don't
-         * inherit the target from the previous type in the list. */
-        symtab->push_target_unit = predeclare_saved_push;
         if (cur->type == LIST_TREE && cur->cur != NULL)
         {
             Tree_t *tree = (Tree_t *)cur->cur;
 
             if (tree->type == TREE_TYPE_DECL)
             {
-                /* Route unit types to per-unit table.
-                 * Use source_unit_index > 0 regardless of defined_in_unit so that
-                 * the primary compiled unit's own types (defined_in_unit=0 but
-                 * source_unit_index=primary_unit_idx) are also visible from
-                 * unit_scopes[primary_unit_idx] when semcheck_subprogram runs. */
-                int saved_push_target_type = symtab->push_target_unit;
-                if (tree->tree_data.type_decl_data.source_unit_index > 0)
-                    symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
+                ScopeNode *saved_scope_for_type = semcheck_switch_to_unit_scope(
+                    symtab, tree->tree_data.type_decl_data.source_unit_index);
                 const char *type_id = tree->tree_data.type_decl_data.id;
 
                 /* Skip if no type id */
                 if (type_id == NULL)
                 {
-                    cur = cur->next;
-                    continue;
+                    goto predeclare_types_next;
                 }
                 
                 /* Debug: print predeclare order */
@@ -7681,8 +7681,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* If we already have a type alias without range/enum metadata and are now
@@ -7736,8 +7735,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 /* Release creator's reference */
                                 destroy_kgpc_type(kgpc_type);
                             }
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
 
                         /* If we already have a non-pointer alias and the new declaration
@@ -7776,8 +7774,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 mark_hashnode_source_unit(existing, tree->tree_data.type_decl_data.source_unit_index);
                                 destroy_kgpc_type(kgpc_type);
                             }
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                     }
 
@@ -7920,8 +7917,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         if (!is_forward_class_completion && !is_alias_override)
                         {
                             /* Already declared, skip */
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                         if (is_alias_override)
                         {
@@ -7954,8 +7950,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 /* Release creator's reference */
                                 destroy_kgpc_type(kgpc_type);
                             }
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                         else
                         {
@@ -8065,8 +8060,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.source_unit_index,
                                     existing_record);
                             }
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                     }
                 }
@@ -8293,8 +8287,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* Do NOT apply integer alias metadata to pointer types.
@@ -8373,8 +8366,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* Handle inline record aliases (e.g., generic specializations) */
@@ -8428,8 +8420,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Release creator's reference */
                         destroy_kgpc_type(alias_kgpc);
 
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* Pre-declare enum types so they can be used as function return types.
@@ -8480,8 +8471,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* Predeclare array/set/file aliases so return types can resolve early. */
@@ -8508,11 +8498,9 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             }
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
                     
                     /* Handle pointer aliases to already known element types */
@@ -8549,8 +8537,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
 
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                     }
 
@@ -8620,8 +8607,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             }
                             /* Release creator's reference */
                             destroy_kgpc_type(kgpc_type);
-                            cur = cur->next;
-                            continue;
+                            goto predeclare_types_next;
                         }
                     }
 
@@ -8651,8 +8637,7 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.source_unit_index);
                             }
                         }
-                        cur = cur->next;
-                        continue;
+                        goto predeclare_types_next;
                     }
 
                     /* Only pre-declare simple primitive type aliases */
@@ -8883,6 +8868,8 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 }
                 /* Skip TYPE_DECL_RECORD, TYPE_DECL_GENERIC, TYPE_DECL_RANGE - 
                  * these have complex dependencies and are handled by semcheck_type_decls */
+predeclare_types_next:
+                semcheck_restore_scope(symtab, saved_scope_for_type);
             }
         }
         cur = cur->next;
@@ -10621,13 +10608,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_TYPE_DECL);
 
-        /* Route unit types to per-unit table.
-         * Use source_unit_index > 0 regardless of defined_in_unit so that a unit's
-         * own types are visible from unit_scopes[unit_idx] when semcheck_subprogram
-         * switches scope. */
-        int saved_push_target_type = symtab->push_target_unit;
-        if (tree->tree_data.type_decl_data.source_unit_index > 0)
-            symtab->push_target_unit = tree->tree_data.type_decl_data.source_unit_index;
+        ScopeNode *saved_scope_for_type = semcheck_switch_to_unit_scope(
+            symtab, tree->tree_data.type_decl_data.source_unit_index);
 
         const char *debug_pss = kgpc_getenv("KGPC_DEBUG_PSHORTSTRING");
         if (debug_pss != NULL &&
@@ -11794,9 +11776,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
-            symtab->push_target_unit = saved_push_target_type;
-            cur = cur->next;
-            continue;
+            goto semcheck_type_decls_next;
         }
 
 
@@ -12108,7 +12088,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 #endif
         }
 
-        symtab->push_target_unit = saved_push_target_type;
+semcheck_type_decls_next:
+        semcheck_restore_scope(symtab, saved_scope_for_type);
         cur = cur->next;
     }
 
@@ -12184,15 +12165,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
     assert(tree != NULL);
     assert(tree->type == TREE_CONST_DECL);
 
-    int saved_push_target = symtab->push_target_unit;
     int saved_imported_unit = g_semcheck_imported_decl_unit_index;
-    /* Route consts to per-unit tables whenever source_unit_index > 0,
-     * regardless of defined_in_unit. A unit's own consts (defined_in_unit=0 but
-     * source_unit_index=unit_idx) must also be visible from unit_scopes[unit_idx]
-     * when semcheck_subprogram switches scope. */
+    ScopeNode *saved_scope_for_const = semcheck_switch_to_unit_scope(
+        symtab, tree->tree_data.const_decl_data.source_unit_index);
     if (tree->tree_data.const_decl_data.source_unit_index > 0)
     {
-        symtab->push_target_unit = tree->tree_data.const_decl_data.source_unit_index;
         g_semcheck_imported_decl_unit_index =
             tree->tree_data.const_decl_data.source_unit_index;
     }
@@ -12538,7 +12515,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                         existing_in_target->const_int_value == value)
                     {
                         g_semcheck_imported_decl_unit_index = saved_imported_unit;
-                        symtab->push_target_unit = saved_push_target;
+                        semcheck_restore_scope(symtab, saved_scope_for_const);
                         return 0;
                     }
                 }
@@ -12635,7 +12612,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
         }
 
     g_semcheck_imported_decl_unit_index = saved_imported_unit;
-    symtab->push_target_unit = saved_push_target;
+    semcheck_restore_scope(symtab, saved_scope_for_const);
     return return_val;
 }
 
@@ -13940,18 +13917,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after types: %d\n", return_val);
 #endif
 
-    /* Reset push_target_unit before processing program-level var declarations.
-     * Earlier type/const declaration passes may leave push_target_unit pointing
-     * at a unit table.  Program vars (source_unit_index == 0) must go into the
-     * program scope, not a unit table, so reset here. */
-    symtab->push_target_unit = 0;
     ListNode_t *program_vars = collect_non_typed_var_decls(tree->tree_data.program_data.var_declaration);
     if (program_vars != NULL)
     {
         return_val += semcheck_decls(symtab, program_vars);
         DestroyList(program_vars);
     }
-    symtab->push_target_unit = 0;
     semcheck_timing_step("var decls", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after vars: %d\n", return_val);
@@ -13982,15 +13953,15 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
                 /* Set unit error context so errors show the correct unit
                  * instead of the main program file. */
                 int saved_suppress = g_semcheck_error_suppress_source_index;
-                const char *saved_unit_ctx = g_semcheck_error_unit_context;
+                const char *saved_unit_ctx = g_semcheck_error_unit_name;
                 if (final_stmt->source_unit_index > 0) {
                     const char *uname = unit_registry_get(final_stmt->source_unit_index);
-                    g_semcheck_error_unit_context = uname ? uname : "<unit>";
+                    g_semcheck_error_unit_name = uname ? uname : "<unit>";
                     g_semcheck_error_suppress_source_index = 0;
                 }
                 return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
                 g_semcheck_error_suppress_source_index = saved_suppress;
-                g_semcheck_error_unit_context = saved_unit_ctx;
+                g_semcheck_error_unit_name = saved_unit_ctx;
             }
             final_node = final_node->next;
         }
@@ -14073,8 +14044,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     }
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
-     * FindIdent_Tree can see entries pushed via push_target_unit into
-     * unit_scopes[unit_idx]->table.  This mirrors what semcheck_unit_decls_only does
+     * FindIdent_Tree can see the stable per-unit declarations in
+     * unit_scopes[unit_idx]->table. This mirrors what semcheck_unit_decls_only does
      * and ensures that type lookups during semcheck_decls/semcheck_subprogram
      * can find per-unit types (e.g. TResourceStringTableList in objpas). */
     if (g_semcheck_current_unit_index > 0)
@@ -14099,8 +14070,8 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
         g_semcheck_current_unit_index);
     /* Mark const and var decls so source_unit_index is set for the unit's own decls
-     * (defined_in_unit=0). Needed so push_target_unit routing works in
-     * semcheck_single_const_decl and semcheck_decls when source_unit_index > 0. */
+     * (defined_in_unit=0). That lets declaration processing switch directly to the
+     * correct unit scope when source_unit_index > 0. */
     semcheck_mark_const_decl_units(tree->tree_data.unit_data.interface_const_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_const_decl_units(tree->tree_data.unit_data.implementation_const_decls,
@@ -14380,9 +14351,8 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     semcheck_mark_subprogram_units(tree->tree_data.unit_data.subprograms,
         g_semcheck_current_unit_index);
     /* Mark const and var decls so that source_unit_index is set even for the
-     * unit's own decls (defined_in_unit=0). This is needed so that
-     * semcheck_single_const_decl and semcheck_decls can route them to the
-     * per-unit table via push_target_unit when source_unit_index > 0. */
+     * unit's own decls (defined_in_unit=0). This lets declaration processing
+     * switch directly to the correct unit scope when source_unit_index > 0. */
     semcheck_mark_const_decl_units(tree->tree_data.unit_data.interface_const_decls,
         g_semcheck_current_unit_index);
     semcheck_mark_const_decl_units(tree->tree_data.unit_data.implementation_const_decls,
@@ -14393,8 +14363,8 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
         g_semcheck_current_unit_index);
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
-     * FindAllIdents_Tree can see entries pushed via push_target_unit into
-     * unit_scopes[unit_idx]->table.  Without this, predeclare_subprogram's duplicate
+     * FindAllIdents_Tree can see the stable declarations in
+     * unit_scopes[unit_idx]->table. Without this, predeclare_subprogram's duplicate
      * detection misses entries already in the unit table, creating duplicates.
      *
      * Also wire the unit's dependencies (interface + implementation uses) into
@@ -14515,20 +14485,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
         tree = (Tree_t *)cur->cur;
         assert(tree->type == TREE_VAR_DECL || tree->type == TREE_ARR_DECL);
 
-        /* Route unit vars to per-unit table, but NOT function parameters/locals.
-         * Unit-level vars use source_unit_index > 0. Function parameters (processed
-         * inside a subprogram body) are excluded by checking g_semcheck_current_subprogram.
-         * We use source_unit_index > 0 regardless of defined_in_unit so that a unit's
-         * own vars (defined_in_unit=0 but source_unit_index=unit_idx) are also visible
-         * from unit_scopes[unit_idx] when semcheck_subprogram switches scope. */
-        int saved_push_target_var = symtab->push_target_unit;
-        {
-            int src_unit_idx = (tree->type == TREE_VAR_DECL)
-                ? tree->tree_data.var_decl_data.source_unit_index
-                : tree->tree_data.arr_decl_data.source_unit_index;
-            if (src_unit_idx > 0 && g_semcheck_current_subprogram == NULL)
-                symtab->push_target_unit = src_unit_idx;
-        }
+        int src_unit_idx = (tree->type == TREE_VAR_DECL)
+            ? tree->tree_data.var_decl_data.source_unit_index
+            : tree->tree_data.arr_decl_data.source_unit_index;
+        ScopeNode *saved_scope_for_var = NULL;
+        if (src_unit_idx > 0 && g_semcheck_current_subprogram == NULL)
+            saved_scope_for_var = semcheck_switch_to_unit_scope(symtab, src_unit_idx);
 
         if (tree->type == TREE_VAR_DECL)
             ids_head = tree->tree_data.var_decl_data.ids;
@@ -16716,7 +16678,7 @@ next_identifier:
             return_val += semcheck_stmt(symtab, tree->tree_data.arr_decl_data.initializer, INT_MAX);
         }
 
-        symtab->push_target_unit = saved_push_target_var;
+        semcheck_restore_scope(symtab, saved_scope_for_var);
     }
 
     return return_val;
@@ -16792,9 +16754,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
 
     char *id_to_use_for_lookup;
-    /* Saved push_target_unit for function body processing — set in the func path. */
-    int saved_push_target_body = symtab->push_target_unit;
-
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
     assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
 
@@ -17068,10 +17027,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         EnterScope(symtab,
             subprogram->tree_data.subprogram_data.source_unit_index);
 
-        /* Clear push_target_unit for the procedure body (see func path comment). */
-        saved_push_target_body = symtab->push_target_unit;
-        symtab->push_target_unit = 0;
-
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram);
         /* For nested types (e.g. TOuter.TInner), also add outer class
@@ -17249,16 +17204,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             fprintf(stderr, "[KGPC] semcheck_subprogram (func): EnterScope for %s\n",
                 subprogram->tree_data.subprogram_data.id);
-
-        /* Clear push_target_unit for the function body so that all body-scope
-         * pushes (return variable, Result alias, args, local vars) go to the
-         * body scope's table — not to a unit table.  Inherited push_target_unit
-         * from an outer context (e.g. a type/const decl pass that didn't restore
-         * correctly, or a nested call) would otherwise route the return variable
-         * to a unit table that is not reachable via the body scope's parent chain,
-         * making FindSymbol fail at the assertion below. */
-        saved_push_target_body = symtab->push_target_unit;
-        symtab->push_target_unit = 0;
 
         /* For method implementations, add class vars to scope */
         add_class_vars_to_method_scope(symtab, subprogram);
@@ -17622,14 +17567,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             {
                 if (FindSymbol(&self_node, symtab, "Self") == 0)
                 {
-                    /* Push Self to the method scope (stack head), NOT the unit table.
-                     * If push_target_unit is set, temporarily clear it so Self goes
-                     * to the local scope and gets cleaned up when the method exits. */
-                    int saved_push_target_self = symtab->push_target_unit;
-                    symtab->push_target_unit = 0;
+                    /* Push Self to the method scope (stack head) so it is cleaned up
+                     * when the method exits. */
                     kgpc_type_retain(self_type);
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
-                    symtab->push_target_unit = saved_push_target_self;
                     if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                         self_node->is_var_parameter = self_is_var_param;
                 }
@@ -17672,7 +17613,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     if (body == NULL)
     {
         g_semcheck_current_subprogram = prev_current_subprogram;
-        symtab->push_target_unit = saved_push_target_body;
         LeaveScope(symtab);
         if (saved_scope_for_unit != NULL)
             symtab->current_scope = saved_scope_for_unit;
@@ -17688,7 +17628,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
      * disambiguate buffers, producing misleading file:line locations. */
     int saved_suppress = g_semcheck_error_suppress_source_index;
     int saved_error_source_index = g_semcheck_error_source_index;
-    const char *saved_error_unit_context = g_semcheck_error_unit_context;
+    const char *saved_error_unit_name = g_semcheck_error_unit_name;
     if (subprogram->tree_data.subprogram_data.defined_in_unit)
     {
         /* Don't suppress source_index — the buffer registry can disambiguate
@@ -17699,7 +17639,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (subprogram->tree_data.subprogram_data.source_unit_index > 0)
         {
             const char *uname = unit_registry_get(subprogram->tree_data.subprogram_data.source_unit_index);
-            g_semcheck_error_unit_context = uname ? uname : "<unit>";
+            g_semcheck_error_unit_name = uname ? uname : "<unit>";
         }
     }
 
@@ -17795,7 +17735,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     }
 
     g_semcheck_current_subprogram = prev_current_subprogram;
-    symtab->push_target_unit = saved_push_target_body;
     LeaveScope(symtab);
     if (saved_scope_for_unit != NULL)
         symtab->current_scope = saved_scope_for_unit;
@@ -17803,7 +17742,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     /* Restore error context / suppress flag after body processing. */
     g_semcheck_error_suppress_source_index = saved_suppress;
     g_semcheck_error_source_index = saved_error_source_index;
-    g_semcheck_error_unit_context = saved_error_unit_context;
+    g_semcheck_error_unit_name = saved_error_unit_name;
 
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_subprogram %s returning at end: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
@@ -17835,13 +17774,12 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     assert(subprogram != NULL);
     assert(subprogram->type == TREE_SUBPROGRAM);
 
-    /* Set push_target_unit during predeclaration so the pushed
-     * procedure/function goes into the correct per-unit table. */
-    int saved_push_target = symtab->push_target_unit;
-    if (subprogram->tree_data.subprogram_data.defined_in_unit &&
+    ScopeNode *saved_scope_for_unit = NULL;
+    if (parent_subprogram == NULL &&
         subprogram->tree_data.subprogram_data.source_unit_index > 0)
     {
-        symtab->push_target_unit = subprogram->tree_data.subprogram_data.source_unit_index;
+        saved_scope_for_unit = semcheck_switch_to_unit_scope(
+            symtab, subprogram->tree_data.subprogram_data.source_unit_index);
     }
 
     char *id_to_use_for_lookup;
@@ -17919,7 +17857,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.tree_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.tree_match;
-        symtab->push_target_unit = saved_push_target;
+        semcheck_restore_scope(symtab, saved_scope_for_unit);
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -17927,7 +17865,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.exact_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.exact_match;
-        symtab->push_target_unit = saved_push_target;
+        semcheck_restore_scope(symtab, saved_scope_for_unit);
         return 0;  /* Already declared - skip to avoid duplicates */
     }
 
@@ -17935,7 +17873,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     {
         semcheck_refresh_predecl_match(lookup.body_pair_match, subprogram);
         subprogram->tree_data.subprogram_data.cached_predecl_node = (struct HashNode *)lookup.body_pair_match;
-        symtab->push_target_unit = saved_push_target;
+        semcheck_restore_scope(symtab, saved_scope_for_unit);
         return 0;  /* Declaration/body pair already tracked */
     }
     
@@ -18066,7 +18004,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
     if (return_val > 0) fprintf(stderr, "DEBUG: predeclare_subprogram %s returning error: %d\n", subprogram->tree_data.subprogram_data.id, return_val);
 #endif
 
-    symtab->push_target_unit = saved_push_target;
+    semcheck_restore_scope(symtab, saved_scope_for_unit);
     return return_val;
 }
 

@@ -196,29 +196,30 @@ Tests pass — no behavioral change.
 
 Unit symbols belong in per-unit tables (`unit_tables[N]` = `unit_scopes[N]->table`), not the PROGRAM scope table. The PROGRAM table should only contain the program's own declarations. Unit symbols are found via `dep_scopes` in `FindIdent_Tree`.
 
-**Constraint:** The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections, e.g. System↔ObjPas). Full per-unit semcheck in load order is impossible. The merged-AST model must be kept — all units merged into one program tree, processed by `semcheck_program`. But symbol INSERTION is directed to per-unit tables via `push_target_unit`.
+**Constraint:** The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections, e.g. System↔ObjPas). Full per-unit semcheck in load order is impossible. The merged-AST model must be kept — all units merged into one program tree, processed by `semcheck_program`.
 
 **What was done (completed):**
 
 10. **Two-pass symbol insertion.**
-    - **Pass 1 (during `load_unit`):** `semcheck_unit_decls_only` predeclares type stubs, enum literals, subprogram signatures, trivial constants. `push_target_unit` is set to the unit index so symbols go to `unit_tables[N]` and survive `LeaveScope`.
-    - **Pass 2 (during `semcheck_program`):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) runs on the merged tree. Each function sets `push_target_unit = source_unit_index` per-declaration for unit symbols. The functions find existing stubs from Pass 1 via `FindIdentInCurrentScope` (which checks `unit_tables[push_target_unit]`) and update them in place. No duplicates in the PROGRAM table.
+    - **Pass 1 (during `load_unit`):** `semcheck_unit_decls_only` predeclares type stubs, enum literals, subprogram signatures, trivial constants into the stable unit scope so they survive `LeaveScope`.
+    - **Pass 2 (during `semcheck_program`):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) runs on the merged tree. Each declaration pass temporarily switches `current_scope` to `unit_scopes[source_unit_index]` for unit-owned declarations, updates the existing stubs in place, and keeps the PROGRAM scope free of imported symbols.
     - **Scope isolation filter removed.** `FindIdent_Tree` uses plain `FindIdentInTable` — no `skip_program_locals`, no `FindIdentInTable_UnitOnly`, no `filter_program_local_symbols`.
 
 11. **Do NOT skip re-processing.** `semcheck_program` must still process unit declarations because `semcheck_unit_decls_only` only creates stubs — it does not resolve type bodies, evaluate constants, or declare variables. The full processing in `semcheck_program` completes what Pass 1 started. Skipping it causes types like Currency to become undefined.
 
-**Lessons learned from 16+ failed agent attempts:**
+**Lessons learned from earlier failed attempts:**
 - Full `semcheck_unit()` during `load_unit` → 150 errors (System↔ObjPas cycle)
 - Skipping `semcheck_type_decls` for unit types → types undefined (it resolves bodies, not just stubs)
-- Removing filter without `push_target_unit` routing → program-local symbols shadow unit symbols
-- `FindIdentInCurrentScope` must check `unit_tables[push_target_unit]` for duplicate detection
+- Routing unit declarations anywhere except the real unit scope → program-local or transient-scope symbols shadow unit symbols
 - `EnterScope(SCOPE_UNIT, 0)` must fix up `unit_index` after `unit_registry_add` computes it
 
 ### Phase 5: Remove flat stack
 
-The flat stack is redundant — lookups use the tree, insertions use `push_target_unit` → `unit_tables[N]`. Nothing needs `stack_head`. Remove it now.
+Completed on 2026-03-20.
 
-12. **`SymTab_GetTargetTable` → `current_scope->table` or `unit_tables[push_target_unit]`.** Remove the `stack_head->cur` fallback. All `Push*OntoScope` functions already go through `SymTab_GetTargetTable`, so this is one change point.
+The flat stack was redundant. Lookups and insertions now use the scope tree directly.
+
+12. **`SymTab_GetTargetTable` is now just `current_scope->table`.**
 
 13. **`PushScope` → tree-only.** Stop creating flat stack entries. `EnterScope` creates a scope node with a new `HashTable_t`, `LeaveScope` destroys it. No `stack_head` manipulation.
 
@@ -226,9 +227,9 @@ The flat stack is redundant — lookups use the tree, insertions use `push_targe
 
 15. **Remove `PushScope`/`PopScope`.** Only `EnterScope`/`LeaveScope` remain.
 
-16. **Remove `unit_tables[256]`.** `unit_scopes[i]->table` is the same pointer. Replace all `unit_tables[N]` references with `unit_scopes[N]->table`.
+16. **Remove `unit_tables[256]`.** `unit_scopes[i]->table` is the only per-unit storage.
 
-17. **Remove `push_target_unit`.** `SymTab_GetTargetTable` becomes: if processing a unit declaration, use `unit_scopes[source_unit_index]->table`; otherwise use `current_scope->table`. The `source_unit_index` is on the tree node being processed, not a global variable.
+17. **Remove `push_target_unit`.** Declaration passes switch `current_scope` explicitly to `unit_scopes[source_unit_index]` when processing unit-owned declarations. The `source_unit_index` is on the tree node being processed, not in global routing state.
 
 18. **Remove `builtins` field.** Becomes `builtin_scope->table`.
 
@@ -252,6 +253,7 @@ After Phase 5: `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context
 
 - Phase 3 step 7: FindIdent → FindSymbol (bool return, all inversions fixed)
 - Phase 3 step 8: `FindIdent_Tree` is the only lookup path
+- Phase 5 complete: no flat-stack or global unit-routing remnants remain in `KGPC/`
 - Nested function method owner preservation
 - Parameter-shadows-class-method fix
 - Math function stubs removed (codegen emits Pascal bodies)

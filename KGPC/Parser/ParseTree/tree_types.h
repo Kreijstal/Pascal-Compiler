@@ -514,7 +514,7 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
-            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after PopScope. */
+            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after leaving semantic scope. */
             
             /* Cached information copied during semantic checking so codegen
              * no longer depends on HashNode lifetime. */

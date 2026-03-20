@@ -1415,15 +1415,16 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited, 
     if (symtab != NULL)
     {
         int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
-        int saved_push = symtab->push_target_unit;
+        ScopeNode *saved_scope = NULL;
         if (unit_idx > 0)
-            symtab->push_target_unit = unit_idx;
+            saved_scope = symtab->current_scope, symtab->current_scope = GetOrCreateUnitScope(symtab, unit_idx);
         char *saved_file_to_parse = file_to_parse;
         file_to_parse = path;
         semcheck_unit_decls_only(symtab, unit_tree);
         LeaveScope(symtab);
         file_to_parse = saved_file_to_parse;
-        symtab->push_target_unit = saved_push;
+        if (saved_scope != NULL)
+            symtab->current_scope = saved_scope;
     }
 
     free(path);

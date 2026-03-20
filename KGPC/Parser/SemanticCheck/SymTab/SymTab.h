@@ -2,8 +2,7 @@
     Symbol table: parent-pointer scope tree (primary).
     See docs/SCOPE_TREE_REFACTORING.md.
 
-    Phase 4: Legacy flat stack removed. All lookups and insertions use the scope tree.
-    push_target_unit routes to unit_scopes[i]->table for per-unit symbol routing.
+    Phase 5: All lookups and insertions use the scope tree directly.
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually
@@ -42,8 +41,6 @@ typedef struct ScopeNode {
 
 typedef struct SymTab
 {
-    int push_target_unit;       /* When > 0, Push*OntoScope routes to unit_scopes[this]->table */
-
     /* --- Scope tree (used for all lookups and insertions) --- */
     ScopeNode *builtin_scope;                 /* Root of the tree; owns its table (builtins) */
     ScopeNode *current_scope;                 /* Active scope node */
@@ -121,11 +118,6 @@ int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 /* Searches for a symbol and sets the hash_return that contains the id and type information */
 /* Returns 0 (false) if not found, 1 (true) if found */
 int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
-
-/* Like FindIdent but uses unit-aware resolution.
- * Prefers symbols from caller_unit_index, then program-local, then any.
- * Returns 0 if not found, 1 if found. */
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
 
 /* Searches for any identifier starting with the given prefix */
 /* Returns 0 and sets hash_return to NULL if not found */

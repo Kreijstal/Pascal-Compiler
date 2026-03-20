@@ -8316,7 +8316,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     {
         /* Get formal parameters from the KgpcType.
          * This avoids use-after-free bugs by not relying on HashNode pointers
-         * that may point to freed memory after PopScope. */
+         * that may point to freed memory after leaving a semantic scope. */
         formal_args = proc_type->info.proc_info.params;
         CODEGEN_DEBUG("DEBUG: Using formal_args from KgpcType: %p\n", formal_args);
     }

@@ -31,14 +31,10 @@ static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id
 
 /* ========================================================================
  * Internal helper: get the target hash table for Push operations.
- * When push_target_unit > 0, routes to the per-unit scope's table (lazily created).
- * Otherwise, routes to the current scope tree node's table.
+ * All insertions target the active scope tree node directly.
  * ======================================================================== */
 HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
 {
-    int idx = symtab->push_target_unit;
-    if (idx > 0 && idx < SYMTAB_MAX_UNITS)
-        return GetOrCreateUnitScope(symtab, idx)->table;
     assert(symtab->current_scope != NULL);
     return symtab->current_scope->table;
 }
@@ -65,8 +61,6 @@ SymTab_t *InitSymTab()
 
     new_symtab = (SymTab_t *)malloc(sizeof(SymTab_t));
     assert(new_symtab != NULL);
-    new_symtab->push_target_unit = 0;
-
     /* Initialize scope tree.
      * builtin_scope owns its table (the builtins hash table). */
     new_symtab->builtin_scope = CreateScope(NULL, 0, InitHashTable());
@@ -459,46 +453,6 @@ int FindSymbol(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
     return 0;
 }
 
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index)
-{
-    assert(symtab != NULL);
-    assert(id != NULL);
-
-    /* Use the scope tree: find the unit scope for caller_unit_index and walk from there */
-    ScopeNode *start = NULL;
-    if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS)
-        start = symtab->unit_scopes[caller_unit_index];
-    if (start == NULL)
-        start = symtab->current_scope;
-
-    ScopeNode *scope = start;
-    while (scope != NULL)
-    {
-        HashNode_t *node = FindIdentInTable(scope->table, id);
-        if (node != NULL)
-        {
-            *hash_return = node;
-            return 1;
-        }
-        if (scope->num_deps > 0)
-        {
-            for (int i = scope->num_deps - 1; i >= 0; i--)
-            {
-                node = FindIdentInTable(scope->dep_scopes[i]->table, id);
-                if (node != NULL)
-                {
-                    *hash_return = node;
-                    return 1;
-                }
-            }
-        }
-        scope = scope->parent;
-    }
-
-    *hash_return = NULL;
-    return 0;
-}
-
 HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
@@ -838,17 +792,6 @@ static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id
 {
     if (symtab->current_scope == NULL)
         return NULL;
-
-    /* When push_target_unit > 0, symbols are routed to unit_scopes[idx]->table via
-     * SymTab_GetTargetTable.  We must check that table too so that duplicate
-     * detection in predeclare_* functions sees the symbols already pushed there. */
-    int idx = symtab->push_target_unit;
-    if (idx > 0 && idx < SYMTAB_MAX_UNITS && symtab->unit_scopes[idx] != NULL)
-    {
-        HashNode_t *node = FindIdentInTable(symtab->unit_scopes[idx]->table, id);
-        if (node != NULL)
-            return node;
-    }
 
     return FindIdentInTable(symtab->current_scope->table, id);
 }
