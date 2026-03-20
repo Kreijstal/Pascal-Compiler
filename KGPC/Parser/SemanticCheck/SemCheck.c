@@ -7430,6 +7430,9 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                     }
                     else
                     {
+                        int unit_idx = tree->tree_data.type_decl_data.source_unit_index;
+                        ScopeNode *saved_scope_for_inline_enum_literals =
+                            semcheck_switch_to_unit_scope(symtab, unit_idx);
                         int ordinal = 0;
                         ListNode_t *literal_node = alias_info->inline_enum_values;
                         while (literal_node != NULL)
@@ -7497,12 +7500,14 @@ static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                         literal_node_entry->defined_in_unit = 1;
                                         literal_node_entry->unit_is_public =
                                             tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                        mark_hashnode_source_unit(literal_node_entry, unit_idx);
                                     }
                                 }
                             }
                             ++ordinal;
                             literal_node = literal_node->next;
                         }
+                        semcheck_restore_scope(symtab, saved_scope_for_inline_enum_literals);
                         /* The enum constants now hold references to inline_enum_type, so we can release our ref */
                         destroy_kgpc_type(inline_enum_type);
                     }
