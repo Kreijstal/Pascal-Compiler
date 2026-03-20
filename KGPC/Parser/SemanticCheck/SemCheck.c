@@ -3761,7 +3761,7 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
 }
 
 static inline void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
-    if (node == NULL || unit_index <= 0 || node->source_unit_index != 0) return;
+    if (node == NULL || unit_index <= 0) return;
     node->source_unit_index = unit_index;
 }
 
@@ -12524,10 +12524,23 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     existing->hash_type == HASHTYPE_CONST &&
                     existing->const_int_value == value)
                 {
-                    /* Same constant with same value - treat as re-export, skip silently */
-                    g_semcheck_imported_decl_unit_index = saved_imported_unit;
-                    symtab->push_target_unit = saved_push_target;
-                    return 0;
+                    HashNode_t *existing_in_target = NULL;
+                    HashTable_t *target_table = SymTab_GetTargetTable(symtab);
+                    if (target_table != NULL)
+                        existing_in_target = FindIdentInTable(target_table,
+                            tree->tree_data.const_decl_data.id);
+
+                    /* Only skip when the current target scope already has this const.
+                     * Re-exported same-value consts (e.g. Math.EqualsValue = types.EqualsValue)
+                     * must still be published into the re-exporting unit's own table. */
+                    if (existing_in_target != NULL &&
+                        existing_in_target->hash_type == HASHTYPE_CONST &&
+                        existing_in_target->const_int_value == value)
+                    {
+                        g_semcheck_imported_decl_unit_index = saved_imported_unit;
+                        symtab->push_target_unit = saved_push_target;
+                        return 0;
+                    }
                 }
 
 
@@ -14032,6 +14045,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
+    {
+        int sys_idx = unit_registry_add("System");
+        if (sys_idx > 0)
+            ScopeAddDependency(symtab->current_scope,
+                               GetOrCreateUnitScope(symtab, sys_idx));
+    }
 
     /* Wire scope tree deps: unit scope can see interface + implementation uses */
     wire_scope_deps(symtab, symtab->current_scope,
@@ -14062,7 +14081,15 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     {
         ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
         if (own_unit_scope != NULL && symtab->current_scope != NULL)
+        {
             ScopeAddDependency(symtab->current_scope, own_unit_scope);
+            {
+                int sys_idx = unit_registry_add("System");
+                if (sys_idx > 0)
+                    ScopeAddDependency(own_unit_scope,
+                                       GetOrCreateUnitScope(symtab, sys_idx));
+            }
+        }
     }
 
     semcheck_mark_type_decl_units(tree->tree_data.unit_data.interface_type_decls,
@@ -14320,6 +14347,12 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
     semcheck_unit_names_add_list(tree->tree_data.unit_data.implementation_uses);
+    {
+        int sys_idx = unit_registry_add("System");
+        if (sys_idx > 0)
+            ScopeAddDependency(symtab->current_scope,
+                               GetOrCreateUnitScope(symtab, sys_idx));
+    }
 
     /* Wire scope tree deps: unit scope can see interface + implementation uses */
     wire_scope_deps(symtab, symtab->current_scope,
@@ -14374,6 +14407,12 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
         if (own_unit_scope != NULL && symtab->current_scope != NULL)
         {
             ScopeAddDependency(symtab->current_scope, own_unit_scope);
+            {
+                int sys_idx = unit_registry_add("System");
+                if (sys_idx > 0)
+                    ScopeAddDependency(own_unit_scope,
+                                       GetOrCreateUnitScope(symtab, sys_idx));
+            }
             /* Wire the interface + implementation uses as deps of own_unit_scope */
             wire_scope_deps(symtab, own_unit_scope,
                             tree->tree_data.unit_data.interface_uses);
