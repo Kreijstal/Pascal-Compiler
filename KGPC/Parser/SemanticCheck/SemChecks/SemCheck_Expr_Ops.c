@@ -2012,8 +2012,15 @@ int semcheck_mulop(int *type_return,
         *type_return = REAL_TYPE;
     else if (type_first == INT64_TYPE || type_second == INT64_TYPE)
         *type_return = INT64_TYPE;
+    else if (type_first == QWORD_TYPE || type_second == QWORD_TYPE)
+        *type_return = QWORD_TYPE;
+    else if (type_first == LONGWORD_TYPE || type_second == LONGWORD_TYPE)
+        *type_return = LONGWORD_TYPE;
     else if (type_first == LONGINT_TYPE || type_second == LONGINT_TYPE)
         *type_return = LONGINT_TYPE;
+    else if (is_integer_type(type_first) && is_integer_type(type_second))
+        /* FPC promotes narrow ordinal arithmetic/shift results to Integer. */
+        *type_return = INT_TYPE;
     else
         *type_return = type_first;
     return return_val;
