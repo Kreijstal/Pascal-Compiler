@@ -92,6 +92,8 @@ typedef struct {
     CodeGenHashEntry *buckets[CODEGEN_HASHSET_SIZE];
 } CodeGenStringSet;
 
+static CodeGenStringSet g_codegen_callable_exports;
+
 static unsigned codegen_hash(const char *s)
 {
     unsigned h = 0;
@@ -224,6 +226,34 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
 
         if (sub->tree_data.subprogram_data.subprograms != NULL)
             codegen_collect_available_subprogram_labels(sub->tree_data.subprogram_data.subprograms);
+
+        sub_list = sub_list->next;
+    }
+}
+
+static void codegen_collect_callable_export_names(ListNode_t *sub_list)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (sub == NULL || sub->type != TREE_SUBPROGRAM) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        struct Subprogram *data = &sub->tree_data.subprogram_data;
+        const char *export_name = NULL;
+        if (data->internproc_id != NULL && data->internproc_id[0] != '\0')
+            export_name = data->internproc_id;
+        else if (data->cname_override != NULL && data->cname_override[0] != '\0')
+            export_name = data->cname_override;
+        else if (data->mangled_id != NULL && data->mangled_id[0] != '\0')
+            export_name = data->mangled_id;
+
+        if (export_name != NULL && !codegen_set_contains_ci(&g_codegen_callable_exports, export_name))
+            codegen_set_insert_ci(&g_codegen_callable_exports, export_name);
+
+        if (data->subprograms != NULL)
+            codegen_collect_callable_export_names(data->subprograms);
 
         sub_list = sub_list->next;
     }
@@ -2319,6 +2349,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
+    memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
 
@@ -2330,6 +2361,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+    codegen_collect_callable_export_names(tree->tree_data.program_data.subprograms);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
     codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
@@ -2350,6 +2382,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
     }
+    codegen_set_destroy(&g_codegen_callable_exports);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -2380,6 +2413,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
+    memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
 
@@ -2390,6 +2424,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+    codegen_collect_callable_export_names(tree->tree_data.unit_data.subprograms);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
     codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
@@ -2521,6 +2556,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
     }
+    codegen_set_destroy(&g_codegen_callable_exports);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -2558,6 +2594,21 @@ static int codegen_const_symbol_emitted(ListNode_t *emitted_symbols, const char 
     return 0;
 }
 
+static int codegen_should_emit_const_equiv_symbol(CodeGenContext *ctx,
+    HashTable_t *table, const HashNode_t *symbol, const char *id)
+{
+    (void)ctx;
+    (void)table;
+    (void)symbol;
+    if (id == NULL || !codegen_is_valid_asm_symbol_name(id))
+        return 0;
+
+    if (codegen_set_contains_ci(&g_codegen_callable_exports, id))
+        return 0;
+
+    return 1;
+}
+
 static void codegen_emit_integer_const_equivs_from_table(CodeGenContext *ctx,
     HashTable_t *table, ListNode_t **emitted_symbols)
 {
@@ -2579,7 +2630,7 @@ static void codegen_emit_integer_const_equivs_from_table(CodeGenContext *ctx,
                 symbol->const_string_value == NULL &&
                 symbol->const_set_value == NULL &&
                 symbol->id != NULL &&
-                codegen_is_valid_asm_symbol_name(symbol->id) &&
+                codegen_should_emit_const_equiv_symbol(ctx, table, symbol, symbol->id) &&
                 !codegen_const_symbol_emitted(*emitted_symbols, symbol->id))
             {
                 int type_tag = codegen_tag_from_kgpc(symbol->type);
@@ -2769,7 +2820,7 @@ static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx, ListNo
         if (id == NULL || value == NULL)
             continue;
 
-        if (!codegen_is_valid_asm_symbol_name(id))
+        if (!codegen_should_emit_const_equiv_symbol(ctx, NULL, NULL, id))
             continue;
 
         long long const_value = 0;
