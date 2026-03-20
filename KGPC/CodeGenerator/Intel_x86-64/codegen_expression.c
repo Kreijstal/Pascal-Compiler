@@ -1141,12 +1141,16 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         }
         struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->storage_size > 0)
+        {
             return (int)alias->storage_size;
+        }
         if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
         {
             long long size = kgpc_type_sizeof(decl->tree_data.var_decl_data.cached_kgpc_type);
             if (size > 0)
+            {
                 return (int)size;
+            }
         }
     }
 

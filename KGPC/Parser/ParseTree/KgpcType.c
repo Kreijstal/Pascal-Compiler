@@ -1220,6 +1220,22 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     kgpc_type_retain(type_node->type);
                     return type_node->type;
                 }
+                /* If the cached type is a bare REAL_TYPE without an
+                 * alias name, prefer the symbol-table type which carries
+                 * proper size info (Single=4, Double=8) or a distinct tag
+                 * (EXTENDED_TYPE).  Without this, overload resolution
+                 * can't distinguish Single/Double/Extended formals. */
+                if (cached != NULL &&
+                    cached->kind == TYPE_KIND_PRIMITIVE &&
+                    is_real_family_type(cached->info.primitive_type_tag) &&
+                    (cached->type_alias == NULL ||
+                     cached->type_alias->alias_name == NULL) &&
+                    type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    kgpc_type_retain(type_node->type);
+                    return type_node->type;
+                }
             }
         }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
@@ -3686,7 +3702,18 @@ static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth)
     switch (a->kind)
     {
         case TYPE_KIND_PRIMITIVE:
-            return a->info.primitive_type_tag == b->info.primitive_type_tag;
+            if (a->info.primitive_type_tag != b->info.primitive_type_tag)
+                return 0;
+            /* For real types, also compare storage sizes so that
+             * Single (4), Double (8), and Extended (16) are distinct. */
+            if (is_real_family_type(a->info.primitive_type_tag))
+            {
+                long long sa = kgpc_type_sizeof(a);
+                long long sb = kgpc_type_sizeof(b);
+                if (sa > 0 && sb > 0 && sa != sb)
+                    return 0;
+            }
+            return 1;
         case TYPE_KIND_POINTER:
             return kgpc_type_equals_internal(a->info.points_to, b->info.points_to, depth + 1);
         case TYPE_KIND_ARRAY:

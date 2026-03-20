@@ -1947,6 +1947,17 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         snprintf(buffer, sizeof(buffer), "\tneg%s\t%s\n",
             use_qword ? "q" : "l", dest);
         inst_list = add_inst(inst_list, buffer);
+        /* After 32-bit negation, sign-extend to 64 bits so the value is
+         * correct when later used in a 64-bit context (e.g. passed as Int64
+         * argument via movq). Writing a 32-bit register zeroes the upper
+         * half, so negl of a positive value leaves e.g. 0x00000000FFFFFFFC
+         * instead of the expected 0xFFFFFFFFFFFFFFFC for -4. */
+        if (!use_qword)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                target_reg->bit_32, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     return inst_list;

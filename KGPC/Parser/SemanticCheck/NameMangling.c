@@ -460,6 +460,12 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 if (resolved_type == HASHVAR_REAL &&
                     mangle_type_id_is_extended(type_ref_base_name_or_id(type_ref, type_id)))
                     record_type_id = "Extended";
+                if (resolved_type == HASHVAR_REAL && record_type_id == NULL)
+                {
+                    const char *base = type_ref_base_name_or_id(type_ref, type_id);
+                    if (base != NULL && strcasecmp(base, "Single") == 0)
+                        record_type_id = "Single";
+                }
                 
                 // If not a built-in type, look it up in the symbol table
                 if (resolved_type == HASHVAR_UNTYPED) {
@@ -498,6 +504,10 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                         if (resolved_type == HASHVAR_REAL &&
                             mangle_kgpc_type_is_extended_real(type_node->type))
                             record_type_id = "Extended";
+                        if (resolved_type == HASHVAR_REAL && record_type_id == NULL &&
+                            type_node->type != NULL &&
+                            kgpc_type_real_storage_size(type_node->type) == 4)
+                            record_type_id = "Single";
                     }
                 }
             } else {
@@ -524,9 +534,20 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 record_type_id = "Extended";
             }
             if (resolved_type == HASHVAR_REAL && record_type_id == NULL &&
+                decl_tree->tree_data.var_decl_data.cached_kgpc_type != NULL &&
+                kgpc_type_real_storage_size(decl_tree->tree_data.var_decl_data.cached_kgpc_type) == 4)
+            {
+                record_type_id = "Single";
+            }
+            if (resolved_type == HASHVAR_REAL && record_type_id == NULL &&
                 inline_alias != NULL && inline_alias->storage_size > 8)
             {
                 record_type_id = "Extended";
+            }
+            if (resolved_type == HASHVAR_REAL && record_type_id == NULL &&
+                inline_alias != NULL && inline_alias->storage_size == 4)
+            {
+                record_type_id = "Single";
             }
         } else { // Assume array or other type for now
             ids = decl_tree->tree_data.arr_decl_data.ids;
@@ -658,6 +679,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_ax";
+                    else if (mt != NULL && mt->type_id != NULL &&
+                             strcasecmp(mt->type_id, "Single") == 0)
+                        type_suffix = "_af";
                     else
                         type_suffix = "_ar";
                     break;
@@ -691,6 +715,9 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_x";
+                    else if (mt != NULL && mt->type_id != NULL &&
+                             strcasecmp(mt->type_id, "Single") == 0)
+                        type_suffix = "_f";
                     else
                         type_suffix = "_r";
                     break;

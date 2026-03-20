@@ -8391,6 +8391,13 @@ int64_t kgpc_sar_int64(int64_t value, int32_t shift) {
     return value >> (shift & 63);
 }
 
+/* FPC internal intrinsic stub — the FPC compiler would inline SAR
+ * instructions, but since we emit a regular call we need a runtime
+ * symbol.  The generic version uses 64-bit arithmetic. */
+int64_t fpc_in_sar_x_y(int64_t value, int64_t shift) {
+    return value >> (shift & 63);
+}
+
 int32_t kgpc_sar_longint(int32_t value, int32_t shift) {
     return value >> (shift & 31);
 }

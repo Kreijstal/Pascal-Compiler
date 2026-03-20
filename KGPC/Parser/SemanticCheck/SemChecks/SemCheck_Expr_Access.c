@@ -6880,6 +6880,7 @@ skip_overload_resolution:
                     int owns_expected_kgpc = 0;
                     KgpcType *expected_kgpc = resolve_type_from_vardecl(arg_decl, symtab, &owns_expected_kgpc);
 
+
                     semcheck_bind_set_literal_to_expected_type_for_call(
                         current_arg_expr, expected_kgpc, &arg_type);
 
@@ -7065,13 +7066,35 @@ skip_overload_resolution:
                     }
                     if (!type_compatible &&
                         id != NULL && pascal_identifier_equals(id, "supports") &&
-                        expected_type == POINTER_TYPE &&
+                        (expected_type == POINTER_TYPE || expected_type == RECORD_TYPE) &&
                         arg_type == UNKNOWN_TYPE &&
                         cur_arg == 2)
                     {
                         /* Keep Supports() second-argument handling permissive for
-                         * interface-type identifiers until parser typing is normalized. */
+                         * interface-type identifiers until parser typing is normalized.
+                         * The RECORD_TYPE case covers the TGUID overload (interface→TGUID). */
                         type_compatible = 1;
+                    }
+                    /* FPC allows passing an interface type identifier where a TGUID record
+                     * is expected. The compiler implicitly resolves it to the interface's GUID.
+                     * Until we implement this fully, accept type identifiers (HASHTYPE_TYPE)
+                     * with pointer kind (interface types) as compatible with record parameters. */
+                    if (!type_compatible &&
+                        expected_type == RECORD_TYPE &&
+                        arg_type == UNKNOWN_TYPE &&
+                        current_arg_expr != NULL &&
+                        current_arg_expr->type == EXPR_FUNCTION_CALL)
+                    {
+                        const char *fc_id = current_arg_expr->expr_data.function_call_data.id;
+                        if (fc_id != NULL) {
+                            HashNode_t *fc_node = NULL;
+                            if (FindSymbol(&fc_node, symtab, fc_id) &&
+                                fc_node != NULL &&
+                                fc_node->hash_type == HASHTYPE_TYPE)
+                            {
+                                type_compatible = 1;
+                            }
+                        }
                     }
 
                     if (owns_arg_kgpc && arg_kgpc != NULL)

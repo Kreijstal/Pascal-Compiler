@@ -867,7 +867,11 @@ static MatchQuality semcheck_match_from_rank(int rank)
     if (rank == 1)
         return semcheck_make_quality(MATCH_PROMOTION);
     if (rank > 1)
-        return semcheck_make_quality(MATCH_CONVERSION);
+    {
+        MatchQuality q = semcheck_make_quality(MATCH_CONVERSION);
+        q.integer_rank = rank;  /* preserve distance for tiebreaking */
+        return q;
+    }
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }
 
@@ -1188,6 +1192,19 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                   formal_kgpc->kind == TYPE_KIND_PRIMITIVE) &&
                 are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
                 return semcheck_make_quality(MATCH_PROMOTION);
+            /* For real family types (REAL_TYPE / EXTENDED_TYPE), allow
+             * var/out param matching with PROMOTION quality so that
+             * overload resolution can still consider the candidate.
+             * Without this, SinCos(Extended) is INCOMPATIBLE when
+             * the argument is Float (= Extended stored as REAL_TYPE). */
+            if (is_real_family_type(actual_kgpc->info.primitive_type_tag) &&
+                is_real_family_type(formal_kgpc->info.primitive_type_tag))
+            {
+                int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
+                if (rank >= 0)
+                    return semcheck_match_from_rank(rank);
+                return semcheck_make_quality(MATCH_PROMOTION);
+            }
             return semcheck_make_quality(MATCH_INCOMPATIBLE);
         }
         if (actual_tag == formal_tag)
@@ -1220,15 +1237,42 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
          * Double actual vs Extended formal is scored as PROMOTION rather
          * than EXACT.  This prevents ambiguity among Max(Single), Max(Double),
          * Max(Extended) overloads. */
-        if (formal_tag == REAL_TYPE && actual_kgpc != NULL && formal_kgpc != NULL)
+        if (is_real_family_type(formal_tag) && actual_kgpc != NULL && formal_kgpc != NULL)
         {
-            const char *actual_alias = (actual_kgpc->type_alias != NULL) ?
-                actual_kgpc->type_alias->alias_name : NULL;
-            const char *formal_alias = (formal_kgpc->type_alias != NULL) ?
-                formal_kgpc->type_alias->alias_name : NULL;
-            if (actual_alias != NULL && formal_alias != NULL &&
-                !pascal_identifier_equals(actual_alias, formal_alias))
-                return semcheck_make_quality(MATCH_PROMOTION);
+            /* Use kgpc_type_conversion_rank to distinguish between
+             * Single (4), Double (8), and Extended (10) for overload
+             * resolution.  kgpc_type_equals returns false when sizes
+             * or primitive tags differ; conversion_rank then scores
+             * by size (widening > narrowing). */
+            int rank = kgpc_type_conversion_rank(actual_kgpc, formal_kgpc);
+            if (rank >= 0)
+                return semcheck_match_from_rank(rank);
+            /* Fall through to default EXACT if rank can't be determined */
+        }
+        /* For record types, compare the actual record identity.
+         * Different record types (e.g. TGUID vs TObject) sharing the
+         * same RECORD_TYPE tag must not score as EXACT — this prevents
+         * Supports(IUnknown, TGUID, out) from beating
+         * Supports(IUnknown, TClass, out) when the argument is an
+         * interface reference, not an actual TGUID. */
+        if (formal_tag == RECORD_TYPE && formal_kgpc != NULL)
+        {
+            if (kgpc_getenv("KGPC_DEBUG_OVERLOAD_QUALITY") != NULL)
+                fprintf(stderr, "[KGPC] RECORD match: actual_kgpc=%p formal_kgpc=%p equals=%d\n",
+                    (void*)actual_kgpc, (void*)formal_kgpc,
+                    actual_kgpc ? kgpc_type_equals(actual_kgpc, formal_kgpc) : -1);
+            if (actual_kgpc == NULL)
+            {
+                /* Actual type info lost (e.g. interface reference) —
+                 * can't verify it matches the formal record, demote. */
+                return semcheck_make_quality(MATCH_CONVERSION);
+            }
+            if (!kgpc_type_equals(actual_kgpc, formal_kgpc))
+            {
+                if (are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
+                    return semcheck_make_quality(MATCH_CONVERSION);
+                return semcheck_make_quality(MATCH_INCOMPATIBLE);
+            }
         }
         return semcheck_make_quality(MATCH_EXACT);
     }
@@ -1434,7 +1478,7 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
          * The generic compatibility check is too permissive here and would
          * allow Real→Integer as MATCH_CONVERSION, causing ambiguity between
          * Max(Extended) and Max(Integer) overloads. */
-        if (!(actual_tag == REAL_TYPE && is_integer_type(formal_tag)) &&
+        if (!(is_real_family_type(actual_tag) && is_integer_type(formal_tag)) &&
             are_types_compatible_for_assignment(formal_kgpc, actual_kgpc, symtab))
             return semcheck_make_quality(MATCH_CONVERSION);
     }
@@ -1449,7 +1493,7 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
     }
     if (semcheck_overload_has_record_assign_conversion(symtab, actual_kgpc, formal_kgpc, actual_tag))
         return semcheck_make_quality(MATCH_CONVERSION);
-    if (is_integer_type(actual_tag) && formal_tag == REAL_TYPE)
+    if (is_integer_type(actual_tag) && is_real_family_type(formal_tag))
         return semcheck_make_quality(MATCH_CONVERSION);
 
     /* Boolean to integer: allow implicit conversion for builtins like FillChar.
@@ -1864,20 +1908,30 @@ static int semcheck_compare_match_quality(int arg_count,
     /* Same conversion-class histogram: fall back to the per-argument compare
      * so exact subtype/id matches can still dominate deterministically. */
     {
-        int a_better_somewhere = 0;
-        int b_better_somewhere = 0;
+        int a_better_count = 0;
+        int b_better_count = 0;
+        int a_worst = 0, b_worst = 0;  /* worst (highest) kind for each */
         for (int i = 0; i < arg_count; i++)
         {
             int cmp = compare_single_quality(&a[i], &b[i]);
             if (cmp < 0)
-                a_better_somewhere = 1;
+                a_better_count++;
             else if (cmp > 0)
-                b_better_somewhere = 1;
+                b_better_count++;
+            if ((int)a[i].kind > a_worst) a_worst = (int)a[i].kind;
+            if ((int)b[i].kind > b_worst) b_worst = (int)b[i].kind;
         }
-        if (a_better_somewhere && !b_better_somewhere)
+        if (a_better_count > 0 && b_better_count == 0)
             return -1;
-        if (b_better_somewhere && !a_better_somewhere)
+        if (b_better_count > 0 && a_better_count == 0)
             return 1;
+        /* Cross-argument tradeoff: neither Pareto-dominates.
+         * Prefer the candidate with better worst-case argument. */
+        if (a_worst != b_worst)
+            return a_worst < b_worst ? -1 : 1;
+        /* Prefer the candidate that is strictly better on more arguments. */
+        if (a_better_count != b_better_count)
+            return a_better_count > b_better_count ? -1 : 1;
     }
 
     return 0;
@@ -2396,6 +2450,34 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     is_var_param = formal_decl->tree_data.var_decl_data.is_var_param;
 
                 int formal_tag = resolve_param_type(formal_decl, symtab);
+
+                /* If formal_kgpc is a bare real type (no alias name), try to
+                 * replace it with the symbol-table type which carries proper
+                 * size info (Single=4, Double=8, Extended=10). */
+                if (formal_kgpc != NULL &&
+                    formal_kgpc->kind == TYPE_KIND_PRIMITIVE &&
+                    is_real_family_type(formal_kgpc->info.primitive_type_tag) &&
+                    (formal_kgpc->type_alias == NULL ||
+                     formal_kgpc->type_alias->alias_name == NULL))
+                {
+                    const char *ftype_id = semcheck_get_param_type_id(formal_decl);
+                    if (ftype_id != NULL)
+                    {
+                        HashNode_t *ftype_node = NULL;
+                        if (FindSymbol(&ftype_node, symtab, ftype_id) &&
+                            ftype_node != NULL &&
+                            ftype_node->hash_type == HASHTYPE_TYPE &&
+                            ftype_node->type != NULL &&
+                            ftype_node->type->kind == TYPE_KIND_PRIMITIVE)
+                        {
+                                if (owns_formal)
+                                destroy_kgpc_type(formal_kgpc);
+                            formal_kgpc = ftype_node->type;
+                            kgpc_type_retain(formal_kgpc);
+                            owns_formal = 1;
+                        }
+                    }
+                }
 
                 if (formal_kgpc == NULL)
                 {
@@ -2959,8 +3041,24 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     }
                     else
                     {
-                        num_best++;
-                        free(qualities);
+                        /* Neither candidate strictly dominates.  Keep the
+                         * current best rather than reporting ambiguity.
+                         * When the comparison function returns 0 after all
+                         * tiebreakers, both candidates are equally valid.
+                         * Prefer the candidate with a resolved mangled name
+                         * over one without (generic specialization artifacts). */
+                        if (candidate->mangled_id != NULL && best_match->mangled_id == NULL)
+                        {
+                            free(best_qualities);
+                            best_match = candidate;
+                            best_qualities = qualities;
+                            best_missing = missing_args;
+                            num_best = 1;
+                        }
+                        else
+                        {
+                            free(qualities);
+                        }
                     }
                 }
             }

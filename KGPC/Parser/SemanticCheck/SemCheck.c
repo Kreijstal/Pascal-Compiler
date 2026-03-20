@@ -13420,7 +13420,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "UInt16", create_primitive_type_with_size(WORD_TYPE, 2));
     add_builtin_type_owned(symtab, "Int32", create_primitive_type_with_size(INT_TYPE, 4));
     add_builtin_type_owned(symtab, "UInt32", create_primitive_type_with_size(LONGWORD_TYPE, 4));
-    add_builtin_type_owned(symtab, "Float", create_primitive_type_with_size(REAL_TYPE, 4));
+    add_builtin_type_owned(symtab, "Float", create_primitive_type_with_size(EXTENDED_TYPE, 10));
     add_builtin_type_owned(symtab, "ValReal", create_primitive_type_with_size(REAL_TYPE, 8));
     add_builtin_type_owned(symtab, "Single", create_primitive_type_with_size(REAL_TYPE, 4));
     add_builtin_type_owned(symtab, "Double", create_primitive_type_with_size(REAL_TYPE, 8));
