@@ -37,231 +37,6 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     return is_builtin;
 }
 
-/* Helper: check if candidate is in the given hash table (pointer identity).
- * Uses FindIdentPtrInTable for zero-allocation direct bucket walk. */
-static int candidate_in_table(HashTable_t *table, HashNode_t *candidate)
-{
-    return FindIdentPtrInTable(table, candidate);
-}
-
-static int semcheck_candidate_is_subprogram(HashNode_t *candidate)
-{
-    if (candidate == NULL)
-        return 0;
-    return (candidate->hash_type == HASHTYPE_PROCEDURE ||
-            candidate->hash_type == HASHTYPE_FUNCTION ||
-            candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
-}
-
-static int semcheck_same_callable_symbol(HashNode_t *a, HashNode_t *b)
-{
-    if (a == NULL || b == NULL)
-        return 0;
-    if (a == b)
-        return 1;
-    if (!semcheck_candidate_is_subprogram(a) || !semcheck_candidate_is_subprogram(b))
-        return 0;
-
-    if (a->mangled_id != NULL && b->mangled_id != NULL &&
-        strcmp(a->mangled_id, b->mangled_id) == 0)
-        return 1;
-
-    if (a->id != NULL && b->id != NULL && strcmp(a->id, b->id) == 0 &&
-        a->type != NULL && b->type != NULL &&
-        a->type->kind == TYPE_KIND_PROCEDURE &&
-        b->type->kind == TYPE_KIND_PROCEDURE)
-    {
-        int a_count = ListLength(a->type->info.proc_info.params);
-        int b_count = ListLength(b->type->info.proc_info.params);
-        if (a_count == b_count)
-            return 1;
-    }
-
-    return 0;
-}
-
-static int semcheck_candidate_equiv_in_table(HashTable_t *table, HashNode_t *candidate)
-{
-    if (table == NULL || candidate == NULL || candidate->id == NULL)
-        return 0;
-
-    ListNode_t *matches = FindAllIdentsInTable(table, candidate->id);
-    int found = 0;
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        HashNode_t *other = (HashNode_t *)cur->cur;
-        if (semcheck_same_callable_symbol(candidate, other))
-        {
-            found = 1;
-            break;
-        }
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-    return found;
-}
-
-static int semcheck_candidate_exists_in_outer_scope(ScopeNode *scope, HashNode_t *candidate)
-{
-    for (ScopeNode *cur = scope; cur != NULL; cur = cur->parent)
-    {
-        if (candidate_in_table(cur->table, candidate) ||
-            semcheck_candidate_equiv_in_table(cur->table, candidate))
-            return 1;
-        if (cur->num_deps > 0)
-        {
-            for (int i = 0; i < cur->num_deps; i++)
-            {
-                if (candidate_in_table(cur->dep_scopes[i]->table, candidate) ||
-                    semcheck_candidate_equiv_in_table(cur->dep_scopes[i]->table, candidate))
-                    return 1;
-            }
-        }
-    }
-    return 0;
-}
-
-/* Walk the scope tree to determine the candidate's scope level.
- *
- * Pure tree walk with pointer identity.  When a proc/func candidate is
- * found in a SCOPE_SUBPROGRAM body scope, it was self-pushed for recursion
- * support — skip it and keep walking to find the original declaration at
- * the declaring scope (parent/dep_scope). */
-static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
-{
-    if (symtab == NULL || candidate == NULL || candidate->id == NULL)
-        return INT_MAX / 2;
-
-    int level = 0;
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
-    {
-        if (candidate_in_table(scope->table, candidate))
-        {
-            /* Subprogram symbols are self-pushed into the active body scope for
-             * recursion. If the same HashNode is also visible from an outer
-             * declaration scope, ignore the body-scope copy so overload
-             * ranking does not prefer recursive self-calls over a better
-             * sibling overload. */
-            if (scope == symtab->current_scope &&
-                semcheck_candidate_is_subprogram(candidate) &&
-                semcheck_candidate_exists_in_outer_scope(scope->parent, candidate))
-            {
-                /* continue walking to find the real declaring scope */
-            }
-            else
-            {
-                return level;
-            }
-        }
-
-        if (scope->num_deps > 0)
-        {
-            for (int i = scope->num_deps - 1; i >= 0; i--)
-            {
-                if (candidate_in_table(scope->dep_scopes[i]->table, candidate))
-                    return level + 1 + (scope->num_deps - 1 - i);
-            }
-            level += 1 + scope->num_deps;
-        }
-        else if (scope->parent == NULL)
-        {
-            return INT_MAX / 2;
-        }
-        else
-        {
-            level++;
-        }
-    }
-
-    return INT_MAX / 2;
-}
-
-static int semcheck_total_param_size(ListNode_t *params, SymTab_t *symtab)
-{
-    int total = 0;
-    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
-    {
-        Tree_t *decl = (Tree_t *)cur->cur;
-        int owns = 0;
-        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
-        long long sz = -1;
-        if (kg != NULL)
-            sz = kgpc_type_sizeof(kg);
-        if (owns && kg != NULL)
-            destroy_kgpc_type(kg);
-
-        if (sz <= 0)
-            sz = 1024;
-        if (sz > INT_MAX / 2)
-            sz = INT_MAX / 2;
-        total += (int)sz;
-        if (total > INT_MAX / 2)
-            total = INT_MAX / 2;
-    }
-    return total;
-}
-
-/* Returns 1 if all parameters in the list are of float (REAL_TYPE) type.
- * Used to detect float-specialized overloads (Single/Double/Extended) that
- * share the same mangled name in KGPC's convention. */
-static int semcheck_all_params_float(ListNode_t *params, SymTab_t *symtab)
-{
-    if (params == NULL)
-        return 0;
-    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
-    {
-        Tree_t *decl = (Tree_t *)cur->cur;
-        int owns = 0;
-        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
-        int is_float = 0;
-        if (kg != NULL && kg->kind == TYPE_KIND_PRIMITIVE)
-            is_float = (kg->info.primitive_type_tag == REAL_TYPE);
-        if (owns && kg != NULL)
-            destroy_kgpc_type(kg);
-        if (!is_float)
-            return 0;
-    }
-    return 1;
-}
-
-/* Returns the absolute distance between the total declared size of value
- * (non-var) float parameters and KGPC's native float size (8 bytes each).
- * A distance of 0 means all value float params are Double (8 bytes) — the
- * KGPC-native size. Used to prefer the Double overload over Single (4 bytes)
- * or Extended (16 bytes) when all overloads map to the same mangled name. */
-static int semcheck_value_float_param_distance(ListNode_t *params, SymTab_t *symtab)
-{
-    int n_value = 0;
-    int total_value_size = 0;
-    for (ListNode_t *cur = params; cur != NULL; cur = cur->next)
-    {
-        Tree_t *decl = (Tree_t *)cur->cur;
-        if (decl == NULL)
-            continue;
-        int is_var = 0;
-        if (decl->type == TREE_VAR_DECL)
-            is_var = decl->tree_data.var_decl_data.is_var_param;
-        if (is_var)
-            continue; /* var/out params are always pointers — skip */
-        n_value++;
-        int owns = 0;
-        KgpcType *kg = resolve_type_from_vardecl(decl, symtab, &owns);
-        long long sz = 8;
-        if (kg != NULL)
-            sz = kgpc_type_sizeof(kg);
-        if (owns && kg != NULL)
-            destroy_kgpc_type(kg);
-        if (sz <= 0)
-            sz = 8;
-        total_value_size += (int)sz;
-    }
-    if (n_value == 0)
-        return 0;
-    int native = n_value * 8;
-    int dist = total_value_size - native;
-    return dist < 0 ? -dist : dist;
-}
-
 static const char *semcheck_get_param_type_id(Tree_t *decl)
 {
     if (decl == NULL)
@@ -296,13 +71,6 @@ static int semcheck_array_elem_legacy_tag(KgpcType *type)
         }
     }
     return UNKNOWN_TYPE;
-}
-
-static int semcheck_mangled_is_syscall(const char *mangled_id)
-{
-    if (mangled_id == NULL)
-        return 0;
-    return strncmp(mangled_id, "FPC_SYSC_", 9) == 0;
 }
 
 static int semcheck_get_pointer_param_subtype(Tree_t *decl, SymTab_t *symtab)
@@ -2115,84 +1883,6 @@ static int semcheck_compare_match_quality(int arg_count,
     return 0;
 }
 
-/* Compute class inheritance depth from a KgpcType that points to a class record.
- * Returns 0 if not a class, or the depth (TObject=1, TBits=2 if TBits inherits TObject, etc.) */
-static int semcheck_class_depth(KgpcType *type, SymTab_t *symtab)
-{
-    if (type == NULL || symtab == NULL)
-        return 0;
-    struct RecordType *rec = NULL;
-    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
-        type->info.points_to->kind == TYPE_KIND_RECORD)
-        rec = type->info.points_to->info.record_info;
-    else if (type->kind == TYPE_KIND_RECORD)
-        rec = type->info.record_info;
-    if (rec == NULL || !record_type_is_class(rec))
-        return 0;
-    int depth = 1;
-    const char *parent = rec->parent_class_name;
-    while (parent != NULL && depth < 100) {
-        depth++;
-        HashNode_t *parent_node = NULL;
-        if (FindSymbol(&parent_node, symtab, (char *)parent) == 0 || parent_node == NULL)
-            break;
-        struct RecordType *parent_rec = NULL;
-        if (parent_node->type != NULL) {
-            if (parent_node->type->kind == TYPE_KIND_RECORD)
-                parent_rec = parent_node->type->info.record_info;
-            else if (parent_node->type->kind == TYPE_KIND_POINTER &&
-                     parent_node->type->info.points_to != NULL &&
-                     parent_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                parent_rec = parent_node->type->info.points_to->info.record_info;
-        }
-        if (parent_rec == NULL)
-            break;
-        parent = parent_rec->parent_class_name;
-    }
-    return depth;
-}
-
-/* Compare two overload candidates by formal class-type specificity.
- * Returns -1 if candidate is more specific, 1 if best is more specific, 0 if equal. */
-static int semcheck_compare_class_specificity(HashNode_t *candidate, HashNode_t *best_match, SymTab_t *symtab)
-{
-    if (candidate == NULL || best_match == NULL || candidate->type == NULL || best_match->type == NULL)
-        return 0;
-    ListNode_t *cand_params = kgpc_type_get_procedure_params(candidate->type);
-    ListNode_t *best_params = kgpc_type_get_procedure_params(best_match->type);
-    int cand_depth_total = 0;
-    int best_depth_total = 0;
-    while (cand_params != NULL && best_params != NULL) {
-        Tree_t *cand_decl = (Tree_t *)cand_params->cur;
-        Tree_t *best_decl = (Tree_t *)best_params->cur;
-        if (cand_decl != NULL && best_decl != NULL &&
-            cand_decl->type == TREE_VAR_DECL && best_decl->type == TREE_VAR_DECL) {
-            /* Try cached kgpc_type first, then look up by type_id */
-            KgpcType *cand_type = cand_decl->tree_data.var_decl_data.cached_kgpc_type;
-            KgpcType *best_type = best_decl->tree_data.var_decl_data.cached_kgpc_type;
-            if (cand_type == NULL && cand_decl->tree_data.var_decl_data.type_id != NULL) {
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
-                    cand_type = node->type;
-            }
-            if (best_type == NULL && best_decl->tree_data.var_decl_data.type_id != NULL) {
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
-                    best_type = node->type;
-            }
-            cand_depth_total += semcheck_class_depth(cand_type, symtab);
-            best_depth_total += semcheck_class_depth(best_type, symtab);
-        }
-        cand_params = cand_params->next;
-        best_params = best_params->next;
-    }
-    if (cand_depth_total > best_depth_total)
-        return -1;
-    if (best_depth_total > cand_depth_total)
-        return 1;
-    return 0;
-}
-
 /* Count untyped var params in a candidate's parameter list */
 static int semcheck_count_untyped_params(HashNode_t *candidate)
 {
@@ -3172,11 +2862,26 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         else
         {
             int cmp = semcheck_compare_match_quality(given_count, qualities, best_qualities);
+            int tiebreak_cmp = 0;
+            if (cmp == 0)
+            {
+                int cand_untyped = semcheck_count_untyped_params(candidate);
+                int best_untyped = semcheck_count_untyped_params(best_match);
+                if (cand_untyped != best_untyped)
+                    tiebreak_cmp = cand_untyped < best_untyped ? -1 : 1;
+            }
+            if (cmp == 0 && tiebreak_cmp == 0)
+            {
+                int cand_builtin = semcheck_candidate_is_builtin(symtab, candidate);
+                int best_builtin = semcheck_candidate_is_builtin(symtab, best_match);
+                if (cand_builtin != best_builtin)
+                    tiebreak_cmp = cand_builtin ? 1 : -1;
+            }
 
             /* Candidate is strictly better if:
              * - better conversion sequence, OR
              * - same quality but fewer defaulted parameters */
-            if (cmp < 0 || (cmp == 0 && missing_args < best_missing))
+            if (cmp < 0 || (cmp == 0 && missing_args < best_missing) || tiebreak_cmp < 0)
             {
                 free(best_qualities);
                 best_match = candidate;
@@ -3184,7 +2889,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                 best_missing = missing_args;
                 num_best = 1;
             }
-            else if (cmp > 0 || (cmp == 0 && missing_args > best_missing))
+            else if (cmp > 0 || (cmp == 0 && missing_args > best_missing) || tiebreak_cmp > 0)
             {
                 /* Best is strictly better */
                 free(qualities);
