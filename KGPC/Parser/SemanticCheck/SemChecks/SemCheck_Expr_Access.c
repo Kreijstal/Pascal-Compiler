@@ -1530,47 +1530,6 @@ int semcheck_funccall(int *type_return,
                 }
             }
         }
-        if (pascal_identifier_equals(id, "ArrayStringToPPchar"))
-        {
-            ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-            if (args == NULL || args->next == NULL || args->next->next != NULL)
-            {
-                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, ArrayStringToPPchar expects exactly two arguments.\n",
-                    expr->line_num);
-                *type_return = UNKNOWN_TYPE;
-                return 1;
-            }
-
-            int error_count = 0;
-            struct Expression *arr_expr = (struct Expression *)args->cur;
-            struct Expression *reserve_expr = (struct Expression *)args->next->cur;
-            KgpcType *arr_kgpc_type = NULL;
-            KgpcType *reserve_kgpc_type = NULL;
-            error_count += semcheck_expr_with_type(&arr_kgpc_type, symtab, arr_expr, max_scope_lev, NO_MUTATE);
-            error_count += semcheck_expr_with_type(&reserve_kgpc_type, symtab, reserve_expr, max_scope_lev, NO_MUTATE);
-            if (error_count != 0)
-            {
-                *type_return = UNKNOWN_TYPE;
-                return error_count;
-            }
-
-            /* Rewrite to runtime call */
-            if (expr->expr_data.function_call_data.id != NULL)
-                free(expr->expr_data.function_call_data.id);
-            expr->expr_data.function_call_data.id = strdup("kgpc_array_string_to_ppchar");
-
-            if (expr->expr_data.function_call_data.mangled_id != NULL)
-                free(expr->expr_data.function_call_data.mangled_id);
-            expr->expr_data.function_call_data.mangled_id = strdup("kgpc_array_string_to_ppchar");
-
-            expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 1;
-            expr->expr_data.function_call_data.is_call_info_valid = 1;
-            expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
-
-            *type_return = POINTER_TYPE;
-            semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
-            return 0;
-        }
     }
 
     /* Trunc with Currency argument needs special handling — Currency is Int64 internally,

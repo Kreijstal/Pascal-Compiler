@@ -2683,20 +2683,6 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
                     }
                 }
             }
-            StackNode_t *stack_node = NULL;
-            int scope_depth_unused = 0;
-            stack_node = find_label_with_depth((char *)expr->expr_data.id, &scope_depth_unused);
-            if (stack_node != NULL)
-            {
-                if (stack_node->element_size > 0 || stack_node->size == 256)
-                {
-                    lower = 0;
-                    upper = 255;
-                    found = 1;
-                    if (is_shortstring_out != NULL)
-                        *is_shortstring_out = 1;
-                }
-            }
         }
         else if (expr->type == EXPR_RECORD_ACCESS)
         {
