@@ -20,7 +20,7 @@ type
     Byte = 0..255;
     TBytes = array of Byte;
 
-    TSysCharSet = set of Char;
+    TSysCharSet = set of AnsiChar;
     TExecuteFlags = set of (ExecInheritsHandles);
 
     TFloatFormat = (ffGeneral, ffExponent, ffFixed, ffNumber, ffCurrency);
@@ -148,6 +148,7 @@ function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
 function StartsWith(const S, Prefix: AnsiString): Boolean;
 function EndsWith(const S, Suffix: AnsiString): Boolean;
 function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
+function StringOfChar(C: AnsiChar; Count: SizeInt): AnsiString; overload;
 function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
@@ -218,7 +219,7 @@ type
     TStringHelper = type helper for AnsiString
     public
         function Trim: AnsiString; overload;
-        function Trim(const TrimChars: set of AnsiChar): AnsiString; overload;
+        function Trim(const TrimChars: TSysCharSet): AnsiString; overload;
         function Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
         function Split(const Separators: array of AnsiString; Options: TStringSplitOptions): TStringArray;
         function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
@@ -907,6 +908,20 @@ begin
         Result[i] := C;
 end;
 
+function StringOfChar(C: AnsiChar; Count: SizeInt): AnsiString; overload;
+var
+    i: SizeInt;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
 function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 var
     i: SizeInt;
@@ -1079,13 +1094,27 @@ begin
 end;
 
 function TStringHelper.Trim: AnsiString;
-const
-    DefaultTrimChars: set of AnsiChar = [' ', #9, #10, #13];
+var
+    start_pos: Integer;
+    end_pos: Integer;
 begin
-    Result := Trim(DefaultTrimChars);
+    start_pos := 1;
+    end_pos := Length(Self);
+    while (start_pos <= end_pos) and
+          ((Self[start_pos] = ' ') or (Self[start_pos] = #9) or
+           (Self[start_pos] = #10) or (Self[start_pos] = #13)) do
+        Inc(start_pos);
+    while (end_pos >= start_pos) and
+          ((Self[end_pos] = ' ') or (Self[end_pos] = #9) or
+           (Self[end_pos] = #10) or (Self[end_pos] = #13)) do
+        Dec(end_pos);
+    if end_pos < start_pos then
+        Result := ''
+    else
+        Result := Copy(Self, start_pos, end_pos - start_pos + 1);
 end;
 
-function TStringHelper.Trim(const TrimChars: set of AnsiChar): AnsiString;
+function TStringHelper.Trim(const TrimChars: TSysCharSet): AnsiString;
 var
     start_pos: Integer;
     end_pos: Integer;

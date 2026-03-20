@@ -487,7 +487,7 @@ static int semcheck_current_subprogram_is_constructor_fallback(SymTab_t *symtab)
         return 0;
 
     HashNode_t *self_node = NULL;
-    if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+    if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
     {
         struct RecordType *self_record = get_record_type_from_node(self_node);
         if (self_record != NULL && self_record->method_templates != NULL)
@@ -504,7 +504,7 @@ static int semcheck_current_subprogram_is_constructor_fallback(SymTab_t *symtab)
     }
 
     HashNode_t *owner_node = NULL;
-    if (FindIdent(&owner_node, symtab, (char *)owner_name) != 0 || owner_node == NULL)
+    if (FindSymbol(&owner_node, symtab, (char *)owner_name) != 0 || owner_node == NULL)
         return 0;
 
     struct RecordType *record = get_record_type_from_node(owner_node);
@@ -609,7 +609,7 @@ static const char *semcheck_record_type_id_from_expr(SymTab_t *symtab,
     }
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, expr->expr_data.id) == 0 && node != NULL &&
+    if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL &&
         node->type != NULL)
     {
         return semcheck_record_type_id_from_kgpc(node->type);
@@ -793,10 +793,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
     semcheck_record_assign_consider_id(symtab, "op_assign", target_type, source_type,
         &best_node, &best_return_type, &best_score);
 
-    ListNode_t *scope = symtab->stack_head;
-    while (scope != NULL)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = (HashTable_t *)scope->cur;
+        HashTable_t *table = scope->table;
         if (table != NULL)
         {
             for (int i = 0; i < TABLE_SIZE; ++i)
@@ -811,20 +810,19 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
                 }
             }
         }
-        scope = scope->next;
     }
 
-    /* Search unit tables — same pattern as FindIdentInUnit. */
+    /* Search unit tables — walk unit tables for unit-aware lookup. */
     {
-        int caller_unit_index = symtab->unit_context > 0
-            ? symtab->unit_context
+        int caller_unit_index = (symtab->current_scope != NULL && symtab->current_scope->unit_index > 0)
+            ? symtab->current_scope->unit_index
             : semcheck_get_current_unit_index();
 
         /* Caller's own unit table */
         if (caller_unit_index > 0 && caller_unit_index < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[caller_unit_index] != NULL)
+            symtab->unit_scopes[caller_unit_index] != NULL)
         {
-            HashTable_t *table = symtab->unit_tables[caller_unit_index];
+            HashTable_t *table = symtab->unit_scopes[caller_unit_index]->table;
             for (int i = 0; i < TABLE_SIZE; ++i)
             {
                 for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -846,9 +844,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
                 continue;
             if (!unit_registry_is_dep(caller_unit_index, dep))
                 continue;
-            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_tables[dep] == NULL)
+            if (dep >= SYMTAB_MAX_UNITS || symtab->unit_scopes[dep] == NULL)
                 continue;
-            HashTable_t *table = symtab->unit_tables[dep];
+            HashTable_t *table = symtab->unit_scopes[dep]->table;
             for (int i = 0; i < TABLE_SIZE; ++i)
             {
                 for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -862,14 +860,14 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
             }
         }
 
-        /* When unit_context is 0 (main program), search all unit tables */
+        /* When current scope is program-level (unit_index == 0), search all unit tables */
         if (caller_unit_index == 0)
         {
             for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
             {
-                if (symtab->unit_tables[u] == NULL)
+                if (symtab->unit_scopes[u] == NULL)
                     continue;
-                HashTable_t *table = symtab->unit_tables[u];
+                HashTable_t *table = symtab->unit_scopes[u]->table;
                 for (int i = 0; i < TABLE_SIZE; ++i)
                 {
                     for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -885,9 +883,9 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
         }
     }
 
-    if (symtab->builtins != NULL)
+    if (symtab->builtin_scope->table != NULL)
     {
-        HashTable_t *table = symtab->builtins;
+        HashTable_t *table = symtab->builtin_scope->table;
         for (int i = 0; i < TABLE_SIZE; ++i)
         {
             for (ListNode_t *cur = table->table[i]; cur != NULL; cur = cur->next)
@@ -1002,7 +1000,7 @@ static int semcheck_type_is_typed_file(KgpcType *type, struct SymTab *symtab)
         return 0;
 
     HashNode_t *typed_file_node = NULL;
-    if (FindIdent(&typed_file_node, symtab, "TypedFile") < 0 || typed_file_node == NULL)
+    if (FindSymbol(&typed_file_node, symtab, "TypedFile") == 0 || typed_file_node == NULL)
         return 0;
     if (typed_file_node->type == NULL)
         return 0;
@@ -1321,7 +1319,7 @@ static struct RecordType *resolve_tfpglist_record_from_lhs(SymTab_t *symtab,
         return NULL;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, lhs->expr_data.id) < 0 || node == NULL)
+    if (FindSymbol(&node, symtab, lhs->expr_data.id) == 0 || node == NULL)
         return NULL;
 
     struct RecordType *record = hashnode_get_record_type(node);
@@ -1400,7 +1398,7 @@ static HashNode_t *lookup_hashnode(SymTab_t *symtab, const char *id)
     if (symtab == NULL || id == NULL)
         return NULL;
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, id) >= 0 && node != NULL)
+    if (FindSymbol(&node, symtab, id) != 0 && node != NULL)
         return node;
     return NULL;
 }
@@ -1614,7 +1612,7 @@ static int semcheck_expr_is_widechar(SymTab_t *symtab, struct Expression *expr)
     if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL)
         {
             if (node->type != NULL)
             {
@@ -1703,7 +1701,7 @@ static int semcheck_expr_is_char_ordinal_const(SymTab_t *symtab, struct Expressi
     if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL &&
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL &&
             (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
         {
             return (node->const_int_value >= 0 && node->const_int_value <= 255);
@@ -1893,23 +1891,23 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
                         (qualifier != NULL &&
                          pascal_identifier_equals(qualifier, "System"));
     if (!force_builtin &&
-        FindIdent(&existing, symtab, proc_id) != -1 && existing != NULL &&
+        FindSymbol(&existing, symtab, proc_id) != 0 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
     {
         return 0;
     }
 
-    HashNode_t *builtin_node = FindIdentInTable(symtab->builtins, proc_id);
-    /* Also check unit_tables[System] — builtin procedures live there since
+    HashNode_t *builtin_node = FindIdentInTable(symtab->builtin_scope->table, proc_id);
+    /* Also check unit_scopes[System]->table — builtin procedures live there since
      * per-unit scoping was added. */
     if (builtin_node == NULL)
     {
         int sys_idx = unit_registry_add("System");
         if (sys_idx > 0 && sys_idx < SYMTAB_MAX_UNITS &&
-            symtab->unit_tables[sys_idx] != NULL)
+            symtab->unit_scopes[sys_idx] != NULL)
         {
             HashNode_t *sys_node = FindIdentInTable(
-                symtab->unit_tables[sys_idx], proc_id);
+                symtab->unit_scopes[sys_idx]->table, proc_id);
             if (sys_node != NULL &&
                 sys_node->hash_type == HASHTYPE_BUILTIN_PROCEDURE)
                 builtin_node = sys_node;
@@ -1944,7 +1942,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, SetLength expects exactly two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetLength expects exactly two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -1985,7 +1983,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         else if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
         {
             HashNode_t *array_node = NULL;
-            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) != -1 &&
+            if (FindSymbol(&array_node, symtab, array_expr->expr_data.id) != 0 &&
                 array_node != NULL && array_node->type != NULL &&
                 kgpc_type_is_dynamic_array(array_node->type))
             {
@@ -2025,7 +2023,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         {
             /* Simple variable reference */
             HashNode_t *array_node = NULL;
-            if (FindIdent(&array_node, symtab, array_expr->expr_data.id) != -1 && array_node != NULL)
+            if (FindSymbol(&array_node, symtab, array_expr->expr_data.id) != 0 && array_node != NULL)
             {
                 set_hash_meta(array_node, BOTH_MUTATE_REFERENCE);
                 
@@ -2055,7 +2053,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         
         if (!is_valid_array)
         {
-            semcheck_error_with_context("Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, first argument to SetLength must be a dynamic array variable.\n", stmt->line_num);
             ++return_val;
         }
     }
@@ -2064,7 +2062,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
     return_val += semcheck_stmt_expr_tag(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(length_type))
     {
-        semcheck_error_with_context("Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetLength length argument must be an integer.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2080,7 +2078,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, SetString expects exactly three arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString expects exactly three arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -2094,7 +2092,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
     if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
-        semcheck_error_with_context("Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2113,7 +2111,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
         }
         if (!is_valid)
         {
-            semcheck_error_with_context("Error on line %d, SetString second argument must be a pointer (PChar).\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString second argument must be a pointer (PChar).\n", stmt->line_num);
             ++return_val;
         }
     }
@@ -2123,7 +2121,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     return_val += semcheck_stmt_expr_tag(&length_type, symtab, length_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(length_type))
     {
-        semcheck_error_with_context("Error on line %d, SetString length argument must be an integer.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString length argument must be an integer.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2253,7 +2251,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Str expects exactly two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Str expects exactly two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -2265,7 +2263,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     return_val += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, INT_MAX, NO_MUTATE);
     if (!is_ordinal_type(value_type) && !is_real_family_type(value_type))
     {
-        semcheck_error_with_context("Error on line %d, Str value must be an ordinal or real.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Str value must be an ordinal or real.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2275,7 +2273,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
         return_val += semcheck_stmt_expr_tag(&width_type, symtab, value_expr->field_width, INT_MAX, NO_MUTATE);
         if (!is_integer_type(width_type))
         {
-            semcheck_error_with_context("Error on line %d, Str field width must be an integer.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Str field width must be an integer.\n", stmt->line_num);
             ++return_val;
         }
     }
@@ -2286,7 +2284,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
         return_val += semcheck_stmt_expr_tag(&precision_type, symtab, value_expr->field_precision, INT_MAX, NO_MUTATE);
         if (!is_integer_type(precision_type))
         {
-            semcheck_error_with_context("Error on line %d, Str field precision must be an integer.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Str field precision must be an integer.\n", stmt->line_num);
             ++return_val;
         }
     }
@@ -2304,7 +2302,7 @@ static int semcheck_builtin_strproc(SymTab_t *symtab, struct Statement *stmt, in
     return_val += target_err;
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, Str output must be a string variable.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Str output must be a string variable.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2320,7 +2318,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     if (args == NULL || args->next == NULL || args->next->next == NULL ||
         args->next->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Insert expects exactly three arguments.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Insert expects exactly three arguments.\n",
             stmt->line_num);
         return 1;
     }
@@ -2340,7 +2338,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
         source_type != SHORTSTRING_TYPE &&
         !source_is_shortstring && !source_is_array)
     {
-        semcheck_error_with_context("Error on line %d, Insert source must be a string or char.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Insert source must be a string or char.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2353,7 +2351,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE &&
         !target_is_shortstring && !target_is_array)
     {
-        semcheck_error_with_context("Error on line %d, Insert target must be a string variable.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Insert target must be a string variable.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2362,7 +2360,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
     error_count += semcheck_stmt_expr_tag(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(index_type))
     {
-        semcheck_error_with_context("Error on line %d, Insert index must be an integer.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Insert index must be an integer.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2394,7 +2392,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     if (args == NULL || args->next == NULL || args->next->next == NULL ||
         args->next->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Delete expects exactly three arguments.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Delete expects exactly three arguments.\n",
             stmt->line_num);
         return 1;
     }
@@ -2418,7 +2416,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     
     if (!is_valid_target)
     {
-        semcheck_error_with_context("Error on line %d, Delete target must be a string variable.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Delete target must be a string variable.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2427,7 +2425,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     error_count += semcheck_stmt_expr_tag(&index_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(index_type))
     {
-        semcheck_error_with_context("Error on line %d, Delete index must be an integer.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Delete index must be an integer.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2436,7 +2434,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     error_count += semcheck_stmt_expr_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
     if (!is_integer_type(count_type))
     {
-        semcheck_error_with_context("Error on line %d, Delete count must be an integer.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Delete count must be an integer.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2468,7 +2466,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     int arg_count = ListLength(args);
     if (args == NULL || (arg_count != 2 && arg_count != 3))
     {
-        semcheck_error_with_context("Error on line %d, Val expects two or three arguments.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Val expects two or three arguments.\n",
             stmt->line_num);
         return 1;
     }
@@ -2480,7 +2478,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
     if (!is_string_type(source_type) && source_type != CHAR_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, Val expects its first argument to be a string.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Val expects its first argument to be a string.\n",
             stmt->line_num);
         ++error_count;
     }
@@ -2503,7 +2501,7 @@ static int semcheck_builtin_val(SymTab_t *symtab, struct Statement *stmt, int ma
         error_count += semcheck_stmt_expr_tag(&code_type, symtab, code_expr, max_scope_lev, MUTATE);
         if (!is_integer_type(code_type))
         {
-            semcheck_error_with_context("Error on line %d, Val code argument must be an integer variable.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Val code argument must be an integer variable.\n",
                 stmt->line_num);
             ++error_count;
         }
@@ -2520,7 +2518,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || (args->next != NULL && args->next->next != NULL))
     {
-        semcheck_error_with_context("Error on line %d, Inc expects one or two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Inc expects one or two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -2531,7 +2529,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
     int target_is_pointer = (target_type == POINTER_TYPE);
     if (!is_ordinal_type(target_type) && !target_is_pointer)
     {
-        semcheck_error_with_context("Error on line %d, Inc target must be an ordinal or pointer variable.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Inc target must be an ordinal or pointer variable.\n", stmt->line_num);
         ++return_val;
     }
 
@@ -2554,7 +2552,7 @@ static int semcheck_builtin_inc(SymTab_t *symtab, struct Statement *stmt, int ma
         }
         if (!value_is_integer)
         {
-            semcheck_error_with_context("Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Inc increment must be an integer.\n", stmt->line_num);
             ++return_val;
         }
     }
@@ -2576,7 +2574,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, %s expects exactly two arguments.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s expects exactly two arguments.\n",
             stmt->line_num, display_name);
         return 1;
     }
@@ -2590,7 +2588,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
         max_scope_lev, MUTATE, &set_type_owned);
     if (set_type != SET_TYPE && !kgpc_type_is_set(set_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, %s target must be a set.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s target must be a set.\n",
             stmt->line_num, display_name);
         ++error_count;
     }
@@ -2602,7 +2600,7 @@ static int semcheck_builtin_include_like(SymTab_t *symtab, struct Statement *stm
     error_count += semcheck_stmt_expr_tag(&value_type, symtab, value_expr, max_scope_lev, NO_MUTATE);
     if (!is_ordinal_type(value_type))
     {
-        semcheck_error_with_context("Error on line %d, %s element must be an ordinal value.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s element must be an ordinal value.\n",
             stmt->line_num, display_name);
         ++error_count;
     }
@@ -2632,10 +2630,10 @@ static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Stateme
     if (arg_count < 1 || arg_count > (allow_count_arg ? 2 : 1))
     {
         if (allow_count_arg)
-            semcheck_error_with_context("Error on line %d, %s expects one or two arguments.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s expects one or two arguments.\n",
                 stmt->line_num, display_name);
         else
-            semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s expects exactly one argument.\n",
                 stmt->line_num, display_name);
         return 1;
     }
@@ -2652,7 +2650,7 @@ static int semcheck_builtin_initialize_finalize(SymTab_t *symtab, struct Stateme
         error_count += semcheck_stmt_expr_tag(&count_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
         if (!is_integer_type(count_type))
         {
-            semcheck_error_with_context("Error on line %d, %s count argument must be an integer.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s count argument must be an integer.\n",
                 stmt->line_num, display_name);
             ++error_count;
         }
@@ -2680,7 +2678,7 @@ static int semcheck_builtin_assert(SymTab_t *symtab, struct Statement *stmt, int
     int arg_count = ListLength(args);
     if (arg_count < 1 || arg_count > 2)
     {
-        semcheck_error_with_context("Error on line %d, Assert expects 1 or 2 arguments.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Assert expects 1 or 2 arguments.\n",
             stmt->line_num);
         return 1;
     }
@@ -2743,7 +2741,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             expr_type != BOOL && expr_type != POINTER_TYPE && !expr_is_real &&
             expr_type != CHAR_TYPE && expr_type != ENUM_TYPE && !expr_is_char_array)
         {
-            semcheck_error_with_context("Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }
@@ -2754,7 +2752,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             return_val += semcheck_stmt_expr_tag(&width_type, symtab, expr->field_width, INT_MAX, NO_MUTATE);
             if (!is_integer_type(width_type))
             {
-                semcheck_error_with_context("Error on line %d, field width for argument %d must be an integer.\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, field width for argument %d must be an integer.\n",
                         stmt->line_num, arg_index);
                 ++return_val;
             }
@@ -2766,7 +2764,7 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
             return_val += semcheck_stmt_expr_tag(&precision_type, symtab, expr->field_precision, INT_MAX, NO_MUTATE);
             if (!is_integer_type(precision_type))
             {
-                semcheck_error_with_context("Error on line %d, field precision for argument %d must be an integer.\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, field precision for argument %d must be an integer.\n",
                         stmt->line_num, arg_index);
                 ++return_val;
             }
@@ -2789,7 +2787,7 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL)
     {
-        semcheck_error_with_context("Error on line %d, WriteStr requires at least one argument.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WriteStr requires at least one argument.\n",
                 stmt->line_num);
         return 1;
     }
@@ -2801,7 +2799,7 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
     
     if (dest_type != STRING_TYPE && dest_type != SHORTSTRING_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, WriteStr first argument must be a string variable.\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WriteStr first argument must be a string variable.\n",
                 stmt->line_num);
         ++return_val;
     }
@@ -2821,7 +2819,7 @@ static int semcheck_builtin_writestr(SymTab_t *symtab, struct Statement *stmt, i
             expr_type != BOOL && expr_type != POINTER_TYPE && !expr_is_real && 
             expr_type != CHAR_TYPE && expr_type != ENUM_TYPE)
         {
-            semcheck_error_with_context("Error on line %d, WriteStr argument %d must be integer, real, boolean, string, pointer, or enum.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WriteStr argument %d must be integer, real, boolean, string, pointer, or enum.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }
@@ -2874,7 +2872,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE &&
             expr_type != REAL_TYPE && !semcheck_expr_is_real_family(expr))
         {
-            semcheck_error_with_context("Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
                     stmt->line_num, arg_index);
             ++return_val;
         }
@@ -3142,7 +3140,7 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
         struct Expression *zero_expr = mk_inum(stmt->line_num, 0);
         if (zero_expr == NULL)
         {
-            semcheck_error_with_context("Error on line %d, failed to allocate Halt argument.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, failed to allocate Halt argument.\n", stmt->line_num);
             return 1;
         }
         stmt->stmt_data.procedure_call_data.expr_args = CreateListNode(zero_expr, LIST_EXPR);
@@ -3151,7 +3149,7 @@ static int semcheck_builtin_halt(SymTab_t *symtab, struct Statement *stmt, int m
 
     if (args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Halt expects zero or one argument.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Halt expects zero or one argument.\n", stmt->line_num);
         return 1;
     }
 
@@ -3171,7 +3169,7 @@ static int semcheck_builtin_error(SymTab_t *symtab, struct Statement *stmt, int 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Error expects exactly one argument.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Error expects exactly one argument.\n", stmt->line_num);
         return 1;
     }
 
@@ -3187,7 +3185,7 @@ static int semcheck_builtin_error(SymTab_t *symtab, struct Statement *stmt, int 
         char *halt_name = strdup("Halt");
         if (halt_name == NULL)
         {
-            semcheck_error_with_context("Error on line %d, failed to rewrite Error call to Halt.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, failed to rewrite Error call to Halt.\n", stmt->line_num);
             return return_val + 1;
         }
 
@@ -3208,7 +3206,7 @@ static int semcheck_builtin_getmem(SymTab_t *symtab, struct Statement *stmt, int
     int arg_count = ListLength(args);
     if (arg_count < 1 || arg_count > 2)
     {
-        semcheck_error_with_context("Error on line %d, GetMem expects one or two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, GetMem expects one or two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -3241,7 +3239,7 @@ static int semcheck_builtin_freemem(SymTab_t *symtab, struct Statement *stmt, in
     int arg_count = ListLength(args);
     if (arg_count < 1 || arg_count > 2)
     {
-        semcheck_error_with_context("Error on line %d, FreeMem expects one or two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, FreeMem expects one or two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -3271,7 +3269,7 @@ static int semcheck_builtin_move(SymTab_t *symtab, struct Statement *stmt, int m
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next == NULL || args->next->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Move expects exactly three arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Move expects exactly three arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -3296,7 +3294,7 @@ static int semcheck_builtin_reallocmem(SymTab_t *symtab, struct Statement *stmt,
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, ReallocMem expects exactly two arguments.\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, ReallocMem expects exactly two arguments.\n", stmt->line_num);
         return 1;
     }
 
@@ -3319,7 +3317,7 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, New expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects exactly one argument.\\n", stmt->line_num);
         return 1;
     }
 
@@ -3329,13 +3327,13 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
 
     if (pointer_type != POINTER_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, New expects a pointer variable argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects a pointer variable argument.\\n", stmt->line_num);
         return ++return_val;
     }
 
     if (target_expr->pointer_subtype == UNKNOWN_TYPE && target_expr->pointer_subtype_id == NULL)
     {
-        semcheck_error_with_context("Error on line %d, unable to determine allocation type for New.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unable to determine allocation type for New.\\n", stmt->line_num);
         return ++return_val;
     }
 
@@ -3351,7 +3349,7 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Dispose expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects exactly one argument.\\n", stmt->line_num);
         return 1;
     }
 
@@ -3361,7 +3359,7 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 
     if (pointer_type != POINTER_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, Dispose expects a pointer variable argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects a pointer variable argument.\\n", stmt->line_num);
         return ++return_val;
     }
 
@@ -3399,7 +3397,7 @@ static int semcheck_break_stmt(struct Statement *stmt)
     if (semcheck_loop_depth <= 0)
     {
         if (stmt != NULL)
-            semcheck_error_with_context("Error on line %d, Break is only valid inside a loop.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Break is only valid inside a loop.\n", stmt->line_num);
         return 1;
     }
     return 0;
@@ -3410,7 +3408,7 @@ static int semcheck_continue_stmt(struct Statement *stmt)
     if (semcheck_loop_depth <= 0)
     {
         if (stmt != NULL)
-            semcheck_error_with_context("Error on line %d, Continue is only valid inside a loop.\n", stmt->line_num);
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Continue is only valid inside a loop.\n", stmt->line_num);
         return 1;
     }
     return 0;
@@ -3577,7 +3575,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     
                     /* Mark Result as assigned if we're in a function context */
                     HashNode_t *result_node = NULL;
-                    if (FindIdent(&result_node, symtab, "Result") == 0 && result_node != NULL)
+                    if (FindSymbol(&result_node, symtab, "Result") != 0 && result_node != NULL)
                     {
                         result_node->mutated = MUTATE;
                         if (result_node->type != NULL && return_expr->resolved_kgpc_type != NULL)
@@ -3594,7 +3592,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                         &return_expr->resolved_kgpc_type,
                                         &return_owned))
                                 {
-                                    semcheck_error_with_context("Error on line %d, incompatible return type in exit().\n",
+                                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, incompatible return type in exit().\n",
                                         stmt->line_num);
                                     ++return_val;
                                 }
@@ -3664,7 +3662,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
             if (context_expr == NULL)
             {
-                semcheck_error_with_context("Error on line %d, WITH statement requires a context expression.\\n\\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, WITH statement requires a context expression.\\n\\n",
                     stmt->line_num);
                 ++return_val;
             }
@@ -3715,7 +3713,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 stmt->stmt_data.try_except_data.exception_var_name != NULL) {
                 
                 /* Push a new scope for the exception variable */
-                PushScope(symtab);
+                EnterScope(symtab, 0);
                 
                 /* Add the exception variable to the symbol table */
                 char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
@@ -3725,7 +3723,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 KgpcType *var_kgpc_type = NULL;
                 if (type_name != NULL) {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, type_name) >= 0 && type_node != NULL) {
+                    if (FindSymbol(&type_node, symtab, type_name) != 0 && type_node != NULL) {
                         if (type_node->hash_type == HASHTYPE_TYPE) {
                             var_kgpc_type = type_node->type;
                         } else {
@@ -3747,7 +3745,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
                 
                 /* Pop the scope */
-                PopScope(symtab);
+                LeaveScope(symtab);
             } else {
                 /* No exception variable - just check the except statements normally */
                 return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
@@ -3805,7 +3803,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         {
                             HashNode_t *call_method_node = NULL;
                             if (method_name != NULL &&
-                                FindIdent(&call_method_node, symtab, method_name) != -1 &&
+                                FindSymbol(&call_method_node, symtab, method_name) != 0 &&
                                 call_method_node != NULL)
                             {
                                 if (call_method_node->method_name != NULL)
@@ -3817,7 +3815,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         const char *parent_class_name = NULL;
                         struct RecordType *current_class = NULL;
 
-                        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL &&
+                        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL &&
                             self_node->type != NULL)
                         {
                             /* Handle both direct records and pointers to records (classes) */
@@ -3872,7 +3870,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (owner_id != NULL)
                             {
                                 HashNode_t *owner_node = NULL;
-                                if (FindIdent(&owner_node, symtab, owner_id) != -1 && owner_node != NULL)
+                                if (FindSymbol(&owner_node, symtab, owner_id) != 0 && owner_node != NULL)
                                     current_class = semcheck_stmt_get_record_type_from_node(owner_node);
                                 if (current_class != NULL)
                                     parent_class_name = current_class->parent_class_name;
@@ -3947,14 +3945,14 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 }
                                 else
                                 {
-                                    if (FindIdent(&parent_method_node, symtab, parent_mangled) == -1)
+                                    if (FindSymbol(&parent_method_node, symtab, parent_mangled) == 0)
                                         parent_method_node = NULL;
                                 }
 
                                 if (parent_method_node == NULL)
                                 {
                                     HashNode_t *parent_node = NULL;
-                                    if (FindIdent(&parent_node, symtab, (char *)search_parent) != -1 &&
+                                    if (FindSymbol(&parent_node, symtab, (char *)search_parent) != 0 &&
                                         parent_node != NULL)
                                     {
                                         struct RecordType *parent_record =
@@ -4262,7 +4260,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             var->expr_data.id != NULL)
         {
             HashNode_t *var_node = NULL;
-            if (FindIdent(&var_node, symtab, var->expr_data.id) >= 0 && var_node != NULL)
+            if (FindSymbol(&var_node, symtab, var->expr_data.id) != 0 && var_node != NULL)
             {
                 record_type = hashnode_get_record_type(var_node);
                 if (record_type == NULL)
@@ -4271,7 +4269,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     if (alias != NULL && alias->target_type_id != NULL)
                     {
                         HashNode_t *target_node = NULL;
-                        if (FindIdent(&target_node, symtab, alias->target_type_id) >= 0 &&
+                        if (FindSymbol(&target_node, symtab, alias->target_type_id) != 0 &&
                             target_node != NULL)
                             record_type = hashnode_get_record_type(target_node);
                     }
@@ -4338,7 +4336,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (record_type == NULL)
                             {
                                 HashNode_t *alias_node = NULL;
-                                if (FindIdent(&alias_node, symtab, field_desc->type_id) >= 0 &&
+                                if (FindSymbol(&alias_node, symtab, field_desc->type_id) != 0 &&
                                     alias_node != NULL)
                                 {
                                     struct TypeAlias *alias = get_type_alias_from_node(alias_node);
@@ -4565,7 +4563,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             expr->expr_data.id != NULL)
         {
             HashNode_t *rhs_node = NULL;
-            if (FindIdent(&rhs_node, symtab, expr->expr_data.id) >= 0 &&
+            if (FindSymbol(&rhs_node, symtab, expr->expr_data.id) != 0 &&
                 rhs_node != NULL && rhs_node->is_constant &&
                 rhs_node->const_string_value != NULL &&
                 strlen(rhs_node->const_string_value) == 1)
@@ -4630,7 +4628,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             kgpc_type_is_array(lhs_kgpctype))
         {
             if (semcheck_convert_set_literal_to_array_literal(expr) != 0)
-                semcheck_error_with_context("Error on line %d, unable to convert set literal to array literal.\n\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unable to convert set literal to array literal.\n\n",
                     stmt->line_num);
         }
 
@@ -4809,7 +4807,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (lhs_is_procedure && rhs_is_procedure && expr != NULL && expr->type == EXPR_VAR_ID)
             {
                 HashNode_t *rhs_symbol = NULL;
-                if (FindIdent(&rhs_symbol, symtab, expr->expr_data.id) >= 0 &&
+                if (FindSymbol(&rhs_symbol, symtab, expr->expr_data.id) != 0 &&
                     rhs_symbol != NULL && rhs_symbol->hash_type == HASHTYPE_PROCEDURE)
                 {
                     /* Transform the expression to EXPR_ADDR_OF_PROC */
@@ -4923,7 +4921,7 @@ assignment_types_ok:
                 if (string_len > (size_t)array_size)
                 {
                     const char *lhs_name = (var->type == EXPR_VAR_ID) ? var->expr_data.id : "<expression>";
-                    semcheck_error_with_context(
+                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
                         "Error on line %d, string literal too long for array %s (string length: %zu, array size: %d)!\n\n",
                         stmt->line_num,
                         lhs_name,
@@ -5102,7 +5100,7 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     struct Expression *object_expr = lhs->expr_data.record_access_data.record_expr;
     if (object_expr == NULL)
     {
-        semcheck_error_with_context("Error on line %d, property assignment requires an object instance.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, property assignment requires an object instance.\n\n",
             stmt->line_num);
         return 1;
     }
@@ -5117,7 +5115,7 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     ListNode_t *self_arg = CreateListNode(object_expr, LIST_EXPR);
     if (self_arg == NULL)
     {
-        semcheck_error_with_context("Error on line %d, unable to allocate setter argument list.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unable to allocate setter argument list.\n\n",
             stmt->line_num);
         destroy_expr(object_expr);
         destroy_expr(value_expr);
@@ -5127,7 +5125,7 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     ListNode_t *value_arg = CreateListNode(value_expr, LIST_EXPR);
     if (value_arg == NULL)
     {
-        semcheck_error_with_context("Error on line %d, unable to allocate setter argument list.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unable to allocate setter argument list.\n\n",
             stmt->line_num);
         destroy_expr(object_expr);
         destroy_expr(value_expr);
@@ -5144,7 +5142,7 @@ static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     if ((setter_node->id != NULL && id_copy == NULL) ||
         (setter_node->mangled_id != NULL && mangled_copy == NULL))
     {
-        semcheck_error_with_context("Error on line %d, unable to prepare property setter call.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unable to prepare property setter call.\n\n",
             stmt->line_num);
         free(id_copy);
         free(mangled_copy);
@@ -5216,7 +5214,7 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
         property_owner, property->write_accessor, NULL);
     if (setter_node == NULL)
     {
-        semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, setter %s for property %s not found.\n\n",
             stmt->line_num,
             property->write_accessor != NULL ? property->write_accessor : "<unknown>",
             property->name != NULL ? property->name : property_name);
@@ -5225,7 +5223,7 @@ static int semcheck_try_property_assignment(SymTab_t *symtab,
 
     if (setter_node->hash_type != HASHTYPE_PROCEDURE)
     {
-        semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, property setter %s must be a procedure.\n\n",
             stmt->line_num, property->write_accessor);
         return 1;
     }
@@ -5277,7 +5275,7 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
             return -1;
 
         HashNode_t *self_node = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != 0 || self_node == NULL)
+        if (FindSymbol(&self_node, symtab, "Self") != 0 || self_node == NULL)
             return -1;
         object_record = get_record_type_from_node(self_node);
         if (object_record == NULL)
@@ -5328,7 +5326,7 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
         property->write_accessor, NULL);
     if (setter_node == NULL)
     {
-        semcheck_error_with_context("Error on line %d, setter %s for property %s not found.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, setter %s for property %s not found.\n\n",
             stmt->line_num,
             property->write_accessor != NULL ? property->write_accessor : "<unknown>",
             property->name != NULL ? property->name : property_name);
@@ -5336,7 +5334,7 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     }
     if (setter_node->hash_type != HASHTYPE_PROCEDURE)
     {
-        semcheck_error_with_context("Error on line %d, property setter %s must be a procedure.\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, property setter %s must be a procedure.\n\n",
             stmt->line_num, property->write_accessor);
         return 1;
     }
@@ -5503,7 +5501,7 @@ static int semcheck_internproc_typedfile_rewrite_reset(
         return 0;
 
     HashNode_t *var_node = NULL;
-    if (FindIdent(&var_node, symtab, file_expr->expr_data.id) < 0 ||
+    if (FindSymbol(&var_node, symtab, file_expr->expr_data.id) == 0 ||
         var_node == NULL || var_node->type == NULL)
         return 0;
 
@@ -5525,7 +5523,7 @@ static int semcheck_internproc_typedfile_rewrite_reset(
     else if (alias->file_type_id != NULL)
     {
         HashNode_t *elem_type_node = NULL;
-        if (FindIdent(&elem_type_node, symtab, alias->file_type_id) >= 0 &&
+        if (FindSymbol(&elem_type_node, symtab, alias->file_type_id) != 0 &&
             elem_type_node != NULL && elem_type_node->type != NULL)
         {
             elem_size = kgpc_type_sizeof(elem_type_node->type);
@@ -5614,7 +5612,7 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 goto skip_type_receiver_rewrite;
 
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) >= 0 &&
+            if (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
                 struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
@@ -5685,11 +5683,11 @@ skip_type_receiver_rewrite:
             /* Prefer explicit unit-name recognition; keep unresolved-name fallback for
              * parser shapes where unit qualifiers are not injected into symbol tables. */
             if (!is_unit_qualifier &&
-                FindIdent(&unit_check, symtab, potential_unit_name) == -1)
+                FindSymbol(&unit_check, symtab, potential_unit_name) == 0)
             {
                 int looks_like_self_member = 0;
                 HashNode_t *self_node = NULL;
-                if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+                if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = semcheck_stmt_get_record_type_from_node(self_node);
                     if (self_record != NULL &&
@@ -5818,7 +5816,7 @@ skip_type_receiver_rewrite:
 
         if (arg_count > 1)
         {
-            semcheck_error_with_context("Error on line %d, Exit() expects at most one argument.\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Exit() expects at most one argument.\n\n",
                 stmt->line_num);
             return 1;
         }
@@ -5869,7 +5867,21 @@ skip_type_receiver_rewrite:
     {
         HashNode_t *self_node = NULL;
         struct RecordType *self_record = NULL;
-        if (FindIdent(&self_node, symtab, "Self") != -1 && self_node != NULL)
+        if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL &&
+            pascal_identifier_equals(proc_id, "Assign"))
+        {
+            HashNode_t *dbg_self = NULL;
+            int dbg_found = FindSymbol(&dbg_self, symtab, "Self");
+            HashNode_t *dbg_proc = NULL;
+            FindSymbol(&dbg_proc, symtab, "Assign");
+            const char *dbg_owner = semcheck_get_current_method_owner();
+            fprintf(stderr, "[ASSIGN-TRACE] Self_found=%d owner=%s scope_kind=%d proc_owner=%s proc_hash=%d\n",
+                dbg_found != 0, dbg_owner ? dbg_owner : "<null>",
+                symtab->current_scope ? symtab->current_scope->num_deps : -1,
+                (dbg_proc && dbg_proc->owner_class) ? dbg_proc->owner_class : "<null>",
+                dbg_proc ? dbg_proc->hash_type : -1);
+        }
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
         {
             self_record = semcheck_stmt_get_record_type_from_node(self_node);
             if (self_record == NULL)
@@ -6061,7 +6073,7 @@ skip_type_receiver_rewrite:
                 /* Check if proc_id is already a resolved method call (has owner_class in symbol table) */
                 HashNode_t *proc_check_node = NULL;
                 int is_already_method = 0;
-                if (FindIdent(&proc_check_node, symtab, proc_id) != -1 && proc_check_node != NULL &&
+                if (FindSymbol(&proc_check_node, symtab, proc_id) != 0 && proc_check_node != NULL &&
                     proc_check_node->owner_class != NULL)
                     is_already_method = 1;
                 if (!is_already_method)
@@ -6097,7 +6109,7 @@ skip_type_receiver_rewrite:
                                 /* proc_type is resolved during semcheck_qualify_nested_types_for_record
                                  * so this path handles non-nested procedural types only. */
                                 HashNode_t *type_node = NULL;
-                                if (FindIdent(&type_node, symtab, rf->type_id) != -1 &&
+                                if (FindSymbol(&type_node, symtab, rf->type_id) != 0 &&
                                     type_node != NULL && type_node->type != NULL &&
                                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                                 {
@@ -6131,7 +6143,7 @@ skip_type_receiver_rewrite:
                                     else if (rf2->type_id != NULL)
                                     {
                                         HashNode_t *type_node = NULL;
-                                        if (FindIdent(&type_node, symtab, rf2->type_id) != -1 &&
+                                        if (FindSymbol(&type_node, symtab, rf2->type_id) != 0 &&
                                             type_node != NULL && type_node->type != NULL &&
                                             type_node->type->kind == TYPE_KIND_PROCEDURE)
                                         {
@@ -6386,7 +6398,7 @@ skip_type_receiver_rewrite:
                 receiver_expr->expr_data.id != NULL)
             {
                 HashNode_t *recv_node = NULL;
-                if (FindIdent(&recv_node, symtab, receiver_expr->expr_data.id) == 0 &&
+                if (FindSymbol(&recv_node, symtab, receiver_expr->expr_data.id) != 0 &&
                     recv_node != NULL)
                 {
                     recv_record = semcheck_stmt_get_record_type_from_node(recv_node);
@@ -6417,7 +6429,7 @@ skip_type_receiver_rewrite:
                     if (field_desc->type_id != NULL)
                     {
                         HashNode_t *type_node = NULL;
-                        if (FindIdent(&type_node, symtab, field_desc->type_id) == 0 &&
+                        if (FindSymbol(&type_node, symtab, field_desc->type_id) != 0 &&
                             type_node != NULL && type_node->type != NULL &&
                             type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
@@ -6431,7 +6443,7 @@ skip_type_receiver_rewrite:
                             char qualified[512];
                             snprintf(qualified, sizeof(qualified), "%s.%s", recv_record->type_id, field_desc->type_id);
                             type_node = NULL;
-                            if (FindIdent(&type_node, symtab, qualified) == 0 &&
+                            if (FindSymbol(&type_node, symtab, qualified) != 0 &&
                                 type_node != NULL && type_node->type != NULL &&
                                 type_node->type->kind == TYPE_KIND_PROCEDURE)
                             {
@@ -6461,7 +6473,7 @@ skip_type_receiver_rewrite:
                         struct Expression *proc_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
                         if (proc_expr == NULL)
                         {
-                            semcheck_error_with_context("Error on line %d: failed to allocate procedural field expression.\n",
+                            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: failed to allocate procedural field expression.\n",
                                 stmt->line_num);
                             if (proc_type != NULL) destroy_kgpc_type(proc_type);
                             return ++return_val;
@@ -6484,7 +6496,7 @@ skip_type_receiver_rewrite:
                             ListNode_t *formal_params = kgpc_type_get_procedure_params(proc_type);
                             if (ListLength(formal_params) != ListLength(remaining_args))
                             {
-                                semcheck_error_with_context("Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
+                                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, call to procedural field %s: expected %d arguments, got %d\n",
                                     stmt->line_num, proc_id, ListLength(formal_params), ListLength(remaining_args));
                                 destroy_expr(proc_expr);
                                 /* proc_type already released by destroy_expr via resolved_kgpc_type */
@@ -6586,7 +6598,7 @@ skip_type_receiver_rewrite:
         if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, first_arg->expr_data.id) >= 0 &&
+            if (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
                 type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
             {
                 static_method_receiver = 1;
@@ -6661,7 +6673,7 @@ skip_type_receiver_rewrite:
                         receiver_expr->expr_data.id != NULL)
                     {
                         HashNode_t *receiver_node = NULL;
-                        if (FindIdent(&receiver_node, symtab, receiver_expr->expr_data.id) >= 0 &&
+                        if (FindSymbol(&receiver_node, symtab, receiver_expr->expr_data.id) != 0 &&
                             receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                             receiver_is_type_ident = 1;
                     }
@@ -6720,7 +6732,7 @@ skip_type_receiver_rewrite:
                     else if (proc_field->type_id != NULL)
                     {
                         HashNode_t *type_node = NULL;
-                        if (FindIdent(&type_node, symtab, proc_field->type_id) >= 0 &&
+                        if (FindSymbol(&type_node, symtab, proc_field->type_id) != 0 &&
                             type_node != NULL && type_node->type != NULL &&
                             type_node->type->kind == TYPE_KIND_PROCEDURE)
                         {
@@ -6780,7 +6792,7 @@ skip_type_receiver_rewrite:
     const char *proc_method_name_resolved = NULL;
     const char *proc_owner_class_resolved = NULL;
     if (!proc_is_method && proc_id != NULL &&
-        FindIdent(&proc_method_node, symtab, proc_id) != -1 && proc_method_node != NULL &&
+        FindSymbol(&proc_method_node, symtab, proc_id) != 0 && proc_method_node != NULL &&
         proc_method_node->owner_class != NULL)
     {
         proc_is_method = 1;
@@ -6804,7 +6816,7 @@ skip_type_receiver_rewrite:
                 if (first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, first_arg->expr_data.id) != -1 &&
+                    if (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         record_type = semcheck_stmt_get_record_type_from_node(type_node);
@@ -6815,7 +6827,7 @@ skip_type_receiver_rewrite:
                 if (first_arg->type == EXPR_VAR_ID) {
                     /* Look up the variable to get its type */
                     HashNode_t *var_node = NULL;
-                    if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 && var_node != NULL &&
+                    if (FindSymbol(&var_node, symtab, first_arg->expr_data.id) != 0 && var_node != NULL &&
                         var_node->type != NULL && var_node->type->kind == TYPE_KIND_RECORD) {
                         record_type = var_node->type->info.record_info;
                     }
@@ -6846,7 +6858,7 @@ skip_type_receiver_rewrite:
                 if (record_type == NULL && first_arg->pointer_subtype_id != NULL)
                 {
                     HashNode_t *subtype_node = NULL;
-                    if (FindIdent(&subtype_node, symtab, first_arg->pointer_subtype_id) != -1 &&
+                    if (FindSymbol(&subtype_node, symtab, first_arg->pointer_subtype_id) != 0 &&
                         subtype_node != NULL)
                     {
                         record_type = semcheck_stmt_get_record_type_from_node(subtype_node);
@@ -6882,7 +6894,7 @@ skip_type_receiver_rewrite:
                         first_arg->expr_data.id != NULL)
                     {
                         HashNode_t *var_node = NULL;
-                        if (FindIdent(&var_node, symtab, first_arg->expr_data.id) != -1 &&
+                        if (FindSymbol(&var_node, symtab, first_arg->expr_data.id) != 0 &&
                             var_node != NULL)
                         {
                             struct TypeAlias *var_alias = hashnode_get_type_alias(var_node);
@@ -6925,7 +6937,7 @@ skip_type_receiver_rewrite:
                  from_cparser_is_method_class_method(class_name, method_name));
             HashNode_t *resolved_method = NULL;
             HashNode_t *class_node = NULL;
-            if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL)
+            if (FindSymbol(&class_node, symtab, class_name) != 0 && class_node != NULL)
             {
                 struct RecordType *class_record = semcheck_stmt_get_record_type_from_node(class_node);
                 if (class_record != NULL)
@@ -6974,7 +6986,7 @@ skip_type_receiver_rewrite:
                     if (pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
                         receiver_is_self = 1;
                     HashNode_t *receiver_node = NULL;
-                    if (FindIdent(&receiver_node, symtab, receiver_expr->expr_data.id) >= 0 &&
+                    if (FindSymbol(&receiver_node, symtab, receiver_expr->expr_data.id) != 0 &&
                         receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                         receiver_is_type_ident = 1;
                 }
@@ -7017,7 +7029,7 @@ skip_type_receiver_rewrite:
     const char *type_res_method_name = NULL;
     int proc_is_method_for_type_res = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
     if (!proc_is_method_for_type_res && proc_id != NULL &&
-        FindIdent(&type_res_method_node, symtab, proc_id) != -1 && type_res_method_node != NULL &&
+        FindSymbol(&type_res_method_node, symtab, proc_id) != 0 && type_res_method_node != NULL &&
         type_res_method_node->owner_class != NULL)
     {
         proc_is_method_for_type_res = 1;
@@ -7104,7 +7116,7 @@ skip_type_receiver_rewrite:
                         
                         /* Check if this mangled name exists in the symbol table */
                         HashNode_t *proc_node = NULL;
-                        if (FindIdent(&proc_node, symtab, mangled_name) != -1 && proc_node != NULL) {
+                        if (FindSymbol(&proc_node, symtab, mangled_name) != 0 && proc_node != NULL) {
                             /* Found it! Update the procedure ID */
                             free(proc_id);
                             proc_id = mangled_name;
@@ -7122,7 +7134,7 @@ skip_type_receiver_rewrite:
                             
                             /* Look up parent class record type */
                             HashNode_t *parent_node = NULL;
-                            if (FindIdent(&parent_node, symtab, parent_name) != -1 && 
+                            if (FindSymbol(&parent_node, symtab, parent_name) != 0 && 
                                 parent_node != NULL && parent_node->type != NULL) {
                                 
                                 if (parent_node->type->kind == TYPE_KIND_RECORD) {
@@ -7170,7 +7182,7 @@ skip_type_receiver_rewrite:
         }
     }
 
-    /* For inherited calls where mangled_id is already set, use it directly 
+    /* For inherited calls where mangled_id is already set, use it directly
      * instead of re-mangling based on the call site arguments.
      * The mangled_id already includes the correct parameter signature. */
     if (stmt->stmt_data.procedure_call_data.mangled_id != NULL) {
@@ -7186,8 +7198,7 @@ skip_type_receiver_rewrite:
      * remaining args are the actual call arguments. Transform into indirect call. */
     {
         HashNode_t *type_check = NULL;
-        int type_scope = FindIdent(&type_check, symtab, proc_id);
-        if (type_scope != -1 && type_check != NULL &&
+        if (FindSymbol(&type_check, symtab, proc_id) && type_check != NULL &&
             type_check->hash_type == HASHTYPE_TYPE &&
             type_check->type != NULL && type_check->type->kind == TYPE_KIND_PROCEDURE &&
             args_given != NULL)
@@ -7272,7 +7283,7 @@ skip_type_receiver_rewrite:
     /* If no match found and this is a method call, try parent classes */
     HashNode_t *parent_lookup_node = NULL;
     if (resolved_proc == NULL && proc_id != NULL &&
-        FindIdent(&parent_lookup_node, symtab, proc_id) != -1 && parent_lookup_node != NULL &&
+        FindSymbol(&parent_lookup_node, symtab, proc_id) != 0 && parent_lookup_node != NULL &&
         parent_lookup_node->owner_class != NULL) {
         {
             char *class_name = strdup(parent_lookup_node->owner_class);
@@ -7286,7 +7297,7 @@ skip_type_receiver_rewrite:
                 }
                 /* Look up the class to find its parent */
                 HashNode_t *class_node = NULL;
-                if (FindIdent(&class_node, symtab, class_name) != -1 && class_node != NULL) {
+                if (FindSymbol(&class_node, symtab, class_name) != 0 && class_node != NULL) {
                     struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(class_node);
                     if (record_info == NULL)
                         goto proccall_parent_resolve_done;
@@ -7427,7 +7438,7 @@ proccall_parent_resolve_done:
                 else
                 {
                     HashNode_t *receiver_node = NULL;
-                    if (FindIdent(&receiver_node, symtab, receiver_expr->expr_data.id) >= 0 &&
+                    if (FindSymbol(&receiver_node, symtab, receiver_expr->expr_data.id) != 0 &&
                         receiver_node != NULL && receiver_node->hash_type == HASHTYPE_TYPE)
                         receiver_is_type_ident = 1;
                 }
@@ -7501,8 +7512,7 @@ proccall_parent_resolve_done:
     {
         /* Skip WITH interception if a non-method symbol with this name exists */
         HashNode_t *global_proc = NULL;
-        int global_scope = FindIdent(&global_proc, symtab, proc_id);
-        int has_global_proc = (global_scope >= 0 && global_proc != NULL &&
+        int has_global_proc = (FindSymbol(&global_proc, symtab, proc_id) && global_proc != NULL &&
             (global_proc->hash_type == HASHTYPE_FUNCTION ||
              global_proc->hash_type == HASHTYPE_PROCEDURE));
 
@@ -7628,6 +7638,10 @@ proccall_parent_resolve_done:
 
     if (match_count == 1)
     {
+        if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL &&
+            pascal_identifier_equals(proc_id, "Assign"))
+            fprintf(stderr, "[ASSIGN-RESOLVED] mangled=%s match_count=%d\n",
+                resolved_proc->mangled_id ? resolved_proc->mangled_id : "<null>", match_count);
         if (resolved_proc->mangled_id != NULL)
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->mangled_id);
         else if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
@@ -7781,7 +7795,7 @@ proccall_parent_resolve_done:
                         }
                         else
                         {
-                            semcheck_error_with_context(
+                            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
                                 "Error on line %d, could not copy default value for parameter %d of %s.\n\n",
                                 stmt->line_num,
                                 arg_index,
@@ -7797,16 +7811,15 @@ proccall_parent_resolve_done:
         }
         
         sym_return = resolved_proc;
-        scope_return = 0; // FIXME: This needs to be properly calculated
+        scope_return = 1; // found
     }
     else if (match_count == 0)
     {
         HashNode_t *proc_var = NULL;
-        int proc_scope = FindIdent(&proc_var, symtab, proc_id);
         /* Check for procedure variables (HASHTYPE_VAR) or procedure constants (HASHTYPE_CONST)
          * with a procedural type. This allows calling procedure variables and typed constants
          * that hold procedure addresses like: const MyProcRef: TProc = @MyProc; */
-        if (proc_scope != -1 && proc_var != NULL && 
+        if (FindSymbol(&proc_var, symtab, proc_id) && proc_var != NULL &&
             (proc_var->hash_type == HASHTYPE_VAR || proc_var->hash_type == HASHTYPE_CONST) &&
             proc_var->type != NULL && proc_var->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -7814,9 +7827,9 @@ proccall_parent_resolve_done:
             free(mangled_name);
 
             proc_var->referenced += 1;
-            if (proc_scope > max_scope_lev)
+            if (0) /* scope depth check removed — tree scoping has no depth */
             {
-                semcheck_error_with_context("Error on line %d, %s cannot be called in the current context!\n\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s cannot be called in the current context!\n\n",
                     stmt->line_num, proc_id);
                 return_val++;
                 return return_val;
@@ -7850,7 +7863,7 @@ proccall_parent_resolve_done:
                         with_expr, strdup(proc_id));
                     if (field_access == NULL)
                     {
-                        semcheck_error_with_context("Error on line %d: failed to allocate procedural field expression.\n",
+                        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: failed to allocate procedural field expression.\n",
                             stmt->line_num);
                         DestroyList(overload_candidates);
                         free(mangled_name);
@@ -8001,7 +8014,7 @@ proccall_parent_resolve_done:
 
             if (overloads_buf[0] != '\0')
             {
-                semcheck_error_with_context(
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
                     "Error on line %d, call to procedure %s%s does not match any available overload.\n"
                     "Available overloads:\n%s",
                     stmt->line_num, proc_id, arg_types_buf, overloads_buf);
@@ -8011,7 +8024,7 @@ proccall_parent_resolve_done:
                 if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
                 {
                     HashNode_t *synth_node = NULL;
-                    if (FindIdent(&synth_node, symtab, proc_id) < 0)
+                    if (FindSymbol(&synth_node, symtab, proc_id) == 0)
                     {
                         KgpcType *synth_type = create_procedure_type(NULL, NULL);
                         if (synth_type != NULL)
@@ -8033,7 +8046,7 @@ proccall_parent_resolve_done:
                     return return_val;
                 }
                 /* No overloads found - procedure is not declared */
-                semcheck_error_with_context(
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
                     "Error on line %d, procedure %s%s is not declared.\n",
                     stmt->line_num, proc_id, arg_types_buf);
             }
@@ -8044,7 +8057,7 @@ proccall_parent_resolve_done:
     }
     else
     {
-        semcheck_error_with_context("Error on line %d, call to procedure %s is ambiguous\n", stmt->line_num, proc_id);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, call to procedure %s is ambiguous\n", stmt->line_num, proc_id);
         DestroyList(overload_candidates);
         free(mangled_name);
         return ++return_val;
@@ -8052,9 +8065,9 @@ proccall_parent_resolve_done:
     DestroyList(overload_candidates);
     free(mangled_name);
 
-    if(scope_return == -1) // Should not happen if match_count > 0
+    if(!scope_return) // Should not happen if match_count > 0
     {
-        semcheck_error_with_context("Error on line %d, unrecognized procedure call %s\n", stmt->line_num,
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, unrecognized procedure call %s\n", stmt->line_num,
             proc_id);
         ++return_val;
     }
@@ -8117,9 +8130,9 @@ proccall_parent_resolve_done:
             stmt->stmt_data.procedure_call_data.expr_args = args_given;
         }
 
-        if(scope_return > max_scope_lev)
+        if(0) /* scope depth check removed — tree scoping has no depth */
         {
-            semcheck_error_with_context("Error on line %d, %s cannot be called in the current context!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, %s cannot be called in the current context!\n\n",
                 stmt->line_num, proc_id);
             fprintf(stderr, "[Was it defined above the current function context?]\n");
 
@@ -8129,7 +8142,7 @@ proccall_parent_resolve_done:
             sym_return->hash_type != HASHTYPE_BUILTIN_PROCEDURE &&
             sym_return->hash_type != HASHTYPE_FUNCTION)
         {
-            semcheck_error_with_context("Error on line %d, expected %s to be a procedure, function, or builtin!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, expected %s to be a procedure, function, or builtin!\n\n",
                 stmt->line_num, proc_id);
 
             ++return_val;
@@ -8415,7 +8428,7 @@ proccall_parent_resolve_done:
                         arg_expr != NULL && arg_expr->type == EXPR_VAR_ID)
                     {
                         HashNode_t *arg_node = NULL;
-                        if (FindIdent(&arg_node, symtab, arg_expr->expr_data.id) != -1 &&
+                        if (FindSymbol(&arg_node, symtab, arg_expr->expr_data.id) != 0 &&
                             arg_node != NULL && arg_node->hash_type == HASHTYPE_PROCEDURE)
                         {
                             /* Transform the expression to EXPR_ADDR_OF_PROC */
@@ -8893,7 +8906,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         /* Check for type */
         if(!is_ordinal_type(for_type))
         {
-            semcheck_error_with_context("Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                     stmt->line_num);
             ++return_val;
         }
@@ -8964,7 +8977,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     if (!bounds_compatible)
     {
-        semcheck_error_with_context("Error on line %d, type mismatch in \"to\" assignment!\n\n",
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, type mismatch in \"to\" assignment!\n\n",
                 stmt->line_num);
         ++return_val;
     }
@@ -8974,7 +8987,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         int legacy = semcheck_tag_from_kgpc(for_kgpc_type);
         if (!is_ordinal_type(legacy))
         {
-            semcheck_error_with_context("Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                 stmt->line_num);
             ++return_val;
         }
@@ -9063,7 +9076,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
                        collection->type == EXPR_VAR_ID &&
                        collection->expr_data.id != NULL) {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, collection->expr_data.id) >= 0 &&
+                if (FindSymbol(&type_node, symtab, collection->expr_data.id) != 0 &&
                     type_node != NULL &&
                     type_node->hash_type == HASHTYPE_TYPE)
                 {
@@ -9113,7 +9126,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         if (!collection_is_array && !collection_is_list &&
             !collection_is_set && !collection_is_enum_domain &&
             !collection_is_enumerator_class) {
-            semcheck_error_with_context("Error on line %d: for-in loop requires an array expression!\n\n",
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;
         } else if (collection_is_enumerator_class) {
@@ -9124,7 +9137,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
             if (loop_var_kgpc == NULL || enumerator_current_type == NULL ||
                 !kgpc_type_equals(loop_var_kgpc, enumerator_current_type))
             {
-                semcheck_error_with_context("Error on line %d: for-in loop variable type does not match enumerator Current type!\n\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: for-in loop variable type does not match enumerator Current type!\n\n",
                         stmt->line_num);
                 ++return_val;
             }
@@ -9155,7 +9168,7 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
             }
             else
             {
-                semcheck_error_with_context("Error on line %d: for-in loop variable must be an ordinal type!\n\n",
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: for-in loop variable must be an ordinal type!\n\n",
                         stmt->line_num);
                 ++return_val;
             }
@@ -9244,14 +9257,16 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
 
     if (!types_compatible)
     {
-        semcheck_error_with_context("Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
+        semcheck_error_with_context_at(for_assign->line_num, for_assign->col_num, for_assign->source_index,
+            "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",
             for_assign->line_num);
         ++return_val;
     }
 
     if (!is_ordinal_type(type_first))
     {
-        semcheck_error_with_context("Error on line %d, expected ordinal type in \"for\" assignment statement!\n\n",
+        semcheck_error_with_context_at(for_assign->line_num, for_assign->col_num, for_assign->source_index,
+            "Error on line %d, expected ordinal type in \"for\" assignment statement!\n\n",
             for_assign->line_num);
         ++return_val;
     }

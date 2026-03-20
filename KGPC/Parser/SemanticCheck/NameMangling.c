@@ -253,7 +253,14 @@ static enum VarType MapBuiltinTypeNameToVarType(const char *type_name) {
         return HASHVAR_UNICODESTRING;
     
     // Integer types
-    if (strcasecmp(type_name, "Integer") == 0 || strcasecmp(type_name, "Byte") == 0 ||
+    /* Note: "Integer" is intentionally NOT in this list.  In ObjFPC/Delphi mode
+     * ObjPas redefines Integer = LongInt (overriding System's Integer = SmallInt).
+     * Hardcoding Integer -> HASHVAR_INTEGER here would bypass the symbol-table
+     * lookup that correctly reflects that override.  Returning HASHVAR_UNTYPED
+     * causes the caller to fall through to find_type_node_for_mangling(), which
+     * consults the live symbol table and returns HASHVAR_LONGINT after the
+     * ObjPas override has been applied. */
+    if (strcasecmp(type_name, "Byte") == 0 ||
         strcasecmp(type_name, "Word") == 0 || strcasecmp(type_name, "TSystemCodePage") == 0)
         return HASHVAR_INTEGER;
     
@@ -315,7 +322,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
             lookup_name = qualified;
     }
     if (lookup_name != NULL &&
-        FindIdent(&type_node, symtab, lookup_name) >= 0 && type_node != NULL)
+        FindSymbol(&type_node, symtab, lookup_name) != 0 && type_node != NULL)
     {
         if (type_node->hash_type == HASHTYPE_TYPE)
         {
@@ -351,7 +358,7 @@ static HashNode_t *find_type_node_for_mangling(SymTab_t *symtab,
         if (unqualified != NULL)
         {
             HashNode_t *unqualified_node = NULL;
-            if (FindIdent(&unqualified_node, symtab, unqualified) >= 0 &&
+            if (FindSymbol(&unqualified_node, symtab, unqualified) != 0 &&
                 unqualified_node != NULL && unqualified_node->hash_type == HASHTYPE_TYPE)
             {
                 free(unqualified);
@@ -446,7 +453,7 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                  decl_tree->tree_data.var_decl_data.type_id != NULL)) {
                 const TypeRef *type_ref = decl_tree->tree_data.var_decl_data.type_ref;
                 const char *type_id = decl_tree->tree_data.var_decl_data.type_id;
-                
+
                 // First try to map built-in type names directly
                 resolved_type = MapBuiltinTypeNameToVarType(
                     type_ref_base_name_or_id(type_ref, type_id));
@@ -647,7 +654,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_ai"; break;   /* array of Integer */
                 case HASHVAR_LONGINT: type_suffix = "_ali"; break;  /* array of LongInt */
                 case HASHVAR_INT64:   type_suffix = "_ai64"; break; /* array of Int64 */
-                case HASHVAR_QWORD:  type_suffix = "_aui64"; break; /* array of QWord */
+                case HASHVAR_QWORD:  type_suffix = "_au64"; break; /* array of QWord */
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_ax";
@@ -680,7 +687,7 @@ static char* MangleNameFromTypeList(const char* original_name, ListNode_t* type_
                 case HASHVAR_INTEGER: type_suffix = "_i"; break;
                 case HASHVAR_LONGINT: type_suffix = "_li"; break;
                 case HASHVAR_INT64:   type_suffix = "_i64"; break;
-                case HASHVAR_QWORD:  type_suffix = "_ui64"; break;
+                case HASHVAR_QWORD:  type_suffix = "_u64"; break;
                 case HASHVAR_REAL:
                     if (mt != NULL && mangle_type_id_is_extended(mt->type_id))
                         type_suffix = "_x";
@@ -850,7 +857,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     struct TypeAlias *alias = kgpc_type->type_alias;
                     if (alias->alias_name != NULL)
                     {
-                        if (strcasecmp(alias->alias_name, "RawByteString") == 0)
+                        if (strcasecmp(alias->alias_name, "RawByteString") == 0 ||
+                            strcasecmp(alias->alias_name, "AnsiString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(alias->alias_name, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;
@@ -871,7 +879,7 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                     if (ret_id == NULL && arg_expr->expr_data.function_call_data.id != NULL)
                     {
                         HashNode_t *func_node = NULL;
-                        int find_result = FindIdent(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
+                        int find_result = FindSymbol(&func_node, symtab, arg_expr->expr_data.function_call_data.id);
                         if (kgpc_getenv("KGPC_DEBUG_MANGLE"))
                             fprintf(stderr, "[MANGLE] fallback lookup '%s': find=%d node=%p hash_type=%d type=%p kind=%d ret_id=%s\n",
                                 arg_expr->expr_data.function_call_data.id,
@@ -881,14 +889,15 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                                 func_node ? (void*)func_node->type : NULL,
                                 (func_node && func_node->type) ? func_node->type->kind : -1,
                                 (func_node && func_node->type && func_node->type->kind == TYPE_KIND_PROCEDURE && func_node->type->info.proc_info.return_type_id) ? func_node->type->info.proc_info.return_type_id : "<null>");
-                        if (find_result != -1 &&
+                        if (find_result &&
                             func_node != NULL && func_node->type != NULL &&
                             func_node->type->kind == TYPE_KIND_PROCEDURE)
                             ret_id = func_node->type->info.proc_info.return_type_id;
                     }
                     if (ret_id != NULL)
                     {
-                        if (strcasecmp(ret_id, "RawByteString") == 0)
+                        if (strcasecmp(ret_id, "RawByteString") == 0 ||
+                            strcasecmp(ret_id, "AnsiString") == 0)
                             resolved_type = HASHVAR_RAWBYTESTRING;
                         else if (strcasecmp(ret_id, "UnicodeString") == 0)
                             resolved_type = HASHVAR_UNICODESTRING;

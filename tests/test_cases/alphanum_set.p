@@ -3,6 +3,9 @@ program alphanum_set;
 uses
   SysUtils;
 
+const
+  AlphaNum = ['A'..'Z', 'a'..'z', '_', '0'..'9'];
+
 var
   C: char;
 

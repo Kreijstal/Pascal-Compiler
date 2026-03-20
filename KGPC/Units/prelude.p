@@ -160,5 +160,11 @@ const
   fmOutput = $D7B2;
   fmInOut = $D7B3;
 
+{ RandomRange - provided here for --no-stdlib mode since FPC's RandomRange
+  lives in the math unit, not in the system unit.  Delegates to the C
+  runtime which uses the same xoshiro128** algorithm as FPC's Random. }
+function RandomRange(aFrom, aTo: LongInt): LongInt; cdecl; external name 'kgpc_random_range';
+function RandomRange(aFrom, aTo: Int64): Int64; cdecl; external name 'kgpc_random_range';
+
 begin
 end.

@@ -241,6 +241,21 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         return 1;
     }
 
+    /* For known primitive type tags, use the tag directly to avoid
+     * misresolution when type_id aliases differ across units (e.g. FPC
+     * system unit maps Integer to SmallInt while the compiler prelude
+     * maps it to LongInt). */
+    if (type_tag != UNKNOWN_TYPE && type_tag != RECORD_TYPE &&
+        type_tag != ENUM_TYPE && type_tag != SET_TYPE)
+    {
+        long long base_size = sizeof_from_type_tag(type_tag);
+        if (base_size >= 0)
+        {
+            *size_out = base_size;
+            return 0;
+        }
+    }
+
     if (type_id != NULL)
     {
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
@@ -931,6 +946,26 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
     {
         *align_out = 1;
         return 0;
+    }
+
+    /* For known primitive type tags, use the tag directly rather than looking
+     * up the type_id in the symbol table.  This avoids misresolution when the
+     * same identifier (e.g. "Integer") is aliased to different widths by the
+     * FPC system unit (SmallInt, 2 bytes) vs the compiler prelude (LongInt,
+     * 4 bytes).  The field's type_tag is authoritative because it was set
+     * during parsing based on the resolved type at the declaration site. */
+    if (type_tag != UNKNOWN_TYPE && type_tag != RECORD_TYPE &&
+        type_tag != ENUM_TYPE && type_tag != SET_TYPE)
+    {
+        long long size = sizeof_from_type_tag(type_tag);
+        if (size > 0)
+        {
+            int align = fpc_type_alignment_from_size(size, type_tag);
+            if (type_tag == SET_TYPE)
+                align = (align > POINTER_SIZE_BYTES) ? POINTER_SIZE_BYTES : align;
+            *align_out = align;
+            return 0;
+        }
     }
 
     if (type_id != NULL && symtab != NULL)

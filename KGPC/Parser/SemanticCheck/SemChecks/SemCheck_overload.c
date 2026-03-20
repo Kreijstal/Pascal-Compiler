@@ -22,7 +22,7 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     if (symtab == NULL || node == NULL || node->id == NULL)
         return 0;
 
-    ListNode_t *matches = FindAllIdentsInTable(symtab->builtins, node->id);
+    ListNode_t *matches = FindAllIdentsInTable(symtab->builtin_scope->table, node->id);
     int is_builtin = 0;
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
     {
@@ -37,40 +37,141 @@ int semcheck_candidate_is_builtin(SymTab_t *symtab, HashNode_t *node)
     return is_builtin;
 }
 
+/* Helper: check if candidate is in the given hash table (pointer identity).
+ * Uses FindIdentPtrInTable for zero-allocation direct bucket walk. */
+static int candidate_in_table(HashTable_t *table, HashNode_t *candidate)
+{
+    return FindIdentPtrInTable(table, candidate);
+}
+
+static int semcheck_candidate_is_subprogram(HashNode_t *candidate)
+{
+    if (candidate == NULL)
+        return 0;
+    return (candidate->hash_type == HASHTYPE_PROCEDURE ||
+            candidate->hash_type == HASHTYPE_FUNCTION ||
+            candidate->hash_type == HASHTYPE_BUILTIN_PROCEDURE);
+}
+
+static int semcheck_same_callable_symbol(HashNode_t *a, HashNode_t *b)
+{
+    if (a == NULL || b == NULL)
+        return 0;
+    if (a == b)
+        return 1;
+    if (!semcheck_candidate_is_subprogram(a) || !semcheck_candidate_is_subprogram(b))
+        return 0;
+
+    if (a->mangled_id != NULL && b->mangled_id != NULL &&
+        strcmp(a->mangled_id, b->mangled_id) == 0)
+        return 1;
+
+    if (a->id != NULL && b->id != NULL && strcmp(a->id, b->id) == 0 &&
+        a->type != NULL && b->type != NULL &&
+        a->type->kind == TYPE_KIND_PROCEDURE &&
+        b->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        int a_count = ListLength(a->type->info.proc_info.params);
+        int b_count = ListLength(b->type->info.proc_info.params);
+        if (a_count == b_count)
+            return 1;
+    }
+
+    return 0;
+}
+
+static int semcheck_candidate_equiv_in_table(HashTable_t *table, HashNode_t *candidate)
+{
+    if (table == NULL || candidate == NULL || candidate->id == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdentsInTable(table, candidate->id);
+    int found = 0;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *other = (HashNode_t *)cur->cur;
+        if (semcheck_same_callable_symbol(candidate, other))
+        {
+            found = 1;
+            break;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return found;
+}
+
+static int semcheck_candidate_exists_in_outer_scope(ScopeNode *scope, HashNode_t *candidate)
+{
+    for (ScopeNode *cur = scope; cur != NULL; cur = cur->parent)
+    {
+        if (candidate_in_table(cur->table, candidate) ||
+            semcheck_candidate_equiv_in_table(cur->table, candidate))
+            return 1;
+        if (cur->num_deps > 0)
+        {
+            for (int i = 0; i < cur->num_deps; i++)
+            {
+                if (candidate_in_table(cur->dep_scopes[i]->table, candidate) ||
+                    semcheck_candidate_equiv_in_table(cur->dep_scopes[i]->table, candidate))
+                    return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+/* Walk the scope tree to determine the candidate's scope level.
+ *
+ * Pure tree walk with pointer identity.  When a proc/func candidate is
+ * found in a SCOPE_SUBPROGRAM body scope, it was self-pushed for recursion
+ * support — skip it and keep walking to find the original declaration at
+ * the declaring scope (parent/dep_scope). */
 static int semcheck_scope_level_for_candidate(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (symtab == NULL || candidate == NULL || candidate->id == NULL)
         return INT_MAX / 2;
 
     int level = 0;
-    for (ListNode_t *scope = symtab->stack_head; scope != NULL; scope = scope->next, ++level)
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        ListNode_t *matches = FindAllIdentsInTable((HashTable_t *)scope->cur, candidate->id);
-        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        if (candidate_in_table(scope->table, candidate))
         {
-            if (cur->cur == candidate)
+            /* Subprogram symbols are self-pushed into the active body scope for
+             * recursion. If the same HashNode is also visible from an outer
+             * declaration scope, ignore the body-scope copy so overload
+             * ranking does not prefer recursive self-calls over a better
+             * sibling overload. */
+            if (scope == symtab->current_scope &&
+                semcheck_candidate_is_subprogram(candidate) &&
+                semcheck_candidate_exists_in_outer_scope(scope->parent, candidate))
             {
-                if (matches != NULL)
-                    DestroyList(matches);
+                /* continue walking to find the real declaring scope */
+            }
+            else
+            {
                 return level;
             }
         }
-        if (matches != NULL)
-            DestroyList(matches);
-    }
 
-    ListNode_t *builtins = FindAllIdentsInTable(symtab->builtins, candidate->id);
-    for (ListNode_t *cur = builtins; cur != NULL; cur = cur->next)
-    {
-        if (cur->cur == candidate)
+        if (scope->num_deps > 0)
         {
-            if (builtins != NULL)
-                DestroyList(builtins);
+            for (int i = scope->num_deps - 1; i >= 0; i--)
+            {
+                if (candidate_in_table(scope->dep_scopes[i]->table, candidate))
+                    return level + 1 + (scope->num_deps - 1 - i);
+            }
+            level += 1 + scope->num_deps;
+        }
+        else if (scope->parent == NULL)
+        {
             return INT_MAX / 2;
         }
+        else
+        {
+            level++;
+        }
     }
-    if (builtins != NULL)
-        DestroyList(builtins);
 
     return INT_MAX / 2;
 }
@@ -852,7 +953,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         if (arg_expr->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *elem_node = NULL;
-            if (FindIdent(&elem_node, symtab, arg_expr->array_element_type_id) == 0 &&
+            if (FindSymbol(&elem_node, symtab, arg_expr->array_element_type_id) != 0 &&
                 elem_node != NULL && elem_node->type != NULL)
                 elem_type = elem_node->type;
         }
@@ -912,7 +1013,7 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
                 if (arg_expr != NULL && arg_expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, arg_expr->pointer_subtype_id) == 0 &&
+                    if (FindSymbol(&type_node, symtab, arg_expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -1180,9 +1281,9 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
 
     if (!found)
     {
-        for (ListNode_t *scope = symtab->stack_head; scope != NULL && !found; scope = scope->next)
+        for (ScopeNode *scope = symtab->current_scope; scope != NULL && scope != symtab->builtin_scope && !found; scope = scope->parent)
         {
-            HashTable_t *table = (HashTable_t *)scope->cur;
+            HashTable_t *table = scope->table;
             if (table == NULL)
                 continue;
             for (int i = 0; i < TABLE_SIZE && !found; ++i)
@@ -1203,11 +1304,11 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
         }
     }
 
-    if (!found && symtab->builtins != NULL)
+    if (!found && symtab->builtin_scope->table != NULL)
     {
         for (int i = 0; i < TABLE_SIZE && !found; ++i)
         {
-            for (ListNode_t *cur = symtab->builtins->table[i]; cur != NULL; cur = cur->next)
+            for (ListNode_t *cur = symtab->builtin_scope->table->table[i]; cur != NULL; cur = cur->next)
             {
                 HashNode_t *cand = (HashNode_t *)cur->cur;
                 if (!semcheck_overload_symbol_is_assign_operator(cand))
@@ -1365,9 +1466,26 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         }
         return semcheck_make_quality(MATCH_EXACT);
     }
-    /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE) */
+    /* String types are mutually compatible (STRING_TYPE, SHORTSTRING_TYPE).
+     * AnsiString (STRING_TYPE) → RawByteString formal should rank higher than
+     * AnsiString → ShortString, since AnsiString IS-A RawByteString.
+     * This prevents Assign(t, AnsiString(s)) from picking the ShortString
+     * overload (assign_t_ss) over the RawByteString overload (assign_t_rbs). */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
+    {
+        if (actual_tag == STRING_TYPE && formal_tag == STRING_TYPE)
+        {
+            /* Both are AnsiString-family (STRING_TYPE).  Check alias names:
+             * AnsiString → RawByteString is exact, other cross-aliases are promotion. */
+            const char *formal_alias = (formal_kgpc != NULL && formal_kgpc->type_alias != NULL)
+                ? formal_kgpc->type_alias->alias_name : NULL;
+            if (formal_alias != NULL &&
+                pascal_identifier_equals(formal_alias, "RawByteString"))
+                return semcheck_make_quality(MATCH_EXACT);
+        }
+        /* AnsiString → ShortString or vice versa: promotion (lossy conversion) */
         return semcheck_make_quality(MATCH_PROMOTION);
+    }
 
     /* Plain Pointer is implicitly convertible to typed pointer parameters
      * such as PChar/PAnsiChar in RTL code (e.g. FpWrite/FpRead wrappers). */
@@ -1674,7 +1792,7 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
         return NULL;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, expr->expr_data.id) < 0 || node == NULL || node->type == NULL)
+    if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL || node->type == NULL)
         return NULL;
 
     if (node->type->type_alias != NULL && node->type->type_alias->alias_name != NULL)
@@ -1685,6 +1803,40 @@ static const char *semcheck_get_expr_decl_type_id(struct Expression *expr, SymTa
         node->type->info.record_info != NULL &&
         node->type->info.record_info->type_id != NULL)
         return node->type->info.record_info->type_id;
+    return NULL;
+}
+
+static const char *semcheck_explicit_string_cast_target_id(struct Expression *expr)
+{
+    if (expr == NULL)
+        return NULL;
+
+    if (expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = expr->expr_data.typecast_data.target_type_id;
+        int target_type = expr->expr_data.typecast_data.target_type;
+        if (target_id != NULL && is_string_type(target_type))
+            return target_id;
+        return NULL;
+    }
+
+    if (expr->type != EXPR_FUNCTION_CALL)
+        return NULL;
+
+    if (expr->expr_data.function_call_data.id == NULL ||
+        expr->expr_data.function_call_data.args_expr == NULL ||
+        expr->expr_data.function_call_data.args_expr->next != NULL)
+        return NULL;
+
+    const char *call_id = expr->expr_data.function_call_data.id;
+    if (pascal_identifier_equals(call_id, "AnsiString") ||
+        pascal_identifier_equals(call_id, "RawByteString") ||
+        pascal_identifier_equals(call_id, "String") ||
+        pascal_identifier_equals(call_id, "ShortString") ||
+        pascal_identifier_equals(call_id, "WideString") ||
+        pascal_identifier_equals(call_id, "UnicodeString"))
+        return call_id;
+
     return NULL;
 }
 
@@ -1707,7 +1859,8 @@ static int semcheck_string_kind_from_type_id(const char *type_id)
         pascal_identifier_equals(id, "AnsiChar") ||
         pascal_identifier_equals(id, "String") ||
         pascal_identifier_equals(id, "AnsiString") ||
-        pascal_identifier_equals(id, "RawByteString"))
+        pascal_identifier_equals(id, "RawByteString") ||
+        pascal_identifier_equals(id, "ShortString"))
         return 1;
 
     return 0;
@@ -1988,7 +2141,7 @@ static int semcheck_class_depth(KgpcType *type, SymTab_t *symtab)
     while (parent != NULL && depth < 100) {
         depth++;
         HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, (char *)parent) == -1 || parent_node == NULL)
+        if (FindSymbol(&parent_node, symtab, (char *)parent) == 0 || parent_node == NULL)
             break;
         struct RecordType *parent_rec = NULL;
         if (parent_node->type != NULL) {
@@ -2026,12 +2179,12 @@ static int semcheck_compare_class_specificity(HashNode_t *candidate, HashNode_t 
             KgpcType *best_type = best_decl->tree_data.var_decl_data.cached_kgpc_type;
             if (cand_type == NULL && cand_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                if (FindSymbol(&node, symtab, cand_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     cand_type = node->type;
             }
             if (best_type == NULL && best_decl->tree_data.var_decl_data.type_id != NULL) {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != -1 && node != NULL)
+                if (FindSymbol(&node, symtab, best_decl->tree_data.var_decl_data.type_id) != 0 && node != NULL)
                     best_type = node->type;
             }
             cand_depth_total += semcheck_class_depth(cand_type, symtab);
@@ -2305,7 +2458,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             if (arg_expr != NULL &&
                 (arg_expr->type == EXPR_SET || arg_expr->type == EXPR_ARRAY_LITERAL ||
                  arg_expr->array_element_type != UNKNOWN_TYPE ||
-                 arg_expr->array_element_type_id != NULL))
+                 (arg_expr->array_element_type_id != NULL && arg_expr->is_array_expr)))
             {
                 arg_is_array = 1;
             }
@@ -2354,7 +2507,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (arg_elem_tag == UNKNOWN_TYPE)
                         {
                             HashNode_t *type_node = NULL;
-                            if (FindIdent(&type_node, symtab, arg_expr->array_element_type_id) != -1 && type_node != NULL)
+                            if (FindSymbol(&type_node, symtab, arg_expr->array_element_type_id) != 0 && type_node != NULL)
                                 set_type_from_hashtype(&arg_elem_tag, type_node);
                         }
                     }
@@ -2769,14 +2922,25 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                              pascal_identifier_equals(formal_id, "AnsiString") ||
                              pascal_identifier_equals(formal_id, "String")))
                         {
+                            /* String literals prefer ShortString over RawByteString
+                             * (FPC behavior). Typecasts like AnsiString(s) should
+                             * match RawByteString without penalty. */
                             quality.kind = MATCH_EXACT;
-                            quality.char_promo_rank = 1;
+                            if (arg_expr != NULL && arg_expr->type == EXPR_STRING)
+                                quality.char_promo_rank = 1;
                         }
                         else if (formal_id == NULL)
                         {
                             if (formal_tag == SHORTSTRING_TYPE)
                             {
-                                quality.kind = MATCH_EXACT;
+                                /* STRING_TYPE arg to SHORTSTRING_TYPE formal is a
+                                 * narrowing conversion (lossy), not exact. This ensures
+                                 * RawByteString/AnsiString overloads are preferred over
+                                 * ShortString when the actual arg is a long string. */
+                                if (arg_tag == STRING_TYPE)
+                                    quality.kind = MATCH_PROMOTION;
+                                else
+                                    quality.kind = MATCH_EXACT;
                             }
                             else if (formal_tag == STRING_TYPE)
                             {
@@ -2785,10 +2949,41 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         }
                     }
 
-                    if (arg_expr != NULL && arg_expr->type == EXPR_TYPECAST)
+                    const char *explicit_string_cast_id =
+                        semcheck_explicit_string_cast_target_id(arg_expr);
+                    if (explicit_string_cast_id != NULL ||
+                        (arg_expr != NULL && arg_expr->type == EXPR_TYPECAST))
                     {
-                        int cast_target = arg_expr->expr_data.typecast_data.target_type;
-                        const char *cast_target_id = arg_expr->expr_data.typecast_data.target_type_id;
+                        int cast_target = (arg_expr != NULL && arg_expr->type == EXPR_TYPECAST)
+                            ? arg_expr->expr_data.typecast_data.target_type
+                            : UNKNOWN_TYPE;
+                        const char *cast_target_id = explicit_string_cast_id;
+                        if (cast_target_id == NULL && arg_expr != NULL &&
+                            arg_expr->type == EXPR_TYPECAST)
+                            cast_target_id = arg_expr->expr_data.typecast_data.target_type_id;
+                        /* String typecast: AnsiString(s) should prefer RawByteString/String
+                         * overloads over ShortString. The typecast explicitly requests the
+                         * target type, so ShortString is a narrowing mismatch. */
+                        if (cast_target_id != NULL &&
+                            (pascal_identifier_equals(cast_target_id, "AnsiString") ||
+                             pascal_identifier_equals(cast_target_id, "RawByteString") ||
+                             pascal_identifier_equals(cast_target_id, "String")))
+                        {
+                            if (formal_tag == SHORTSTRING_TYPE ||
+                                (formal_id != NULL && pascal_identifier_equals(formal_id, "ShortString")))
+                            {
+                                quality.kind = MATCH_PROMOTION;
+                                quality.char_promo_rank = 10;
+                            }
+                            else if (formal_id != NULL &&
+                                (pascal_identifier_equals(formal_id, "RawByteString") ||
+                                 pascal_identifier_equals(formal_id, "AnsiString") ||
+                                 pascal_identifier_equals(formal_id, "String")))
+                            {
+                                quality.kind = MATCH_EXACT;
+                                quality.char_promo_rank = 0;
+                            }
+                        }
                         if (cast_target == POINTER_TYPE)
                         {
                             if (formal_tag == POINTER_TYPE)
@@ -2882,6 +3077,10 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         const char *formal_id = semcheck_get_param_type_id(formal_decl);
                         const char *arg_decl_id = semcheck_get_expr_decl_type_id(arg_expr, symtab);
                         const char *arg_type_id = arg_decl_id;
+                        const char *explicit_string_cast_id =
+                            semcheck_explicit_string_cast_target_id(arg_expr);
+                        if (explicit_string_cast_id != NULL)
+                            arg_type_id = explicit_string_cast_id;
                         if (arg_type_id == NULL && arg_kgpc != NULL && arg_kgpc->type_alias != NULL)
                         {
                             arg_type_id = arg_kgpc->type_alias->alias_name != NULL
@@ -2961,28 +3160,36 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
         }
 
         int candidate_scope = semcheck_scope_level_for_candidate(symtab, candidate);
-        /* For class method overloads (id contains "__"), the current method
-         * being compiled sits at scope 0 (method body) while sibling overloads
-         * are at scope 1 (class level). Normalize them to prevent the scope
-         * filter from excluding sibling overloads. */
-        if (candidate->owner_class != NULL && candidate_scope == 0)
-            candidate_scope = 1;
-        if (candidate_scope < best_scope_level)
+        int use_scope_preference = !semcheck_candidate_is_subprogram(candidate);
+        if (best_match != NULL &&
+            semcheck_candidate_is_subprogram(candidate) &&
+            semcheck_candidate_is_subprogram(best_match))
         {
-            best_scope_level = candidate_scope;
-            if (best_qualities != NULL)
-            {
-                free(best_qualities);
-                best_qualities = NULL;
-            }
-            best_match = NULL;
-            best_missing = 0;
-            num_best = 0;
+            /* Callable overload shadowing is already filtered in
+             * semcheck_funccall. Among remaining overloads, scope should not
+             * outrank a better conversion sequence, especially for the
+             * self-pushed recursive copy of the current routine. */
+            use_scope_preference = 0;
         }
-        if (candidate_scope > best_scope_level)
+        if (use_scope_preference)
         {
-            free(qualities);
-            continue;
+            if (candidate_scope < best_scope_level)
+            {
+                best_scope_level = candidate_scope;
+                if (best_qualities != NULL)
+                {
+                    free(best_qualities);
+                    best_qualities = NULL;
+                }
+                best_match = NULL;
+                best_missing = 0;
+                num_best = 0;
+            }
+            if (candidate_scope > best_scope_level)
+            {
+                free(qualities);
+                continue;
+            }
         }
 
         int missing_args = total_params - given_count;

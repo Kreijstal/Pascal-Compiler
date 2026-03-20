@@ -124,6 +124,15 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
 
+/* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
+ * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
+ * this skips program-local redeclarations to find the unit-defined symbol. */
+/* Check if a specific HashNode pointer exists in the table.
+ * Direct bucket walk — zero heap allocations. */
+int FindIdentPtrInTable(HashTable_t *table, HashNode_t *candidate);
+
+HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id);
+
 /* Like FindIdentInTable but prefers matches from caller_unit_index.
  * Priority: same unit > program-local (0) > any other unit. */
 HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index);

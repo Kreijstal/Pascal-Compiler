@@ -1,7 +1,8 @@
 /*
-    Damon Gwinn
-    Creates a symbol table which is simply a stack of hash tables for identifiers
-    Used to perform semantic checking on a ParseTree
+    Symbol table: parent-pointer scope tree (primary).
+    See docs/SCOPE_TREE_REFACTORING.md.
+
+    Phase 5: All lookups and insertions use the scope tree directly.
 
     WARNING: Symbol table will NOT free given identifier strings or args when destroyed
         Remember to free given identifier strings manually
@@ -19,24 +20,35 @@
 
 #define SYMTAB_MAX_UNITS 256
 
-/* A stack of hash tables with built-ins and per-unit symbol tables */
+/* ========================================================================
+ * Scope tree types
+ * ======================================================================== */
+
+typedef struct ScopeNode {
+    HashTable_t *table;          /* Symbols declared in this scope (owned by this node, freed in DestroyScope) */
+    struct ScopeNode *parent;    /* Walk this chain for FindIdent */
+    int unit_index;              /* Which unit this scope belongs to (0 = program) */
+
+    /* Dependency edges from `uses` clause (only on unit/program scopes) */
+    struct ScopeNode **dep_scopes;
+    int num_deps;
+    int cap_deps;
+} ScopeNode;
+
+/* ========================================================================
+ * Symbol table: scope tree (primary)
+ * ======================================================================== */
+
 typedef struct SymTab
 {
-    ListNode_t *stack_head;
-    HashTable_t *builtins;
-    int unit_context;       /* Active unit index for unit-aware resolution (0 = program) */
-    int push_target_unit;   /* When > 0, Push*OntoScope routes to unit_tables[this] */
-    /* Per-unit symbol tables. unit_tables[i] holds symbols belonging to unit i.
-     * Lazily allocated on first push to that unit. Owned by SymTab — destroyed
-     * with DestroyHashTable (full ownership of their HashNodes). */
-    HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
+    /* --- Scope tree (used for all lookups and insertions) --- */
+    ScopeNode *builtin_scope;                 /* Root of the tree; owns its table (builtins) */
+    ScopeNode *current_scope;                 /* Active scope node */
+    ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
 } SymTab_t;
 
-/* Initializes the SymTab with stack_head pointing to NULL */
+/* Initializes the SymTab */
 SymTab_t *InitSymTab();
-
-/* Pushes a new scope onto the stack (FIFO) */
-void PushScope(SymTab_t *symtab);
 
 int PushConstOntoScope(SymTab_t *symtab, char *id, long long value);
 
@@ -67,6 +79,9 @@ int PushArrayOntoScope_Typed(SymTab_t *symtab, char *id, KgpcType *type);
 
 /* Pushes a new procedure with a KgpcType onto the current scope */
 int PushProcedureOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
+
+/* Returns the hash table that Push* operations currently target */
+HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab);
 
 /* Pushes a new function with a KgpcType onto the current scope */
 int PushFunctionOntoScope_Typed(SymTab_t *symtab, char *id, char *mangled_id, KgpcType *type);
@@ -100,18 +115,13 @@ int AddBuiltinIntConst(SymTab_t *symtab, const char *id, long long value);
 /* Adds a built-in character constant */
 int AddBuiltinCharConst(SymTab_t *symtab, const char *id, unsigned char value);
 
-/* Searches for an identifier and sets the hash_return that contains the id and type information */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
-int FindIdent(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
-
-/* Like FindIdent but uses unit-aware resolution.
- * Prefers symbols from caller_unit_index, then program-local, then any. */
-int FindIdentInUnit(HashNode_t **hash_return, SymTab_t *symtab, const char *id, int caller_unit_index);
+/* Searches for a symbol and sets the hash_return that contains the id and type information */
+/* Returns 0 (false) if not found, 1 (true) if found */
+int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 
 /* Searches for any identifier starting with the given prefix */
-/* Returns -1 and sets hash_return to NULL if not found */
-/* Returns >= 0 tells what scope level it was found at */
+/* Returns 0 and sets hash_return to NULL if not found */
+/* Returns 1 if found (hash_return set to the matching node) */
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
 
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
@@ -121,9 +131,6 @@ ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);
 /* Searches for all instances of an identifier in the nearest scope that defines it */
 /* Returns NULL if not found */
 ListNode_t *FindAllIdentsInNearestScope(SymTab_t *symtab, const char *id);
-
-/* Pops the current scope */
-void PopScope(SymTab_t *symtab);
 
 /* Destroys the SymTab and all associated hash tables */
 /* WARNING: Does not free given identifier strings */
@@ -138,5 +145,27 @@ HashNode_t *FindIdentInCurrentScope(SymTab_t *symtab, const char *id);
 
 /* Move a hash node to the back of its bucket list in the nearest scope */
 void SymTab_MoveHashNodeToBack(SymTab_t *symtab, HashNode_t *node);
+
+/* ========================================================================
+ * Scope tree API
+ * ======================================================================== */
+
+/* Create a scope node. DestroyScope always frees the table. */
+ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table);
+void DestroyScope(ScopeNode *scope);
+
+/* Get (or lazily create) the unit scope for the given unit registry index.
+ * Allocates a new HashTable for the scope if it does not exist yet.
+ * The scope OWNS its table (freed in DestroyScope). */
+ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
+
+/* Add a dependency edge: scope can see dep_scope's symbols. */
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
+
+/* Push a new child scope under current_scope and make it current. */
+void EnterScope(SymTab_t *symtab, int unit_index);
+
+/* Pop current_scope to its parent (never leaves the root). */
+void LeaveScope(SymTab_t *symtab);
 
 #endif
