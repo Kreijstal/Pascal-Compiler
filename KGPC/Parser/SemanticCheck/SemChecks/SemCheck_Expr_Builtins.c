@@ -9,6 +9,45 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static long long semcheck_builtin_sizeof_type_id_local(const char *type_id)
+{
+    if (type_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(type_id, "Integer"))
+        return pascal_frontend_is_objfpc_mode() ? 4 : 2;
+    if (pascal_identifier_equals(type_id, "LongInt") ||
+        pascal_identifier_equals(type_id, "LongWord") ||
+        pascal_identifier_equals(type_id, "Cardinal") ||
+        pascal_identifier_equals(type_id, "DWord") ||
+        pascal_identifier_equals(type_id, "Single"))
+        return 4;
+    if (pascal_identifier_equals(type_id, "SmallInt") ||
+        pascal_identifier_equals(type_id, "Word") ||
+        pascal_identifier_equals(type_id, "WideChar"))
+        return 2;
+    if (pascal_identifier_equals(type_id, "Byte") ||
+        pascal_identifier_equals(type_id, "ShortInt") ||
+        pascal_identifier_equals(type_id, "Boolean") ||
+        pascal_identifier_equals(type_id, "Char") ||
+        pascal_identifier_equals(type_id, "AnsiChar"))
+        return 1;
+    if (pascal_identifier_equals(type_id, "Int64") ||
+        pascal_identifier_equals(type_id, "QWord") ||
+        pascal_identifier_equals(type_id, "Double") ||
+        pascal_identifier_equals(type_id, "Real") ||
+        pascal_identifier_equals(type_id, "Pointer") ||
+        pascal_identifier_equals(type_id, "NativeUInt") ||
+        pascal_identifier_equals(type_id, "SizeUInt") ||
+        pascal_identifier_equals(type_id, "PtrUInt") ||
+        pascal_identifier_equals(type_id, "NativeInt") ||
+        pascal_identifier_equals(type_id, "SizeInt") ||
+        pascal_identifier_equals(type_id, "PtrInt") ||
+        pascal_identifier_equals(type_id, "String"))
+        return 8;
+    return 0;
+}
+
 static int semcheck_expr_is_explicit_char_typecast_local(const struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_TYPECAST)
@@ -3140,6 +3179,14 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     if (arg != NULL && arg->type == EXPR_VAR_ID)
     {
         char *arg_id = arg->expr_data.id;
+        long long builtin_size = semcheck_builtin_sizeof_type_id_local(arg_id);
+        if (builtin_size > 0)
+        {
+            computed_size = builtin_size;
+            size_computed = 1;
+        }
+        if (size_computed)
+            goto sizeof_success;
         HashNode_t *node = NULL;
         int found = FindSymbol(&node, symtab, arg_id);
         HashNode_t *preferred_type_node = NULL;
@@ -3306,7 +3353,20 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 {
                     struct TypeAlias *alias = get_type_alias_from_node(node);
                     int used_target_size = 0;
-                    if (alias != NULL && alias->target_type_id != NULL)
+                    /* Prefer the resolved type node over textual alias-target shortcuts.
+                     * Mode-dependent aliases such as Integer may keep the original
+                     * target_type_id text (e.g. SmallInt) while node->type has already
+                     * been overridden to the effective width for the active mode. */
+                    if (node->type != NULL)
+                    {
+                        long long direct_size = kgpc_type_sizeof(node->type);
+                        if (direct_size >= 0)
+                        {
+                            computed_size = direct_size;
+                            used_target_size = 1;
+                        }
+                    }
+                    if (!used_target_size && alias != NULL && alias->target_type_id != NULL)
                     {
                         const char *target = alias->target_type_id;
                         if (pascal_identifier_equals(target, "Byte") ||
@@ -3476,6 +3536,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
     }
 
+sizeof_success:
     if (error_count == 0)
     {
         if (computed_size < 0)

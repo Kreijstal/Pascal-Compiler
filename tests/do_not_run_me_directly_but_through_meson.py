@@ -3379,6 +3379,7 @@ KGPC_ONLY_TESTS = {
 # suite by default. Keep a small explicit allowlist for tests that intentionally
 # exercise implicit System/ObjPas/FPC bootstrap behavior.
 FPC_RTL_IMPLICIT_UNIT_TESTS = {
+    "bitsizeof_const_expr",
     "fpc_bootstrap_absolute_record_field",
     "fpc_bootstrap_andor_complex",
     "fpc_bootstrap_ansichar_type",
