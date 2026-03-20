@@ -15,6 +15,7 @@ import textwrap
 import threading
 import time
 import traceback
+import re
 import unittest
 import signal
 from pathlib import Path
@@ -390,6 +391,7 @@ def _has_explicit_target_flag(flags):
 def run_executable_with_valgrind(executable_args, **kwargs):
     """Run an executable, optionally with valgrind in CI mode."""
     command = list(executable_args)
+    explicit_pty_capture = kwargs.pop("use_pty_capture", None)
     
     # Use valgrind when CI mode is enabled and valgrind is available
     if VALGRIND_MODE and shutil.which("valgrind") is not None:
@@ -474,7 +476,10 @@ def run_executable_with_valgrind(executable_args, **kwargs):
     #
     # Important: keep stdin as a pipe when input=... is provided, so test input is
     # not echoed by terminal line discipline.
-    use_pty_capture = os.environ.get("KGPC_USE_PTY_CAPTURE", "").lower() in ("1", "true", "yes")
+    if explicit_pty_capture is None:
+        use_pty_capture = os.environ.get("KGPC_USE_PTY_CAPTURE", "").lower() in ("1", "true", "yes")
+    else:
+        use_pty_capture = bool(explicit_pty_capture)
     if use_pty_capture and HAS_PTY and kwargs.get("capture_output") and "stdout" not in kwargs and "stderr" not in kwargs:
         text_mode = bool(kwargs.get("text"))
         timeout = kwargs.get("timeout", EXEC_TIMEOUT)
@@ -2404,24 +2409,17 @@ class TestCompiler(unittest.TestCase):
             text=True,
             timeout=EXEC_TIMEOUT,
             check=True,
+            use_pty_capture=True,
         )
         expected_output = "0\n72\n10\n3\n"
-        self.assertEqual(kgpc_run.stdout, expected_output)
+        actual_output = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", kgpc_run.stdout or "")
+        self.assertEqual(actual_output, expected_output)
 
     def test_run_executable_with_valgrind_pty_crlf_and_echo(self):
         """PTY path should normalize CRLF, merge stderr, and avoid input echo."""
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
-
-        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
-        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
-        try:
-            self._test_pty_crlf_and_echo_impl()
-        finally:
-            if old_val is None:
-                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
-            else:
-                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+        self._test_pty_crlf_and_echo_impl()
 
     def _test_pty_crlf_and_echo_impl(self):
         helper_body = r"""
@@ -2444,6 +2442,7 @@ sys.stdout.flush()
                 text=True,
                 capture_output=True,
                 check=True,
+                use_pty_capture=True,
             )
 
         self.assertIn(result.stderr, (None, ""))
@@ -2460,16 +2459,7 @@ sys.stdout.flush()
         """PTY path should terminate processes that exceed timeout."""
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
-
-        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
-        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
-        try:
-            self._test_pty_timeout_impl()
-        finally:
-            if old_val is None:
-                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
-            else:
-                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+        self._test_pty_timeout_impl()
 
     def _test_pty_timeout_impl(self):
         helper_body = r"""
@@ -2485,6 +2475,7 @@ sys.stdout.flush()
                 text=True,
                 capture_output=True,
                 check=False,
+                use_pty_capture=True,
             )
 
         self.assertNotEqual(result.returncode, 0)
@@ -2494,16 +2485,7 @@ sys.stdout.flush()
         """PTY and non-PTY paths should surface the same output and exit codes."""
         if not HAS_PTY:
             self.skipTest("PTY not available on this platform")
-
-        old_val = os.environ.get("KGPC_USE_PTY_CAPTURE")
-        os.environ["KGPC_USE_PTY_CAPTURE"] = "1"
-        try:
-            self._test_pty_vs_non_pty_equivalence_impl()
-        finally:
-            if old_val is None:
-                os.environ.pop("KGPC_USE_PTY_CAPTURE", None)
-            else:
-                os.environ["KGPC_USE_PTY_CAPTURE"] = old_val
+        self._test_pty_vs_non_pty_equivalence_impl()
 
     def _test_pty_vs_non_pty_equivalence_impl(self):
         helper_body = r"""

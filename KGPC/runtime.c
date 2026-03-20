@@ -1960,7 +1960,9 @@ static void kgpc_keyboard_init_once(void)
         return;
 
     struct termios raw = kgpc_keyboard_saved_termios;
-    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+    /* Crt.ReadKey must receive control characters like Ctrl+C as input bytes
+     * instead of letting the terminal driver turn them into signals. */
+    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
     raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;

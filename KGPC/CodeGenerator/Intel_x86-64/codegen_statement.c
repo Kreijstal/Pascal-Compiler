@@ -2751,6 +2751,14 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
 
 static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
 {
+    int explicit_shortstring = 0;
+    if (expr != NULL)
+    {
+        explicit_shortstring =
+            (expr_get_type_tag(expr) == SHORTSTRING_TYPE) ||
+            codegen_expr_is_shortstring_array(expr);
+    }
+
     if (expr != NULL)
     {
         KgpcType *expr_type = expr_get_kgpc_type(expr);
@@ -2792,6 +2800,9 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
             }
         }
     }
+
+    if (explicit_shortstring)
+        return 256;
 
     if (expr != NULL && expr->is_array_expr)
     {
@@ -2848,6 +2859,27 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL)
         {
+            if (node->type != NULL)
+            {
+                if (kgpc_type_is_shortstring(node->type))
+                    return 256;
+
+                if (kgpc_type_is_procedure(node->type) &&
+                    node->type->info.proc_info.return_type != NULL &&
+                    kgpc_type_is_shortstring(node->type->info.proc_info.return_type))
+                {
+                    return 256;
+                }
+
+                if (node->type->type_alias != NULL &&
+                    node->type->type_alias->is_shortstring)
+                {
+                    if (node->type->type_alias->storage_size > 1)
+                        return (int)node->type->type_alias->storage_size;
+                    return 256;
+                }
+            }
+
             int start = 0;
             int end = -1;
             hashnode_get_array_bounds(node, &start, &end);
@@ -2865,6 +2897,9 @@ static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, Cod
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
         return inst_list;
+
+    if (array_size <= 1)
+        array_size = 256;
 
     char buffer[128];
     if (codegen_target_is_windows())
@@ -3517,6 +3552,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 
                 /* Get ShortString capacity */
                 int array_size = codegen_get_shortstring_capacity(dest_expr, ctx);
+                if (array_size <= 1)
+                    array_size = 256;
                 
                 /* Call the string-to-shortstring conversion */
                 inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
@@ -9099,6 +9136,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             /* For shortstrings, use the array bounds to determine size.
              * If bounds are not available, default to 256 (standard ShortString). */
             int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+            if (array_size <= 1)
+                array_size = 256;
             
             /* Use ShortString-specific copy that sets length byte at index 0 */
             inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
@@ -9547,6 +9586,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             /* Handle shortstring assignment - copy string content to shortstring buffer */
             int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+            if (array_size <= 1)
+                array_size = 256;
             inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, array_size);
         }
         else if (use_qword)
@@ -9767,7 +9808,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
              codegen_expr_is_shortstring_value_local(assign_expr)))
         {
             int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
-            if (array_size <= 0)
+            if (array_size <= 1)
                 array_size = 256;
 
             if (assign_expr != NULL && assign_expr->type == EXPR_STRING)
