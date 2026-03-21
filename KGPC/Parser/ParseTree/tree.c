@@ -3411,6 +3411,16 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         destroy_list(alias->array_dimensions);
         alias->array_dimensions = NULL;
     }
+    if (alias->array_dim_start_str != NULL)
+    {
+        free(alias->array_dim_start_str);
+        alias->array_dim_start_str = NULL;
+    }
+    if (alias->array_dim_end_str != NULL)
+    {
+        free(alias->array_dim_end_str);
+        alias->array_dim_end_str = NULL;
+    }
     if (alias->pointer_type_id != NULL)
     {
         free(alias->pointer_type_id);
