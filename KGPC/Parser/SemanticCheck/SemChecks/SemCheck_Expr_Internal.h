@@ -278,8 +278,10 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
 int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
     const char *type_id, const struct TypeRef *type_ref, int line_num);
 
-/* Get type name from type tag */
+/* Get type name from type tag (display only — not for symbol table lookups) */
 const char *semcheck_type_tag_name(int type_tag);
+/* Get valid Pascal type identifier from type tag (for symbol table lookups) */
+const char *semcheck_type_tag_pascal_name(int type_tag);
 
 /* Get base type name (after last dot) */
 const char *semcheck_base_type_name(const char *id);

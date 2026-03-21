@@ -927,8 +927,8 @@ relop_fallback:
                     {
                         const char *target_name = get_expr_type_name(expr2, symtab);
                         if (target_name == NULL || target_name[0] == '\0')
-                            target_name = semcheck_type_tag_name(type_second);
-                        if (target_name != NULL && strcmp(target_name, "unknown") != 0)
+                            target_name = semcheck_type_tag_pascal_name(type_second);
+                        if (target_name != NULL)
                         {
                             struct Expression *cast_expr = mk_typecast(expr1->line_num,
                                 type_second, strdup(target_name), expr1);
@@ -944,8 +944,8 @@ relop_fallback:
                     {
                         const char *target_name = get_expr_type_name(expr1, symtab);
                         if (target_name == NULL || target_name[0] == '\0')
-                            target_name = semcheck_type_tag_name(type_first);
-                        if (target_name != NULL && strcmp(target_name, "unknown") != 0)
+                            target_name = semcheck_type_tag_pascal_name(type_first);
+                        if (target_name != NULL)
                         {
                             struct Expression *cast_expr = mk_typecast(expr2->line_num,
                                 type_first, strdup(target_name), expr2);

@@ -40,6 +40,32 @@ const char *semcheck_type_tag_name(int type_tag)
     }
 }
 
+/* Return a valid Pascal type identifier for a given type tag.
+ * Unlike semcheck_type_tag_name() which returns display-only strings
+ * (e.g. "int", "bool"), this function returns names that can be
+ * looked up in the symbol table (e.g. "Integer", "Boolean"). */
+const char *semcheck_type_tag_pascal_name(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE: return "Integer";
+        case LONGINT_TYPE: return "LongInt";
+        case INT64_TYPE: return "Int64";
+        case REAL_TYPE: return "Real";
+        case BOOL: return "Boolean";
+        case CHAR_TYPE: return "Char";
+        case STRING_TYPE: return "String";
+        case SHORTSTRING_TYPE: return "ShortString";
+        case POINTER_TYPE: return "Pointer";
+        case BYTE_TYPE: return "Byte";
+        case WORD_TYPE: return "Word";
+        case LONGWORD_TYPE: return "LongWord";
+        case QWORD_TYPE: return "QWord";
+        case EXTENDED_TYPE: return "Extended";
+        default: return NULL;
+    }
+}
+
 HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
     const char *type_id, const char *owner_full, const char *owner_outer)
 {
