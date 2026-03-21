@@ -2756,12 +2756,18 @@ static bool parse_factor(const char **cursor,
             size = 1;
             found = true;
         }
+        // Code pointer types (FPC builtins)
+        else if (strcmp(type_name, "CODEPTRUINT") == 0 || strcmp(type_name, "CODEPTRINT") == 0 ||
+                 strcmp(type_name, "CODEPOINTER") == 0) {
+            size = cpu64 ? 8 : 4;
+            found = true;
+        }
         // Pointer types
         else if (strstr(type_name, "POINTER") != NULL || type_name[0] == 'P') {
             size = 8;  // 64-bit pointers on x86_64
             found = true;
         }
-        
+
         if (!found) {
             bool err = set_error(error_message, "unsupported type '%s' for SIZEOF", type_name);
             free(type_name);
@@ -2914,7 +2920,19 @@ static bool parse_factor(const char **cursor,
         }
         char *sym = duplicate_range(start, *cursor);
         if (!sym) return set_error(error_message, "out of memory");
-        
+
+        // Boolean literals: true = 1, false = 0
+        if (ascii_strncasecmp(sym, "TRUE", 5) == 0) {
+            *value = 1;
+            free(sym);
+            return true;
+        }
+        if (ascii_strncasecmp(sym, "FALSE", 6) == 0) {
+            *value = 0;
+            free(sym);
+            return true;
+        }
+
         const char *val_str = get_symbol_value(pp, sym);
         if (val_str) {
             // Try to parse value as integer
