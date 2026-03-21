@@ -179,7 +179,8 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     assert(table != NULL);
     assert(id != NULL);
 
-    char *canonical_id = pascal_identifier_lower_dup(id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
     if (canonical_id == NULL)
         return NULL;
 
@@ -187,7 +188,7 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     list = table->table[hash];
     if(list == NULL)
     {
-        free(canonical_id);
+        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
         return NULL;
     }
 
@@ -197,13 +198,13 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
         hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
-            free(canonical_id);
+            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return hash_node;
         }
         cur = cur->next;
     }
 
-    free(canonical_id);
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return NULL;
 }
 
@@ -234,7 +235,8 @@ HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
     assert(table != NULL);
     assert(id != NULL);
 
-    char *canonical_id = pascal_identifier_lower_dup(id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
     if (canonical_id == NULL)
         return NULL;
 
@@ -242,7 +244,7 @@ HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
     list = table->table[hash];
     if(list == NULL)
     {
-        free(canonical_id);
+        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
         return NULL;
     }
 
@@ -252,13 +254,13 @@ HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
         hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0 && hash_node->defined_in_unit)
         {
-            free(canonical_id);
+            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return hash_node;
         }
         cur = cur->next;
     }
 
-    free(canonical_id);
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return NULL;
 }
 
@@ -271,7 +273,8 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
     assert(table != NULL);
     assert(id != NULL);
 
-    char *canonical_id = pascal_identifier_lower_dup(id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
     if (canonical_id == NULL)
         return NULL;
 
@@ -279,7 +282,7 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
     ListNode_t *list = table->table[hash];
     if (list == NULL)
     {
-        free(canonical_id);
+        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
         return NULL;
     }
 
@@ -320,7 +323,7 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
         cur = cur->next;
     }
 
-    free(canonical_id);
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return best;
 }
 
@@ -329,7 +332,8 @@ HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
     assert(table != NULL);
     assert(prefix != NULL);
 
-    char *canonical_prefix = pascal_identifier_lower_dup(prefix);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_prefix = pascal_identifier_lower_buf(prefix, stack_buf, sizeof(stack_buf));
     if (canonical_prefix == NULL)
         return NULL;
     size_t prefix_len = strlen(canonical_prefix);
@@ -342,14 +346,14 @@ HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
             HashNode_t *hash_node = (HashNode_t *)cur->cur;
             if (strncmp(hash_node->canonical_id, canonical_prefix, prefix_len) == 0)
             {
-                free(canonical_prefix);
+                pascal_identifier_lower_buf_free(canonical_prefix, stack_buf);
                 return hash_node;
             }
             cur = cur->next;
         }
     }
 
-    free(canonical_prefix);
+    pascal_identifier_lower_buf_free(canonical_prefix, stack_buf);
     return NULL;
 }
 
@@ -358,7 +362,8 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
     assert(table != NULL);
     assert(prefix != NULL);
 
-    char *canonical_prefix = pascal_identifier_lower_dup(prefix);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_prefix = pascal_identifier_lower_buf(prefix, stack_buf, sizeof(stack_buf));
     if (canonical_prefix == NULL)
         return NULL;
 
@@ -400,7 +405,7 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
         }
     }
 
-    free(canonical_prefix);
+    pascal_identifier_lower_buf_free(canonical_prefix, stack_buf);
     return best;
 }
 
@@ -410,11 +415,13 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
     HashNode_t *hash_node;
     int hash;
     ListNode_t *found_list = NULL;
+    ListNode_t *found_tail = NULL;  /* track tail for O(1) append */
 
     assert(table != NULL);
     assert(id != NULL);
 
-    char *canonical_id = pascal_identifier_lower_dup(id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
     if (canonical_id == NULL)
         return NULL;
 
@@ -422,7 +429,7 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
     list = table->table[hash];
     if(list == NULL)
     {
-        free(canonical_id);
+        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
         return NULL;
     }
 
@@ -432,19 +439,22 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
         hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
+            ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
             if (found_list == NULL)
             {
-                found_list = CreateListNode(hash_node, LIST_UNSPECIFIED);
+                found_list = new_node;
+                found_tail = new_node;
             }
             else
             {
-                PushListNodeBack(found_list, CreateListNode(hash_node, LIST_UNSPECIFIED));
+                found_tail->next = new_node;
+                found_tail = new_node;
             }
         }
         cur = cur->next;
     }
 
-    free(canonical_id);
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return found_list;
 }
 

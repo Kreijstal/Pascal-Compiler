@@ -65,29 +65,44 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
 /* Cached getenv() for KGPC_* environment variables.
  * getenv() does a linear scan of the environment on each call; with hundreds of
- * debug checks in hot loops, this was consuming 9% of total CPU time.
- * Uses a simple linear-probe cache (env var names are always string literals). */
-#define KGPC_ENV_CACHE_SIZE 128
+ * debug checks in hot loops, this was consuming 6.75% of total CPU time.
+ * O(1) pointer-hash cache: all callers pass string literals with stable addresses. */
+#define KGPC_ENV_CACHE_SIZE 256  /* must be power of 2 */
 static struct {
     const char *name;   /* pointer to string literal (identity comparison) */
     const char *value;  /* cached getenv result (NULL or pointer) */
+    int         valid;  /* 1 if slot is populated */
 } g_env_cache[KGPC_ENV_CACHE_SIZE];
-static int g_env_cache_count = 0;
+
+static unsigned int env_ptr_hash(const char *ptr)
+{
+    uintptr_t v = (uintptr_t)ptr;
+    v ^= v >> 16;
+    v *= 0x45d9f3bu;  /* murmurhash3 finalizer constant */
+    v ^= v >> 16;
+    return (unsigned int)(v & (KGPC_ENV_CACHE_SIZE - 1));
+}
 
 const char *kgpc_getenv(const char *name) {
-    /* Linear search — fast for <100 unique names with pointer identity */
-    for (int i = 0; i < g_env_cache_count; i++) {
-        if (g_env_cache[i].name == name)
-            return g_env_cache[i].value;
+    unsigned int h = env_ptr_hash(name);
+    /* Open-address probe (linear, max 4 steps) for collisions.
+     * With 256 slots and ~112 unique names this is nearly always 1 step. */
+    for (int step = 0; step < 4; step++) {
+        unsigned int idx = (h + (unsigned int)step) & (KGPC_ENV_CACHE_SIZE - 1);
+        if (g_env_cache[idx].valid && g_env_cache[idx].name == name)
+            return g_env_cache[idx].value;
+        if (!g_env_cache[idx].valid) {
+            /* Empty slot – fill it. */
+            const char *val = getenv(name);
+            g_env_cache[idx].name  = name;
+            g_env_cache[idx].value = val;
+            g_env_cache[idx].valid = 1;
+            return val;
+        }
     }
-    /* Cache miss — do the real getenv and store */
-    const char *val = getenv(name);
-    if (g_env_cache_count < KGPC_ENV_CACHE_SIZE) {
-        g_env_cache[g_env_cache_count].name = name;
-        g_env_cache[g_env_cache_count].value = val;
-        g_env_cache_count++;
-    }
-    return val;
+    /* Extremely unlikely fallback: all 4 probe slots are occupied by
+     * different keys.  Just do a real getenv without caching. */
+    return getenv(name);
 }
 
 #ifdef _WIN32
