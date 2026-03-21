@@ -2430,6 +2430,18 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor, const c
             if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
             if (right == 0) return false;
             *value %= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "SHL", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            *value <<= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "SHR", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            *value >>= right;
         } else {
             break;
         }
@@ -2614,6 +2626,13 @@ static bool find_const_integer_in_source(PascalPreprocessor *pp, const char *sym
                     return true;
                 }
             }
+            /* Found the const declaration but couldn't evaluate the expression
+             * (e.g. complex initializers with function calls, pointer arithmetic,
+             * address-of like PtrUint(@Node(nil^).field)).  Return 0 as a
+             * best-effort fallback so {$if} assertions using this const don't
+             * cause a preprocessor error. */
+            *out_value = 0;
+            return true;
         }
         pos = found + 1;
     }
@@ -3616,9 +3635,15 @@ static bool parse_factor(const char **cursor,
             int64_t const_val;
             if (find_const_integer_in_source(pp, sym, &const_val)) {
                 *value = const_val;
+            } else if (pp->current_output != NULL && pp->current_output_len > 0 &&
+                       symbol_is_declared_in_source(pp->current_output, pp->current_output_len, sym)) {
+                // Symbol is declared in source but its value can't be computed
+                // (e.g. complex const initializers with function calls, pointer
+                // arithmetic, address-of like PtrUint(@Node(nil^).field)).
+                // Return 0 as best-effort so {$if} assertions don't error.
+                *value = 0;
             } else {
-                // Undefined symbol -> error (matching FPC behavior)
-                // FPC requires symbols in {$if} expressions to be defined
+                // Truly undefined symbol -> error (matching FPC behavior)
                 bool err = set_error(
                     error_message,
                     "undefined macro '%s'",
