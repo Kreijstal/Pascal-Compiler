@@ -4516,13 +4516,32 @@ static int expression_is_string(SymTab_t *symtab, struct Expression *expr)
         }
     }
     
+    if (expr->type == EXPR_RECORD_ACCESS && symtab != NULL &&
+        expr->expr_data.record_access_data.field_id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, expr->expr_data.record_access_data.field_id) != 0 &&
+            node != NULL)
+        {
+            if ((node->hash_type == HASHTYPE_CONST || node->is_typed_const) &&
+                node->const_string_value != NULL)
+                return 1;
+            if (node->type != NULL && node->type->kind == TYPE_KIND_PRIMITIVE)
+            {
+                int tag = kgpc_type_get_primitive_tag(node->type);
+                if (tag == STRING_TYPE || tag == SHORTSTRING_TYPE)
+                    return 1;
+            }
+        }
+    }
+
     if (expr->type == EXPR_ADDOP && expr->expr_data.addop_data.addop_type == PLUS)
     {
         /* String concatenation */
         return expression_is_string(symtab, expr->expr_data.addop_data.left_expr) ||
                expression_is_string(symtab, expr->expr_data.addop_data.right_term);
     }
-    
+
     return 0;
 }
 
@@ -4832,6 +4851,35 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
             return 1;
         }
         
+        case EXPR_RECORD_ACCESS:
+        {
+            const char *fid = expr->expr_data.record_access_data.field_id;
+            HashNode_t *node = NULL;
+            if (fid != NULL &&
+                FindSymbol(&node, symtab, fid) != 0 && node != NULL &&
+                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+            {
+                if (node->const_string_value != NULL)
+                {
+                    *out_value = strdup(node->const_string_value);
+                    return (*out_value == NULL) ? 1 : 0;
+                }
+                if (node->type != NULL &&
+                    semcheck_tag_from_kgpc(node->type) == CHAR_TYPE)
+                {
+                    *out_value = (char *)malloc(2);
+                    if (*out_value == NULL)
+                        return 1;
+                    (*out_value)[0] = (char)(node->const_int_value & 0xFF);
+                    (*out_value)[1] = '\0';
+                    return 0;
+                }
+            }
+            fprintf(stderr, "Error: constant %s is undefined or not a string const.\n",
+                fid ? fid : "<null>");
+            return 1;
+        }
+
         case EXPR_ADDOP:
         {
             if (expr->expr_data.addop_data.addop_type != PLUS)
@@ -4839,7 +4887,7 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
                 fprintf(stderr, "Error: only + operator is supported for string concatenation.\n");
                 return 1;
             }
-            
+
             char *left = NULL, *right = NULL;
             if (evaluate_string_const_expr(symtab, expr->expr_data.addop_data.left_expr, &left) != 0)
                 return 1;

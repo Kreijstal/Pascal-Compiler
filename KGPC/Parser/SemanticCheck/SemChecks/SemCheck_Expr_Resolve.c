@@ -117,7 +117,11 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
         {
             int mapped = UNKNOWN_TYPE;
             set_type_from_hashtype(&mapped, type_node);
-            if (mapped != UNKNOWN_TYPE)
+            /* Only trust the symtab result for primitive/scalar types.
+             * Core builtin names like Word/Byte/LongWord may be registered
+             * as record types in the RTL but must map to their primitive tags
+             * for typecast and expression type resolution. */
+            if (mapped != UNKNOWN_TYPE && mapped != RECORD_TYPE)
                 return mapped;
         }
     }

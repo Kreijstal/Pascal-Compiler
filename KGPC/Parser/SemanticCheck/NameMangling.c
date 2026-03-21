@@ -484,7 +484,10 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                          * record type_id so overloads with different class params
                          * get distinct mangled names. Skip for "Self" parameters
                          * since methods are already distinguished by ClassName__ prefix
-                         * and including Self's class type breaks inherited calls. */
+                         * and including Self's class type breaks inherited calls.
+                         * For non-class pointer types (like PDirRec = ^TDirRec), do NOT
+                         * use the pointed-to record's type_id — it would collide with
+                         * parameters of the record type itself. */
                         {
                             int is_self_param = 0;
                             if (ids != NULL && ids->cur != NULL)
@@ -496,7 +499,8 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                                 type_node->type->info.points_to != NULL &&
                                 type_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
                                 type_node->type->info.points_to->info.record_info != NULL &&
-                                type_node->type->info.points_to->info.record_info->type_id != NULL)
+                                type_node->type->info.points_to->info.record_info->type_id != NULL &&
+                                record_type_is_class(type_node->type->info.points_to->info.record_info))
                             {
                                 record_type_id = type_node->type->info.points_to->info.record_info->type_id;
                             }
@@ -834,7 +838,9 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                      * Describe(TAnimal) vs Describe(TCat).
                      * Skip for "Self" arguments since methods are distinguished
                      * by ClassName__ prefix and including Self's class type
-                     * breaks inherited calls. */
+                     * breaks inherited calls.
+                     * For non-class pointer types, do NOT use the pointed-to
+                     * record's type_id to avoid collision with the record type. */
                     int is_self_arg = 0;
                     if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID &&
                         arg_expr->expr_data.id != NULL &&
@@ -845,7 +851,8 @@ static ListNode_t* GetFlatTypeListFromCallSite(ListNode_t *args_expr, SymTab_t *
                         KgpcType *points_to = kgpc_type->info.points_to;
                         if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD &&
                             points_to->info.record_info != NULL &&
-                            points_to->info.record_info->type_id != NULL)
+                            points_to->info.record_info->type_id != NULL &&
+                            record_type_is_class(points_to->info.record_info))
                             record_type_id = points_to->info.record_info->type_id;
                     }
                 }

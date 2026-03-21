@@ -2849,6 +2849,65 @@ static void substitute_generic_identifiers(ast_t *node, char **params, char **ar
     }
 }
 
+/* Collect local type names from TYPE_DECL nodes within a subprogram AST.
+ * Only walks children of the root node (not siblings) to avoid picking up
+ * global type declarations from the program tree.
+ * Returns allocated arrays via out params; caller must free. */
+static void collect_local_type_names(ast_t *node, char ***names_out, int *count_out)
+{
+    *names_out = NULL;
+    *count_out = 0;
+    if (node == NULL || node->child == NULL)
+        return;
+
+    int capacity = 4;
+    int count = 0;
+    char **names = (char **)malloc(capacity * sizeof(char *));
+    if (names == NULL)
+        return;
+
+    /* Walk only children of the root (subprogram body), not siblings */
+    ast_t *stack[256];
+    int sp = 0;
+    /* Push only children of root, not root->next */
+    for (ast_t *c = node->child; c != NULL; c = c->next)
+    {
+        if (sp < 256)
+            stack[sp++] = c;
+    }
+
+    while (sp > 0)
+    {
+        ast_t *cur = stack[--sp];
+        if (cur->typ == PASCAL_T_TYPE_DECL)
+        {
+            ast_t *id_node = cur->child;
+            if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER &&
+                id_node->sym != NULL && id_node->sym->name != NULL)
+            {
+                if (count >= capacity)
+                {
+                    capacity *= 2;
+                    char **tmp = (char **)realloc(names, capacity * sizeof(char *));
+                    if (tmp == NULL) break;
+                    names = tmp;
+                }
+                names[count++] = strdup(id_node->sym->name);
+            }
+            /* Don't recurse into type decl children */
+            continue;
+        }
+        if (cur->child != NULL && sp < 256)
+            stack[sp++] = cur->child;
+        /* Follow next for non-root nodes */
+        if (cur->next != NULL && sp < 256)
+            stack[sp++] = cur->next;
+    }
+
+    *names_out = names;
+    *count_out = count;
+}
+
 static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *specialized_name,
     char **params, char **args, int count)
 {
@@ -2865,6 +2924,36 @@ static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *sp
     }
 
     substitute_generic_identifiers(subprogram_ast, params, args, count);
+
+    /* Rename local type declarations so each specialization gets unique names.
+     * E.g., local type "RawT" in Swap<LongInt> becomes "Swap$LongInt.RawT". */
+    char **local_names = NULL;
+    int local_count = 0;
+    collect_local_type_names(subprogram_ast, &local_names, &local_count);
+    if (local_count > 0 && local_names != NULL)
+    {
+        char **renamed = (char **)malloc(local_count * sizeof(char *));
+        if (renamed != NULL)
+        {
+            for (int i = 0; i < local_count; i++)
+            {
+                size_t len = strlen(specialized_name) + 1 + strlen(local_names[i]) + 1;
+                renamed[i] = (char *)malloc(len);
+                if (renamed[i] != NULL)
+                    snprintf(renamed[i], len, "%s$%s", specialized_name, local_names[i]);
+            }
+            substitute_generic_identifiers(subprogram_ast, local_names, renamed, local_count);
+            for (int i = 0; i < local_count; i++)
+                free(renamed[i]);
+            free(renamed);
+        }
+    }
+    if (local_names != NULL)
+    {
+        for (int i = 0; i < local_count; i++)
+            free(local_names[i]);
+        free(local_names);
+    }
 }
 
 static Tree_t *instantiate_generic_subprogram(Tree_t *template,

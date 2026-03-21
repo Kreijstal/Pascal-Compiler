@@ -216,6 +216,14 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
             continue;
         }
 
+        /* Skip unspecialized generic subprogram templates — only their
+         * specializations (which have generic_type_params cleared) should
+         * be emitted. */
+        if (sub->tree_data.subprogram_data.num_generic_type_params > 0) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
         if (mangled_id != NULL && !codegen_list_contains_string(g_codegen_available_subprograms, mangled_id)) {
             ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
             if (g_codegen_available_subprograms == NULL)
@@ -4978,6 +4986,13 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 
         /* Skip unused functions (dead code elimination / reachability pass). */
         if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
+        {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        /* Skip unspecialized generic subprogram templates. */
+        if (sub->tree_data.subprogram_data.num_generic_type_params > 0)
         {
             sub_list = sub_list->next;
             continue;
