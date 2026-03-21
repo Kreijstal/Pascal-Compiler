@@ -543,6 +543,33 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (expr->expr_data.id != NULL &&
                 FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL)
             {
+                /* When in assignment context, an enum constant cannot be the
+                 * target.  Look for an assignable alternative just as
+                 * semcheck_varid does. */
+                if (mutating != NO_MUTATE &&
+                    node->hash_type == HASHTYPE_CONST && !node->is_typed_const &&
+                    node->type != NULL &&
+                    node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    kgpc_type_get_primitive_tag(node->type) == ENUM_TYPE)
+                {
+                    ListNode_t *all = FindAllIdents(symtab, expr->expr_data.id);
+                    for (ListNode_t *cur = all; cur != NULL; cur = cur->next)
+                    {
+                        HashNode_t *alt = (HashNode_t *)cur->cur;
+                        if (alt == NULL || alt == node)
+                            continue;
+                        if (alt->hash_type == HASHTYPE_VAR ||
+                            alt->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                            (alt->hash_type == HASHTYPE_CONST && alt->is_typed_const))
+                        {
+                            node = alt;
+                            break;
+                        }
+                    }
+                    if (all != NULL)
+                        DestroyList(all);
+                }
+
                 if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
                     pascal_identifier_equals(expr->expr_data.id, "Ctr"))
                 {

@@ -5052,10 +5052,24 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
         if (node == NULL)
             continue;
         if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
-            node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
+            node->hash_type == HASHTYPE_FUNCTION_RETURN)
         {
             has_storage_symbol = 1;
             break;
+        }
+        /* Enum constants are not assignable, so they should not block
+         * module-property setter lookup.  Only non-enum constants
+         * (typed consts, literal consts) count as storage symbols. */
+        if (node->hash_type == HASHTYPE_CONST)
+        {
+            int is_enum_literal = (node->type != NULL &&
+                node->type->kind == TYPE_KIND_PRIMITIVE &&
+                kgpc_type_get_primitive_tag(node->type) == ENUM_TYPE);
+            if (!is_enum_literal)
+            {
+                has_storage_symbol = 1;
+                break;
+            }
         }
         if (node->hash_type == HASHTYPE_PROCEDURE && node->type != NULL &&
             node->type->kind == TYPE_KIND_PROCEDURE)

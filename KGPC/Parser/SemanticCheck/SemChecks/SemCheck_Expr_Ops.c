@@ -2380,6 +2380,35 @@ int semcheck_varid(int *type_return,
     }
 
     scope_return = FindSymbol(&hash_return, symtab, id);
+
+    /* When in assignment context, an enum constant cannot be the target.
+     * If FindSymbol returned an enum constant (e.g. from a local enum that
+     * shadows a module-level variable with the same name), look for an
+     * assignable alternative (variable or typed constant) in broader scopes. */
+    if (scope_return && mutating != NO_MUTATE && hash_return != NULL &&
+        hash_return->hash_type == HASHTYPE_CONST && !hash_return->is_typed_const &&
+        hash_return->type != NULL &&
+        hash_return->type->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(hash_return->type) == ENUM_TYPE)
+    {
+        ListNode_t *all = FindAllIdents(symtab, id);
+        for (ListNode_t *cur = all; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *alt = (HashNode_t *)cur->cur;
+            if (alt == NULL || alt == hash_return)
+                continue;
+            if (alt->hash_type == HASHTYPE_VAR ||
+                alt->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                (alt->hash_type == HASHTYPE_CONST && alt->is_typed_const))
+            {
+                hash_return = alt;
+                break;
+            }
+        }
+        if (all != NULL)
+            DestroyList(all);
+    }
+
     if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
     {
