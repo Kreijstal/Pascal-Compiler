@@ -34,7 +34,10 @@ static int unsetenv(const char *name)
 
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -85,6 +88,7 @@ static UnitSearchPaths g_unit_paths;
 static bool g_skip_stdlib = false;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
+static int g_ast_cache_explicit = 0;
 
 /* ---- Compilation context (Phase 2: central compilation state) ---- */
 static CompilationContext g_comp_ctx;
@@ -330,6 +334,84 @@ static unsigned g_count_parse_stdlib = 0;
 static unsigned g_count_parse_user = 0;
 static unsigned g_count_parse_units = 0;
 
+static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; ++i)
+    {
+        hash ^= (uint64_t)data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static int ensure_dir_exists(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+        return -1;
+
+#ifdef _WIN32
+    if (_mkdir(path) == 0 || errno == EEXIST)
+        return 0;
+#else
+    if (mkdir(path, 0777) == 0 || errno == EEXIST)
+        return 0;
+#endif
+    return -1;
+}
+
+static char *build_default_ast_cache_dir(const char *argv0)
+{
+    if (argv0 == NULL || argv0[0] == '\0')
+        return NULL;
+
+    char compiler_path[PATH_MAX];
+#ifndef _WIN32
+    if (realpath(argv0, compiler_path) == NULL)
+        return NULL;
+#else
+    strncpy(compiler_path, argv0, sizeof(compiler_path) - 1);
+    compiler_path[sizeof(compiler_path) - 1] = '\0';
+#endif
+
+    char *last_sep = strrchr(compiler_path, '/');
+#ifdef _WIN32
+    char *backslash = strrchr(compiler_path, '\\');
+    if (backslash != NULL && (last_sep == NULL || backslash > last_sep))
+        last_sep = backslash;
+#endif
+    if (last_sep == NULL)
+        return NULL;
+    *last_sep = '\0';
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (stat(argv0, &st) != 0)
+        memset(&st, 0, sizeof(st));
+
+    char signature_input[PATH_MAX + 128];
+    snprintf(signature_input, sizeof(signature_input), "%s|%lld|%lld",
+             compiler_path,
+             (long long)st.st_size,
+             (long long)st.st_mtime);
+    uint64_t sig = fnv1a64_bytes((const unsigned char *)signature_input, strlen(signature_input));
+
+    size_t needed = strlen(compiler_path) + 1 + strlen("kgpc_ast_cache_") + 16 + 1;
+    char *dir = (char *)malloc(needed);
+    if (dir == NULL)
+        return NULL;
+
+    snprintf(dir, needed, "%s/kgpc_ast_cache_%016llx",
+             compiler_path, (unsigned long long)sig);
+    if (ensure_dir_exists(dir) != 0)
+    {
+        free(dir);
+        return NULL;
+    }
+
+    return dir;
+}
+
 static int profile_pipeline_flag(void)
 {
     static int initialized = 0;
@@ -522,6 +604,7 @@ static void set_flags(char **optional_args, int count)
         }
         else if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
         {
+            g_ast_cache_explicit = 1;
             pascal_frontend_set_ast_cache_dir(&arg[15]);
         }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
@@ -1648,6 +1731,16 @@ int main(int argc, char **argv)
         return 1;
     }
     set_stdlib_loaded_flag(1);
+
+    if (!g_ast_cache_explicit)
+    {
+        char *default_cache_dir = build_default_ast_cache_dir(argv[0]);
+        if (default_cache_dir != NULL)
+        {
+            pascal_frontend_set_ast_cache_dir(default_cache_dir);
+            free(default_cache_dir);
+        }
+    }
 
     bool parse_only = parse_only_flag();
     bool convert_to_tree = !parse_only || dump_ast_path() != NULL;

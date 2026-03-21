@@ -679,8 +679,30 @@ static char *compute_ast_cache_path(const char *source_path)
     return cache_path;
 }
 
-static bool source_path_is_unit(const char *path)
+static bool path_is_compiler_prelude(const char *path)
 {
+    if (path == NULL)
+        return false;
+
+    const char *base = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash != NULL && (base == NULL || backslash > base))
+        base = backslash;
+#endif
+    base = (base != NULL) ? base + 1 : path;
+
+    if (strcmp(base, "system.p") != 0 && strcmp(base, "prelude.p") != 0)
+        return false;
+
+    return strstr(path, "KGPC/Units/") != NULL || strstr(path, "KGPC\\Units\\") != NULL;
+}
+
+static bool source_path_is_cacheable(const char *path)
+{
+    if (path_is_compiler_prelude(path))
+        return true;
+
     size_t length = 0;
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
@@ -714,7 +736,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (path != NULL)
         g_last_parse_path = strdup(path);
 
-    bool cache_units_only = source_path_is_unit(path);
+    bool cache_units_only = source_path_is_cacheable(path);
 
     /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
     if (cache_units_only)
