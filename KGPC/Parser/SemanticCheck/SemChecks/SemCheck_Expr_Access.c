@@ -4969,12 +4969,40 @@ int semcheck_funccall(int *type_return,
 
         if (has_local_candidate)
         {
+            /* Check whether any local candidate belongs to a unit being compiled
+             * (source_unit_index > 0).  When compiling a unit, overloads from
+             * directly-used units must remain visible alongside the unit's own
+             * overloads (Pascal's overload directive is additive across units).
+             * In a program, local functions shadow all imported ones. */
+            int local_is_unit_function = 0;
+            for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+            {
+                HashNode_t *hn = (HashNode_t *)cn->cur;
+                if (hn != NULL &&
+                    semcheck_candidate_is_local_callable_for_shadowing(symtab, hn) &&
+                    semcheck_candidate_source_unit_index(hn) > 0)
+                {
+                    local_is_unit_function = 1;
+                    break;
+                }
+            }
             ListNode_t *filtered = NULL;
             ListNode_t *tail = NULL;
             for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
             {
                 HashNode_t *hn = (HashNode_t *)cn->cur;
-                if (!semcheck_candidate_is_local_callable_for_shadowing(symtab, hn))
+                if (hn == NULL)
+                    continue;
+                int keep = 0;
+                if (semcheck_candidate_is_local_callable_for_shadowing(symtab, hn))
+                    keep = 1;
+                else if (local_is_unit_function &&
+                         hn->defined_in_unit &&
+                         (hn->hash_type == HASHTYPE_FUNCTION ||
+                          hn->hash_type == HASHTYPE_PROCEDURE) &&
+                         semcheck_candidate_is_direct_for_current_unit(symtab, hn))
+                    keep = 1;
+                if (!keep)
                     continue;
 
                 ListNode_t *new_node = CreateListNode(hn, LIST_UNSPECIFIED);
