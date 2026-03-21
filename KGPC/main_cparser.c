@@ -17,6 +17,8 @@
 #endif
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <direct.h>
 #endif
 
 /* Portable setenv/unsetenv for Windows */
