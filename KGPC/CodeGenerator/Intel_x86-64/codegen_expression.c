@@ -9256,7 +9256,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                          * BUT only if Self was not already loaded by value (i.e., not a var param).
                          * For non-methods with var parameters, don't dereference. */
                         int should_dereference = 0;
-                        if (is_class_method && arg_num == 0 && !arg_is_var_param)
+                        int called_is_method = 0;
+                        if (procedure_name != NULL && ctx->symtab != NULL)
+                        {
+                            HashNode_t *called_func = NULL;
+                            if (FindSymbol(&called_func, ctx->symtab, procedure_name) != 0 &&
+                                called_func != NULL && called_func->owner_class != NULL)
+                                called_is_method = 1;
+                        }
+                        if (is_class_method && arg_num == 0 && !arg_is_var_param &&
+                            called_is_method)
                         {
                             /* Class method Self from local variable: dereference to get instance pointer */
                             should_dereference = 1;
@@ -9267,18 +9276,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             should_dereference = 1;
                         }
                         else if (arg_num == 0 && is_var_param && !arg_is_var_param &&
-                                 procedure_name != NULL && ctx->symtab != NULL)
+                                 called_is_method)
                         {
                             /* Self parameter for a method call from outside a class method context.
                              * The formal Self parameter is a var param, but for a global/static
                              * class/interface variable, codegen_address_for_expr emits leaq (address
                              * of the variable), so we need to dereference to get the object pointer. */
-                            HashNode_t *called_func = NULL;
-                            if (FindSymbol(&called_func, ctx->symtab, procedure_name) != 0 &&
-                                called_func != NULL && called_func->owner_class != NULL)
-                            {
-                                should_dereference = 1;
-                            }
+                            should_dereference = 1;
                         }
                         /* else: var parameter of class type OR argument is already a var param:
                          * codegen_address_for_expr already loaded the value, don't dereference again */

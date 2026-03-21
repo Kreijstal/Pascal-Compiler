@@ -5761,7 +5761,8 @@ method_call_resolved:
             {
                 struct RecordType *class_record = semcheck_lookup_record_type(symtab,
                     best_match->owner_class);
-                if (class_record != NULL && class_record->methods != NULL)
+                if (class_record != NULL && record_type_is_class(class_record) &&
+                    class_record->methods != NULL)
                 {
                     for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
                     {
