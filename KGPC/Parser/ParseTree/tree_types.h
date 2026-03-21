@@ -46,6 +46,9 @@ struct TypeAlias
     int is_wide_string;
     int is_open_array;
     ListNode_t *array_dimensions;
+    char *array_dim_start_str;  /* Symbolic lower bound (e.g. "Low(T)"), NULL if numeric */
+    char *array_dim_end_str;    /* Symbolic upper bound (e.g. "High(T)"), NULL if numeric */
+    int array_dims_parsed;      /* 1 if start_str/end_str were extracted from dimensions */
     int is_pointer;
     int is_class_reference;  /* 1 if declared as "class of T" */
     int pointer_type;
@@ -180,6 +183,7 @@ struct RecordType
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
+    char *outer_type_id;      /* Outer class for nested types (e.g. "TOuter" for "TOuter.TInner"), NULL if not nested */
     int parent_fields_merged; /* 1 if parent class fields have been merged into fields */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
@@ -287,6 +291,7 @@ struct Statement
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
+            char *call_qualifier;            /* Unit prefix if call was qualified, e.g. "System" (NULL if unqualified) */
         } procedure_call_data;
 
         /* Expression statement */
@@ -509,7 +514,7 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
-            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after PopScope. */
+            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after leaving semantic scope. */
             
             /* Cached information copied during semantic checking so codegen
              * no longer depends on HashNode lifetime. */
@@ -532,6 +537,7 @@ struct Expression
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
             int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
+            int is_operator_call;              /* 1 if this call targets an operator (set by parser) */
         } function_call_data;
 
         /* Integer number */

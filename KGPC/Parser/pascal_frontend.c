@@ -626,16 +626,11 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
-    if (cached_unit_parser != NULL)
-    {
-        free_combinator(cached_unit_parser);
-        cached_unit_parser = NULL;
-    }
-    if (cached_program_parser != NULL)
-    {
-        free_combinator(cached_program_parser);
-        cached_program_parser = NULL;
-    }
+    /* Parser graphs still share combinator subtrees in ways free_combinator()
+     * does not model safely. Keep the cached parsers alive until process exit
+     * instead of risking a teardown-time UAF after a successful compile. */
+    cached_unit_parser = NULL;
+    cached_program_parser = NULL;
     if (generic_registry_ready)
     {
         generic_registry_cleanup();
@@ -684,8 +679,30 @@ static char *compute_ast_cache_path(const char *source_path)
     return cache_path;
 }
 
-static bool source_path_is_unit(const char *path)
+static bool path_is_compiler_prelude(const char *path)
 {
+    if (path == NULL)
+        return false;
+
+    const char *base = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash != NULL && (base == NULL || backslash > base))
+        base = backslash;
+#endif
+    base = (base != NULL) ? base + 1 : path;
+
+    if (strcmp(base, "system.p") != 0 && strcmp(base, "prelude.p") != 0)
+        return false;
+
+    return strstr(path, "KGPC/Units/") != NULL || strstr(path, "KGPC\\Units\\") != NULL;
+}
+
+static bool source_path_is_cacheable(const char *path)
+{
+    if (path_is_compiler_prelude(path))
+        return true;
+
     size_t length = 0;
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
@@ -719,7 +736,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (path != NULL)
         g_last_parse_path = strdup(path);
 
-    bool cache_units_only = source_path_is_unit(path);
+    bool cache_units_only = source_path_is_cacheable(path);
 
     /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
     if (cache_units_only)
@@ -831,6 +848,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
         // FPC floating-point type availability (KGPC maps Extended to Double)
         "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE",
+        // KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant expressions,
+        // so define FPUSOFT to prevent FPC RTL from using them in const initializers.
+        "FPUSOFT",
         "FPC_WIDESTRING_EQUAL_UNICODESTRING",
         "FPC_ANSI_TEXTFILEREC"
     };

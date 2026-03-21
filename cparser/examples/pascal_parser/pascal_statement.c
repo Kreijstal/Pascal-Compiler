@@ -570,8 +570,8 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
         between(token(match("(")), token(match(")")), lazy(expr_parser)), // parenthesized expressions
         NULL);
 
-    // Allow simple arithmetic in case labels like (CONST + 1) or -5
-    return multi(new_combinator(), PASCAL_T_NONE,
+    // Unary prefix: -factor, +factor, not factor, or just factor
+    combinator_t* unary_factor = multi(new_combinator(), PASCAL_T_NONE,
         seq(new_combinator(), PASCAL_T_NEG,
             token(match("-")),
             const_expr_factor,
@@ -580,8 +580,31 @@ static combinator_t* make_case_expression(combinator_t** expr_parser) {
             token(match("+")),
             const_expr_factor,
             NULL),
+        seq(new_combinator(), PASCAL_T_NOT,
+            token(keyword_ci("not")),
+            const_expr_factor,
+            NULL),
         const_expr_factor,
         NULL);
+
+    // Binary arithmetic operators for constant expressions in case labels
+    // Supports: +, -, *, /, div, mod, and, or, xor, shl, shr
+    combinator_t* case_binop = multi(new_combinator(), PASCAL_T_NONE,
+        token(seq(new_combinator(), PASCAL_T_ADD, match("+"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_SUB, match("-"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_MUL, match("*"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_DIV, match("/"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_INTDIV, keyword_ci("div"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_MOD, keyword_ci("mod"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_AND, keyword_ci("and"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_OR, keyword_ci("or"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_XOR, keyword_ci("xor"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_SHL, keyword_ci("shl"), NULL)),
+        token(seq(new_combinator(), PASCAL_T_SHR, keyword_ci("shr"), NULL)),
+        NULL);
+
+    // Allow binary arithmetic in case labels like (Ofs2 - 1) or (A + B * C)
+    return chainl1(unary_factor, case_binop);
 }
 
 static bool slice_matches_keyword_ci(const char* slice, size_t len, const char* keyword) {

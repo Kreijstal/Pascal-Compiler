@@ -18,8 +18,43 @@
 
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
 
+/* FPC RTL compatibility symbols for float-to-ASCII conversion (flt_core.inc) */
+const unsigned int C_1_SHL_31 = 0x80000000u;
+const unsigned long long C_MANT2_INTEGER = (1ULL << 52);
+const int C_EXP2_SPECIAL = 2047;  /* C_EXP2_BIAS * 2 + 1 for double */
+const int RT_NATIVE = 2;  /* RT_S64REAL for double */
+
+/* FPC Grisu lookup table for float-to-string conversion.
+ * This is a simplified placeholder - the full table is in FPC's flt_core.inc. */
+static const char lookup_placeholder[1] = { 0 };
+const char *lookup = lookup_placeholder;
+
+/* FPC dynamic library handle placeholder */
+#ifdef _WIN32
+static void *Libdl_handle = NULL;
+void *Libdl = NULL;
+void *libdl = NULL;
+#else
+static void *Libdl_handle = NULL;
+void *Libdl = &Libdl_handle;
+void *libdl = &Libdl_handle;
+#endif
+
+/* FPC I/O check functions - weak stubs for real number I/O.
+ * These are provided by FPC's RTL when linked, but we provide weak fallbacks
+ * for cases where the RTL code isn't included. */
+__attribute__((weak)) void checkread_t(void) { }
+__attribute__((weak)) void readreal_t_ss(void) { }
+
+/* FPC errno setter - weak stub */
+__attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
+
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
+/* Native stdlib lowering currently materializes a qualifier symbol for
+ * unit-qualified System.Error(...) calls. Provide an addressable symbol so
+ * those references link without reviving the broad System.Error alias. */
+int32_t System = 0;
 
 /* Xoshiro128** state (matching FPC rtl/inc/system.inc). */
 static uint32_t kgpc_xsr_state[4] = {
@@ -1925,7 +1960,9 @@ static void kgpc_keyboard_init_once(void)
         return;
 
     struct termios raw = kgpc_keyboard_saved_termios;
-    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+    /* Crt.ReadKey must receive control characters like Ctrl+C as input bytes
+     * instead of letting the terminal driver turn them into signals. */
+    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
     raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
@@ -2874,6 +2911,30 @@ static void kgpc_string_release(char *value)
         kgpc_string_set_remove(value);
         free(hdr);
     }
+}
+
+void FPC_ANSISTR_UNIQUE(char **value)
+{
+    if (value == NULL || *value == NULL)
+        return;
+    KgpcStringHeader *hdr = kgpc_string_header(*value);
+    if (hdr == NULL)
+        return;
+    if (hdr->refcount == 1 || hdr->refcount < 0)
+        return;
+    size_t len = (size_t)hdr->length;
+    char *new_str = (char *)malloc(sizeof(KgpcStringHeader) + len + 1);
+    if (new_str == NULL)
+        return;
+    KgpcStringHeader *new_hdr = (KgpcStringHeader *)new_str;
+    new_hdr->codepage = hdr->codepage;
+    new_hdr->elementsize = hdr->elementsize;
+    new_hdr->refcount = 1;
+    new_hdr->length = len;
+    char *new_data = new_str + sizeof(KgpcStringHeader);
+    memcpy(new_data, *value, len + 1);
+    kgpc_string_release(*value);
+    *value = new_data;
 }
 
 char *kgpc_alloc_empty_string(void)
@@ -5506,6 +5567,16 @@ int64_t popcnt_i64(uint64_t value)
     return (int64_t)__builtin_popcountll(value);
 }
 
+int32_t popcnt_i(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
+}
+
+int32_t popcnt_li(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
+}
+
 /* filecreate_rbs: FPC FileCreate(Filename: string): THandle
  * Creates a new file (or truncates existing), returns file descriptor.
  * The _i and _i_i suffixed variants (with Rights/Attributes params) redirect
@@ -5523,15 +5594,19 @@ int64_t kgpc_filecreate_rbs(const char *filename)
 }
 
 /* Chr function - returns a character value as an integer */
-int64_t kgpc_chr(int64_t value)
+int64_t fpc_in_chr_byte(int64_t value)
 {
-    /* Clamp value to valid character range [0, 255] */
     if (value < 0)
         return 0;
     if (value > 255)
         return 255;
     
     return value;
+}
+
+int64_t kgpc_chr(int64_t value)
+{
+    return fpc_in_chr_byte(value);
 }
 
 /* Convert a character value to a single-character string */
@@ -5598,6 +5673,16 @@ int64_t kgpc_is_odd(int64_t value)
     return (value & 1) ? 1 : 0;
 }
 
+int64_t fpc_in_const_odd(int64_t value)
+{
+    return (value & 1) ? 1 : 0;
+}
+
+void *fpc_in_const_ptr(void *value)
+{
+    return value;
+}
+
 int32_t kgpc_sqr_int32(int32_t value)
 {
     return value * value;
@@ -5608,7 +5693,12 @@ int64_t kgpc_sqr_int64(int64_t value)
     return value * value;
 }
 
-double kgpc_sqr_real(double value)
+int64_t fpc_in_const_sqr(int64_t value)
+{
+    return value * value;
+}
+
+double fpc_in_sqr_real(double value)
 {
     return value * value;
 }
@@ -7135,7 +7225,7 @@ int64_t kgpc_aligned(const void *ptr, int64_t alignment)
     return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
 }
 
-int32_t kgpc_abs_int(int32_t value)
+int32_t fpc_in_abs_long(int32_t value)
 {
     return (value < 0) ? -value : value;
 }
@@ -7145,23 +7235,27 @@ int64_t kgpc_abs_longint(int64_t value)
     return (value < 0) ? -value : value;
 }
 
-/* Abs for unsigned types is a no-op (identity function) */
+int64_t fpc_in_const_abs(int64_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
 uint64_t kgpc_abs_unsigned(uint64_t value)
 {
     return value;
 }
 
-double kgpc_abs_real(double value)
+double fpc_in_abs_real(double value)
 {
     return fabs(value);
 }
 
-double kgpc_sqrt(double value)
+double fpc_in_sqrt_real(double value)
 {
     return sqrt(value);
 }
 
-double kgpc_sin(double value)
+double fpc_in_sin_real(double value)
 {
     return sin(value);
 }
@@ -7171,7 +7265,7 @@ double kgpc_csc(double value)
     return 1.0 / sin(value);
 }
 
-double kgpc_cos(double value)
+double fpc_in_cos_real(double value)
 {
     return cos(value);
 }
@@ -7222,7 +7316,7 @@ double kgpc_coth(double value)
     return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
 }
 
-double kgpc_arctan(double value)
+double fpc_in_arctan_real(double value)
 {
     return atan(value);
 }
@@ -7327,7 +7421,7 @@ double kgpc_rad_to_cycle(double value)
     return value / (2.0 * KGPC_PI);
 }
 
-double kgpc_ln(double value)
+double fpc_in_ln_real(double value)
 {
     return log(value);
 }
@@ -7337,7 +7431,7 @@ double kgpc_logn(double base, double value)
     return log(value) / log(base);
 }
 
-double kgpc_exp(double value)
+double fpc_in_exp_real(double value)
 {
     return exp(value);
 }
@@ -7352,7 +7446,7 @@ double kgpc_hypot(double x, double y)
     return hypot(x, y);
 }
 
-long long kgpc_round(double value)
+long long fpc_in_round_real(double value)
 {
     double rounded;
     if (value >= 0.0)
@@ -7362,7 +7456,7 @@ long long kgpc_round(double value)
     return (long long)rounded;
 }
 
-long long kgpc_trunc(double value)
+long long fpc_in_trunc_real(double value)
 {
     /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
      * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
@@ -7384,26 +7478,26 @@ long long kgpc_trunc_currency(long long currency_value)
 
 long long kgpc_int(double value)
 {
-    return kgpc_trunc(value);
+    return fpc_in_trunc_real(value);
 }
 
-/* kgpc_int_real: Int() intrinsic returning the integer part as a double.
+/* fpc_in_int_real: Int() intrinsic returning the integer part as a double.
    Used by FPC RTL [internproc:fpc_in_int_real]. */
-double kgpc_int_real(double value)
+double fpc_in_int_real(double value)
 {
-    return (double)kgpc_trunc(value);
+    return (double)fpc_in_trunc_real(value);
 }
 
-/* kgpc_pi: Pi() intrinsic returning the mathematical constant.
+/* fpc_in_pi_real: Pi() intrinsic returning the mathematical constant.
    Used by FPC RTL [internproc:fpc_in_pi_real]. */
-double kgpc_pi(void)
+double fpc_in_pi_real(void)
 {
     return 3.14159265358979323846;
 }
 
-double kgpc_frac(double value)
+double fpc_in_frac_real(double value)
 {
-    return value - (double)kgpc_trunc(value);
+    return value - (double)fpc_in_trunc_real(value);
 }
 
 long long kgpc_ceil(double value)
@@ -7796,6 +7890,20 @@ uint32_t atomicincrement_u32(uint32_t *target)
     return __sync_add_and_fetch(target, 1);
 }
 
+/* LongInt (32-bit signed) overloads for compiler intrinsics.
+ * AtomicIncrement/AtomicDecrement/AtomicExchange/AtomicCmpExchange are true
+ * compiler intrinsics (like Ord, Chr) — they have no Pascal source body.
+ * The runtime provides all type-specific implementations. */
+int32_t atomicincrement_li(int32_t *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+int32_t atomicincrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
 long atomicdecrement_i(long *target)
 {
     return __sync_sub_and_fetch(target, 1);
@@ -7804,6 +7912,26 @@ long atomicdecrement_i(long *target)
 uint32_t atomicdecrement_u32(uint32_t *target)
 {
     return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li(int32_t *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_sub_and_fetch(target, value);
+}
+
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
 }
 
 void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)
@@ -7887,45 +8015,32 @@ uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint6
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
  * system.pp).  Removed from runtime to avoid duplicate symbol conflicts. */
 
-/* Lo/Hi for Word/Integer — [internproc] fpc_in_lo_Word / fpc_in_hi_Word */
-uint8_t lo_w(uint16_t value)
+uint8_t fpc_in_lo_Word(uint16_t value)
 {
     return (uint8_t)value;
 }
 
-uint8_t hi_w(uint16_t value)
+uint8_t fpc_in_hi_Word(uint16_t value)
 {
     return (uint8_t)(value >> 8);
 }
 
-/* Lo/Hi for LongInt/DWord — [internproc] fpc_in_lo_long / fpc_in_hi_long */
-uint16_t lo_li(int32_t value)
+uint16_t fpc_in_lo_long(int32_t value)
 {
     return (uint16_t)value;
 }
 
-uint16_t hi_li(int32_t value)
+uint16_t fpc_in_hi_long(int32_t value)
 {
     return (uint16_t)((uint32_t)value >> 16);
 }
 
-/* Lo/Hi for Int64/QWord — [internproc] fpc_in_lo_qword / fpc_in_hi_qword */
-uint32_t lo_i64(int64_t value)
+uint32_t fpc_in_lo_qword(uint64_t value)
 {
     return (uint32_t)value;
 }
 
-uint32_t hi_i64(int64_t value)
-{
-    return (uint32_t)((uint64_t)value >> 32);
-}
-
-uint32_t lo_qw(uint64_t value)
-{
-    return (uint32_t)value;
-}
-
-uint32_t hi_qw(uint64_t value)
+uint32_t fpc_in_hi_qword(uint64_t value)
 {
     return (uint32_t)(value >> 32);
 }
@@ -8273,6 +8388,13 @@ void kgpc_init_widestringmanager(void)
    ========================================================================= */
 
 int64_t kgpc_sar_int64(int64_t value, int32_t shift) {
+    return value >> (shift & 63);
+}
+
+/* FPC internal intrinsic stub — the FPC compiler would inline SAR
+ * instructions, but since we emit a regular call we need a runtime
+ * symbol.  The generic version uses 64-bit arithmetic. */
+int64_t fpc_in_sar_x_y(int64_t value, int64_t shift) {
     return value >> (shift & 63);
 }
 

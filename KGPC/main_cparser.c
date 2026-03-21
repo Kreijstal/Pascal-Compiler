@@ -17,6 +17,8 @@
 #endif
 #ifndef _WIN32
 #include <unistd.h>
+#else
+#include <direct.h>
 #endif
 
 /* Portable setenv/unsetenv for Windows */
@@ -34,7 +36,10 @@ static int unsetenv(const char *name)
 
 #include <ctype.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <errno.h>
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -56,6 +61,7 @@ static int unsetenv(const char *name)
 #include "unit_paths.h"
 #include "arena.h"
 #include "identifier_utils.h"
+#include "compilation_context.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -84,6 +90,10 @@ static UnitSearchPaths g_unit_paths;
 static bool g_skip_stdlib = false;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
+static int g_ast_cache_explicit = 0;
+
+/* ---- Compilation context (Phase 2: central compilation state) ---- */
+static CompilationContext g_comp_ctx;
 
 /* Ensure program-defined subprograms are emitted even if reachability misses them */
 static void mark_program_subs_used(Tree_t *program)
@@ -326,6 +336,84 @@ static unsigned g_count_parse_stdlib = 0;
 static unsigned g_count_parse_user = 0;
 static unsigned g_count_parse_units = 0;
 
+static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len)
+{
+    uint64_t hash = 1469598103934665603ULL;
+    for (size_t i = 0; i < len; ++i)
+    {
+        hash ^= (uint64_t)data[i];
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static int ensure_dir_exists(const char *path)
+{
+    if (path == NULL || path[0] == '\0')
+        return -1;
+
+#ifdef _WIN32
+    if (_mkdir(path) == 0 || errno == EEXIST)
+        return 0;
+#else
+    if (mkdir(path, 0777) == 0 || errno == EEXIST)
+        return 0;
+#endif
+    return -1;
+}
+
+static char *build_default_ast_cache_dir(const char *argv0)
+{
+    if (argv0 == NULL || argv0[0] == '\0')
+        return NULL;
+
+    char compiler_path[PATH_MAX];
+#ifndef _WIN32
+    if (realpath(argv0, compiler_path) == NULL)
+        return NULL;
+#else
+    strncpy(compiler_path, argv0, sizeof(compiler_path) - 1);
+    compiler_path[sizeof(compiler_path) - 1] = '\0';
+#endif
+
+    char *last_sep = strrchr(compiler_path, '/');
+#ifdef _WIN32
+    char *backslash = strrchr(compiler_path, '\\');
+    if (backslash != NULL && (last_sep == NULL || backslash > last_sep))
+        last_sep = backslash;
+#endif
+    if (last_sep == NULL)
+        return NULL;
+    *last_sep = '\0';
+
+    struct stat st;
+    memset(&st, 0, sizeof(st));
+    if (stat(argv0, &st) != 0)
+        memset(&st, 0, sizeof(st));
+
+    char signature_input[PATH_MAX + 128];
+    snprintf(signature_input, sizeof(signature_input), "%s|%lld|%lld",
+             compiler_path,
+             (long long)st.st_size,
+             (long long)st.st_mtime);
+    uint64_t sig = fnv1a64_bytes((const unsigned char *)signature_input, strlen(signature_input));
+
+    size_t needed = strlen(compiler_path) + 1 + strlen("kgpc_ast_cache_") + 16 + 1;
+    char *dir = (char *)malloc(needed);
+    if (dir == NULL)
+        return NULL;
+
+    snprintf(dir, needed, "%s/kgpc_ast_cache_%016llx",
+             compiler_path, (unsigned long long)sig);
+    if (ensure_dir_exists(dir) != 0)
+    {
+        free(dir);
+        return NULL;
+    }
+
+    return dir;
+}
+
 static int profile_pipeline_flag(void)
 {
     static int initialized = 0;
@@ -518,6 +606,7 @@ static void set_flags(char **optional_args, int count)
         }
         else if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
         {
+            g_ast_cache_explicit = 1;
             pascal_frontend_set_ast_cache_dir(&arg[15]);
         }
         else if (arg[0] == '-' && arg[1] == 'D' && arg[2] != '\0')
@@ -789,41 +878,6 @@ static char *build_unit_path(const char *unit_name)
     return unit_search_paths_resolve(&g_unit_paths, unit_name);
 }
 
-static void append_initialization_statement(Tree_t *program, struct Statement *init_stmt)
-{
-    if (program == NULL || init_stmt == NULL)
-        return;
-
-    struct Statement *body = program->tree_data.program_data.body_statement;
-    if (body == NULL || body->type != STMT_COMPOUND_STATEMENT)
-    {
-        destroy_stmt(init_stmt);
-        return;
-    }
-
-    if (init_stmt->type != STMT_COMPOUND_STATEMENT)
-    {
-        destroy_stmt(init_stmt);
-        return;
-    }
-
-    ListNode_t *init_list = init_stmt->stmt_data.compound_statement;
-    if (init_list == NULL)
-    {
-        destroy_stmt(init_stmt);
-        return;
-    }
-
-    // Prepend initialization to the body (so it runs BEFORE the main program body)
-    if (body->stmt_data.compound_statement == NULL)
-        body->stmt_data.compound_statement = init_list;
-    else
-        body->stmt_data.compound_statement = ConcatList(init_list, body->stmt_data.compound_statement);
-
-    init_stmt->stmt_data.compound_statement = NULL;
-    destroy_stmt(init_stmt);
-}
-
 static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
 {
     ListNode_t *node = sub_list;
@@ -990,15 +1044,6 @@ static ListNode_t **get_subprograms_list(Tree_t *target)
         return NULL;
 }
 
-static ListNode_t **get_finalization_list(Tree_t *target)
-{
-    assert(target != NULL);
-    if (target->type == TREE_PROGRAM_TYPE)
-        return &target->tree_data.program_data.finalization_statements;
-    /* Units don't accumulate finalization statements from other units */
-    return NULL;
-}
-
 static int type_list_contains(ListNode_t *list, const char *type_id)
 {
     ListNode_t *node = list;
@@ -1116,89 +1161,58 @@ static ListNode_t *extract_public_unit_subprograms(ListNode_t **list)
     return public_head;
 }
 
-/* Merges a loaded unit's declarations into the target tree.
- * The target can be either a TREE_PROGRAM_TYPE or TREE_UNIT. */
-static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
+/* Build combined declaration lists from loaded units into the target tree
+ * (program or unit) so that semcheck can iterate a single list per
+ * declaration kind.
+ *
+ * Semantic correctness does NOT depend on concatenation order:
+ *   - Each declaration carries source_unit_index and defined_in_unit flags
+ *   - semcheck pushes declarations into per-unit scopes via source_unit_index
+ *   - Cross-unit references resolve through scope dependency edges
+ *   - Imported vs local processing is driven by the defined_in_unit flag
+ *
+ * When the target is a program (TREE_PROGRAM_TYPE), both interface and
+ * implementation declarations are merged.  When the target is a unit
+ * (TREE_UNIT), only interface declarations and public subprograms are
+ * merged (implementation details stay private to the imported unit).
+ *
+ * Called once after all units are loaded, before semcheck. */
+static void build_combined_program_view(CompilationContext *comp_ctx)
 {
-    if (target == NULL || unit_tree == NULL)
+    Tree_t *target = comp_ctx->program;
+    if (target == NULL)
         return;
-    
-    assert(target->type == TREE_PROGRAM_TYPE || target->type == TREE_UNIT);
-    
+
+    int is_program = (target->type == TREE_PROGRAM_TYPE);
+    int is_unit = (target->type == TREE_UNIT);
+    if (!is_program && !is_unit)
+        return;
+
     ListNode_t **type_list = get_type_decl_list(target);
     ListNode_t **const_list = get_const_decl_list(target);
     ListNode_t **var_list = get_var_decl_list(target);
     ListNode_t **sub_list = get_subprograms_list(target);
-    ListNode_t **final_list = get_finalization_list(target);
-    
-    assert(type_list != NULL);
-    assert(const_list != NULL);
-    assert(var_list != NULL);
-    assert(sub_list != NULL);
 
-    int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
-    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_TYPE_DECL &&
-                    decl->tree_data.type_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging interface type %s from unit %s\n",
-                            decl->tree_data.type_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>");
-                }
-            }
-            dbg = dbg->next;
-        }
-    }
-    /* Insert imported types before local types while preserving import order. */
-    *type_list = merge_unit_type_decls_before_locals(*type_list,
-        unit_tree->tree_data.unit_data.interface_type_decls);
-    unit_tree->tree_data.unit_data.interface_type_decls = NULL;
-
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
-    if (kgpc_getenv("KGPC_DEBUG_CONST") != NULL) {
-        ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
-        while (dbg != NULL) {
-            if (dbg->type == LIST_TREE) {
-                Tree_t *decl = (Tree_t *)dbg->cur;
-                if (decl != NULL && decl->type == TREE_CONST_DECL &&
-                    decl->tree_data.const_decl_data.id != NULL)
-                {
-                    fprintf(stderr, "[KGPC] merging interface const '%s' from unit '%s' into target type %d\n",
-                            decl->tree_data.const_decl_data.id,
-                            unit_tree->tree_data.unit_data.unit_id != NULL ?
-                                unit_tree->tree_data.unit_data.unit_id : "<unknown>",
-                            target->type);
-                }
-            }
-            dbg = dbg->next;
-        }
-    }
-    /* Append imported constants so dependencies are available first. */
-    *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.interface_const_decls);
-    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
-
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1, unit_idx);
-    *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.interface_var_decls);
-    unit_tree->tree_data.unit_data.interface_var_decls = NULL;
-
-    if (target->type == TREE_PROGRAM_TYPE)
+    for (int i = 0; i < comp_ctx->loaded_unit_count; ++i)
     {
-        mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+        Tree_t *unit_tree = comp_ctx->loaded_units[i].unit_tree;
+        if (unit_tree == NULL)
+            continue;
+
+        int unit_idx = comp_ctx->loaded_units[i].unit_idx;
+
+        /* Types: interface (always) + implementation (programs only).
+         * mark_unit_* calls are already done in load_unit() before
+         * semcheck_unit_decls_only, so they are not repeated here. */
         if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
-            ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+            ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_type_decls;
             while (dbg != NULL) {
                 if (dbg->type == LIST_TREE) {
                     Tree_t *decl = (Tree_t *)dbg->cur;
                     if (decl != NULL && decl->type == TREE_TYPE_DECL &&
                         decl->tree_data.type_decl_data.id != NULL)
                     {
-                        fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                        fprintf(stderr, "[KGPC] merging interface type %s from unit %s\n",
                                 decl->tree_data.type_decl_data.id,
                                 unit_tree->tree_data.unit_data.unit_id != NULL ?
                                     unit_tree->tree_data.unit_data.unit_id : "<unknown>");
@@ -1207,122 +1221,231 @@ static void merge_unit_into_target(Tree_t *target, Tree_t *unit_tree)
                 dbg = dbg->next;
             }
         }
-        /* Append implementation types to keep dependencies ahead of targets. */
-        *type_list = merge_unit_type_decls_before_locals(*type_list,
-            unit_tree->tree_data.unit_data.implementation_type_decls);
-        unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+        *type_list = merge_unit_type_decls_before_locals(
+                *type_list,
+                unit_tree->tree_data.unit_data.interface_type_decls);
+        unit_tree->tree_data.unit_data.interface_type_decls = NULL;
 
-        mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
-        /* Append implementation constants to keep dependencies ahead of targets. */
-        *const_list = ConcatList(*const_list, unit_tree->tree_data.unit_data.implementation_const_decls);
-        unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+        if (is_program) {
+            if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL) {
+                ListNode_t *dbg = unit_tree->tree_data.unit_data.implementation_type_decls;
+                while (dbg != NULL) {
+                    if (dbg->type == LIST_TREE) {
+                        Tree_t *decl = (Tree_t *)dbg->cur;
+                        if (decl != NULL && decl->type == TREE_TYPE_DECL &&
+                            decl->tree_data.type_decl_data.id != NULL)
+                        {
+                            fprintf(stderr, "[KGPC] merging impl type %s from unit %s\n",
+                                    decl->tree_data.type_decl_data.id,
+                                    unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                        unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                        }
+                    }
+                    dbg = dbg->next;
+                }
+            }
+            *type_list = merge_unit_type_decls_before_locals(
+                    *type_list,
+                    unit_tree->tree_data.unit_data.implementation_type_decls);
+            unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
+        }
 
-        mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
-        *var_list = ConcatList(*var_list, unit_tree->tree_data.unit_data.implementation_var_decls);
-        unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+        /* Constants: interface (always) + implementation (programs only) */
+        if (kgpc_getenv("KGPC_DEBUG_CONST") != NULL) {
+            ListNode_t *dbg = unit_tree->tree_data.unit_data.interface_const_decls;
+            while (dbg != NULL) {
+                if (dbg->type == LIST_TREE) {
+                    Tree_t *decl = (Tree_t *)dbg->cur;
+                    if (decl != NULL && decl->type == TREE_CONST_DECL &&
+                        decl->tree_data.const_decl_data.id != NULL)
+                    {
+                        fprintf(stderr, "[KGPC] merging interface const '%s' from unit '%s'\n",
+                                decl->tree_data.const_decl_data.id,
+                                unit_tree->tree_data.unit_data.unit_id != NULL ?
+                                    unit_tree->tree_data.unit_data.unit_id : "<unknown>");
+                    }
+                }
+                dbg = dbg->next;
+            }
+        }
+        *const_list = ConcatList(*const_list,
+                       unit_tree->tree_data.unit_data.interface_const_decls);
+        unit_tree->tree_data.unit_data.interface_const_decls = NULL;
 
-        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
-        *sub_list = ConcatList(*sub_list, unit_tree->tree_data.unit_data.subprograms);
-        unit_tree->tree_data.unit_data.subprograms = NULL;
-    }
-    else
-    {
-        /* When compiling a unit, only interface declarations from used units are visible.
-         * Keep implementation declarations private to their original unit tree. */
-        mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
-        ListNode_t *public_subs = extract_public_unit_subprograms(&unit_tree->tree_data.unit_data.subprograms);
-        *sub_list = ConcatList(*sub_list, public_subs);
-    }
+        if (is_program) {
+            *const_list = ConcatList(*const_list,
+                           unit_tree->tree_data.unit_data.implementation_const_decls);
+            unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
+        }
 
-    /* Only programs accumulate initialization/finalization */
-    if (target->type == TREE_PROGRAM_TYPE) {
-        append_initialization_statement(target, unit_tree->tree_data.unit_data.initialization);
-        unit_tree->tree_data.unit_data.initialization = NULL;
+        /* Variables: interface (always) + implementation (programs only) */
+        *var_list = ConcatList(*var_list,
+                       unit_tree->tree_data.unit_data.interface_var_decls);
+        unit_tree->tree_data.unit_data.interface_var_decls = NULL;
 
-        // Prepend finalization to the list (for LIFO execution order)
-        if (unit_tree->tree_data.unit_data.finalization != NULL && final_list != NULL) {
-            /* Tag the finalization statement with its unit index so error
-             * reporting can show the correct unit name instead of the
-             * main program file. */
+        if (is_program) {
+            *var_list = ConcatList(*var_list,
+                           unit_tree->tree_data.unit_data.implementation_var_decls);
+            unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
+        }
+
+        /* Subprograms: programs get all; units get only public interface subs */
+        if (is_program) {
+            *sub_list = ConcatList(*sub_list,
+                           unit_tree->tree_data.unit_data.subprograms);
+            unit_tree->tree_data.unit_data.subprograms = NULL;
+        } else {
+            ListNode_t *public_subs = extract_public_unit_subprograms(
+                    &unit_tree->tree_data.unit_data.subprograms);
+            *sub_list = ConcatList(*sub_list, public_subs);
+        }
+
+        /* Init/final stay on the unit tree.  For programs, semcheck and
+         * mark_used access them via compilation_context_get_active().
+         * Codegen emits them from unit trees in dependency order. */
+        if (unit_tree->tree_data.unit_data.finalization != NULL)
             unit_tree->tree_data.unit_data.finalization->source_unit_index = unit_idx;
-            ListNode_t *final_node = CreateListNode(unit_tree->tree_data.unit_data.finalization, LIST_STMT);
-            if (final_node != NULL) {
-                final_node->next = *final_list;
-                *final_list = final_node;
-            }
-            unit_tree->tree_data.unit_data.finalization = NULL;
-        }
     }
 }
 
-/* Legacy wrapper for backward compatibility */
-static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
-{
-    merge_unit_into_target(program, unit_tree);
+/* Helper: extract list nodes whose Tree_t has the given source_unit_index and
+ * return them as a new list.  Nodes that don't match stay in the original list.
+ * get_unit_index is a callback that reads source_unit_index from a Tree_t node. */
+typedef int (*get_unit_index_fn)(const Tree_t *);
+
+static int get_type_decl_unit_index(const Tree_t *t) {
+    if (t == NULL || t->type != TREE_TYPE_DECL) return 0;
+    return t->tree_data.type_decl_data.source_unit_index;
+}
+static int get_const_decl_unit_index(const Tree_t *t) {
+    if (t == NULL || t->type != TREE_CONST_DECL) return 0;
+    return t->tree_data.const_decl_data.source_unit_index;
+}
+static int get_var_decl_unit_index(const Tree_t *t) {
+    if (t == NULL) return 0;
+    if (t->type == TREE_VAR_DECL)
+        return t->tree_data.var_decl_data.source_unit_index;
+    if (t->type == TREE_ARR_DECL)
+        return t->tree_data.arr_decl_data.source_unit_index;
+    return 0;
+}
+static int get_subprogram_unit_index(const Tree_t *t) {
+    if (t == NULL || t->type != TREE_SUBPROGRAM) return 0;
+    return t->tree_data.subprogram_data.source_unit_index;
 }
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
-
-static int source_file_mentions_objpas_qualified(const char *path)
+/* Extract nodes with source_unit_index == target_idx from *list_ptr,
+ * returning them as a new list.  Modifies *list_ptr in place. */
+static ListNode_t *extract_unit_nodes(ListNode_t **list_ptr, int target_idx,
+                                       get_unit_index_fn get_idx)
 {
-    if (path == NULL)
-        return 0;
+    if (list_ptr == NULL || *list_ptr == NULL)
+        return NULL;
 
-    FILE *f = fopen(path, "rb");
-    if (f == NULL)
-        return 0;
+    ListNode_t *extracted_head = NULL;
+    ListNode_t **extracted_tail = &extracted_head;
+    ListNode_t *prev = NULL;
+    ListNode_t *cur = *list_ptr;
 
-    int found = 0;
-    char buf[8192 + 1];
-    size_t carry = 0;
-    while (!found)
-    {
-        size_t n = fread(buf + carry, 1, sizeof(buf) - 1 - carry, f);
-        if (n == 0 && carry == 0)
-            break;
-        n += carry;
-        buf[n] = '\0';
-        for (size_t i = 0; i + 6 < n; ++i)
-        {
-            if ((buf[i] == 'O' || buf[i] == 'o') &&
-                (buf[i + 1] == 'B' || buf[i + 1] == 'b') &&
-                (buf[i + 2] == 'J' || buf[i + 2] == 'j') &&
-                (buf[i + 3] == 'P' || buf[i + 3] == 'p') &&
-                (buf[i + 4] == 'A' || buf[i + 4] == 'a') &&
-                (buf[i + 5] == 'S' || buf[i + 5] == 's') &&
-                buf[i + 6] == '.')
-            {
-                found = 1;
-                break;
-            }
+    while (cur != NULL) {
+        ListNode_t *next = cur->next;
+        int idx = 0;
+        if (cur->type == LIST_TREE && cur->cur != NULL)
+            idx = get_idx((const Tree_t *)cur->cur);
+
+        if (idx == target_idx) {
+            /* Remove from original list */
+            if (prev != NULL)
+                prev->next = next;
+            else
+                *list_ptr = next;
+            /* Append to extracted list */
+            cur->next = NULL;
+            *extracted_tail = cur;
+            extracted_tail = &cur->next;
+        } else {
+            prev = cur;
         }
-        if (found || feof(f))
-            break;
-        carry = (n >= 6) ? 6 : n;
-        memmove(buf, buf + n - carry, carry);
+        cur = next;
     }
-
-    fclose(f);
-    return found;
+    return extracted_head;
 }
 
-static void load_prelude_uses(Tree_t *program, Tree_t *prelude, UnitSet *visited)
+/* Restore unit declarations from the merged target tree back to unit records.
+ * Called after semcheck (which needs the merged view) and before codegen
+ * (which should iterate unit records directly).
+ *
+ * Works for both program and unit compilation targets.
+ * Init/finalization are stored on LoadedUnit records (not inlined into the
+ * program body) and emitted by codegen in dependency order. */
+static void unbuild_combined_program_view(CompilationContext *comp_ctx)
+{
+    Tree_t *target = comp_ctx->program;
+    if (target == NULL)
+        return;
+    if (target->type != TREE_PROGRAM_TYPE && target->type != TREE_UNIT)
+        return;
+
+    ListNode_t **type_list = get_type_decl_list(target);
+    ListNode_t **const_list = get_const_decl_list(target);
+    ListNode_t **var_list = get_var_decl_list(target);
+    ListNode_t **sub_list = get_subprograms_list(target);
+
+    for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+        LoadedUnit *lu = &comp_ctx->loaded_units[i];
+        Tree_t *unit_tree = lu->unit_tree;
+        if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+            continue;
+
+        int unit_idx = lu->unit_idx;
+
+        /* Extract type declarations belonging to this unit.
+         * build_combined_program_view merged interface (and for programs,
+         * implementation) types into the target list.  We restore them to
+         * interface_type_decls so codegen has a single list per unit. */
+        ListNode_t *unit_types = extract_unit_nodes(
+            type_list, unit_idx, get_type_decl_unit_index);
+        unit_tree->tree_data.unit_data.interface_type_decls = unit_types;
+
+        /* Extract const declarations */
+        ListNode_t *unit_consts = extract_unit_nodes(
+            const_list, unit_idx, get_const_decl_unit_index);
+        unit_tree->tree_data.unit_data.interface_const_decls = unit_consts;
+
+        /* Extract var declarations */
+        ListNode_t *unit_vars = extract_unit_nodes(
+            var_list, unit_idx, get_var_decl_unit_index);
+        unit_tree->tree_data.unit_data.interface_var_decls = unit_vars;
+
+        /* Extract subprograms */
+        ListNode_t *unit_subs = extract_unit_nodes(
+            sub_list, unit_idx, get_subprogram_unit_index);
+        unit_tree->tree_data.unit_data.subprograms = unit_subs;
+    }
+}
+
+static void load_units_from_list(CompilationContext *comp_ctx, ListNode_t *uses, UnitSet *visited);
+
+
+static void load_prelude_uses(CompilationContext *comp_ctx, Tree_t *prelude, UnitSet *visited)
 {
     if (prelude == NULL || visited == NULL)
         return;
     if (prelude->type == TREE_PROGRAM_TYPE)
     {
-        load_units_from_list(program, prelude->tree_data.program_data.uses_units, visited);
+        load_units_from_list(comp_ctx, prelude->tree_data.program_data.uses_units, visited);
     }
     else if (prelude->type == TREE_UNIT)
     {
-        load_units_from_list(program, prelude->tree_data.unit_data.interface_uses, visited);
-        load_units_from_list(program, prelude->tree_data.unit_data.implementation_uses, visited);
+        load_units_from_list(comp_ctx, prelude->tree_data.unit_data.interface_uses, visited);
+        load_units_from_list(comp_ctx, prelude->tree_data.unit_data.implementation_uses, visited);
     }
 }
 
-static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
+static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitSet *visited)
 {
+    Tree_t *program = comp_ctx->program;
+    SymTab_t *symtab = comp_ctx->symtab;
     if (unit_name == NULL || visited == NULL)
         return;
 
@@ -1342,7 +1465,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
-    int wants_objpas = source_file_mentions_objpas_qualified(path);
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
@@ -1356,9 +1478,9 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         g_time_parse_units += current_time_seconds() - start_time;
         ++g_count_parse_units;
     }
-    free(path);
     if (!ok)
     {
+        free(path);
         fprintf(stderr, "ERROR: Failed to load unit '%s'.\n", unit_name);
         exit(1);
     }
@@ -1383,16 +1505,14 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         emit_profile_stage(stage, current_time_seconds() - profile_start);
     }
 
-    load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
-    load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
+    load_units_from_list(comp_ctx, unit_tree->tree_data.unit_data.interface_uses, visited);
+    load_units_from_list(comp_ctx, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
-    /* Imported units that explicitly reference ObjPas-qualified names need
-     * ObjPas loaded before merge/semcheck, otherwise aliases like
-     * ObjPas.TEndian can bind to unrelated visible types. Keep this narrow. */
+    /* {$mode objfpc} and {$mode delphi} implicitly require the ObjPas unit */
     if (!pascal_identifier_equals(unit_tree->tree_data.unit_data.unit_id, "objpas") &&
-        wants_objpas)
+        pascal_frontend_is_objfpc_mode())
     {
-        load_unit(program, "objpas", visited);
+        load_unit(comp_ctx, "objpas", visited);
         int has_objpas = 0;
         for (ListNode_t *cur = unit_tree->tree_data.unit_data.interface_uses;
              cur != NULL; cur = cur->next)
@@ -1433,17 +1553,60 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
         unit_registry_add_dep(this_idx, unit_registry_add("System"));
     }
 
-    merge_unit_into_program(program, unit_tree);
-    destroy_tree(unit_tree);
+    /* Mark unit declarations BEFORE semcheck so defined_in_unit is set.
+     * These functions just set flags on AST nodes, they don't touch the symbol table. */
+    {
+        int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+        mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1, unit_idx);
+        mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1, unit_idx);
+        mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1, unit_idx);
+        if (program->type == TREE_PROGRAM_TYPE)
+        {
+            mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
+            mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
+            mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        }
+        else
+        {
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+        }
+    }
+
+    /* Lightweight per-unit semantic check: predeclares types, enums,
+     * subprogram signatures, and trivial constants into the unit's scope.
+     * Full processing (type resolution, body checking) is deferred to
+     * semcheck_program() on the merged tree. */
+    if (symtab != NULL)
+    {
+        char *saved_file_to_parse = file_to_parse;
+        file_to_parse = path;
+        int saved_source_buf_idx = semcheck_register_source_buffer(
+            path, preprocessed_source, preprocessed_length);
+        (void)saved_source_buf_idx;
+        semcheck_unit_decls_only(symtab, unit_tree);
+        LeaveScope(symtab);
+        file_to_parse = saved_file_to_parse;
+    }
+
+    free(path);
+    path = NULL;
+
+    /* Store the unit in the loaded-units array.  build_combined_program_view()
+     * will merge declarations into the target tree before semcheck. */
+    {
+        int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
+        compilation_context_add_unit(comp_ctx, unit_tree, unit_idx);
+    }
 }
 
-static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited)
+static void load_units_from_list(CompilationContext *comp_ctx, ListNode_t *uses, UnitSet *visited)
 {
     ListNode_t *cur = uses;
     while (cur != NULL)
     {
         if (cur->type == LIST_STRING && cur->cur != NULL)
-            load_unit(program, (const char *)cur->cur, visited);
+            load_unit(comp_ctx, (const char *)cur->cur, visited);
         cur = cur->next;
     }
 }
@@ -1480,7 +1643,7 @@ int main(int argc, char **argv)
 {
     install_stack_trace_handler();
 
-    // Initialize global arena with 1MB blocks
+        // Initialize global arena with 1MB blocks
     arena_t* arena = arena_create(1024 * 1024);
     arena_set_global(arena);
 
@@ -1570,6 +1733,16 @@ int main(int argc, char **argv)
         return 1;
     }
     set_stdlib_loaded_flag(1);
+
+    if (!g_ast_cache_explicit)
+    {
+        char *default_cache_dir = build_default_ast_cache_dir(argv[0]);
+        if (default_cache_dir != NULL)
+        {
+            pascal_frontend_set_ast_cache_dir(default_cache_dir);
+            free(default_cache_dir);
+        }
+    }
 
     bool parse_only = parse_only_flag();
     bool convert_to_tree = !parse_only || dump_ast_path() != NULL;
@@ -1784,6 +1957,14 @@ int main(int argc, char **argv)
         unit_set_init(&visited_units);
         double unit_import_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
 
+        /* Set up compilation context for unit compilation.
+         * symtab is NULL here -- unit compilation doesn't do per-unit
+         * declaration pre-population during load. */
+        CompilationContext unit_comp_ctx;
+        compilation_context_init(&unit_comp_ctx);
+        unit_comp_ctx.program = user_tree;
+        unit_comp_ctx.symtab = NULL;
+
         /* Mark the current unit as visited so circular dependencies
          * (e.g. types.pp → Math → types.pp) don't re-import it. */
         if (user_tree->tree_data.unit_data.unit_id != NULL)
@@ -1802,23 +1983,23 @@ int main(int argc, char **argv)
             !pascal_identifier_equals(user_tree->tree_data.unit_data.unit_id, "System"))
         {
             double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-            load_unit(user_tree, "System", &visited_units);
+            load_unit(&unit_comp_ctx, "System", &visited_units);
             emit_profile_stage("unit compile: auto-load System", current_time_seconds() - system_load_start);
         }
         double interface_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_units_from_list(user_tree, user_tree->tree_data.unit_data.interface_uses, &visited_units);
+        load_units_from_list(&unit_comp_ctx, user_tree->tree_data.unit_data.interface_uses, &visited_units);
         emit_profile_stage("unit compile: load interface uses", current_time_seconds() - interface_uses_start);
         double implementation_uses_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_units_from_list(user_tree, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
+        load_units_from_list(&unit_comp_ctx, user_tree->tree_data.unit_data.implementation_uses, &visited_units);
         emit_profile_stage("unit compile: load implementation uses", current_time_seconds() - implementation_uses_start);
-        
+
         /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
          * This makes types like TEndian available without explicit 'uses objpas'.
          * Also add ObjPas to the uses list so that unit-qualified references work. */
         if (pascal_frontend_is_objfpc_mode())
         {
             double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-            load_unit(user_tree, "objpas", &visited_units);
+            load_unit(&unit_comp_ctx, "objpas", &visited_units);
             /* Add ObjPas to interface_uses for semcheck_is_unit_name to recognize it */
             ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
             if (objpas_node != NULL)
@@ -1829,9 +2010,32 @@ int main(int argc, char **argv)
             emit_profile_stage("unit compile: auto-load ObjPas", current_time_seconds() - objpas_start);
         }
         
+        /* Register the target unit's own dependencies so that
+         * unit_registry_is_dep() works for qualified type resolution
+         * (e.g. baseunix.stat where baseunix is a direct dependency). */
+        {
+            int target_idx = unit_registry_add(user_tree->tree_data.unit_data.unit_id);
+            ListNode_t *dep;
+            for (dep = user_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
+            {
+                if (dep->type == LIST_STRING && dep->cur != NULL)
+                    unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
+            }
+            for (dep = user_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
+            {
+                if (dep->type == LIST_STRING && dep->cur != NULL)
+                    unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
+            }
+            unit_registry_add_dep(target_idx, unit_registry_add("System"));
+        }
+
         debug_check_type_presence(user_tree);
         emit_profile_stage("unit compile: total imports", current_time_seconds() - unit_import_start);
         unit_set_destroy(&visited_units);
+
+        /* Build the combined view: merge imported unit declarations into
+         * the target unit tree so semcheck can see them. */
+        build_combined_program_view(&unit_comp_ctx);
 
         if (saved_preprocessed_source != NULL)
         {
@@ -1861,7 +2065,12 @@ int main(int argc, char **argv)
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
         emit_profile_stage("unit compile: semantic analysis", current_time_seconds() - sem_profile_start);
-        
+
+        /* Restore imported declarations from the unit tree back to their
+         * unit records so codegen only sees the target unit's own decls. */
+        unbuild_combined_program_view(&unit_comp_ctx);
+        compilation_context_destroy(&unit_comp_ctx);
+
         if (sem_result > 0)
         {
             fprintf(stderr, "Semantic check failed for unit.\n");
@@ -1879,7 +2088,7 @@ int main(int argc, char **argv)
                 free(saved_preprocessed_path);
             return 1;
         }
-        
+
         fprintf(stderr, "Generating code for unit to file: %s\n", output_file);
         
         CodeGenContext ctx;
@@ -1957,6 +2166,13 @@ int main(int argc, char **argv)
     ListNode_t *user_subs = user_tree->tree_data.program_data.subprograms;
     UnitSet visited_units;
     unit_set_init(&visited_units);
+    /* Create symtab early for per-unit declaration pre-population during load */
+    SymTab_t *early_symtab = semcheck_init_symtab();
+
+    /* Initialise the compilation context for program compilation */
+    compilation_context_init(&g_comp_ctx);
+    g_comp_ctx.program = user_tree;
+    g_comp_ctx.symtab = early_symtab;
     ListNode_t *user_types = user_tree->tree_data.program_data.type_declaration;
     ListNode_t *user_consts = user_tree->tree_data.program_data.const_declaration;
     ListNode_t *user_vars = user_tree->tree_data.program_data.var_declaration;
@@ -1966,6 +2182,12 @@ int main(int argc, char **argv)
     if (prelude_tree != NULL)
     {
         double prelude_merge_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
+
+        /* System/prelude is parsed as TREE_PROGRAM_TYPE (not TREE_UNIT), so
+         * its declarations are merged directly into the program tree below.
+         * semcheck_program() processes them -- only declarations from units
+         * loaded via load_unit() (marked fully checked) are skipped. */
+
         prelude_subs = get_prelude_subprograms(prelude_tree);
         if (prelude_subs != NULL)
             mark_stdlib_var_params(prelude_subs);
@@ -2015,19 +2237,27 @@ int main(int argc, char **argv)
             clear_prelude_var_decls(prelude_tree);
         }
 
-        load_prelude_uses(user_tree, prelude_tree, &visited_units);
+        /* Predeclare System's types, enums, subprogram signatures, and trivial
+         * constants into System's unit scope.  This must happen BEFORE loading
+         * other units (which depend on System through scope deps). */
+        {
+            int sys_idx = unit_registry_add("System");
+            semcheck_predeclare_program_into_unit_scope(early_symtab, user_tree, sys_idx);
+        }
+
+        load_prelude_uses(&g_comp_ctx, prelude_tree, &visited_units);
         emit_profile_stage("program: merge prelude and prelude uses", current_time_seconds() - prelude_merge_start);
     }
     if (!use_stdlib)
     {
         double system_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_unit(user_tree, "System", &visited_units);
+        load_unit(&g_comp_ctx, "System", &visited_units);
         emit_profile_stage("program: auto-load System", current_time_seconds() - system_load_start);
     }
     double uses_load_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    load_units_from_list(user_tree, user_tree->tree_data.program_data.uses_units, &visited_units);
+    load_units_from_list(&g_comp_ctx, user_tree->tree_data.program_data.uses_units, &visited_units);
     emit_profile_stage("program: load uses units", current_time_seconds() - uses_load_start);
-    
+
     /* If {$MODE objfpc} was detected, automatically load ObjPas unit.
      * This makes types like TEndian available without explicit 'uses objpas'.
      * Also add ObjPas to the uses list so that unit-qualified references
@@ -2035,7 +2265,7 @@ int main(int argc, char **argv)
     if (pascal_frontend_is_objfpc_mode())
     {
         double objpas_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        load_unit(user_tree, "objpas", &visited_units);
+        load_unit(&g_comp_ctx, "objpas", &visited_units);
         /* Add ObjPas to uses list for semcheck_is_unit_name to recognize it */
         ListNode_t *objpas_node = CreateListNode(strdup("ObjPas"), LIST_STRING);
         if (objpas_node != NULL)
@@ -2067,6 +2297,16 @@ int main(int argc, char **argv)
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
     
     debug_check_type_presence(user_tree);
+    /* Build the combined program view from loaded unit records.
+     * Loaded units are stored in the context during load_unit() and merged
+     * here into the program tree so semcheck sees all declarations. */
+    double combined_view_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
+    build_combined_program_view(&g_comp_ctx);
+    emit_profile_stage("program: build combined view from loaded units", current_time_seconds() - combined_view_start);
+
+    /* Make the context available to passes that don't receive it as a parameter */
+    compilation_context_set_active(&g_comp_ctx);
+
     double merge_user_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     user_tree->tree_data.program_data.type_declaration =
         ConcatList(user_tree->tree_data.program_data.type_declaration, user_types);
@@ -2098,7 +2338,7 @@ int main(int argc, char **argv)
      * semantic checking of imported unit implementation bodies.  This is
      * safe when the program has errors (codegen is skipped anyway) and
      * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
-    SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
+    SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
     emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);
@@ -2121,6 +2361,7 @@ int main(int argc, char **argv)
             DestroySymTab(symtab);
             if (prelude_tree != NULL)
                 destroy_tree(prelude_tree);
+            compilation_context_destroy(&g_comp_ctx);
             destroy_tree(user_tree);
             clear_dump_ast_path();
             unit_search_paths_destroy(&g_unit_paths);
@@ -2149,9 +2390,15 @@ int main(int argc, char **argv)
         mark_used_functions(user_tree, symtab);
         emit_profile_stage("program: mark used functions (pass 2)", current_time_seconds() - mark_used_second_start);
 
+        /* Restore unit declarations from merged program lists back to unit
+         * records so that codegen emits imported code from unit records. */
+        double unbuild_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
+        unbuild_combined_program_view(&g_comp_ctx);
+        emit_profile_stage("program: unbuild combined view for codegen", current_time_seconds() - unbuild_start);
+
         double codegen_start = track_time ? current_time_seconds() : 0.0;
         double codegen_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        codegen(user_tree, input_file, &ctx, symtab);
+        codegen(user_tree, input_file, &ctx, symtab, &g_comp_ctx);
         if (track_time)
             g_time_codegen += current_time_seconds() - codegen_start;
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
@@ -2177,6 +2424,7 @@ int main(int argc, char **argv)
     DestroySymTab(symtab);
     if (prelude_tree != NULL)
         destroy_tree(prelude_tree);
+    compilation_context_destroy(&g_comp_ctx);
     destroy_tree(user_tree);
     free(prelude_path);
 
@@ -2191,6 +2439,7 @@ int main(int argc, char **argv)
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        unit_registry_reset();
         arena_destroy(arena);
         return exit_code > 0 ? exit_code : 1;
     }
@@ -2198,6 +2447,7 @@ int main(int argc, char **argv)
     clear_dump_ast_path();
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
+    unit_registry_reset();
     arena_destroy(arena);
     emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
     return exit_code;

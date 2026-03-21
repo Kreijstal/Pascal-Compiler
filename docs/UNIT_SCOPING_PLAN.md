@@ -4,7 +4,7 @@
 
 ### 1.1 Unit Loading and Merging (AST Level)
 
-Units are parsed into `Tree_t` with `type == TREE_UNIT`, then `merge_unit_into_target()` (`main_cparser.c:1061`) moves all interface AND implementation declarations into the program's flat lists. Every moved node gets `defined_in_unit = 1` and `source_unit_index` set. After merging, the program's `var_declaration` list contains system vars, unit A vars, unit B vars, and program vars — all in one flat list. Same for types, consts, and subprograms.
+Units are parsed into `Tree_t` with `type == TREE_UNIT`, then stored in the `CompilationContext` loaded-units array. Before semcheck, `build_combined_program_view()` temporarily moves unit declarations into the target tree's flat lists. Every moved node gets `defined_in_unit = 1` and `source_unit_index` set. After semcheck, `unbuild_combined_program_view()` restores declarations back to their unit records.
 
 ### 1.2 Semantic Analysis (Symbol Table Level)
 

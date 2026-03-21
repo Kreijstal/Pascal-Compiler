@@ -252,6 +252,9 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
 /* Reset function call cache on expression */
 void semcheck_reset_function_call_cache(struct Expression *expr);
 
+/* Duplicate the canonical callee symbol for a resolved function target. */
+char *semcheck_dup_function_call_target_symbol(HashNode_t *target);
+
 /* Set function call target on expression */
 void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target);
 
@@ -275,8 +278,10 @@ int resolve_type_identifier(int *out_type, SymTab_t *symtab,
 int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
     const char *type_id, const struct TypeRef *type_ref, int line_num);
 
-/* Get type name from type tag */
+/* Get type name from type tag (display only — not for symbol table lookups) */
 const char *semcheck_type_tag_name(int type_tag);
+/* Get valid Pascal type identifier from type tag (for symbol table lookups) */
+const char *semcheck_type_tag_pascal_name(int type_tag);
 
 /* Get base type name (after last dot) */
 const char *semcheck_base_type_name(const char *id);
@@ -445,10 +450,6 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
-int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev);
-int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);

@@ -2677,7 +2677,7 @@ combinator_t* object_type(tag_t tag) {
 combinator_t* pointer_type(tag_t tag) {
     combinator_t* pointed_type = multi(new_combinator(), PASCAL_T_NONE,
         type_name(PASCAL_T_IDENTIFIER),             // built-in Pascal types (integer, string, ...)
-        token(pascal_identifier(PASCAL_T_IDENTIFIER)), // user-defined type identifiers
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)), // user-defined type identifiers (supports Outer.Inner)
         NULL
     );
 

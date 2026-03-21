@@ -146,6 +146,7 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../compilation_context.h"
 
 static inline int codegen_align_to(int value, int alignment)
 {
@@ -275,12 +276,13 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab,
+             CompilationContext *comp_ctx);
 
 /* Entry function for unit compilation */
 void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
-ListNode_t *add_inst(ListNode_t *, char *);
+ListNode_t *add_inst(ListNode_t *, const char *);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);
@@ -311,7 +313,8 @@ void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
 
-char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
+char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
+                       CompilationContext *comp_ctx);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 

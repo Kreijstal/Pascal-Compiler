@@ -130,7 +130,9 @@ typedef struct Tree
             int is_static_method;         /* 1 if method is static (no implicit Self) */
             int nostackframe;             /* 1 if declared with nostackframe directive (skip prologue/epilogue) */
             int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
+            int is_operator;              /* 1 if declared with operator keyword (class operator, global operator) */
             char *internproc_id;          /* FPC [INTERNPROC: name] identifier (e.g. "fpc_in_Rewrite_TypedFile") */
+            int is_nested_scope;          /* 1 if nested inside another function (mangled as parent$child) */
             struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
         } subprogram_data;
 
@@ -176,6 +178,8 @@ typedef struct Tree
             int s_range;
             int e_range;
             char *range_str;  /* Original range string (e.g., "1..N") for constant resolution */
+            char *range_start_str; /* Symbolic lower bound (e.g., "1"), NULL if not parsed */
+            char *range_end_str;   /* Symbolic upper bound (e.g., "N"), NULL if not parsed */
             struct Statement *initializer;
             int is_typed_const;
             int is_shortstring;

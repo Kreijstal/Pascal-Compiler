@@ -8,6 +8,7 @@ type
 
 const
     NilHandle = TLibHandle(0);
+    SharedSuffix = 'so';
 
 function LoadLibrary(const Name: AnsiString): TLibHandle;
 function SafeLoadLibrary(const Name: AnsiString): TLibHandle;

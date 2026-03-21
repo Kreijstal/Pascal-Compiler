@@ -85,6 +85,7 @@ kgpc_cparser_sources = [
   'unit_paths.c',
   'unit_registry.c',
   'string_intern.c',
+  'compilation_context.c',
 ]
 
 kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,

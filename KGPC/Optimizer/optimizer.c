@@ -680,7 +680,7 @@ void decrement_reference_id_expr(SymTab_t *symtab, char *id, struct Expression *
                         expr->expr_data.id, expr->line_num);
                 #endif
 
-                assert(FindIdent(&node, symtab, expr->expr_data.id) == 0);
+                assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
                 assert(node != NULL);
                 --node->referenced;
 
@@ -735,7 +735,7 @@ void decrement_reference_expr(SymTab_t *symtab, struct Expression *expr)
                     expr->expr_data.id, expr->line_num);
             #endif
 
-            assert(FindIdent(&node, symtab, expr->expr_data.id) == 0);
+            assert(FindSymbol(&node, symtab, expr->expr_data.id) != 0);
             assert(node != NULL);
             --node->referenced;
 
@@ -778,7 +778,7 @@ void set_vars_lists(SymTab_t *symtab, ListNode_t *vars, ListNode_t **vars_to_che
 
             while(ids != NULL)
             {
-                assert(FindIdent(&node, symtab, ids->cur) == 0);
+                assert(FindSymbol(&node, symtab, ids->cur) != 0);
                 assert(node != NULL);
                 if (node->defined_in_unit)
                 {

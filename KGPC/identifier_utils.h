@@ -22,6 +22,39 @@ static inline char *pascal_identifier_lower_dup(const char *src)
     return dst;
 }
 
+/* Lower an identifier into a caller-provided buffer.
+ * Returns buf on success, or a malloc'd string if the identifier is too long.
+ * Caller must call pascal_identifier_lower_buf_free() to free if needed. */
+#define PASCAL_ID_STACK_MAX 256
+
+static inline char *pascal_identifier_lower_buf(const char *src, char *buf, size_t buf_size)
+{
+    if (src == NULL)
+        return NULL;
+
+    size_t len = strlen(src);
+    char *dst;
+    if (len + 1 <= buf_size) {
+        dst = buf;
+    } else {
+        dst = (char *)malloc(len + 1);
+        if (dst == NULL)
+            return NULL;
+    }
+
+    for (size_t i = 0; i < len; ++i)
+        dst[i] = (char)tolower((unsigned char)src[i]);
+
+    dst[len] = '\0';
+    return dst;
+}
+
+static inline void pascal_identifier_lower_buf_free(char *result, char *buf)
+{
+    if (result != NULL && result != buf)
+        free(result);
+}
+
 static inline int pascal_identifier_equals(const char *lhs, const char *rhs)
 {
     if (lhs == NULL || rhs == NULL)

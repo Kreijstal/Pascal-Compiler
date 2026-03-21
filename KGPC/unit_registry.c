@@ -68,6 +68,11 @@ int unit_registry_is_dep(int unit_idx, int dep_idx)
     return (deps[unit_idx][dep_idx / 64] & (1ULL << (dep_idx % 64))) != 0;
 }
 
+int unit_registry_count(void)
+{
+    return count;
+}
+
 void unit_registry_reset(void)
 {
     for (int i = 1; i <= count; i++)

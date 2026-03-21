@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: pp.pas loads 267 units then hangs in semantic analysis; 2 remaining errors (DirectorySeparator)
+## Status: pp.pas now gets past the old verbose/msgtxt blocker; current progress reaches compiler unit loading
 
 ## Prerequisites
 
@@ -8,6 +8,15 @@ Clone the FPC source code:
 ```bash
 git clone https://github.com/fpc/FPCSource
 ```
+
+Regenerate the compiler message includes before attempting `pp.pas`:
+```bash
+make -B -C ./FPCSource/compiler msg
+```
+
+Without this, a stale `FPCSource/compiler/msgtxt.inc` can be a documentation-text
+file instead of the generated Pascal include, which makes `verbose.pas` fail in
+preprocessing with a malformed compiler directive error.
 
 ## Build Commands
 
@@ -173,7 +182,7 @@ ordering issues.
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### pp.pas (2 errors + infinite loop)
+### pp.pas (current bootstrap attempt)
 ```bash
 ./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
   -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -Sg \
@@ -204,11 +213,27 @@ ordering issues.
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
 
-Remaining issues:
-1. `constant DirectorySeparator is undefined or not a string const` (×2) — sysutils typed constant
-2. **Infinite loop** in semantic analysis after loading 267 units (1GB+ RSS)
+Current observations on `gaps8` after regenerating `msgtxt.inc`/`msgidx.inc`:
+1. The old `verbose.pas` preprocessing failure is gone.
+2. `pp.pas` now loads substantially further through compiler units, including
+   `verbose`, `cmsgs`, `globals`, `systems`, `symdef`, `node`, `cgbase`,
+   `procinfo`, `pass_1`, `ncal`, and `nflw`.
+3. The previously documented `DirectorySeparator`/semantic-analysis-hang state
+   has not been re-reached yet in this refreshed attempt; the next blocker
+   should be recorded from the next live reproduction rather than carried over
+   from the older note.
 
 ## Remaining Blockers
+
+- Keep using the FPC-declared order from `make -n -B -C ./FPCSource/rtl/linux units`
+  for RTL bootstrap work.
+- For compiler bootstrap, `make -n -C ./FPCSource/compiler ppcx64` shows that
+  FPC expects the RTL to be prebuilt into `../rtl/units/x86_64-linux` and then
+  compiles `pp.pas` in one top-level invocation using:
+  - `-Fu../rtl/units/x86_64-linux`
+  - `-Fux86_64`
+  - `-Fux86`
+  - `-Fusystems`
 
 ## Flags
 

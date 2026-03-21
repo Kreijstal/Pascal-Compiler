@@ -1,0 +1,3 @@
+suffix=.so
+greeting=Hello
+combined=Hello.so

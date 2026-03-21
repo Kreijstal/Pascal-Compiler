@@ -5791,6 +5791,36 @@ void test_class_final_directive(void) {
     free_input(input);
 }
 
+// Regression: function declaration with dynamic-array alias and pointer-to-pointer return
+void test_function_dynarray_alias_ppchar_return(void) {
+    combinator_t* p = get_unit_parser();
+    input_t* input = new_input();
+    const char* src =
+        "unit U;\n"
+        "{$mode objfpc}\n"
+        "interface\n"
+        "type\n"
+        "  AnsiString = string;\n"
+        "  AnsiChar = Char;\n"
+        "  PAnsiChar = ^AnsiChar;\n"
+        "  PPAnsiChar = ^PAnsiChar;\n"
+        "  TAnsiStringArray = array of AnsiString;\n"
+        "function ArrayStringToPPchar(const values: TAnsiStringArray; StartIndex: Integer): PPAnsiChar;\n"
+        "implementation\n"
+        "end.";
+    input->buffer = strdup(src);
+    input->length = (int)strlen(src);
+    ParseResult res = parse(input, p);
+    if (!res.is_success) {
+        printf("Parse error: %s\n", res.value.error->message);
+        free_error(res.value.error);
+    }
+    TEST_ASSERT(res.is_success);
+    if (res.is_success) free_ast(res.value.ast);
+    free(input->buffer);
+    free_input(input);
+}
+
 TEST_LIST = {
     { "test_pascal_integer_parsing", test_pascal_integer_parsing },
     { "test_pascal_invalid_input", test_pascal_invalid_input },
@@ -5987,5 +6017,6 @@ TEST_LIST = {
     { "test_reference_as_field_name", test_reference_as_field_name },
     { "test_nested_class_with_parent", test_nested_class_with_parent },
     { "test_class_final_directive", test_class_final_directive },
+    { "test_function_dynarray_alias_ppchar_return", test_function_dynarray_alias_ppchar_return },
     { NULL, NULL }
 };

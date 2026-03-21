@@ -88,11 +88,13 @@ typedef struct HashNode
 
     int is_var_parameter;
     int is_varargs;                /* 1 if declared with varargs directive (C-style variadic) */
+    int is_operator;               /* 1 if declared with operator keyword */
     int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
     int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;
     int unit_is_public;
     int source_unit_index; /* Unit registry index (0 = local/unknown) */
+    int is_nested_scope;   /* 1 if mangled name indicates nested/qualified scope (e.g. parent$child) */
 
     char *method_name;    /* Bare method name (NULL for non-methods) */
     char *owner_class;    /* Owning class name (NULL for non-methods) */
@@ -121,6 +123,15 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
+
+/* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
+ * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
+ * this skips program-local redeclarations to find the unit-defined symbol. */
+/* Check if a specific HashNode pointer exists in the table.
+ * Direct bucket walk — zero heap allocations. */
+int FindIdentPtrInTable(HashTable_t *table, HashNode_t *candidate);
+
+HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id);
 
 /* Like FindIdentInTable but prefers matches from caller_unit_index.
  * Priority: same unit > program-local (0) > any other unit. */
