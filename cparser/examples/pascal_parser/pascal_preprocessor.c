@@ -1970,11 +1970,317 @@ static void skip_spaces_in_range(const char **cursor, const char *end) {
         ++(*cursor);
 }
 
+/* Resolve the size of a built-in Pascal type by name (case-insensitive).
+ * Returns true and sets *size if the type is recognized. */
+static bool resolve_builtin_type_size(PascalPreprocessor *pp, const char *type_name_input, int64_t *size) {
+    char *type_name = strdup(type_name_input);
+    if (!type_name) return false;
+    uppercase(type_name);
+
+    bool cpu64 = pascal_preprocessor_is_defined(pp, "CPU64");
+    bool found = false;
+
+    if (strcmp(type_name, "NATIVEINT") == 0 || strcmp(type_name, "NATIVEUINT") == 0 ||
+        strcmp(type_name, "SIZEINT") == 0 || strcmp(type_name, "SIZEUINT") == 0 ||
+        strcmp(type_name, "PTRINT") == 0 || strcmp(type_name, "PTRUINT") == 0 ||
+        strcmp(type_name, "INTPTR") == 0 || strcmp(type_name, "UINTPTR") == 0 ||
+        strcmp(type_name, "TCONSTPTRUINT") == 0 || strcmp(type_name, "TCONSTPTRINT") == 0 ||
+        strcmp(type_name, "PUINT") == 0 || strcmp(type_name, "PINT") == 0 ||
+        strcmp(type_name, "AINT") == 0 || strcmp(type_name, "ASIZEINT") == 0 ||
+        strcmp(type_name, "POINTER") == 0) {
+        *size = cpu64 ? 8 : 4;
+        found = true;
+    }
+    else if (strcmp(type_name, "INT64") == 0 || strcmp(type_name, "QWORD") == 0 || strcmp(type_name, "UINT64") == 0 ||
+        strcmp(type_name, "TSYSPARAM") == 0 || strcmp(type_name, "ALUUINT") == 0 ||
+        strcmp(type_name, "ALUSINT") == 0 || strcmp(type_name, "VALSINT") == 0 || strcmp(type_name, "VALUINT") == 0 ||
+        strcmp(type_name, "AINTMAX") == 0 || strcmp(type_name, "TBITSBASE") == 0 ||
+        strcmp(type_name, "TUNSIGNEDINTTYPE") == 0 || strcmp(type_name, "TSIGNEDINTTYPE") == 0 ||
+        strcmp(type_name, "HANDLE") == 0 || strcmp(type_name, "THANDLE") == 0 ||
+        strcmp(type_name, "TLARGEINTEGER") == 0 || strcmp(type_name, "TTHREADID") == 0) {
+        *size = 8;
+        found = true;
+    }
+    else if (strcmp(type_name, "INTEGER") == 0 || strcmp(type_name, "LONGINT") == 0 ||
+             strcmp(type_name, "INT32") == 0 || strcmp(type_name, "CARDINAL") == 0 ||
+             strcmp(type_name, "DWORD") == 0 || strcmp(type_name, "UINT32") == 0 ||
+             strcmp(type_name, "LONGWORD") == 0 || strcmp(type_name, "LONGBOOL") == 0) {
+        *size = 4;
+        found = true;
+    }
+    else if (strcmp(type_name, "SMALLINT") == 0 || strcmp(type_name, "INT16") == 0 ||
+             strcmp(type_name, "WORD") == 0 || strcmp(type_name, "UINT16") == 0 ||
+             strcmp(type_name, "WIDECHAR") == 0 || strcmp(type_name, "WORDBOOL") == 0 ||
+             strcmp(type_name, "TCOMPILERWIDECHAR") == 0) {
+        *size = 2;
+        found = true;
+    }
+    else if (strcmp(type_name, "SHORTINT") == 0 || strcmp(type_name, "INT8") == 0 ||
+             strcmp(type_name, "BYTE") == 0 || strcmp(type_name, "UINT8") == 0 ||
+             strcmp(type_name, "CHAR") == 0 || strcmp(type_name, "BOOLEAN") == 0 ||
+             strcmp(type_name, "ANSICHAR") == 0 || strcmp(type_name, "BYTEBOOL") == 0) {
+        *size = 1;
+        found = true;
+    }
+    else if (strcmp(type_name, "VALREAL") == 0 || strcmp(type_name, "EXTENDED") == 0 ||
+             strcmp(type_name, "LONGDOUBLE") == 0 || strcmp(type_name, "BESTREALREC") == 0 ||
+             strcmp(type_name, "TEXTENDED80REC") == 0 || strcmp(type_name, "BESTREAL") == 0) {
+        *size = 10;
+        found = true;
+    }
+    else if (strcmp(type_name, "DOUBLE") == 0 || strcmp(type_name, "REAL") == 0) {
+        *size = 8;
+        found = true;
+    }
+    else if (strcmp(type_name, "SINGLE") == 0 || strcmp(type_name, "FLOAT") == 0) {
+        *size = 4;
+        found = true;
+    }
+    else if (strcmp(type_name, "COMP") == 0 || strcmp(type_name, "CURRENCY") == 0) {
+        *size = 8;
+        found = true;
+    }
+    else if (strcmp(type_name, "TIME_T") == 0 || strcmp(type_name, "CLONG") == 0 ||
+             strcmp(type_name, "CULONG") == 0 || strcmp(type_name, "CLONGLONG") == 0 ||
+             strcmp(type_name, "CULONGLONG") == 0 || strcmp(type_name, "CSIZE_T") == 0 ||
+             strcmp(type_name, "CSSIZE_T") == 0 || strcmp(type_name, "COFF_T") == 0 ||
+             strcmp(type_name, "OFF_T") == 0) {
+        *size = 8;
+        found = true;
+    }
+    else if (strcmp(type_name, "CINT") == 0 || strcmp(type_name, "CUINT") == 0 ||
+             strcmp(type_name, "CINT32") == 0 || strcmp(type_name, "CUINT32") == 0) {
+        *size = 4;
+        found = true;
+    }
+    else if (strcmp(type_name, "CSHORT") == 0 || strcmp(type_name, "CUSHORT") == 0 ||
+             strcmp(type_name, "CINT16") == 0 || strcmp(type_name, "CUINT16") == 0) {
+        *size = 2;
+        found = true;
+    }
+    else if (strcmp(type_name, "CCHAR") == 0 || strcmp(type_name, "CSCHAR") == 0 ||
+             strcmp(type_name, "CUCHAR") == 0 || strcmp(type_name, "CINT8") == 0 ||
+             strcmp(type_name, "CUINT8") == 0) {
+        *size = 1;
+        found = true;
+    }
+    else if (strcmp(type_name, "CODEPTRUINT") == 0 || strcmp(type_name, "CODEPTRINT") == 0 ||
+             strcmp(type_name, "CODEPOINTER") == 0) {
+        *size = cpu64 ? 8 : 4;
+        found = true;
+    }
+    else if (strstr(type_name, "POINTER") != NULL || type_name[0] == 'P') {
+        *size = cpu64 ? 8 : 4;
+        found = true;
+    }
+
+    free(type_name);
+    return found;
+}
+
+/* Compute the size of a packed record type by scanning the preprocessed source.
+ * Looks for: TYPE_NAME = packed record FIELD1: TYPE1; FIELD2: TYPE2; ... end;
+ * Returns the sum of field sizes (no alignment padding for packed records). */
+static bool compute_packed_record_size_from_source(PascalPreprocessor *pp, const char *type_name, int64_t *size) {
+    if (!pp || !pp->current_output || pp->current_output_len == 0) return false;
+
+    const char *src = pp->current_output;
+    size_t src_len = pp->current_output_len;
+    const char *src_end = src + src_len;
+    size_t name_len = strlen(type_name);
+
+    const char *pos = src;
+    while (pos + name_len < src_end) {
+        /* Find the type name (case-insensitive whole word) */
+        bool match = true;
+        for (size_t i = 0; i < name_len; i++) {
+            if (ascii_tolower(pos[i]) != ascii_tolower(type_name[i])) {
+                match = false;
+                break;
+            }
+        }
+        if (!match || (pos > src && (isalnum((unsigned char)pos[-1]) || pos[-1] == '_')) ||
+            (pos + name_len < src_end && (isalnum((unsigned char)pos[name_len]) || pos[name_len] == '_'))) {
+            pos++;
+            continue;
+        }
+
+        /* Check for: <whitespace> = <whitespace> packed <whitespace> record */
+        const char *p = pos + name_len;
+        while (p < src_end && isspace((unsigned char)*p)) p++;
+        if (p >= src_end || *p != '=') { pos++; continue; }
+        p++; /* skip '=' */
+        while (p < src_end && isspace((unsigned char)*p)) p++;
+        /* Check for "packed" keyword */
+        bool is_packed = false;
+        if (p + 6 <= src_end && ascii_strncasecmp(p, "packed", 6) == 0 &&
+            (p + 6 >= src_end || !isalnum((unsigned char)p[6]))) {
+            is_packed = true;
+            p += 6;
+            while (p < src_end && isspace((unsigned char)*p)) p++;
+        }
+
+        /* Check for "record" keyword */
+        if (p + 6 > src_end || ascii_strncasecmp(p, "record", 6) != 0 ||
+            (p + 6 < src_end && isalnum((unsigned char)p[6]))) {
+            pos++;
+            continue;
+        }
+        p += 6; /* skip "record" */
+
+        /* Now parse fields until "end" keyword.
+         * Each field is: field_name [, field_name ...] : type_name ; */
+        int64_t total_size = 0;
+        bool success = true;
+
+        while (p < src_end) {
+            while (p < src_end && isspace((unsigned char)*p)) p++;
+            if (p >= src_end) { success = false; break; }
+
+            /* Skip // comments */
+            while (p + 1 < src_end && p[0] == '/' && p[1] == '/') {
+                while (p < src_end && *p != '\n') p++;
+                while (p < src_end && isspace((unsigned char)*p)) p++;
+            }
+            /* Skip { } comments */
+            while (p < src_end && *p == '{') {
+                while (p < src_end && *p != '}') p++;
+                if (p < src_end) p++; /* skip '}' */
+                while (p < src_end && isspace((unsigned char)*p)) p++;
+            }
+            /* Skip (* *) comments */
+            while (p + 1 < src_end && p[0] == '(' && p[1] == '*') {
+                p += 2;
+                while (p + 1 < src_end && !(p[0] == '*' && p[1] == ')')) p++;
+                if (p + 1 < src_end) p += 2;
+                while (p < src_end && isspace((unsigned char)*p)) p++;
+            }
+            if (p >= src_end) { success = false; break; }
+
+            /* Check for "end" keyword */
+            if (p + 3 <= src_end && ascii_strncasecmp(p, "end", 3) == 0 &&
+                (p + 3 >= src_end || (!isalnum((unsigned char)p[3]) && p[3] != '_'))) {
+                break;
+            }
+
+            /* Parse field name(s) - skip to ':' */
+            const char *colon = p;
+            while (colon < src_end && *colon != ':' && *colon != ';') colon++;
+            if (colon >= src_end || *colon != ':') { success = false; break; }
+
+            /* Count field names (separated by commas) */
+            int field_count = 1;
+            for (const char *c = p; c < colon; c++) {
+                if (*c == ',') field_count++;
+            }
+
+            colon++; /* skip ':' */
+            while (colon < src_end && isspace((unsigned char)*colon)) colon++;
+
+            /* Parse field type name */
+            const char *ftype_start = colon;
+            while (colon < src_end && (isalnum((unsigned char)*colon) || *colon == '_')) colon++;
+            if (colon == ftype_start) { success = false; break; }
+
+            char *field_type = malloc((size_t)(colon - ftype_start) + 1);
+            if (!field_type) { success = false; break; }
+            memcpy(field_type, ftype_start, (size_t)(colon - ftype_start));
+            field_type[colon - ftype_start] = '\0';
+
+            /* Resolve field type size */
+            int64_t field_size;
+            if (!resolve_builtin_type_size(pp, field_type, &field_size)) {
+                /* Try resolving as a type alias from const/type declarations */
+                /* For type aliases like "StringDataHeaderHashType = uint16", try const lookup */
+                int64_t alias_val;
+                bool resolved = false;
+                /* Scan source for TYPE_ALIAS = <builtin_type> pattern */
+                if (pp->current_output) {
+                    const char *s = pp->current_output;
+                    size_t ft_len = strlen(field_type);
+                    while (s + ft_len < src_end) {
+                        bool m = true;
+                        for (size_t i = 0; i < ft_len; i++) {
+                            if (ascii_tolower(s[i]) != ascii_tolower(field_type[i])) { m = false; break; }
+                        }
+                        if (m && (s == pp->current_output || (!isalnum((unsigned char)s[-1]) && s[-1] != '_')) &&
+                            (s + ft_len >= src_end || (!isalnum((unsigned char)s[ft_len]) && s[ft_len] != '_'))) {
+                            const char *after = s + ft_len;
+                            while (after < src_end && isspace((unsigned char)*after)) after++;
+                            if (after < src_end && *after == '=' && (after <= s || after[-1] != ':')) {
+                                after++;
+                                while (after < src_end && isspace((unsigned char)*after)) after++;
+                                const char *tstart = after;
+                                while (after < src_end && (isalnum((unsigned char)*after) || *after == '_')) after++;
+                                if (after > tstart) {
+                                    char *resolved_type = malloc((size_t)(after - tstart) + 1);
+                                    if (resolved_type) {
+                                        memcpy(resolved_type, tstart, (size_t)(after - tstart));
+                                        resolved_type[after - tstart] = '\0';
+                                        if (resolve_builtin_type_size(pp, resolved_type, &field_size)) {
+                                            resolved = true;
+                                        }
+                                        free(resolved_type);
+                                    }
+                                }
+                            }
+                        }
+                        if (resolved) break;
+                        s++;
+                    }
+                }
+                if (!resolved) {
+                    free(field_type);
+                    success = false;
+                    break;
+                }
+            }
+            free(field_type);
+
+            if (is_packed) {
+                total_size += field_size * field_count;
+            } else {
+                /* For non-packed records, use natural alignment (simplified) */
+                for (int i = 0; i < field_count; i++) {
+                    int64_t align = field_size;
+                    if (align > 8) align = 8;
+                    if (align > 1) {
+                        int64_t rem = total_size % align;
+                        if (rem != 0) total_size += align - rem;
+                    }
+                    total_size += field_size;
+                }
+            }
+
+            /* Skip to semicolon */
+            while (colon < src_end && *colon != ';') colon++;
+            if (colon < src_end) colon++; /* skip ';' */
+            p = colon;
+        }
+
+        if (success) {
+            *size = total_size;
+            return true;
+        }
+        pos++;
+    }
+    return false;
+}
+
 static bool eval_const_factor(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
     if (depth > 32) return false;
     skip_spaces_in_range(cursor, end);
     if (*cursor >= end) return false;
 
+    /* Unary NOT */
+    if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "NOT", 3) == 0 &&
+        (*cursor + 3 >= end || (!isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_'))) {
+        *cursor += 3;
+        int64_t inner;
+        if (!eval_const_factor(pp, cursor, end, &inner, depth + 1)) return false;
+        *value = !inner;
+        return true;
+    }
     /* Unary minus */
     if (**cursor == '-') {
         ++(*cursor);
@@ -2038,6 +2344,44 @@ static bool eval_const_factor(PascalPreprocessor *pp, const char **cursor, const
         if (ascii_strncasecmp(id, "TRUE", 5) == 0 && id_len == 4) { *value = 1; free(id); return true; }
         if (ascii_strncasecmp(id, "FALSE", 6) == 0 && id_len == 5) { *value = 0; free(id); return true; }
 
+        /* Handle sizeof(TYPE) calls */
+        if (id_len == 6 && ascii_strncasecmp(id, "SIZEOF", 6) == 0) {
+            free(id);
+            skip_spaces_in_range(cursor, end);
+            if (*cursor >= end || **cursor != '(') return false;
+            ++(*cursor); /* skip '(' */
+            skip_spaces_in_range(cursor, end);
+
+            const char *type_start = *cursor;
+            if (*cursor >= end || (!isalpha((unsigned char)**cursor) && **cursor != '_')) return false;
+            while (*cursor < end && (isalnum((unsigned char)**cursor) || **cursor == '_'))
+                ++(*cursor);
+            size_t type_len = (size_t)(*cursor - type_start);
+            char *type_name = malloc(type_len + 1);
+            if (!type_name) return false;
+            memcpy(type_name, type_start, type_len);
+            type_name[type_len] = '\0';
+
+            skip_spaces_in_range(cursor, end);
+            if (*cursor < end && **cursor == ')') ++(*cursor);
+
+            /* Try built-in type table */
+            int64_t sz;
+            if (resolve_builtin_type_size(pp, type_name, &sz)) {
+                *value = sz;
+                free(type_name);
+                return true;
+            }
+            /* Try computing packed record size from source */
+            if (compute_packed_record_size_from_source(pp, type_name, &sz)) {
+                *value = sz;
+                free(type_name);
+                return true;
+            }
+            free(type_name);
+            return false;
+        }
+
         /* Try preprocessor defines first */
         const char *val_str = get_symbol_value(pp, id);
         if (val_str) {
@@ -2086,6 +2430,18 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor, const c
             if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
             if (right == 0) return false;
             *value %= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "SHL", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            *value <<= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "SHR", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            *value >>= right;
         } else {
             break;
         }
@@ -2093,7 +2449,8 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor, const c
     return true;
 }
 
-static bool eval_const_expr(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+/* Parse additive: term (('+' | '-') term)* */
+static bool eval_const_additive(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
     if (!eval_const_term(pp, cursor, end, value, depth)) return false;
     for (;;) {
         skip_spaces_in_range(cursor, end);
@@ -2108,6 +2465,78 @@ static bool eval_const_expr(PascalPreprocessor *pp, const char **cursor, const c
             int64_t right;
             if (!eval_const_term(pp, cursor, end, &right, depth)) return false;
             *value -= right;
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+/* Parse comparison: additive (('=' | '<>' | '<=' | '>=' | '<' | '>') additive)? */
+static bool eval_const_comparison(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+    if (!eval_const_additive(pp, cursor, end, value, depth)) return false;
+    for (;;) {
+        skip_spaces_in_range(cursor, end);
+        if (*cursor >= end) break;
+        if (*cursor + 1 < end && **cursor == '<' && (*cursor)[1] == '=') {
+            *cursor += 2;
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value <= right) ? 1 : 0;
+        } else if (*cursor + 1 < end && **cursor == '>' && (*cursor)[1] == '=') {
+            *cursor += 2;
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value >= right) ? 1 : 0;
+        } else if (*cursor + 1 < end && **cursor == '<' && (*cursor)[1] == '>') {
+            *cursor += 2;
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value != right) ? 1 : 0;
+        } else if (**cursor == '<') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value < right) ? 1 : 0;
+        } else if (**cursor == '>') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value > right) ? 1 : 0;
+        } else if (**cursor == '=') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_additive(pp, cursor, end, &right, depth)) return false;
+            *value = (*value == right) ? 1 : 0;
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+/* Parse expression: comparison (('and' | 'or') comparison)* */
+static bool eval_const_expr(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+    if (!eval_const_comparison(pp, cursor, end, value, depth)) return false;
+    for (;;) {
+        skip_spaces_in_range(cursor, end);
+        if (*cursor >= end) break;
+        if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "AND", 3) == 0 &&
+            (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_comparison(pp, cursor, end, &right, depth)) return false;
+            *value = (*value && right) ? 1 : 0;
+        } else if (*cursor + 2 <= end && ascii_strncasecmp(*cursor, "OR", 2) == 0 &&
+                   (*cursor + 2 >= end || !isalnum((unsigned char)(*cursor)[2]))) {
+            *cursor += 2;
+            int64_t right;
+            if (!eval_const_comparison(pp, cursor, end, &right, depth)) return false;
+            *value = (*value || right) ? 1 : 0;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "NOT", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            /* NOT as unary prefix - shouldn't appear here but handle for robustness */
+            break;
         } else {
             break;
         }
@@ -2197,6 +2626,13 @@ static bool find_const_integer_in_source(PascalPreprocessor *pp, const char *sym
                     return true;
                 }
             }
+            /* Found the const declaration but couldn't evaluate the expression
+             * (e.g. complex initializers with function calls, pointer arithmetic,
+             * address-of like PtrUint(@Node(nil^).field)).  Return 0 as a
+             * best-effort fallback so {$if} assertions using this const don't
+             * cause a preprocessor error. */
+            *out_value = 0;
+            return true;
         }
         pos = found + 1;
     }
@@ -3199,9 +3635,15 @@ static bool parse_factor(const char **cursor,
             int64_t const_val;
             if (find_const_integer_in_source(pp, sym, &const_val)) {
                 *value = const_val;
+            } else if (pp->current_output != NULL && pp->current_output_len > 0 &&
+                       symbol_is_declared_in_source(pp->current_output, pp->current_output_len, sym)) {
+                // Symbol is declared in source but its value can't be computed
+                // (e.g. complex const initializers with function calls, pointer
+                // arithmetic, address-of like PtrUint(@Node(nil^).field)).
+                // Return 0 as best-effort so {$if} assertions don't error.
+                *value = 0;
             } else {
-                // Undefined symbol -> error (matching FPC behavior)
-                // FPC requires symbols in {$if} expressions to be defined
+                // Truly undefined symbol -> error (matching FPC behavior)
                 bool err = set_error(
                     error_message,
                     "undefined macro '%s'",

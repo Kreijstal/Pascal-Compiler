@@ -7700,39 +7700,29 @@ proccall_parent_resolve_done:
                 resolved_param_count,
                 NULL))
         {
-            int has_body = 0;
-            if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+            struct RecordType *class_record = semcheck_lookup_record_type(symtab,
+                resolved_proc->owner_class);
+            if (class_record != NULL && record_type_is_class(class_record) &&
+                class_record->methods != NULL)
             {
-                Tree_t *proc_def = resolved_proc->type->info.proc_info.definition;
-                if (proc_def != NULL &&
-                    proc_def->tree_data.subprogram_data.statement_list != NULL)
-                    has_body = 1;
-            }
-            if (!has_body)
-            {
-                struct RecordType *class_record = semcheck_lookup_record_type(symtab,
-                    resolved_proc->owner_class);
-                if (class_record != NULL && class_record->methods != NULL)
+                for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
                 {
-                    for (ListNode_t *me = class_record->methods; me != NULL; me = me->next)
+                    struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                    if (mi != NULL && mi->name != NULL &&
+                        (mi->is_virtual || mi->is_override) &&
+                        strcasecmp(mi->name, resolved_proc->method_name) == 0)
                     {
-                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
-                        if (mi != NULL && mi->name != NULL &&
-                            (mi->is_virtual || mi->is_override) &&
-                            strcasecmp(mi->name, resolved_proc->method_name) == 0)
+                        if (resolved_param_count >= 0 && mi->param_count >= 0 &&
+                            resolved_param_count != mi->param_count)
                         {
-                            if (resolved_param_count >= 0 && mi->param_count >= 0 &&
-                                resolved_param_count != mi->param_count)
-                            {
-                                continue;
-                            }
-                            stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
-                            stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
-                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
-                                stmt->stmt_data.procedure_call_data.self_class_name =
-                                    strdup(resolved_proc->owner_class);
-                            break;
+                            continue;
                         }
+                        stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                        stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
+                        if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                            stmt->stmt_data.procedure_call_data.self_class_name =
+                                strdup(resolved_proc->owner_class);
+                        break;
                     }
                 }
             }

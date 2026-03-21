@@ -4378,6 +4378,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     assert(0 && "Bad addop type!");
                     break;
             }
+            /* Sign-extend 32-bit result to 64-bit so negative values are
+               correctly represented when stored into 64-bit slots. */
+            if (!use_qword_op && left_reg != NULL &&
+                !is_unsigned_integer_type(expr_get_type_tag(expr)))
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                    left_reg->bit_32, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
 
             break;
             }
@@ -4486,6 +4495,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 int err = 0;
                 inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "imul", arith_suffix, op_right, op_left, &err);
                 if (err) break;
+                /* Sign-extend 32-bit result to 64-bit so negative values are
+                   correctly represented when stored into 64-bit slots (e.g.
+                   passing Integer result as SizeInt/Int64 function argument). */
+                if (!use_qword_op && left_reg != NULL &&
+                    !is_unsigned_integer_type(expr_get_type_tag(expr)))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                        left_reg->bit_32, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             else if(type == AND)
             {

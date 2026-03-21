@@ -10725,9 +10725,21 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             return -1;
         }
     } else if (tuple_node->typ != PASCAL_T_TUPLE) {
-        fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
-                *id_ptr);
-        return -1;
+        /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
+         * The parser parses (expr) as a parenthesized expression rather than
+         * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
+        ast_t *wrapper = new_ast();
+        wrapper->typ = PASCAL_T_TUPLE;
+        wrapper->child = tuple_node;
+        wrapper->next = NULL;
+        /* Detach from any sibling chain so iteration sees exactly 1 element */
+        ast_t *saved_next = tuple_node->next;
+        tuple_node->next = NULL;
+        tuple_node = wrapper;
+        /* Note: wrapper is a small allocation; it is not freed here because
+         * the AST is freed in bulk after translation.  saved_next is unused
+         * since single-element array consts only have one value. */
+        (void)saved_next;
     }
 
     int start = type_info->start;
