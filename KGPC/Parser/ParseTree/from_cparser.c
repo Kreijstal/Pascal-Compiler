@@ -1300,6 +1300,165 @@ static void substitute_generic_identifiers(ast_t *node, char **params, char **ar
 
 static ListNode_t *class_method_bindings = NULL;
 
+/* ---- Class-method hash index (keyed by interned class_name pointer) ----
+ *
+ * The flat class_method_bindings list is O(n) per lookup.  With hundreds
+ * of RTL classes this makes is_method_static / is_method_virtual / … the
+ * dominant cost during compilation.  The hash index maps an interned
+ * class_name to a small chain of ClassMethodBinding pointers for that
+ * class, giving O(1) class lookup + O(k) method scan within the class.
+ *
+ * Because class_name strings are interned (string_intern.h), we can use
+ * pointer identity for hashing and comparison.
+ */
+#define CMB_INDEX_SIZE 512
+
+typedef struct CMBIndexEntry {
+    const char            *class_name;  /* interned pointer – identity key */
+    ClassMethodBinding   **bindings;    /* dynamic array of binding pointers */
+    int                    count;
+    int                    capacity;
+    struct CMBIndexEntry  *next;        /* hash chain */
+} CMBIndexEntry;
+
+static CMBIndexEntry *cmb_index[CMB_INDEX_SIZE];
+
+static unsigned int cmb_ptr_hash(const char *ptr)
+{
+    uintptr_t v = (uintptr_t)ptr;
+    v ^= v >> 16;
+    v *= 0x45d9f3bu;
+    v ^= v >> 16;
+    return (unsigned int)(v % CMB_INDEX_SIZE);
+}
+
+static CMBIndexEntry *cmb_index_find(const char *interned_class)
+{
+    unsigned int h = cmb_ptr_hash(interned_class);
+    for (CMBIndexEntry *e = cmb_index[h]; e != NULL; e = e->next)
+        if (e->class_name == interned_class)
+            return e;
+    return NULL;
+}
+
+static CMBIndexEntry *cmb_index_get_or_create(const char *interned_class)
+{
+    unsigned int h = cmb_ptr_hash(interned_class);
+    for (CMBIndexEntry *e = cmb_index[h]; e != NULL; e = e->next)
+        if (e->class_name == interned_class)
+            return e;
+
+    CMBIndexEntry *e = (CMBIndexEntry *)malloc(sizeof(CMBIndexEntry));
+    assert(e != NULL);
+    e->class_name = interned_class;
+    e->count    = 0;
+    e->capacity = 4;
+    e->bindings = (ClassMethodBinding **)malloc(sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+    assert(e->bindings != NULL);
+    e->next = cmb_index[h];
+    cmb_index[h] = e;
+    return e;
+}
+
+static void cmb_index_add(const char *interned_class, ClassMethodBinding *binding)
+{
+    CMBIndexEntry *e = cmb_index_get_or_create(interned_class);
+    if (e->count == e->capacity) {
+        e->capacity *= 2;
+        e->bindings = (ClassMethodBinding **)realloc(e->bindings,
+                        sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+        assert(e->bindings != NULL);
+    }
+    e->bindings[e->count++] = binding;
+}
+
+static void cmb_index_reset(void)
+{
+    for (int i = 0; i < CMB_INDEX_SIZE; i++) {
+        CMBIndexEntry *e = cmb_index[i];
+        while (e != NULL) {
+            CMBIndexEntry *next = e->next;
+            free(e->bindings);
+            free(e);
+            e = next;
+        }
+        cmb_index[i] = NULL;
+    }
+}
+
+/* ---- Method-name index (keyed by interned method_name pointer) ----
+ *
+ * Used by find_class_for_method and from_cparser_find_classes_with_method
+ * which look up by method_name across all classes.
+ */
+#define CMB_METHOD_INDEX_SIZE 512
+
+typedef struct CMBMethodEntry {
+    const char            *method_name;  /* interned pointer – identity key */
+    ClassMethodBinding   **bindings;
+    int                    count;
+    int                    capacity;
+    struct CMBMethodEntry *next;
+} CMBMethodEntry;
+
+static CMBMethodEntry *cmb_method_index[CMB_METHOD_INDEX_SIZE];
+
+static CMBMethodEntry *cmb_method_index_find(const char *interned_method)
+{
+    unsigned int h = cmb_ptr_hash(interned_method);
+    h = h % CMB_METHOD_INDEX_SIZE;
+    for (CMBMethodEntry *e = cmb_method_index[h]; e != NULL; e = e->next)
+        if (e->method_name == interned_method)
+            return e;
+    return NULL;
+}
+
+static CMBMethodEntry *cmb_method_index_get_or_create(const char *interned_method)
+{
+    unsigned int h = cmb_ptr_hash(interned_method);
+    h = h % CMB_METHOD_INDEX_SIZE;
+    for (CMBMethodEntry *e = cmb_method_index[h]; e != NULL; e = e->next)
+        if (e->method_name == interned_method)
+            return e;
+
+    CMBMethodEntry *e = (CMBMethodEntry *)malloc(sizeof(CMBMethodEntry));
+    assert(e != NULL);
+    e->method_name = interned_method;
+    e->count    = 0;
+    e->capacity = 4;
+    e->bindings = (ClassMethodBinding **)malloc(sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+    assert(e->bindings != NULL);
+    e->next = cmb_method_index[h];
+    cmb_method_index[h] = e;
+    return e;
+}
+
+static void cmb_method_index_add(const char *interned_method, ClassMethodBinding *binding)
+{
+    CMBMethodEntry *e = cmb_method_index_get_or_create(interned_method);
+    if (e->count == e->capacity) {
+        e->capacity *= 2;
+        e->bindings = (ClassMethodBinding **)realloc(e->bindings,
+                        sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+        assert(e->bindings != NULL);
+    }
+    e->bindings[e->count++] = binding;
+}
+
+static void cmb_method_index_reset(void)
+{
+    for (int i = 0; i < CMB_METHOD_INDEX_SIZE; i++) {
+        CMBMethodEntry *e = cmb_method_index[i];
+        while (e != NULL) {
+            CMBMethodEntry *next = e->next;
+            free(e->bindings);
+            free(e);
+            e = next;
+        }
+        cmb_method_index[i] = NULL;
+    }
+}
+
 /* Counter for generating unique anonymous method names */
 static int anonymous_method_counter = 0;
 
@@ -1504,7 +1663,11 @@ static void register_class_method_ex(const char *class_name, const char *method_
 
     node->next = class_method_bindings;
     class_method_bindings = node;
-    
+
+    /* Maintain hash indices for O(1) lookup by class and method name. */
+    cmb_index_add(binding->class_name, binding);
+    cmb_method_index_add(binding->method_name, binding);
+
     if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr,
             "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
@@ -1525,14 +1688,13 @@ static const char *find_class_for_method(const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->method_name, method_name) == 0)
-            return binding->class_name;
-        cur = cur->next;
-    }
+    const char *interned = string_intern(method_name);
+    if (interned == NULL)
+        return NULL;
+
+    CMBMethodEntry *me = cmb_method_index_find(interned);
+    if (me != NULL && me->count > 0)
+        return me->bindings[0]->class_name;
     return NULL;
 }
 
@@ -1541,21 +1703,25 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
     int has_static = 0;
     int has_instance = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             if (binding->is_static)
                 has_static = 1;
             else
                 has_instance = 1;
         }
-        cur = cur->next;
     }
     if (has_instance)
         return 0;
@@ -1569,16 +1735,21 @@ static int is_method_static_with_signature(const char *class_name, const char *m
     if (param_sig == NULL && param_count < 0)
         return is_method_static(class_name, method_name);
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return is_method_static(class_name, method_name);
+
     int has_static = 0;
     int has_instance = 0;
     int has_match = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             int matches = 0;
             if (param_sig != NULL && binding->param_sig != NULL) {
                 if (strcmp(binding->param_sig, param_sig) == 0)
@@ -1594,7 +1765,6 @@ static int is_method_static_with_signature(const char *class_name, const char *m
                     has_instance = 1;
             }
         }
-        cur = cur->next;
     }
     if (has_match) {
         if (has_instance)
@@ -1614,17 +1784,20 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
 int from_cparser_is_method_class_method(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_class_method)
-                return 1;
-        }
-        cur = cur->next;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn && binding->is_class_method)
+            return 1;
     }
     return 0;
 }
@@ -1636,21 +1809,26 @@ int from_cparser_is_method_class_method(const char *class_name, const char *meth
 int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
     int found_nonstatic_class = 0;
     int found_instance = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             if (binding->is_class_method && !binding->is_static)
                 found_nonstatic_class = 1;
             else if (!binding->is_class_method)
                 found_instance = 1;
         }
-        cur = cur->next;
     }
     /* If there are mixed overloads (class + instance with same name),
      * don't mark as class method — overload resolution should pick correctly. */
@@ -1668,39 +1846,40 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
     /* First pass: search under exact class name. */
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_virtual || binding->is_override)
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding->method_name == mn &&
+                (binding->is_virtual || binding->is_override))
                 return 1;
         }
-        cur = cur->next;
     }
     /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
      * registered under the unqualified name before renaming. Only try if no exact match. */
     const char *dot = strrchr(class_name, '.');
     if (dot == NULL)
         return 0;
-    const char *unqualified = dot + 1;
-    cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, unqualified) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_virtual || binding->is_override)
+    const char *unqualified = string_intern(dot + 1);
+    if (unqualified == NULL)
+        return 0;
+    entry = cmb_index_find(unqualified);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding->method_name == mn &&
+                (binding->is_virtual || binding->is_override))
                 return 1;
         }
-        cur = cur->next;
     }
     return 0;
 }
@@ -1714,42 +1893,50 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
     if (param_sig == NULL && param_count < 0)
         return from_cparser_is_method_virtual(class_name, method_name);
 
-    /* Helper lambda-like: check bindings for a given class name string. */
-    #define CHECK_BINDINGS_FOR(cname) \
-        do { \
-            ListNode_t *_cur = class_method_bindings; \
-            while (_cur != NULL) { \
-                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
-                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
-                    strcasecmp(_b->class_name, (cname)) == 0 && \
-                    strcasecmp(_b->method_name, method_name) == 0) \
-                { \
-                    int _matches = 0; \
-                    if (param_sig != NULL && _b->param_sig != NULL) { \
-                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
-                    } else if (param_count >= 0 && _b->param_count == param_count) { \
-                        _matches = 1; \
-                    } \
-                    if (_matches) { \
-                        has_match = 1; \
-                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
-                    } \
-                } \
-                _cur = _cur->next; \
-            } \
-        } while (0)
+    const char *mn = string_intern(method_name);
+    if (mn == NULL)
+        return 0;
 
     int has_match = 0;
     int has_virtual = 0;
+
+    /* Helper: check bindings for a given interned class name. */
+    #define CHECK_INDEX_FOR(interned_cname) \
+        do { \
+            CMBIndexEntry *_entry = cmb_index_find(interned_cname); \
+            if (_entry != NULL) { \
+                for (int _i = 0; _i < _entry->count; _i++) { \
+                    ClassMethodBinding *_b = _entry->bindings[_i]; \
+                    if (_b->method_name == mn) { \
+                        int _matches = 0; \
+                        if (param_sig != NULL && _b->param_sig != NULL) { \
+                            if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                        } else if (param_count >= 0 && _b->param_count == param_count) { \
+                            _matches = 1; \
+                        } \
+                        if (_matches) { \
+                            has_match = 1; \
+                            if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                        } \
+                    } \
+                } \
+            } \
+        } while (0)
+
     /* First pass: exact class name. */
-    CHECK_BINDINGS_FOR(class_name);
+    const char *cn = string_intern(class_name);
+    if (cn != NULL)
+        CHECK_INDEX_FOR(cn);
     /* Second pass: unqualified fallback — only if nothing found under exact name. */
     if (!has_match) {
         const char *dot = strrchr(class_name, '.');
-        if (dot != NULL)
-            CHECK_BINDINGS_FOR(dot + 1);
+        if (dot != NULL) {
+            const char *uq = string_intern(dot + 1);
+            if (uq != NULL)
+                CHECK_INDEX_FOR(uq);
+        }
     }
-    #undef CHECK_BINDINGS_FOR
+    #undef CHECK_INDEX_FOR
     if (has_match)
         return has_virtual;
     return 0;
@@ -1760,40 +1947,42 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
     if (count_out != NULL) *count_out = 0;
     if (method_name == NULL) return NULL;
 
+    const char *mn = string_intern(method_name);
+    if (mn == NULL) return NULL;
+
+    CMBMethodEntry *me = cmb_method_index_find(mn);
+    if (me == NULL)
+        return NULL;
+
     ListNode_t *result = NULL;
     int count = 0;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->method_name, method_name) == 0) {
-            /* Check if we already have this class in the result */
-            ListNode_t *check = result;
-            int found = 0;
-            while (check != NULL) {
-                char *existing_class = (char *)check->cur;
-                if (existing_class != NULL && strcasecmp(existing_class, binding->class_name) == 0) {
-                    found = 1;
-                    break;
-                }
-                check = check->next;
+    for (int i = 0; i < me->count; i++) {
+        ClassMethodBinding *binding = me->bindings[i];
+        if (binding->class_name == NULL) continue;
+        /* Check if we already have this class in the result (pointer comparison). */
+        ListNode_t *check = result;
+        int found = 0;
+        while (check != NULL) {
+            if (check->cur == binding->class_name) {
+                found = 1;
+                break;
             }
-            if (!found && binding->class_name != NULL) {
-                char *class_copy = strdup(binding->class_name);
-                if (class_copy != NULL) {
-                    ListNode_t *node = CreateListNode(class_copy, LIST_UNSPECIFIED);
-                    if (node != NULL) {
-                        node->next = result;
-                        result = node;
-                        count++;
-                    } else {
-                        free(class_copy);
-                    }
+            check = check->next;
+        }
+        if (!found) {
+            char *class_copy = strdup(binding->class_name);
+            if (class_copy != NULL) {
+                ListNode_t *node = CreateListNode(class_copy, LIST_UNSPECIFIED);
+                if (node != NULL) {
+                    node->next = result;
+                    result = node;
+                    count++;
+                } else {
+                    free(class_copy);
                 }
             }
         }
-        cur = cur->next;
     }
 
     if (count_out != NULL) *count_out = count;
@@ -1957,27 +2146,29 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
 
+    const char *cn = string_intern(class_name);
+    if (cn == NULL)
+        return;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return;
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0) {
-            /* Found a method for this class - create a copy of the list node */
-            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
-            if (node != NULL) {
-                node->type = LIST_UNSPECIFIED;
-                node->cur = binding;
-                node->next = NULL;
-                *tail = node;
-                tail = &node->next;
-                count++;
-            }
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+        if (node != NULL) {
+            node->type = LIST_UNSPECIFIED;
+            node->cur = binding;
+            node->next = NULL;
+            *tail = node;
+            tail = &node->next;
+            count++;
         }
-        cur = cur->next;
     }
 
     *methods_out = head;
@@ -18369,6 +18560,8 @@ void from_cparser_cleanup(void)
     }
 
     /* Free class method bindings (interned strings - do NOT free, just free structs + list nodes) */
+    cmb_index_reset();
+    cmb_method_index_reset();
     while (class_method_bindings != NULL) {
         ListNode_t *next = class_method_bindings->next;
         ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
