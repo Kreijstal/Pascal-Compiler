@@ -2066,6 +2066,31 @@ int semcheck_funccall(int *type_return,
                     {
                         can_strip = 1;
                     }
+                    /* If the id is not a top-level type, check if it's a nested type
+                     * within the receiver type (e.g., HeapTracer.Node where Node is
+                     * a nested type declared inside HeapTracer). Nested types are
+                     * stored in the symbol table with qualified names like "HeapTracer.Node". */
+                    if (!can_strip && id != NULL && first_arg->expr_data.id != NULL)
+                    {
+                        size_t recv_len = strlen(first_arg->expr_data.id);
+                        size_t id_len = strlen(id);
+                        char *qualified_id = (char *)malloc(recv_len + 1 + id_len + 1);
+                        if (qualified_id != NULL)
+                        {
+                            snprintf(qualified_id, recv_len + 1 + id_len + 1, "%s.%s",
+                                first_arg->expr_data.id, id);
+                            HashNode_t *qual_type_node = NULL;
+                            if (FindSymbol(&qual_type_node, symtab, qualified_id) != 0 &&
+                                qual_type_node != NULL && qual_type_node->hash_type == HASHTYPE_TYPE)
+                            {
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = strdup(qualified_id);
+                                id = expr->expr_data.function_call_data.id;
+                                can_strip = 1;
+                            }
+                            free(qualified_id);
+                        }
+                    }
                 }
 
                 if (can_strip)
@@ -2075,6 +2100,17 @@ int semcheck_funccall(int *type_return,
                     {
                         is_unit_qualifier = 1;
                         DestroyList(func_candidates);
+                    }
+                    /* Qualified nested type names may not be found by FindAllIdents.
+                     * Fall back to FindSymbol since we already verified the type. */
+                    if (!is_unit_qualifier)
+                    {
+                        HashNode_t *type_verify = NULL;
+                        if (FindSymbol(&type_verify, symtab, id) != 0 &&
+                            type_verify != NULL && type_verify->hash_type == HASHTYPE_TYPE)
+                        {
+                            is_unit_qualifier = 1;
+                        }
                     }
                 }
             }
