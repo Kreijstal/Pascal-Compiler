@@ -728,7 +728,8 @@ static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
         return 1;
     if (cand->method_name != NULL &&
         (pascal_identifier_equals(cand->method_name, "op_assign") ||
-         pascal_identifier_equals(cand->method_name, ":=")))
+         pascal_identifier_equals(cand->method_name, ":=") ||
+         pascal_identifier_equals(cand->method_name, "Implicit")))
         return 1;
     return 0;
 }

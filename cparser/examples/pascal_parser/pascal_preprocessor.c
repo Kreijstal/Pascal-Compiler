@@ -2587,10 +2587,10 @@ static bool parse_term(const char **cursor,
 
         switch (op) {
             case OP_MUL: *value *= rhs; break;
-            case OP_DIV: 
+            case OP_DIV:
             case OP_INTDIV:
                 if (rhs == 0) return set_error(error_message, "division by zero");
-                *value /= rhs; 
+                *value /= rhs;
                 break;
             case OP_MOD:
                 if (rhs == 0) return set_error(error_message, "division by zero");
@@ -2769,9 +2769,11 @@ static bool parse_factor(const char **cursor,
         }
 
         if (!found) {
-            bool err = set_error(error_message, "unsupported type '%s' for SIZEOF", type_name);
-            free(type_name);
-            return err;
+            // Unknown type — assume pointer size as fallback.
+            // FPC's preprocessor can resolve variable types in sizeof(),
+            // which ours cannot. Most such variables are platform-sized
+            // (SizeInt, SizeUint, etc.) so pointer size is a safe default.
+            size = cpu64 ? 8 : 4;
         }
         
         free(type_name);

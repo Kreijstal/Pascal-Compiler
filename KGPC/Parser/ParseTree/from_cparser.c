@@ -7779,13 +7779,25 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
-            field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
-            field_desc->array_element_record = field_info.record_type;
-            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
-            field_info.element_type_id = NULL;  /* Ownership transferred */
+            /* For multi-name fields (e.g. a, b: array[0..1] of T),
+             * duplicate shared resources; transfer ownership only for the last name. */
+            if (name_node->next == NULL)
+            {
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_info.element_type_id = NULL;
+                field_desc->array_element_record = field_info.record_type;
+                field_info.record_type = NULL;
+            }
+            else
+            {
+                field_desc->array_element_type_id =
+                    field_info.element_type_id ? strdup(field_info.element_type_id) : NULL;
+                field_desc->array_element_record =
+                    field_info.record_type ? clone_record_type(field_info.record_type) : NULL;
+            }
             /* Transfer pre-built element KgpcType for nested arrays */
             if (field_info.element_kgpc_type != NULL)
             {
@@ -9056,13 +9068,25 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
-            field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
-            field_desc->array_element_record = field_info.record_type;
-            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
-            field_info.element_type_id = NULL;
+            /* For multi-name fields (e.g. a, b: array[0..1] of T),
+             * duplicate shared resources; transfer ownership only for the last name. */
+            if (name_node->next == NULL)
+            {
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_info.element_type_id = NULL;
+                field_desc->array_element_record = field_info.record_type;
+                field_info.record_type = NULL;
+            }
+            else
+            {
+                field_desc->array_element_type_id =
+                    field_info.element_type_id ? strdup(field_info.element_type_id) : NULL;
+                field_desc->array_element_record =
+                    field_info.record_type ? clone_record_type(field_info.record_type) : NULL;
+            }
             /* Transfer pre-built element KgpcType for nested arrays */
             if (field_info.element_kgpc_type != NULL)
             {
