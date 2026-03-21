@@ -7106,6 +7106,78 @@ low_cleanup:
                 fprintf(stderr, "Error: unsupported relational operator in const expression.\n");
             return 1;
         }
+        case EXPR_ADDR:
+        {
+            /* Handle @Record(nil^).field as compile-time offsetof() */
+            struct Expression *inner = expr->expr_data.addr_data.expr;
+            if (inner == NULL || inner->type != EXPR_RECORD_ACCESS)
+                break;
+
+            char *field_id = inner->expr_data.record_access_data.field_id;
+            struct Expression *base_expr = inner->expr_data.record_access_data.record_expr;
+            if (field_id == NULL || base_expr == NULL)
+                break;
+
+            /* The base expression must be a nil pointer dereference typecast:
+             * Either EXPR_FUNCTION_CALL(TypeName, args=[EXPR_POINTER_DEREF(EXPR_NIL)])
+             * or EXPR_TYPECAST(TypeName, expr=EXPR_POINTER_DEREF(EXPR_NIL)) */
+            const char *type_name = NULL;
+            struct Expression *deref_check = NULL;
+
+            if (base_expr->type == EXPR_FUNCTION_CALL)
+            {
+                ListNode_t *args = base_expr->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->next == NULL && args->cur != NULL)
+                {
+                    deref_check = (struct Expression *)args->cur;
+                    type_name = base_expr->expr_data.function_call_data.id;
+                }
+            }
+            else if (base_expr->type == EXPR_TYPECAST)
+            {
+                deref_check = base_expr->expr_data.typecast_data.expr;
+                type_name = base_expr->expr_data.typecast_data.target_type_id;
+            }
+
+            if (type_name == NULL || deref_check == NULL)
+                break;
+
+            /* Verify that the argument is nil^ (EXPR_POINTER_DEREF(EXPR_NIL)) */
+            if (deref_check->type != EXPR_POINTER_DEREF ||
+                deref_check->expr_data.pointer_deref_data.pointer_expr == NULL ||
+                deref_check->expr_data.pointer_deref_data.pointer_expr->type != EXPR_NIL)
+                break;
+
+            /* Look up the record type in the symbol table */
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+            if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                /* Try stripping unit prefix (e.g. "HeapTracer.Node" -> "Node") */
+                const char *dot = strrchr(type_name, '.');
+                if (dot != NULL)
+                {
+                    type_node = semcheck_find_preferred_type_node(symtab, dot + 1);
+                }
+                if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+                    break;
+            }
+
+            struct RecordType *record = hashnode_get_record_type(type_node);
+            if (record == NULL)
+                break;
+
+            /* Compute field offset using resolve_record_field */
+            struct RecordField *field_desc = NULL;
+            long long field_offset = 0;
+            if (resolve_record_field(symtab, record, field_id, &field_desc,
+                                     &field_offset, expr->line_num, 1) == 0 &&
+                field_desc != NULL)
+            {
+                *out_value = field_offset;
+                return 0;
+            }
+            break;
+        }
         default:
             break;
     }
