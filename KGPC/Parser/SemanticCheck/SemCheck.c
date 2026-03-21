@@ -78,7 +78,7 @@ static unsigned int env_ptr_hash(const char *ptr)
 {
     uintptr_t v = (uintptr_t)ptr;
     v ^= v >> 16;
-    v *= 0x45d9f3bu;
+    v *= 0x45d9f3bu;  /* murmurhash3 finalizer constant */
     v ^= v >> 16;
     return (unsigned int)(v & (KGPC_ENV_CACHE_SIZE - 1));
 }
