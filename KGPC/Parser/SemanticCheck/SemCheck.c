@@ -2547,12 +2547,22 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
         alias->storage_size = 4;
     }
     else if (pascal_identifier_equals(type_name, "QWord") ||
-             pascal_identifier_equals(type_name, "UInt64"))
+             pascal_identifier_equals(type_name, "UInt64") ||
+             pascal_identifier_equals(type_name, "NativeUInt"))
     {
         alias->base_type = QWORD_TYPE;
         alias->is_range = 1;
         alias->range_known = 1;
         alias->range_start = 0;
+        alias->range_end = LLONG_MAX;
+        alias->storage_size = 8;
+    }
+    else if (pascal_identifier_equals(type_name, "NativeInt"))
+    {
+        alias->base_type = INT64_TYPE;
+        alias->is_range = 1;
+        alias->range_known = 1;
+        alias->range_start = LLONG_MIN;
         alias->range_end = LLONG_MAX;
         alias->storage_size = 8;
     }
