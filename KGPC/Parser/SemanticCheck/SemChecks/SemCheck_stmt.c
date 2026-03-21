@@ -6697,20 +6697,13 @@ skip_type_receiver_rewrite:
                 }
                 else if (is_static && !receiver_is_type_ident && args_given != NULL)
                 {
-                    /* Static method called from within the class with implicit Self prepended.
-                     * Self must be stripped since static methods have no Self parameter.
-                     * Check if the first arg is "Self". */
-                    struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-                    if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
-                        receiver_expr->expr_data.id != NULL &&
-                        pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
-                    {
-                        ListNode_t *old_head = args_given;
-                        stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
-                        old_head->next = NULL;
-                        args_given = stmt->stmt_data.procedure_call_data.expr_args;
-                        static_arg_already_removed = 1;
-                    }
+                    /* Static method called via instance variable or implicit Self.
+                     * Static methods have no Self parameter, so strip the receiver. */
+                    ListNode_t *old_head = args_given;
+                    stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                    old_head->next = NULL;
+                    args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                    static_arg_already_removed = 1;
                 }
             }
             else
@@ -7005,18 +6998,13 @@ skip_type_receiver_rewrite:
             }
             else if (is_static && !receiver_is_type_ident && args_given != NULL)
             {
-                /* Static method called with implicit Self - strip it */
-                struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-                if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
-                    receiver_expr->expr_data.id != NULL &&
-                    pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
-                {
-                    args_given = args_given->next;
-                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
-                }
+                /* Static method called via instance variable or implicit Self.
+                 * Static methods have no Self parameter, so strip the receiver. */
+                args_given = args_given->next;
+                stmt->stmt_data.procedure_call_data.expr_args = args_given;
             }
         }
-        
+
         if (need_free_class_name && class_name != NULL) {
             free((void *)class_name);
         }

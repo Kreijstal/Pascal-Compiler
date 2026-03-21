@@ -4220,6 +4220,20 @@ int semcheck_funccall(int *type_return,
                                 fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
                             }
                         }
+                        else if (is_static && !any_has_self && !first_arg_is_type_ident &&
+                                 args_given != NULL && args_given->cur != NULL) {
+                            /* Static method called via instance variable (e.g. ht.StaticMethod(arg)).
+                             * The instance is not needed since static methods have no Self parameter.
+                             * Strip the instance receiver from the argument list. */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;
+                            args_given = expr->expr_data.function_call_data.args_expr;
+
+                            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed instance arg for static method call\n");
+                            }
+                        }
 
                         if (mangled_name != NULL)
                             free(mangled_name);
