@@ -2002,6 +2002,60 @@ int semcheck_funccall(int *type_return,
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
+            /* Handle specialized generic type as receiver: specialize T<A>.Method(...)
+             * The parser produces receiver="T$A" which may or may not be in the symbol
+             * table, but the base type "T" is.  Look up the base type and resolve the
+             * method through it (e.g. T$A__Method). */
+            const char *dollar = strchr(first_arg->expr_data.id, '$');
+            if (dollar != NULL && dollar > first_arg->expr_data.id &&
+                expr->expr_data.function_call_data.placeholder_method_name != NULL)
+            {
+                size_t base_len = (size_t)(dollar - first_arg->expr_data.id);
+                char *base_name = strndup(first_arg->expr_data.id, base_len);
+                if (base_name != NULL)
+                {
+                    HashNode_t *base_type_node = NULL;
+                    if (FindSymbol(&base_type_node, symtab, base_name) != 0 &&
+                        base_type_node != NULL && base_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        const char *method_name = expr->expr_data.function_call_data.placeholder_method_name;
+                        /* Build mangled method name: "T$A__Method" using the full specialized name */
+                        const char *spec_name = first_arg->expr_data.id;
+                        size_t spec_len = strlen(spec_name);
+                        size_t method_len = strlen(method_name);
+                        char *mangled_method = (char *)malloc(spec_len + 2 + method_len + 1);
+                        if (mangled_method != NULL)
+                        {
+                            snprintf(mangled_method, spec_len + 2 + method_len + 1,
+                                "%s__%s", spec_name, method_name);
+                            ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method);
+                            if (method_candidates != NULL)
+                            {
+                                /* Strip the receiver arg and rewrite to direct call */
+                                ListNode_t *remaining_args = args_given->next;
+                                destroy_expr(first_arg);
+                                args_given->cur = NULL;
+                                free(args_given);
+
+                                expr->expr_data.function_call_data.args_expr = remaining_args;
+                                args_given = remaining_args;
+
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = mangled_method;
+                                id = mangled_method;
+                                mangled_method = NULL;
+
+                                DestroyList(method_candidates);
+                                was_unit_qualified = 1;
+                                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                            }
+                            if (mangled_method != NULL)
+                                free(mangled_method);
+                        }
+                    }
+                    free(base_name);
+                }
+            }
             int is_unit_qualifier = semcheck_is_unit_name(first_arg->expr_data.id);
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {

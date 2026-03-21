@@ -123,6 +123,17 @@ KgpcType* generic_substitute_type_parameter(KgpcType* type, const char* param_na
     return type;
 }
 
+int generic_registry_is_type_param(const char *name) {
+    if (name == NULL) return 0;
+    for (GenericTypeDecl *decl = g_generic_registry.generic_decls; decl != NULL; decl = decl->next) {
+        for (int i = 0; i < decl->num_type_params; i++) {
+            if (decl->type_parameters[i] != NULL && strcasecmp(decl->type_parameters[i], name) == 0)
+                return 1;
+        }
+    }
+    return 0;
+}
+
 void generic_registry_cleanup(void) {
     // Clean up generic declarations
     GenericTypeDecl* decl = g_generic_registry.generic_decls;

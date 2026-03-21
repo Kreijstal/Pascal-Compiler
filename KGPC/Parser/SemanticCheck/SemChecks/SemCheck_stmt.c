@@ -5627,8 +5627,32 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 goto skip_type_receiver_rewrite;
 
             HashNode_t *type_node = NULL;
-            if (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
-                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            int type_found = (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
+                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+
+            /* Handle specialized generic type receiver: specialize T<A>.Method(...)
+             * The parser produces receiver="T$A" which may not be in the symbol
+             * table directly, but the base type "T" is.  Fall back to the base name. */
+            if (!type_found)
+            {
+                const char *dollar = strchr(first_arg->expr_data.id, '$');
+                if (dollar != NULL && dollar > first_arg->expr_data.id)
+                {
+                    char *gen_base = strndup(first_arg->expr_data.id, (size_t)(dollar - first_arg->expr_data.id));
+                    if (gen_base != NULL)
+                    {
+                        type_node = NULL;
+                        if (FindSymbol(&type_node, symtab, gen_base) != 0 &&
+                            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                        {
+                            type_found = 1;
+                        }
+                        free(gen_base);
+                    }
+                }
+            }
+
+            if (type_found)
             {
                 struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
                 if (record_info != NULL && record_info->type_id != NULL &&
