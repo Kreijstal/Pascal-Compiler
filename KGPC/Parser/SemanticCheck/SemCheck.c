@@ -18353,6 +18353,15 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             cur = cur->next;
             continue;
         }
+        if (child != NULL &&
+            child->tree_data.subprogram_data.num_generic_type_params > 0)
+        {
+            /* Unspecialized generic subprogram — skip body semcheck.
+             * Generic bodies are only checked after specialization, when
+             * concrete type arguments replace the type parameters. */
+            cur = cur->next;
+            continue;
+        }
         return_val += semcheck_subprogram(symtab, child, max_scope_lev);
         /* If child needs a static link, mark parent as having nested children that need links.
          * This is used by codegen to know when to PASS a static link when calling nested functions.
