@@ -14,6 +14,7 @@
 #include <assert.h>
 #include <ctype.h>
 #include "identifier_utils.h"
+#include "compilation_context.h"
 
 /* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
 #define SUBPROG_MAP_BUCKETS 211
@@ -726,13 +727,20 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         mark_stmt_calls(main_body, &map);
     }
     
-    /* Also traverse finalization statements */
-    ListNode_t *final = program->tree_data.program_data.finalization_statements;
-    while (final != NULL) {
-        if (final->type == LIST_STMT && final->cur != NULL) {
-            mark_stmt_calls((struct Statement*)final->cur, &map);
+    /* Also traverse unit initialization and finalization blocks */
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                if (unit_tree->tree_data.unit_data.initialization != NULL)
+                    mark_stmt_calls(unit_tree->tree_data.unit_data.initialization, &map);
+                if (unit_tree->tree_data.unit_data.finalization != NULL)
+                    mark_stmt_calls(unit_tree->tree_data.unit_data.finalization, &map);
+            }
         }
-        final = final->next;
     }
 
     /* Scan typed constant and variable initializers for function references.

@@ -1068,7 +1068,8 @@ static inline int get_var_storage_size(HashNode_t *node)
 }
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree);
+void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
+                 CompilationContext *comp_ctx);
 
 kgpc_target_abi_t g_current_codegen_abi = KGPC_TARGET_ABI_SYSTEM_V;
 int g_stack_home_space_bytes = 0;
@@ -2329,7 +2330,8 @@ void codegen_function_footer(char *func_name, CodeGenContext *ctx)
 
 
 /* This is the entry function */
-void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab)
+void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab,
+             CompilationContext *comp_ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -2361,13 +2363,33 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+
+    /* Collect callable export names from loaded units, then program */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_collect_callable_export_names(unit->tree_data.unit_data.subprograms);
+        }
+    }
     codegen_collect_callable_export_names(tree->tree_data.program_data.subprograms);
+
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 0);
-    codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
-    codegen_vmt(ctx, symtab, tree);
 
-    prgm_name = codegen_program(tree, ctx, symtab);
+    /* Collect available subprogram labels from loaded units, then program */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_collect_available_subprogram_labels(unit->tree_data.unit_data.subprograms);
+        }
+    }
+    codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
+
+    codegen_vmt(ctx, symtab, tree, comp_ctx);
+
+    prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
     codegen_main(prgm_name, ctx);
 
     codegen_program_footer(ctx);
@@ -3370,31 +3392,11 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
-/* Generate Virtual Method Tables (VMT) for classes with virtual methods */
-void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
+/* Helper: emit VMTs/RTTI for all type declarations in a list. */
+static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
+                                        ListNode_t *type_decls,
+                                        EmittedClassSet *emitted_classes)
 {
-    #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
-    #endif
-    assert(ctx != NULL);
-    assert(symtab != NULL);
-    assert(tree != NULL);
-    
-    if (tree->type != TREE_PROGRAM_TYPE)
-        return;
-    
-    ListNode_t *type_decls = tree->tree_data.program_data.type_declaration;
-    if (type_decls == NULL)
-        return;
-    
-    /* RTTI metadata and VMTs are generated as read-only data structures */
-    fprintf(ctx->output_file, "\n");
-    fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
-    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
-
-    EmittedClassSet emitted_classes = {0};
-
-    /* Iterate through all type declarations */
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
@@ -3406,19 +3408,16 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
             struct RecordType *record_info = NULL;
             const char *class_label = NULL;
-            
-            /* Check if this is a record/class type with methods */
+
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
                 record_info = codegen_record_from_type_decl(type_tree);
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
                 class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
             }
-            /* Also check for TYPE_DECL_ALIAS that points to specialized generic classes */
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
                 record_info = codegen_record_from_type_decl(type_tree);
                 if (record_info != NULL && record_info->type_id != NULL) {
-                    /* Check if this is a specialized generic */
                     if (record_info->is_generic_specialization) {
                         class_label = record_info->type_id;
                     }
@@ -3426,12 +3425,76 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
             }
 
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                &emitted_classes);
+                emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                &emitted_classes);
+                emitted_classes);
         }
         cur = cur->next;
     }
+}
+
+/* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
+static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
+                                                ListNode_t *type_decls,
+                                                const EmittedClassSet *emitted_classes)
+{
+    ListNode_t *cur = type_decls;
+    while (cur != NULL) {
+        Tree_t *type_tree = (Tree_t *)cur->cur;
+        if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
+            !codegen_type_decl_suppressed(type_tree) &&
+            type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
+            const char *alias_name = type_tree->tree_data.type_decl_data.id;
+            const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
+            if (alias_name != NULL && target_name != NULL) {
+                int target_emitted = emitted_class_set_contains(emitted_classes, target_name);
+                if (target_emitted) {
+                    fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
+                    fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
+                    fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
+                    fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
+                    fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
+                }
+            }
+        }
+        cur = cur->next;
+    }
+}
+
+/* Generate Virtual Method Tables (VMT) for classes with virtual methods.
+ * Iterates type declarations from loaded units (via comp_ctx) and the program tree.
+ * Uses a single EmittedClassSet to avoid duplicate emissions. */
+void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
+                 CompilationContext *comp_ctx)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(ctx != NULL);
+    assert(symtab != NULL);
+    assert(tree != NULL);
+
+    /* RTTI metadata and VMTs are generated as read-only data structures */
+    fprintf(ctx->output_file, "\n");
+    fprintf(ctx->output_file, "# Class RTTI metadata and Virtual Method Tables (VMT)\n");
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+
+    EmittedClassSet emitted_classes = {0};
+
+    /* Emit VMTs from loaded units first */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_vmt_from_type_list(ctx, symtab,
+                    unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
+        }
+    }
+
+    /* Emit VMTs from program type declarations */
+    if (tree->type == TREE_PROGRAM_TYPE)
+        codegen_vmt_from_type_list(ctx, symtab,
+            tree->tree_data.program_data.type_declaration, &emitted_classes);
 
     /* Also emit VMTs for class types that exist only in the symbol table
      * (e.g., specializations pulled in from units like FGL). */
@@ -3476,30 +3539,18 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree)
         }
     }
 
-    /* Emit TYPEINFO/VMT aliases for type aliases that point to class/interface types.
-     * e.g., IInterface = IUnknown  →  .set IInterface_TYPEINFO, IUnknown_TYPEINFO */
-    cur = type_decls;
-    while (cur != NULL) {
-        Tree_t *type_tree = (Tree_t *)cur->cur;
-        if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL &&
-            !codegen_type_decl_suppressed(type_tree) &&
-            type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-            const char *alias_name = type_tree->tree_data.type_decl_data.id;
-            const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
-            if (alias_name != NULL && target_name != NULL) {
-                /* Check if the target type has been emitted as a class/interface */
-                int target_emitted = emitted_class_set_contains(&emitted_classes, target_name);
-                if (target_emitted) {
-                    fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
-                    fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
-                    fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
-                    fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
-                    fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
-                }
-            }
+    /* Emit TYPEINFO/VMT aliases from loaded units and program */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_vmt_aliases_from_type_list(ctx,
+                    unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
         }
-        cur = cur->next;
     }
+    if (tree->type == TREE_PROGRAM_TYPE)
+        codegen_vmt_aliases_from_type_list(ctx,
+            tree->tree_data.program_data.type_declaration, &emitted_classes);
 
     emitted_class_set_destroy(&emitted_classes);
     fprintf(ctx->output_file, ".text\n");
@@ -3709,7 +3760,8 @@ void codegen_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 }
 
 /* Returns the program name for use with main */
-char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
+char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
+                       CompilationContext *comp_ctx)
 {
     if (prgm == NULL)
         return NULL;
@@ -3751,6 +3803,16 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
 
     push_stackscope();
 
+    /* Process var/const declarations from loaded units first, then program */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            codegen_function_locals(unit->tree_data.unit_data.interface_var_decls, ctx, symtab);
+            codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.interface_const_decls);
+        }
+    }
     codegen_function_locals(data->var_declaration, ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, data->const_declaration);
 
@@ -3768,7 +3830,23 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
+    /* Emit program subprograms first (they override unit versions with the
+     * same mangled_id), then unit subprograms.
+     * Units are iterated in REVERSE load order so that more fundamental units
+     * (e.g. System) are processed last and their implementations win over
+     * wrapper functions in higher-level units (e.g. objpas).  In the
+     * loaded_units array, dependencies are added before their dependents
+     * return from load_unit(), so the most fundamental unit has the highest
+     * array index.  Iterating in reverse processes fundamentals first. */
     codegen_subprograms(data->subprograms, ctx, symtab);
+    if (comp_ctx != NULL) {
+        for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            codegen_subprograms(unit->tree_data.unit_data.subprograms, ctx, symtab);
+        }
+    }
 
     /* Build hash set of emitted subprogram labels for O(1) lookups */
     CodeGenStringSet emitted_labels;
@@ -3782,6 +3860,38 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    /* Build a temporary combined subprogram list for alias post-passes.
+     * The alias passes need to scan all subprograms (units + program) to find
+     * forward decl → implementation matches across unit boundaries. */
+    ListNode_t *all_subprograms = NULL;
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
+            while (usubs != NULL) {
+                ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
+                if (copy != NULL) {
+                    copy->next = all_subprograms;
+                    all_subprograms = copy;
+                }
+                usubs = usubs->next;
+            }
+        }
+    }
+    {
+        ListNode_t *psubs = data->subprograms;
+        while (psubs != NULL) {
+            ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
+            if (copy != NULL) {
+                copy->next = all_subprograms;
+                all_subprograms = copy;
+            }
+            psubs = psubs->next;
+        }
+    }
+
     /* Post-pass: emit .set aliases for cname_override values.
        Forward declarations with [Alias:'FPC_DO_EXIT'] have cname_override set
        but no body; the matching implementation has a body but no cname_override.
@@ -3790,7 +3900,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     memset(&emitted_cname_aliases, 0, sizeof(emitted_cname_aliases));
     if (ctx->output_file != NULL) {
         int debug_alias = (getenv("KGPC_DEBUG_ALIAS") != NULL);
-        ListNode_t *alias_scan = data->subprograms;
+        ListNode_t *alias_scan = all_subprograms;
         while (alias_scan != NULL) {
             if (alias_scan->type == LIST_TREE && alias_scan->cur != NULL) {
                 Tree_t *sub = (Tree_t *)alias_scan->cur;
@@ -3829,7 +3939,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
                            referencing a function that has [Alias:'FPC_DO_EXIT']). */
                         else if (is_internal_alias &&
                                  sub->tree_data.subprogram_data.statement_list == NULL) {
-                            ListNode_t *impl_scan = data->subprograms;
+                            ListNode_t *impl_scan = all_subprograms;
                             while (impl_scan != NULL) {
                                 if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
                                     Tree_t *impl = (Tree_t *)impl_scan->cur;
@@ -3884,7 +3994,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
        has a different mangled_id (e.g. forward "runerror_i" → impl "FPC_RUNERROR").
        Call sites reference the forward's mangled_id, so we need an alias. */
     if (ctx->output_file != NULL) {
-        ListNode_t *fwd_scan = data->subprograms;
+        ListNode_t *fwd_scan = all_subprograms;
         while (fwd_scan != NULL) {
             if (fwd_scan->type == LIST_TREE && fwd_scan->cur != NULL) {
                 Tree_t *fwd = (Tree_t *)fwd_scan->cur;
@@ -3952,22 +4062,68 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_set_destroy(&emitted_labels);
     codegen_set_destroy(&emitted_cname_aliases);
 
+    /* Free the temporary combined subprograms list (shallow copies only) */
+    {
+        ListNode_t *tmp = all_subprograms;
+        while (tmp != NULL) {
+            ListNode_t *next = tmp->next;
+            tmp->cur = NULL;  /* Don't free the Tree_t — we don't own it */
+            free(tmp);
+            tmp = next;
+        }
+        all_subprograms = NULL;
+    }
+
     inst_list = NULL;
+    /* Emit var initializers from loaded units first, then program */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            inst_list = codegen_var_initializers(unit->tree_data.unit_data.interface_var_decls, inst_list, ctx, symtab);
+        }
+    }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
+
+    /* Emit unit initialization blocks in dependency (load) order */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            struct Statement *init_stmt = unit->tree_data.unit_data.initialization;
+            if (init_stmt == NULL)
+                continue;
+            /* Only inline the inner statements from compound statements */
+            if (init_stmt->type == STMT_COMPOUND_STATEMENT) {
+                ListNode_t *stnode = init_stmt->stmt_data.compound_statement;
+                while (stnode != NULL) {
+                    if (stnode->type == LIST_STMT && stnode->cur != NULL)
+                        inst_list = codegen_stmt((struct Statement *)stnode->cur, inst_list, ctx, symtab);
+                    stnode = stnode->next;
+                }
+            } else {
+                inst_list = codegen_stmt(init_stmt, inst_list, ctx, symtab);
+            }
+        }
+    }
+
     if (data->body_statement == NULL && getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] WARNING: program body is NULL during codegen\n");
     }
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
-    // Generate finalization code from units (in LIFO order - already reversed in list)
-    if (data->finalization_statements != NULL) {
-        ListNode_t *final_node = data->finalization_statements;
-        while (final_node != NULL) {
-            if (final_node->type == LIST_STMT && final_node->cur != NULL) {
-                struct Statement *final_stmt = (struct Statement *)final_node->cur;
-                inst_list = codegen_stmt(final_stmt, inst_list, ctx, symtab);
-            }
-            final_node = final_node->next;
+    /* Emit unit finalization blocks in reverse dependency order (LIFO) */
+    if (comp_ctx != NULL) {
+        for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit == NULL || unit->type != TREE_UNIT)
+                continue;
+            struct Statement *final_stmt = unit->tree_data.unit_data.finalization;
+            if (final_stmt == NULL)
+                continue;
+            inst_list = codegen_stmt(final_stmt, inst_list, ctx, symtab);
         }
     }
 

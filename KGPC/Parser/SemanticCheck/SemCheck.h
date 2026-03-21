@@ -53,6 +53,11 @@ void wire_all_unit_scope_deps(SymTab_t *symtab);
  * caller must call LeaveScope() after this returns. */
 int semcheck_unit(SymTab_t *symtab, Tree_t *tree);
 
+/* Track which units have been fully semchecked.
+ * Declarations from fully-checked units are skipped in semcheck_program(). */
+int semcheck_is_unit_fully_checked(int unit_index);
+void semcheck_mark_unit_fully_checked(int unit_index);
+
 /* Lightweight per-unit semantic check: processes declarations only (types, consts,
  * vars, subprogram signatures) without checking subprogram bodies.
  * Enters a SCOPE_UNIT scope; caller must call LeaveScope() after this returns. */
@@ -99,6 +104,13 @@ int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr);
 int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
     unsigned char *out_bytes, size_t out_bytes_size, size_t *out_size,
     long long *out_mask, int *is_char_set);
+
+/* Predeclare types, enums, subprogram signatures, and trivial constants from
+ * a program tree into the given unit's scope.  Used for System/prelude, which
+ * is parsed as TREE_PROGRAM_TYPE but whose declarations must be visible to
+ * other units loaded before semcheck_program() runs. */
+void semcheck_predeclare_program_into_unit_scope(SymTab_t *symtab, Tree_t *program_tree,
+    int unit_idx);
 
 /* Cached getenv() for KGPC_* environment variables.
  * getenv() does a linear scan of the environment on each call; with hundreds of

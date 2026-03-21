@@ -28,6 +28,7 @@ static char* strndup(const char* s, size_t n)
 #include "from_cparser.h"
 #include "../../string_intern.h"
 #include "../../unit_registry.h"
+#include "../../compilation_context.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
@@ -3236,14 +3237,19 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
     }
 
     collect_specialize_from_stmt(program_tree->tree_data.program_data.body_statement, program_tree);
-    if (program_tree->tree_data.program_data.finalization_statements != NULL)
+    /* Scan unit init/final blocks for generic specializations */
     {
-        ListNode_t *final_node = program_tree->tree_data.program_data.finalization_statements;
-        while (final_node != NULL)
-        {
-            if (final_node->type == LIST_STMT)
-                collect_specialize_from_stmt((struct Statement *)final_node->cur, program_tree);
-            final_node = final_node->next;
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                if (unit_tree->tree_data.unit_data.initialization != NULL)
+                    collect_specialize_from_stmt(unit_tree->tree_data.unit_data.initialization, program_tree);
+                if (unit_tree->tree_data.unit_data.finalization != NULL)
+                    collect_specialize_from_stmt(unit_tree->tree_data.unit_data.finalization, program_tree);
+            }
         }
     }
 }

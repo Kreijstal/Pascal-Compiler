@@ -35,6 +35,7 @@
 #include "../../unit_registry.h"
 #include "../../string_intern.h"
 #include "../../Optimizer/optimizer.h"
+#include "../../compilation_context.h"
 #include "../pascal_frontend.h"
 #include "../ParseTree/tree.h"
 #include "../ParseTree/tree_types.h"
@@ -106,6 +107,23 @@ static char* strndup(const char* s, size_t n)
 static ListNode_t *g_semcheck_unit_names = NULL;
 static int g_semcheck_current_unit_index = 0;
 static int g_semcheck_imported_decl_unit_index = 0;
+
+/* Track which units have been fully semchecked via semcheck_unit().
+ * Declarations from these units are skipped in semcheck_program(). */
+static int g_unit_fully_semchecked[SYMTAB_MAX_UNITS];
+
+int semcheck_is_unit_fully_checked(int unit_index)
+{
+    if (unit_index <= 0 || unit_index >= SYMTAB_MAX_UNITS)
+        return 0;
+    return g_unit_fully_semchecked[unit_index];
+}
+
+void semcheck_mark_unit_fully_checked(int unit_index)
+{
+    if (unit_index > 0 && unit_index < SYMTAB_MAX_UNITS)
+        g_unit_fully_semchecked[unit_index] = 1;
+}
 static char *g_semcheck_source_path = NULL;
 static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
@@ -4086,7 +4104,7 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
                     cur = cur->next;
                     continue;
                 }
-                
+
                 int allow = 1;
                 const char *type_id = NULL;
                 int type_tag = UNKNOWN_TYPE;
@@ -12624,8 +12642,11 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 /* Quick pre-pass: push trivially evaluable imported constants (literal integers,
  * literal reals, simple identifier references) onto the symbol table so that
  * cross-unit qualified references like types.EqualsValue can resolve them.
- * This handles merge-ordering issues where a re-exporting unit (Math) is
- * merged before the defining unit (Types). */
+ *
+ * Called during unit loading (semcheck_unit_decls_only) and System predeclaration
+ * (semcheck_predeclare_program_into_unit_scope) to populate per-unit scopes
+ * before full const evaluation.  Cross-unit resolution uses scope dependency
+ * edges rather than relying on list concatenation order. */
 static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls)
 {
     for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
@@ -12966,21 +12987,6 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
     }
 }
 
-static int semcheck_const_decls_imported(SymTab_t *symtab, ListNode_t *const_decls)
-{
-    int return_val = 0;
-    ListNode_t *cur = const_decls;
-    while (cur != NULL)
-    {
-        assert(cur->type == LIST_TREE);
-        Tree_t *tree = (Tree_t *)cur->cur;
-        assert(tree->type == TREE_CONST_DECL);
-        if (tree->tree_data.const_decl_data.defined_in_unit)
-            return_val += semcheck_single_const_decl(symtab, tree);
-        cur = cur->next;
-    }
-    return return_val;
-}
 
 static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
 {
@@ -13050,14 +13056,13 @@ static int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *
 
 /* Semantic check on constant declarations.
  *
- * ARCHITECTURAL FIX: Two-pass processing to handle qualified constant references.
- * When a unit (e.g., baseunix) imports another unit (e.g., UnixType) and re-aliases
- * constants like: ARG_MAX = UnixType.ARG_MAX;
- *
- * The imported unit's constants must be pushed to the symbol table BEFORE the
- * local constants are evaluated. This requires:
- *   Pass 1: Process only constants from imported units (defined_in_unit=1)
- *   Pass 2: Process remaining constants (local constants that may reference imported ones)
+ * Two-pass processing to handle qualified constant references.
+ * Each constant is pushed into its per-unit scope (via source_unit_index),
+ * and cross-unit references resolve through scope dependency edges.
+ * Imported constants are processed first so that local constants referencing
+ * them (e.g. ARG_MAX = UnixType.ARG_MAX) can find them during evaluation.
+ *   Pass 1: Process constants from imported units (defined_in_unit=1)
+ *   Pass 2: Process local constants (defined_in_unit=0)
  */
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 {
@@ -13964,8 +13969,9 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     semcheck_timing_step("unit names", &t0);
 
     /* Wire scope tree deps: program scope can see ALL loaded units.
-     * This is needed because units are merged into the program tree,
-     * so subprograms from any unit need to see their own unit's symbols. */
+     * Unit declarations are already in per-unit scopes (from full
+     * semcheck_unit() during loading), so the program scope only needs
+     * dep edges to find them. */
     wire_program_scope_all_units(symtab, symtab->current_scope);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
@@ -13981,15 +13987,19 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after args: %d\n", return_val);
 #endif
 
+    /* Predeclare types and enums.  These are idempotent -- they check for
+     * existing entries and skip duplicates.  Unit-owned types are already
+     * in their per-unit scopes from semcheck_unit(), but re-predeclaring
+     * them here is harmless and ensures cross-references work. */
     return_val += predeclare_enum_literals(symtab, tree->tree_data.program_data.type_declaration);
-    /* Pre-declare types so they're available for const expressions like High(MyType) */
     return_val += predeclare_types(symtab, tree->tree_data.program_data.type_declaration);
     semcheck_timing_step("predeclare types", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after type predeclare: %d\n", return_val);
 #endif
 
-    /* Predeclare subprograms so they can be referenced in const initializers. */
+    /* Predeclare subprograms so they can be referenced in const initializers.
+     * Idempotent -- skips already-declared entries. */
     return_val += predeclare_subprograms(symtab, tree->tree_data.program_data.subprograms, 0, NULL);
     semcheck_timing_step("predeclare subprograms", &t0);
     if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL)
@@ -14010,21 +14020,23 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
             debug_cur = debug_cur->next;
         }
     }
-    
+
     /* Four-pass processing for constants to handle all reference patterns:
      *
      * Pass 1: Imported unit untyped constants.
      * Pass 2: Imported unit typed constants (e.g., DirectorySeparator from system.p).
      * Pass 3: Local untyped constants.
      * Pass 4: Local typed constants.
+     *
+     * Note: trivial imported constants (literal ints, reals, strings) are already
+     * pre-pushed into per-unit scopes during unit loading (semcheck_unit_decls_only)
+     * and System predeclaration (semcheck_predeclare_program_into_unit_scope).
+     * Cross-unit resolution uses scope dependency edges, not list concatenation order.
      */
 
-    /* Pre-push trivially evaluable imported consts (literal integers, reals, etc.)
-     * to handle cross-unit forward references due to merge ordering. */
-    prepush_trivial_imported_consts(symtab, tree->tree_data.program_data.const_declaration);
-
     /* Pass 1: Imported unit untyped constants */
-    return_val += semcheck_const_decls_imported(symtab, tree->tree_data.program_data.const_declaration);
+    return_val += semcheck_const_decls_imported_filtered(symtab,
+        tree->tree_data.program_data.const_declaration, 1);
     semcheck_timing_step("consts pass1 imported untyped", &t0);
 
     /* Pass 2: Imported unit typed constants */
@@ -14039,6 +14051,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
 
     /* Pass 3: Local untyped constants */
     return_val += semcheck_const_decls_local(symtab, tree->tree_data.program_data.const_declaration);
+
+    /* Pass 3b: Deferred imported constants (qualified refs to current unit) */
+    return_val += semcheck_const_decls_imported_filtered(symtab,
+        tree->tree_data.program_data.const_declaration, 0);
     semcheck_timing_step("consts pass3 local untyped", &t0);
 #ifdef DEBUG
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after consts: %d\n", return_val);
@@ -14087,26 +14103,29 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if (return_val > 0) fprintf(stderr, "DEBUG: semcheck_program error after body: %d\n", return_val);
 #endif
 
-    // Semantic check finalization statements from units
-    if (tree->tree_data.program_data.finalization_statements != NULL) {
-        ListNode_t *final_node = tree->tree_data.program_data.finalization_statements;
-        while (final_node != NULL) {
-            if (final_node->type == LIST_STMT && final_node->cur != NULL) {
-                struct Statement *final_stmt = (struct Statement *)final_node->cur;
-                /* Set unit error context so errors show the correct unit
-                 * instead of the main program file. */
+    /* Semantic check unit initialization and finalization blocks from loaded units */
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
                 int saved_suppress = g_semcheck_error_suppress_source_index;
                 const char *saved_unit_ctx = g_semcheck_error_unit_name;
-                if (final_stmt->source_unit_index > 0) {
-                    const char *uname = unit_registry_get(final_stmt->source_unit_index);
+                int unit_idx = comp_ctx->loaded_units[ui].unit_idx;
+                if (unit_idx > 0) {
+                    const char *uname = unit_registry_get(unit_idx);
                     g_semcheck_error_unit_name = uname ? uname : "<unit>";
                     g_semcheck_error_suppress_source_index = 0;
                 }
-                return_val += semcheck_stmt(symtab, final_stmt, INT_MAX);
+                if (unit_tree->tree_data.unit_data.initialization != NULL)
+                    return_val += semcheck_stmt(symtab, unit_tree->tree_data.unit_data.initialization, INT_MAX);
+                if (unit_tree->tree_data.unit_data.finalization != NULL)
+                    return_val += semcheck_stmt(symtab, unit_tree->tree_data.unit_data.finalization, INT_MAX);
                 g_semcheck_error_suppress_source_index = saved_suppress;
                 g_semcheck_error_unit_name = saved_unit_ctx;
             }
-            final_node = final_node->next;
         }
     }
     semcheck_timing_step("finalization", &t0);
@@ -14114,10 +14133,10 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     if(optimize_flag() > 0 && return_val == 0)
     {
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
-            fprintf(stderr, "[KGPC] Before optimize: body_statement = %p\n", 
+            fprintf(stderr, "[KGPC] Before optimize: body_statement = %p\n",
                     (void*)tree->tree_data.program_data.body_statement);
             if (tree->tree_data.program_data.body_statement != NULL) {
-                fprintf(stderr, "[KGPC] Body statement type: %d\n", 
+                fprintf(stderr, "[KGPC] Body statement type: %d\n",
                         tree->tree_data.program_data.body_statement->type);
                 if (tree->tree_data.program_data.body_statement->type == STMT_COMPOUND_STATEMENT) {
                     fprintf(stderr, "[KGPC] Compound statement list: %p\n",
@@ -14127,7 +14146,7 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
         }
         optimize(symtab, tree);
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
-            fprintf(stderr, "[KGPC] After optimize: body_statement = %p\n", 
+            fprintf(stderr, "[KGPC] After optimize: body_statement = %p\n",
                     (void*)tree->tree_data.program_data.body_statement);
         }
     }
@@ -14188,9 +14207,15 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     /* Wire the unit's own scope table as a dep of this UNIT scope so that
      * FindIdent_Tree can see the stable per-unit declarations in
-     * unit_scopes[unit_idx]->table. This mirrors what semcheck_unit_decls_only does
-     * and ensures that type lookups during semcheck_decls/semcheck_subprogram
-     * can find per-unit types (e.g. TResourceStringTableList in objpas). */
+     * unit_scopes[unit_idx]->table. This ensures that type lookups during
+     * semcheck_decls/semcheck_subprogram can find per-unit types
+     * (e.g. TResourceStringTableList in objpas).
+     *
+     * Also wire the unit's dependencies (interface + implementation uses)
+     * into the stable own_unit_scope so that semcheck_switch_to_unit_scope
+     * (which sets current_scope = unit_scopes[unit_idx]) can find symbols
+     * from dependencies (e.g. PtrUInt from System) when processing
+     * declarations and procedure bodies. */
     if (g_semcheck_current_unit_index > 0)
     {
         ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
@@ -14202,6 +14227,24 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 if (sys_idx > 0)
                     ScopeAddDependency(own_unit_scope,
                                        GetOrCreateUnitScope(symtab, sys_idx));
+            }
+            /* Wire the interface + implementation uses as deps of own_unit_scope */
+            wire_scope_deps(symtab, own_unit_scope,
+                            tree->tree_data.unit_data.interface_uses);
+            {
+                ListNode_t *dep_cur = tree->tree_data.unit_data.implementation_uses;
+                while (dep_cur != NULL)
+                {
+                    if (dep_cur->type == LIST_STRING && dep_cur->cur != NULL)
+                    {
+                        const char *dep_name = (const char *)dep_cur->cur;
+                        int dep_idx = unit_registry_add(dep_name);
+                        if (dep_idx > 0)
+                            ScopeAddDependency(own_unit_scope,
+                                               GetOrCreateUnitScope(symtab, dep_idx));
+                    }
+                    dep_cur = dep_cur->next;
+                }
             }
         }
     }
@@ -14441,6 +14484,36 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
  * full type resolution, constant evaluation, or body checking -- those are
  * handled later by semcheck_program() on the merged tree.
  * Enters a SCOPE_UNIT scope; caller must call LeaveScope() after this returns. */
+void semcheck_predeclare_program_into_unit_scope(SymTab_t *symtab, Tree_t *program_tree,
+    int unit_idx)
+{
+    assert(symtab != NULL);
+    assert(program_tree != NULL);
+    assert(program_tree->type == TREE_PROGRAM_TYPE);
+    if (unit_idx <= 0)
+        return;
+
+    /* Switch to the unit's scope for predeclaration */
+    ScopeNode *saved_scope = symtab->current_scope;
+    ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, unit_idx);
+    symtab->current_scope = unit_scope;
+
+    EnterScope(symtab, 0);
+
+    /* Predeclare types and enum literals */
+    predeclare_enum_literals(symtab, program_tree->tree_data.program_data.type_declaration);
+    predeclare_types(symtab, program_tree->tree_data.program_data.type_declaration);
+
+    /* Predeclare subprogram signatures */
+    predeclare_subprograms(symtab, program_tree->tree_data.program_data.subprograms, 0, NULL);
+
+    /* Pre-push trivially evaluable constants */
+    prepush_trivial_imported_consts(symtab, program_tree->tree_data.program_data.const_declaration);
+
+    LeaveScope(symtab);
+    symtab->current_scope = saved_scope;
+}
+
 int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val;

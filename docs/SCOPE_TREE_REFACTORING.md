@@ -1,298 +1,371 @@
-# Scope Tree Refactoring: Flat Stack to Parent-Pointer Tree
+# Scope Tree Refactoring
+
+## Status
+
+The scope-tree refactor is complete.
+
+What it solved:
+
+- name lookup is tree-based instead of flat-stack based
+- per-unit visibility is structural through scope dependencies
+- `push_target_unit`, `unit_context`, `stack_head`, and related flat-model routing hacks are gone
+- overload scoring no longer compensates for flat-scope leakage
+
+What it did **not** solve:
+
+- programs still compile imported units through a merged-program pipeline
+- loaded unit ASTs are still appended into the program AST
+- standalone unit compilation and `uses`-based program compilation do not yet share one identical semantic path
+
+That remaining issue is architectural, but it is **not** part of the completed scope-tree phases.
 
 ## Motivation
 
-The current scope system uses a flat stack (`stack_head` linked list) shared by all method bodies, plus a bolt-on `unit_tables[256]` array for per-unit symbols. This causes:
+The original compiler mixed two separate problems:
 
-- **Scope leaking**: Local variables, parameters, and implicit variables from one subprogram are visible inside sibling subprograms. Examples:
-  - `x: uint64` (local in `Xoshiro128ss_32.Setup` in system.inc) shadows `TPointF.x` (field) in types.pp methods — **fixed with band-aid at `add_class_vars_to_method_scope_impl`**
-  - `Output: TStream` (parameter of `ObjectBinaryToText` in classes.inc) shadows `Output: Text` (system global) inside `fpc_get_output` in text.inc — causes `format_function` compilation failure, **unfixable without tree scopes**
-  - `Self` from a previously semchecked class method body leaks into standalone procedures like `Assign(t:Text, s:ShortString)` in text.inc. `semcheck_proccall` finds `Self` in scope, thinks the `Assign(t, AnsiString(s))` call is a method call on Self's class, and bypasses the normal overload resolution entirely. This causes the call to resolve to `assign_t_ss` (itself) instead of `assign_t_rbs` (the RawByteString overload), producing **infinite recursion at runtime**. Affects `crt_colour_list`, `fpc_bootstrap_assign_textrec_cast`, `fpc_bootstrap_system_qualified_proccall`, `fpc_settextcodepage`, `tdd_cp_acp_paramstr_ioresult` — all 5 crash with stack overflow in `assign_t_ss`.
-- **Name mangling ordering dependency**: In the flat merge model, all units are merged then semchecked sequentially. ObjPas's `Integer = LongInt` override happens partway through. Call sites processed BEFORE the override mangle `Integer` parameters as `_i` (INT_TYPE = SmallInt). Function bodies processed AFTER mangle as `_li` (LONGINT_TYPE = LongInt). The symbols don't match → **link errors**. Example: `FileCreate(Filename: RawByteString; Rights: Integer)` is codegenned as `filecreate_rbs_li` but callers emit `call filecreate_rbs_i`. Affects `adfgvxcipher`, `class_field_offset_tstringlist`, `tdd_varparam_tstringlist_filter`. With tree scopes, each unit resolves types in its own scope — a unit that `uses ObjPas` sees `Integer = LongInt` from the start, no ordering dependency.
-- **Workaround proliferation**: `source_unit_index` checks, `unit_context` routing, `push_target_unit` save/restore (~40 sites), `add_class_vars` FindIdent hacks
-- **Unnatural complexity**: The flat stack fights against Pascal's inherently tree-structured scoping
+1. scope lookup was wrong
+2. unit compilation architecture was merged and order-sensitive
 
-A tree just mirrors the source code structure. It simplifies the codebase by removing workarounds, not adding complexity.
+The scope-tree work addressed the first problem.
 
-**Priority**: FPC RTL tests take priority over normal tests. The goal is all 208 FPC RTL tests passing.
+The old flat model caused:
 
-## Current Architecture
+- sibling subprogram locals leaking into each other
+- implicit `Self` leaking into unrelated procedures
+- unit symbols and program symbols colliding through global routing state
+- name-mangling depending on semcheck order rather than unit-local meaning
 
-```
-SymTab_t:
-  stack_head → [scope0] → [scope1] → [scope2] → ...   (flat linked list)
-  unit_tables[256]                                       (bolt-on per-unit tables)
-  builtins                                               (single hash table)
-  unit_context                                           (which unit we're checking)
-  push_target_unit                                       (routing hack)
-```
+A tree of scopes fixes those visibility bugs directly because Pascal scopes are naturally hierarchical.
 
-`FindIdent` walks: stack → all accessible unit_tables → builtins. Everything sees everything.
+## Completed Architecture
 
-## Target Architecture
+Current lookup model:
 
-```
-builtins (root)
-  ├── system.pp unit scope
-  │     ├── Xoshiro128ss_32.Setup scope (parent → system)
-  │     └── ... other system methods
-  ├── types.pp unit scope (deps: [system])
-  │     ├── TPointF.MidPoint scope (parent → types)
-  │     │     └── nested block (parent → MidPoint)
-  │     └── TRectF.CenterAt scope (parent → types)
-  ├── sysutils.pp unit scope (deps: [system, types])
-  └── program scope (deps: [system, sysutils, ...])
-        └── main block scope
+```text
+builtin scope
+  |- unit scope: System
+  |- unit scope: ObjPas
+  |- unit scope: SysUtils
+  \- program scope
+       \- subprogram scopes
+            \- nested block scopes
 ```
 
-`FindIdent` walks: current → parent → parent → ... → builtins. At unit scopes, also checks `dep_scopes[]`. Never sees siblings or cousins.
+Lookup rules:
 
-## A. Data Structure Changes
+- search current scope
+- walk parents
+- at unit/program scopes, also search direct dependency unit scopes
+- never search sibling or unrelated scopes
 
-### New `ScopeNode` struct (SymTab.h)
+This is the completed scope-tree result.
 
-```c
-typedef enum ScopeKind {
-    SCOPE_BUILTIN,      /* Root: compiler builtins */
-    SCOPE_UNIT,         /* Unit-level scope (one per unit) */
-    SCOPE_PROGRAM,      /* Program-level scope (globals) */
-    SCOPE_SUBPROGRAM,   /* Procedure/function body */
-    SCOPE_BLOCK,        /* Nested block: try-except, with, anonymous method */
-} ScopeKind;
+## What Changed
 
-typedef struct ScopeNode {
-    HashTable_t *table;          /* Symbols declared in this scope */
-    struct ScopeNode *parent;    /* Walk this chain for FindIdent */
-    ScopeKind kind;
-    int unit_index;              /* Which unit this scope belongs to (0 = program) */
+### Data Model
 
-    /* For SCOPE_UNIT: dependency edges from `uses` clause */
-    struct ScopeNode **dep_scopes;
-    int num_deps;
-    int cap_deps;
-} ScopeNode;
+`SymTab_t` now centers on:
+
+- `builtin_scope`
+- `current_scope`
+- `unit_scopes[]`
+
+The old flat-model fields have been removed from active use.
+
+### Lookup
+
+`FindIdent`/`FindSymbol` now use the scope tree directly.
+
+This means:
+
+- no global scan of all unit tables
+- no special per-unit fallback helpers
+- no hidden visibility across sibling scopes
+
+### Insertion
+
+Declaration processing inserts into the structurally correct scope by switching `current_scope` explicitly.
+
+This replaced the old global routing model.
+
+### Overload Resolution
+
+Overload resolution was simplified after tree scoping became reliable.
+
+The scorer now prefers:
+
+- better conversion quality
+- fewer defaulted arguments
+- fewer untyped parameters
+- non-builtin over builtin
+
+Large flat-model tie-break heuristics were removed.
+
+## Completed Phases
+
+### Phase 1: Scope Infrastructure
+
+Completed.
+
+- added scope-node based infrastructure
+- introduced `EnterScope` / `LeaveScope`
+- established explicit parent/dependency relationships
+
+### Phase 2: Tree Lookup Bring-Up
+
+Completed.
+
+- implemented tree-based symbol lookup
+- validated it against the old path during migration
+- switched lookup permanently to the tree path
+
+### Phase 3: Tree Lookup Switchover
+
+Completed.
+
+- `FindIdent_Tree` became the only lookup path
+- scope entry/exit moved to tree semantics
+- old lookup assumptions were removed from semcheck
+
+### Phase 4: Per-Unit Scope Isolation
+
+Completed.
+
+Important constraint:
+
+- this phase did **not** remove merged-program compilation
+- it made merged-program compilation use proper per-unit scopes
+
+What this phase achieved:
+
+- unit-owned declarations live in unit scopes
+- program-owned declarations live in the program scope
+- full-program semantic checking updates unit-owned declarations in place through their owning unit scopes
+
+### Phase 5: Remove Flat Stack And Routing State
+
+Completed.
+
+Removed:
+
+- `stack_head`
+- `unit_tables`
+- `push_target_unit`
+- `unit_context`
+- `PushScope` / `PopScope`
+- `FindIdentInUnit`
+- other flat-model lookup helpers
+
+Acceptance result:
+
+```text
+grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/
 ```
 
-### Modified `SymTab_t`
+Expected result: zero matches for active code paths.
 
-```c
-typedef struct SymTab
-{
-    ScopeNode *builtin_scope;                /* Root of the tree */
-    ScopeNode *current_scope;                /* Active scope — all lookups start here */
-    ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index */
+### Phase 6: Simplify Overload Resolution
 
-    /* DEPRECATED (kept during migration, removed at end) */
-    ListNode_t *stack_head;
-    HashTable_t *builtins;
-    int unit_context;
-    int push_target_unit;
-    HashTable_t *unit_tables[SYMTAB_MAX_UNITS];
-} SymTab_t;
+Completed.
+
+Removed or collapsed:
+
+- scope-era ranking hacks
+- broad ad hoc specificity bonuses
+- flat-model compensating tie-break logic
+
+Kept:
+
+- explicit conversion ranking
+- default-argument and untyped-parameter tie-breaks
+- builtin vs non-builtin preference
+
+## Completed Outcomes
+
+The completed refactor fixed the scope-model problem.
+
+Examples of problems this refactor was meant to eliminate:
+
+- method-local symbols shadowing unrelated fields in other methods
+- leaked `Self` causing ordinary procedure calls to resolve as method calls
+- unit-local type meaning depending on global merged semcheck order
+
+Those were scope-system defects. They are now addressed by the scope tree.
+
+## What Is Still Open
+
+The remaining architecture issue is unit merging.
+
+Current program compilation still does this:
+
+1. parse a used unit
+2. do a lightweight declaration-only semantic pass for stable stubs
+3. append that unit’s declarations into the program AST
+4. run `semcheck_program()` over the merged program tree
+
+That means tree scoping is correct, but unit compilation is still not fully isolated.
+
+This can still produce discrepancies such as:
+
+- standalone unit compilation failing where `uses`-based program compilation succeeds
+- semantic behavior depending on whether a unit is compiled as a top-level unit or as a merged dependency
+- const/typed-const/initializer behavior depending on merged-list processing rather than unit-local processing
+
+## Next Plan: Non-Merged Units
+
+This is the next architecture plan after the completed scope-tree refactor.
+
+### Goal
+
+Stop compiling programs by physically splicing loaded unit ASTs into the program AST.
+
+Units should remain first-class compilation objects through parse, semcheck, and codegen.
+
+### Phase 1: Freeze The Boundary
+
+- keep imported units out of `program_data.*` declaration lists
+- make `load_unit()` produce loaded-unit records instead of mutating the program AST
+- keep visibility through scope dependencies only
+
+Acceptance:
+
+- `merge_unit_into_program()` and `merge_unit_into_target()` have been removed
+- program AST contains only program-owned declarations
+
+### Phase 2: Add A Compilation Context
+
+Introduce a compilation context that owns:
+
+- loaded unit ASTs
+- unit scopes
+- dependency order
+- initialization/finalization order
+- codegen worklist
+
+Acceptance:
+
+- imported units are tracked in one central structure
+- semantic passes no longer rely on imported declarations appearing in program lists
+
+### Phase 3: Fully Semcheck Units In Place
+
+Replace the split model:
+
+- `semcheck_unit_decls_only()` during load
+- later reprocessing through merged `semcheck_program()`
+
+with:
+
+- full unit semantic checking in the unit’s own scope
+- program semantic checking for program-owned declarations and body only
+
+Acceptance:
+
+- standalone unit compile and `uses`-based unit loading follow the same unit-semcheck path
+
+### Phase 4: Remove Merge-Order Semantics (DONE)
+
+Audited and verified that cross-unit resolution depends only on scopes and
+dependency graph, not list concatenation order:
+
+- **imported const passes**: `semcheck_const_decls_imported_filtered` iterates
+  the merged list but each constant is pushed into its per-unit scope via
+  `source_unit_index`; cross-unit references resolve through scope dependency
+  edges, not list position.
+- **typed-const collection**: `collect_typed_const_decls_filtered` filters by
+  `defined_in_unit` flag (a per-declaration property), not by list position.
+- **prepush imported-const helpers**: Removed the redundant
+  `prepush_trivial_imported_consts` call from `semcheck_program()`. Trivial
+  constants are already pre-pushed into per-unit scopes during unit loading
+  (`semcheck_unit_decls_only`) and System predeclaration
+  (`semcheck_predeclare_program_into_unit_scope`).
+- **re-export handling**: `semcheck_single_const_decl` uses scope-based lookup
+  (`FindSymbol` + `SymTab_GetTargetTable`) to detect same-value re-exports;
+  no merge-order assumption.
+
+Acceptance:
+
+- cross-unit resolution depends only on scopes and dependency graph, not list concatenation order
+
+### Phase 5: Codegen Units Separately
+
+Generate code from:
+
+- loaded units
+- then the program
+
+instead of one merged declaration tree.
+
+Acceptance:
+
+- codegen input is `program + loaded units`
+- imported unit code is emitted from unit records, not copied program lists
+
+### Phase 6: Make Init/Final Explicit
+
+Store initialization and finalization on units themselves and schedule them from the dependency graph.
+
+Acceptance:
+
+- imported unit init/fini are no longer appended into the program AST
+- initialization runs in dependency order
+- finalization runs in reverse dependency order
+
+### Phase 7: Delete Merge Machinery (COMPLETED)
+
+Removed:
+
+- `merge_unit_into_program()` (was already removed from main_cparser.c in Phase 1; now removed from legacy main.c)
+- `merge_unit_into_target()` (replaced by generalized `build_combined_program_view()` that handles both program and unit targets)
+- `append_initialization_statement()` helper (only used by merge machinery)
+- `get_finalization_list()` helper (only used by merge machinery)
+- Updated docs/comments describing merged-unit architecture
+
+`build_combined_program_view()` and `unbuild_combined_program_view()` now handle both
+TREE_PROGRAM_TYPE and TREE_UNIT targets, with the unit path only merging interface
+declarations and public subprograms (not implementation details).
+
+Acceptance (verified):
+
+```text
+grep -r 'merge_unit_into_program\|merge_unit_into_target' KGPC/
 ```
 
-## B. API Changes
+Result: zero matches.
 
-### New functions
+### Phase 8: Stabilize (COMPLETED)
 
-```c
-ScopeNode *CreateScope(ScopeKind kind, ScopeNode *parent, int unit_index);
-void DestroyScope(ScopeNode *scope);
+Ran comprehensive testing after all phases. Results:
 
-ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index, ScopeNode *parent);
-void ScopeAddDependency(ScopeNode *unit_scope, ScopeNode *dep_scope);
+- **Main test suite**: 816/817 pass (1 pre-existing failure:
+  `test_auto_tdd_sysutils_fpclosedir_overload` — unrelated to refactoring)
+- **FPC RTL test suite**: 220/220 pass
 
-void EnterScope(SymTab_t *symtab, ScopeKind kind, int unit_index);
-void LeaveScope(SymTab_t *symtab);
-```
+Verified no regressions in tracked areas:
 
-### Simplified existing functions
+- **imported consts**: `reg_imported_qualified_const_lowhigh` and related tests pass
+- **typed consts**: all 15+ typed-const tests pass (array lowering, persistence,
+  currency init, mutability, nil, pointer init, system constexpr, record array)
+- **unit re-exports**: scope-based re-export detection working correctly
+- **overloads across units**: 30+ cross-unit overload tests pass (string, pointer,
+  array, open-array, helper, operator overloads)
+- **initialization/finalization ordering**: `program_uses_init_final` and
+  `unit_init_after_nested_body` tests pass
+- **duplicate or missing codegen**: `unit_compile_only` and all codegen tests pass
 
-```c
-/* FindIdent — same signature, walks parent chain internally */
-int FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id);
+Acceptance:
 
-/* SymTab_GetTargetTable — becomes trivial */
-static HashTable_t *SymTab_GetTargetTable(SymTab_t *symtab)
-{
-    return symtab->current_scope->table;
-}
-```
+- Full Meson suite passes (no new failures)
+- FPC RTL suite passes (220/220)
+- No regressions from the non-merged-units refactoring
 
-### Functions removed
+## Bottom Line
 
-- `FindIdentInUnit` — absorbed into FindIdent via tree walk
-- `FindIdentInAnyUnitTable` — no longer needed
-- `FindAllIdentsInAnyUnitTable` — no longer needed
-- `PushScope` / `PopScope` — replaced by EnterScope / LeaveScope
-- `get_or_create_system_unit_table` — replaced by GetOrCreateUnitScope
+The scope-tree refactor and the non-merged-units architecture refactor are both done.
 
-## C. FindIdent Rewrite
+Units remain first-class compilation objects through the full pipeline:
 
-```c
-/* Returns true (1) if found, false (0) if not.
- * Symbol is returned via *hash_return.
- * Optional found_kind reports which scope kind contained the symbol. */
-bool FindIdent(HashNode_t **hash_return, SymTab_t *symtab, const char *id)
-{
-    ScopeNode *scope = symtab->current_scope;
-
-    while (scope != NULL)
-    {
-        HashNode_t *node = FindIdentInTable(scope->table, id);
-        if (node != NULL)
-        {
-            *hash_return = node;
-            return 1;
-        }
-
-        /* At unit scope, also search dependency unit scopes */
-        if (scope->kind == SCOPE_UNIT)
-        {
-            for (int i = 0; i < scope->num_deps; i++)
-            {
-                node = FindIdentInTable(scope->dep_scopes[i]->table, id);
-                if (node != NULL)
-                {
-                    *hash_return = node;
-                    return 1;
-                }
-            }
-        }
-
-        scope = scope->parent;
-    }
-
-    *hash_return = NULL;
-    return 0;
-}
-```
-
-Unit dependencies are flat (not transitive) — Pascal's `uses` gives direct visibility only.
-
-## D. Migration Plan
-
-### Phase 1: Add infrastructure alongside existing code (no behavioral change)
-
-1. Add `ScopeNode` struct and `CreateScope`/`DestroyScope` to SymTab.h/c
-2. Add `builtin_scope`, `current_scope`, `unit_scopes[]` to `SymTab_t`, initialize to NULL
-3. Implement `EnterScope`/`LeaveScope` as wrappers that also call `PushScope`/`PopScope`
-
-Tests pass — no behavioral change.
-
-### Phase 2: Shadow FindIdent with tree-walking path
-
-4. Implement `FindIdent_Tree` as a parallel implementation
-5. Gate with `KGPC_SCOPE_TREE=1` env var — run all tests with both paths, diff results
-6. Fix discrepancies until both paths agree
-
-### Phase 3: Switch over
-
-7. Make FindIdent use tree path unconditionally
-8. Replace 28 PushScope/PopScope sites with EnterScope/LeaveScope
-9. Remove ~40 `unit_context`/`push_target_unit` save/restore patterns
-
-### Phase 4: Per-unit symbol table isolation
-
-Unit symbols belong in per-unit tables (`unit_tables[N]` = `unit_scopes[N]->table`), not the PROGRAM scope table. The PROGRAM table should only contain the program's own declarations. Unit symbols are found via `dep_scopes` in `FindIdent_Tree`.
-
-**Constraint:** The unit dependency graph is cyclic (Pascal allows `uses` cycles via interface/implementation sections, e.g. System↔ObjPas). Full per-unit semcheck in load order is impossible. The merged-AST model must be kept — all units merged into one program tree, processed by `semcheck_program`.
-
-**What was done (completed):**
-
-10. **Two-pass symbol insertion.**
-    - **Pass 1 (during `load_unit`):** `semcheck_unit_decls_only` predeclares type stubs, enum literals, subprogram signatures, trivial constants into the stable unit scope so they survive `LeaveScope`.
-    - **Pass 2 (during `semcheck_program`):** The existing multi-pass processing (`predeclare_types` → `semcheck_type_decls` → `semcheck_decls` → etc.) runs on the merged tree. Each declaration pass temporarily switches `current_scope` to `unit_scopes[source_unit_index]` for unit-owned declarations, updates the existing stubs in place, and keeps the PROGRAM scope free of imported symbols.
-    - **Scope isolation filter removed.** `FindIdent_Tree` uses plain `FindIdentInTable` — no `skip_program_locals`, no `FindIdentInTable_UnitOnly`, no `filter_program_local_symbols`.
-
-11. **Do NOT skip re-processing.** `semcheck_program` must still process unit declarations because `semcheck_unit_decls_only` only creates stubs — it does not resolve type bodies, evaluate constants, or declare variables. The full processing in `semcheck_program` completes what Pass 1 started. Skipping it causes types like Currency to become undefined.
-
-**Lessons learned from earlier failed attempts:**
-- Full `semcheck_unit()` during `load_unit` → 150 errors (System↔ObjPas cycle)
-- Skipping `semcheck_type_decls` for unit types → types undefined (it resolves bodies, not just stubs)
-- Routing unit declarations anywhere except the real unit scope → program-local or transient-scope symbols shadow unit symbols
-- `EnterScope(SCOPE_UNIT, 0)` must fix up `unit_index` after `unit_registry_add` computes it
-
-### Phase 5: Remove flat stack
-
-Completed on 2026-03-20.
-
-The flat stack was redundant. Lookups and insertions now use the scope tree directly.
-
-12. **`SymTab_GetTargetTable` is now just `current_scope->table`.**
-
-13. **`PushScope` → tree-only.** Stop creating flat stack entries. `EnterScope` creates a scope node with a new `HashTable_t`, `LeaveScope` destroys it. No `stack_head` manipulation.
-
-14. **Remove `stack_head` from `SymTab_t`.** Fix every compile error — replace `stack_head->cur` with `current_scope->table`.
-
-15. **Remove `PushScope`/`PopScope`.** Only `EnterScope`/`LeaveScope` remain.
-
-16. **Remove `unit_tables[256]`.** `unit_scopes[i]->table` is the only per-unit storage.
-
-17. **Remove `push_target_unit`.** Declaration passes switch `current_scope` explicitly to `unit_scopes[source_unit_index]` when processing unit-owned declarations. The `source_unit_index` is on the tree node being processed, not in global routing state.
-
-18. **Remove `builtins` field.** Becomes `builtin_scope->table`.
-
-19. **Remove `unit_context`.** `current_scope->unit_index` replaces it.
-
-20. **Remove flat-model lookup helpers.** `FindIdentInUnit`, `FindIdentInAnyUnitTable`, `FindAllIdentsInAnyUnitTable`, `FindIdentInTable_UnitOnly`.
-
-21. **Remove all workarounds** listed in section E.
-
-### Phase 6: Simplify overload resolution
-
-With proper per-unit scoping, overloads resolve structurally by scope membership.
-
-21. **Remove overload scoring heuristics.** `char_promo_rank`, `MATCH_PROMOTION`, `MATCH_CONVERSION`, string-type-name comparisons — all exist because the flat model couldn't distinguish overloads by scope. Remove them.
-
-### Acceptance criteria
-
-After Phase 5: `grep -r 'stack_head\|unit_tables\|push_target_unit\|unit_context\|PushScope\|PopScope\|FindIdentInUnit' KGPC/` returns **zero results**.
-
-### Already completed
-
-- Phase 3 step 7: FindIdent → FindSymbol (bool return, all inversions fixed)
-- Phase 3 step 8: `FindIdent_Tree` is the only lookup path
-- Phase 5 complete: no flat-stack or global unit-routing remnants remain in `KGPC/`
-- Nested function method owner preservation
-- Parameter-shadows-class-method fix
-- Math function stubs removed (codegen emits Pascal bodies)
-- Random/RandomRange builtin interception removed
-- Unit-qualified lookup (System.MaxInt) fixed
-- Delete `UNIT_SCOPING_PLAN.md`
-
-## E. What Gets Removed
-
-These workarounds become unnecessary with tree scoping:
-
-| Workaround | Location | Why it exists |
-|-----------|----------|---------------|
-| `push_target_unit` save/restore | SemCheck.c (~40 sites) | Routes symbols to correct unit table |
-| `unit_context` save/restore | SemCheck.c | Tells FindIdentInUnit which unit we're in |
-| `FindIdentInUnit` | SymTab.c | Special-cases unit-aware lookup |
-| `FindIdentInAnyUnitTable` | SymTab.c | Searches all unit tables as fallback |
-| `add_class_vars` FindIdent hack | SemCheck.c:2762 | Prevents field injection when unit symbol collides |
-| `source_unit_index` priority system | HashTable.c | Ranks matches by unit origin |
-| `g_semcheck_error_suppress_source_index` | SemCheck.c | Suppresses errors for wrong-unit symbols |
-
-## F. Risk Area: FindIdent Return Value
-
-`FindIdent` returns scope depth (0 = current, 1 = parent, etc.). ~504 call sites. Most only check `-1` vs `>= 0`, which is safe. The risky pattern is depth comparison for `max_scope_lev`:
-
-```c
-FindIdent(&node, symtab, id) == 0    /* current scope — safe */
-FindIdent(&node, symtab, id) >= 0    /* found somewhere — safe */
-FindIdent(&node, symtab, id) > X     /* deeper than X — MEANING CHANGES */
-```
-
-~5-10 sites use numeric depth for `max_scope_lev` checks. These need audit — may need to switch to scope-kind checks instead of numeric depth.
-
-## G. Scope Kind Mapping
-
-| Scope kind | Created when | Parent |
-|-----------|-------------|--------|
-| `SCOPE_BUILTIN` | `InitSymTab()` | NULL |
-| `SCOPE_UNIT` | Unit loaded | `builtin_scope` |
-| `SCOPE_PROGRAM` | `semcheck_program` entry | `builtin_scope` |
-| `SCOPE_SUBPROGRAM` | `semcheck_subprogram` entry | Unit or program scope |
-| `SCOPE_BLOCK` | try-except, with, etc. | Enclosing subprogram/block |
+- units are loaded as separate records in a compilation context
+- semantic checking uses temporary combined views, not permanent merging
+- codegen iterates loaded units separately
+- init/final is scheduled from the dependency graph

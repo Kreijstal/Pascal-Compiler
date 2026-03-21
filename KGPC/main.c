@@ -264,58 +264,9 @@ static void mark_unit_var_decls(ListNode_t *var_list, int is_public)
     }
 }
 
-static void merge_unit_into_program(Tree_t *program, Tree_t *unit_tree)
-{
-    if (program == NULL || unit_tree == NULL)
-        return;
-
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.interface_type_decls, 1);
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.interface_const_decls, 1);
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.interface_var_decls, 1);
-
-    mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0);
-    mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0);
-    mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0);
-
-    program->tree_data.program_data.type_declaration =
-        ConcatList(program->tree_data.program_data.type_declaration,
-                   unit_tree->tree_data.unit_data.interface_type_decls);
-    unit_tree->tree_data.unit_data.interface_type_decls = NULL;
-
-    program->tree_data.program_data.const_declaration =
-        ConcatList(program->tree_data.program_data.const_declaration,
-                   unit_tree->tree_data.unit_data.interface_const_decls);
-    unit_tree->tree_data.unit_data.interface_const_decls = NULL;
-
-    program->tree_data.program_data.var_declaration =
-        ConcatList(program->tree_data.program_data.var_declaration,
-                   unit_tree->tree_data.unit_data.interface_var_decls);
-    unit_tree->tree_data.unit_data.interface_var_decls = NULL;
-
-    program->tree_data.program_data.type_declaration =
-        ConcatList(program->tree_data.program_data.type_declaration,
-                   unit_tree->tree_data.unit_data.implementation_type_decls);
-    unit_tree->tree_data.unit_data.implementation_type_decls = NULL;
-
-    program->tree_data.program_data.const_declaration =
-        ConcatList(program->tree_data.program_data.const_declaration,
-                   unit_tree->tree_data.unit_data.implementation_const_decls);
-    unit_tree->tree_data.unit_data.implementation_const_decls = NULL;
-
-    program->tree_data.program_data.var_declaration =
-        ConcatList(program->tree_data.program_data.var_declaration,
-                   unit_tree->tree_data.unit_data.implementation_var_decls);
-    unit_tree->tree_data.unit_data.implementation_var_decls = NULL;
-
-    mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms);
-    program->tree_data.program_data.subprograms =
-        ConcatList(program->tree_data.program_data.subprograms,
-                   unit_tree->tree_data.unit_data.subprograms);
-    unit_tree->tree_data.unit_data.subprograms = NULL;
-
-    append_initialization_statement(program, unit_tree->tree_data.unit_data.initialization);
-    unit_tree->tree_data.unit_data.initialization = NULL;
-}
+/* NOTE: This file is legacy code not used by the current build.
+ * Unit loading and merging is handled by main_cparser.c via
+ * CompilationContext and build_combined_program_view(). */
 
 static void load_units_from_list(Tree_t *program, ListNode_t *uses, UnitSet *visited);
 
@@ -355,7 +306,6 @@ static void load_unit(Tree_t *program, const char *unit_name, UnitSet *visited)
     load_units_from_list(program, unit_tree->tree_data.unit_data.interface_uses, visited);
     load_units_from_list(program, unit_tree->tree_data.unit_data.implementation_uses, visited);
 
-    merge_unit_into_program(program, unit_tree);
     destroy_tree(unit_tree);
 }
 
@@ -459,7 +409,8 @@ int main(int argc, char **argv)
 
         if (prelude_tree->type == TREE_UNIT)
         {
-            merge_unit_into_program(user_tree, prelude_tree);
+            /* Legacy: prelude merge removed, handled by CompilationContext */
+            (void)user_tree;
         }
         else
         {
@@ -570,7 +521,7 @@ int main(int argc, char **argv)
 
             {
                 double t0 = kgpc_timing_start();
-                codegen(user_tree, argv[1], &ctx, symtab);
+                codegen(user_tree, argv[1], &ctx, symtab, NULL);
                 kgpc_timing_log("codegen", t0);
             }
 
