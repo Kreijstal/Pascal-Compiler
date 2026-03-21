@@ -12582,15 +12582,36 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     }
                 }
             }
+            /* If this const belongs to a record (id contains '.'), temporarily
+               set the method owner so that unqualified nested type references
+               (e.g. Node inside HeapTracer) resolve correctly via the owner chain. */
+            const char *prev_method_owner = semcheck_get_current_method_owner();
+            char *const_owner = NULL;
+            {
+                const char *const_id = tree->tree_data.const_decl_data.id;
+                if (const_id != NULL)
+                {
+                    const char *dot = strrchr(const_id, '.');
+                    if (dot != NULL && dot != const_id)
+                    {
+                        const_owner = strndup(const_id, (size_t)(dot - const_id));
+                        semcheck_set_current_method_owner(const_owner);
+                    }
+                }
+            }
             semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
-            
+
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
                 semcheck_error_with_context_at(tree->line_num, 0, tree->source_index, "Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
+                semcheck_set_current_method_owner(prev_method_owner);
+                free(const_owner);
             }
             else
             {
+                semcheck_set_current_method_owner(prev_method_owner);
+                free(const_owner);
                 /* Check if constant already exists with same value (for re-exports like ARG_MAX = UnixType.ARG_MAX) */
                 HashNode_t *existing = NULL;
                 if (FindSymbol(&existing, symtab, tree->tree_data.const_decl_data.id) && existing != NULL &&

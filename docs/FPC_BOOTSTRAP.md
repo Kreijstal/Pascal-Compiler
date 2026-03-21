@@ -126,7 +126,7 @@ ordering issues.
   -I./FPCSource/rtl/x86_64
 ```
 
-### sysutils.pp (current blocker)
+### sysutils.pp (0 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -147,6 +147,7 @@ ordering issues.
   -I./FPCSource/rtl/unix \
   -I./FPCSource/rtl/objpas \
   -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/objpas/classes \
   -I./FPCSource/rtl/inc \
   -I./FPCSource/rtl/linux \
   -I./FPCSource/rtl/linux/x86_64 \

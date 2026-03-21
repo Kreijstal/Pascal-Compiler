@@ -12873,6 +12873,23 @@ static void rewrite_class_const_expr_nested_types(struct Expression *expr,
     switch (expr->type) {
         case EXPR_FUNCTION_CALL: {
             const char *func_id = expr->expr_data.function_call_data.id;
+            /* A function call whose id matches a nested type is really a typecast
+               (e.g. Node(nil^) where Node is a nested record type).  Qualify
+               the id so the semantic checker can resolve it. */
+            if (func_id != NULL &&
+                type_name_exists_in_sections(func_id, nested_type_sections))
+            {
+                size_t olen = strlen(owner_id);
+                size_t flen = strlen(func_id);
+                char *qualified = (char *)malloc(olen + 1 + flen + 1);
+                if (qualified != NULL)
+                {
+                    snprintf(qualified, olen + 1 + flen + 1, "%s.%s", owner_id, func_id);
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = qualified;
+                    func_id = qualified;
+                }
+            }
             int is_type_intrinsic = func_id != NULL &&
                 (pascal_identifier_equals(func_id, "SizeOf") ||
                  pascal_identifier_equals(func_id, "TypeInfo") ||
