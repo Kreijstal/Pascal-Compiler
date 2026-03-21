@@ -100,19 +100,48 @@ static const char *g_current_method_name = NULL;
 
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
- * defined in already-loaded units can be resolved when parsing later units. */
+ * defined in already-loaded units can be resolved when parsing later units.
+ * Uses a hash table for O(1) lookup. */
 typedef struct EnumTypeEntry {
     char *name;
     int start;
     int end;
     struct EnumTypeEntry *next;
 } EnumTypeEntry;
-static EnumTypeEntry *g_enum_type_registry = NULL;
+
+#define ENUM_HT_INITIAL_CAPACITY 64
+
+static struct {
+    EnumTypeEntry **buckets;
+    size_t capacity;
+    size_t size;
+} g_enum_ht = {NULL, 0, 0};
+
+/* Reuse the same FNV-1a case-insensitive hash */
+static size_t enum_ht_hash(const char *name, size_t capacity) {
+    size_t h = 2166136261u;
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'A' && c <= 'Z') c += 32;
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h & (capacity - 1);
+}
+
+static void enum_ht_init(void) {
+    if (g_enum_ht.buckets != NULL) return;
+    g_enum_ht.capacity = ENUM_HT_INITIAL_CAPACITY;
+    g_enum_ht.buckets = (EnumTypeEntry **)calloc(g_enum_ht.capacity, sizeof(EnumTypeEntry *));
+    g_enum_ht.size = 0;
+}
 
 static void enum_registry_add(const char *name, int start, int end) {
     if (name == NULL) return;
+    enum_ht_init();
+    size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
     /* Check for existing entry (case-insensitive) */
-    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+    for (EnumTypeEntry *e = g_enum_ht.buckets[idx]; e != NULL; e = e->next) {
         if (strcasecmp(e->name, name) == 0) {
             e->start = start;
             e->end = end;
@@ -124,13 +153,15 @@ static void enum_registry_add(const char *name, int start, int end) {
     entry->name = strdup(name);
     entry->start = start;
     entry->end = end;
-    entry->next = g_enum_type_registry;
-    g_enum_type_registry = entry;
+    entry->next = g_enum_ht.buckets[idx];
+    g_enum_ht.buckets[idx] = entry;
+    g_enum_ht.size++;
 }
 
 static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
-    if (name == NULL) return -1;
-    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+    if (name == NULL || g_enum_ht.buckets == NULL) return -1;
+    size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
+    for (EnumTypeEntry *e = g_enum_ht.buckets[idx]; e != NULL; e = e->next) {
         if (strcasecmp(e->name, name) == 0) {
             *out_start = e->start;
             *out_end = e->end;
@@ -141,14 +172,20 @@ static int enum_registry_lookup(const char *name, int *out_start, int *out_end) 
 }
 
 static void enum_registry_free(void) {
-    EnumTypeEntry *e = g_enum_type_registry;
-    while (e != NULL) {
-        EnumTypeEntry *next = e->next;
-        free(e->name);
-        free(e);
-        e = next;
+    if (g_enum_ht.buckets == NULL) return;
+    for (size_t i = 0; i < g_enum_ht.capacity; i++) {
+        EnumTypeEntry *e = g_enum_ht.buckets[i];
+        while (e != NULL) {
+            EnumTypeEntry *next = e->next;
+            free(e->name);
+            free(e);
+            e = next;
+        }
     }
-    g_enum_type_registry = NULL;
+    free(g_enum_ht.buckets);
+    g_enum_ht.buckets = NULL;
+    g_enum_ht.capacity = 0;
+    g_enum_ht.size = 0;
 }
 
 /* Forward declaration for const expression evaluator (defined later in the file). */
@@ -1005,12 +1042,173 @@ typedef struct PendingGenericAlias {
 static PendingGenericAlias *g_pending_generic_aliases = NULL;
 static int g_allow_pending_specializations = 0;
 static ListNode_t *g_const_sections = NULL;
+static ListNode_t *g_const_sections_tail = NULL; /* tail pointer for O(1) append */
+
+/* ---- Hash table for const int cache (replaces linear-search linked list) ---- */
+#define CONST_INT_HT_INITIAL_CAPACITY 256
+#define CONST_INT_HT_LOAD_FACTOR_NUM 3   /* numerator */
+#define CONST_INT_HT_LOAD_FACTOR_DEN 4   /* denominator: grow when size > 3/4 capacity */
+
 typedef struct ConstIntEntry {
     char *name;
     int value;
-    struct ConstIntEntry *next;
+    struct ConstIntEntry *next;  /* chaining for collisions */
 } ConstIntEntry;
-static ConstIntEntry *g_const_ints = NULL;
+
+typedef struct {
+    ConstIntEntry **buckets;
+    size_t capacity;
+    size_t size;
+} ConstIntHashTable;
+
+static ConstIntHashTable g_const_int_ht = {NULL, 0, 0};
+
+static size_t const_int_ht_hash(const char *name, size_t capacity) {
+    /* FNV-1a case-insensitive hash */
+    size_t h = 2166136261u;
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'A' && c <= 'Z') c += 32;
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h & (capacity - 1);  /* capacity is always a power of 2 */
+}
+
+static void const_int_ht_init(void) {
+    if (g_const_int_ht.buckets != NULL) return;
+    g_const_int_ht.capacity = CONST_INT_HT_INITIAL_CAPACITY;
+    g_const_int_ht.buckets = (ConstIntEntry **)calloc(g_const_int_ht.capacity, sizeof(ConstIntEntry *));
+    g_const_int_ht.size = 0;
+}
+
+static void const_int_ht_grow(void) {
+    size_t new_cap = g_const_int_ht.capacity * 2;
+    ConstIntEntry **new_buckets = (ConstIntEntry **)calloc(new_cap, sizeof(ConstIntEntry *));
+    if (new_buckets == NULL) return;
+    for (size_t i = 0; i < g_const_int_ht.capacity; i++) {
+        ConstIntEntry *e = g_const_int_ht.buckets[i];
+        while (e != NULL) {
+            ConstIntEntry *next = e->next;
+            size_t idx = const_int_ht_hash(e->name, new_cap);
+            e->next = new_buckets[idx];
+            new_buckets[idx] = e;
+            e = next;
+        }
+    }
+    free(g_const_int_ht.buckets);
+    g_const_int_ht.buckets = new_buckets;
+    g_const_int_ht.capacity = new_cap;
+}
+
+static void const_int_ht_destroy(void) {
+    if (g_const_int_ht.buckets == NULL) return;
+    for (size_t i = 0; i < g_const_int_ht.capacity; i++) {
+        ConstIntEntry *e = g_const_int_ht.buckets[i];
+        while (e != NULL) {
+            ConstIntEntry *next = e->next;
+            free(e->name);
+            free(e);
+            e = next;
+        }
+    }
+    free(g_const_int_ht.buckets);
+    g_const_int_ht.buckets = NULL;
+    g_const_int_ht.capacity = 0;
+    g_const_int_ht.size = 0;
+}
+
+/* ---- Const-decl AST index: name → value AST node ----
+ * Built when const sections are registered, enables O(1) lookup of const
+ * declaration value nodes instead of recursive AST walking. */
+#define CONST_DECL_INDEX_CAPACITY 512
+
+typedef struct ConstDeclIndexEntry {
+    const char *name;        /* NOT owned - points into AST sym->name */
+    ast_t *value_node;       /* the value expression AST node */
+    ast_t *const_section;    /* which section it came from */
+    struct ConstDeclIndexEntry *next;
+} ConstDeclIndexEntry;
+
+static struct {
+    ConstDeclIndexEntry **buckets;
+    size_t capacity;
+    size_t size;
+} g_const_decl_index = {NULL, 0, 0};
+
+static void const_decl_index_init(void) {
+    if (g_const_decl_index.buckets != NULL) return;
+    g_const_decl_index.capacity = CONST_DECL_INDEX_CAPACITY;
+    g_const_decl_index.buckets = (ConstDeclIndexEntry **)calloc(
+        g_const_decl_index.capacity, sizeof(ConstDeclIndexEntry *));
+    g_const_decl_index.size = 0;
+}
+
+static void const_decl_index_destroy(void) {
+    if (g_const_decl_index.buckets == NULL) return;
+    for (size_t i = 0; i < g_const_decl_index.capacity; i++) {
+        ConstDeclIndexEntry *e = g_const_decl_index.buckets[i];
+        while (e != NULL) {
+            ConstDeclIndexEntry *next = e->next;
+            free(e);
+            e = next;
+        }
+    }
+    free(g_const_decl_index.buckets);
+    g_const_decl_index.buckets = NULL;
+    g_const_decl_index.capacity = 0;
+    g_const_decl_index.size = 0;
+}
+
+/* Insert a const declaration into the index.  Does NOT overwrite existing entries
+ * (first definition wins, matching Pascal semantics). */
+static void const_decl_index_insert(const char *name, ast_t *value_node, ast_t *section) {
+    if (name == NULL || g_const_decl_index.buckets == NULL) return;
+    size_t idx = const_int_ht_hash(name, g_const_decl_index.capacity);
+    /* Check if already present */
+    for (ConstDeclIndexEntry *e = g_const_decl_index.buckets[idx]; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0)
+            return; /* first definition wins */
+    }
+    ConstDeclIndexEntry *e = (ConstDeclIndexEntry *)malloc(sizeof(ConstDeclIndexEntry));
+    if (e == NULL) return;
+    e->name = name;
+    e->value_node = value_node;
+    e->const_section = section;
+    e->next = g_const_decl_index.buckets[idx];
+    g_const_decl_index.buckets[idx] = e;
+    g_const_decl_index.size++;
+}
+
+/* Lookup a const declaration by name. Returns the value AST node or NULL. */
+static ast_t *const_decl_index_lookup(const char *name) {
+    if (name == NULL || g_const_decl_index.buckets == NULL) return NULL;
+    size_t idx = const_int_ht_hash(name, g_const_decl_index.capacity);
+    for (ConstDeclIndexEntry *e = g_const_decl_index.buckets[idx]; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0)
+            return e->value_node;
+    }
+    return NULL;
+}
+
+/* Scan a const section and index all CONST_DECL entries.
+ * Walks the AST iteratively (siblings only) to find CONST_DECL nodes. */
+static void const_decl_index_scan_section(ast_t *section) {
+    if (section == NULL) return;
+    const_decl_index_init();
+    for (ast_t *node = section->child; node != NULL; node = node->next) {
+        if (node->typ == PASCAL_T_CONST_DECL) {
+            ast_t *id_node = node->child;
+            if (id_node != NULL && id_node->sym != NULL && id_node->sym->name != NULL) {
+                /* Find the value node (skip optional type spec) */
+                ast_t *value_node = id_node->next;
+                if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+                    value_node = value_node->next;
+                const_decl_index_insert(id_node->sym->name, value_node, section);
+            }
+        }
+    }
+}
 
 static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
@@ -1102,13 +1300,10 @@ static void reset_const_sections(void) {
     if (g_const_sections != NULL) {
         DestroyList(g_const_sections);
         g_const_sections = NULL;
+        g_const_sections_tail = NULL;
     }
-    while (g_const_ints != NULL) {
-        ConstIntEntry *next = g_const_ints->next;
-        free(g_const_ints->name);
-        free(g_const_ints);
-        g_const_ints = next;
-    }
+    const_int_ht_destroy();
+    const_decl_index_destroy();
 }
 
 static void register_const_section(ast_t *const_section) {
@@ -1121,9 +1316,13 @@ static void register_const_section(ast_t *const_section) {
     ListNode_t *node = CreateListNode(const_section, LIST_UNSPECIFIED);
     if (g_const_sections == NULL) {
         g_const_sections = node;
+        g_const_sections_tail = node;
     } else {
-        PushListNodeBack(g_const_sections, node);
+        g_const_sections_tail->next = node;
+        g_const_sections_tail = node;
     }
+    /* Index const declarations for O(1) lookup */
+    const_decl_index_scan_section(const_section);
 }
 
 static int const_section_is_resourcestring(ast_t *const_section) {
@@ -1191,7 +1390,10 @@ static int resolve_const_expr_from_sections(const char *expr, int *result)
 static int lookup_const_int(const char *name, int *out_value) {
     if (name == NULL || out_value == NULL)
         return -1;
-    for (ConstIntEntry *cur = g_const_ints; cur != NULL; cur = cur->next) {
+    if (g_const_int_ht.buckets == NULL)
+        return -1;
+    size_t idx = const_int_ht_hash(name, g_const_int_ht.capacity);
+    for (ConstIntEntry *cur = g_const_int_ht.buckets[idx]; cur != NULL; cur = cur->next) {
         if (strcasecmp(cur->name, name) == 0) {
             *out_value = cur->value;
             return 0;
@@ -1203,12 +1405,16 @@ static int lookup_const_int(const char *name, int *out_value) {
 static void register_const_int(const char *name, int value) {
     if (name == NULL)
         return;
-    for (ConstIntEntry *cur = g_const_ints; cur != NULL; cur = cur->next) {
+    const_int_ht_init();
+    size_t idx = const_int_ht_hash(name, g_const_int_ht.capacity);
+    /* Check for existing entry */
+    for (ConstIntEntry *cur = g_const_int_ht.buckets[idx]; cur != NULL; cur = cur->next) {
         if (strcasecmp(cur->name, name) == 0) {
             cur->value = value;
             return;
         }
     }
+    /* Insert new entry */
     ConstIntEntry *entry = (ConstIntEntry *)malloc(sizeof(ConstIntEntry));
     if (entry == NULL)
         return;
@@ -1218,8 +1424,13 @@ static void register_const_int(const char *name, int value) {
         return;
     }
     entry->value = value;
-    entry->next = g_const_ints;
-    g_const_ints = entry;
+    entry->next = g_const_int_ht.buckets[idx];
+    g_const_int_ht.buckets[idx] = entry;
+    g_const_int_ht.size++;
+    /* Grow if load factor exceeded */
+    if (g_const_int_ht.size * CONST_INT_HT_LOAD_FACTOR_DEN >
+        g_const_int_ht.capacity * CONST_INT_HT_LOAD_FACTOR_NUM)
+        const_int_ht_grow();
 }
 
 static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
@@ -5696,6 +5907,50 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
     if (lookup_const_int(identifier, &cached) == 0)
         return cached;
 
+    /* Fast path: use the indexed const-decl map for O(1) lookup.
+     * This replaces the recursive resolve_const_int_in_section walk. */
+    ast_t *indexed_value = const_decl_index_lookup(identifier);
+    if (indexed_value != NULL) {
+        ast_t *value_node = unwrap_pascal_node(indexed_value);
+        if (value_node != NULL && value_node->sym != NULL) {
+            char *endptr;
+            long val = strtol(value_node->sym->name, &endptr, 10);
+            if (*endptr == '\0' && val >= INT_MIN && val <= INT_MAX) {
+                register_const_int(identifier, (int)val);
+                return (int)val;
+            }
+            /* Value is another identifier — resolve recursively */
+            if (value_node->typ == PASCAL_T_IDENTIFIER &&
+                strcasecmp(value_node->sym->name, identifier) != 0) {
+                int resolved = resolve_const_int_from_ast_internal(
+                    value_node->sym->name, const_section, INT_MIN, depth + 1);
+                if (resolved != INT_MIN) {
+                    register_const_int(identifier, resolved);
+                    return resolved;
+                }
+            }
+        } else if (value_node != NULL && value_node->typ == PASCAL_T_NEG &&
+                   value_node->child != NULL) {
+            ast_t *inner = unwrap_pascal_node(value_node->child);
+            if (inner != NULL && inner->sym != NULL) {
+                int resolved = resolve_const_int_from_ast_internal(
+                    inner->sym->name, const_section, INT_MIN, depth + 1);
+                if (resolved != INT_MIN) {
+                    register_const_int(identifier, -resolved);
+                    return -resolved;
+                }
+            }
+        } else if (value_node != NULL) {
+            /* Try evaluating as a const expression (handles +, -, *, etc.) */
+            int eval_result = 0;
+            if (evaluate_const_int_expr(value_node, &eval_result, depth + 1) == 0) {
+                register_const_int(identifier, eval_result);
+                return eval_result;
+            }
+        }
+    }
+
+    /* Slow fallback: recursive AST walk (for const sections not yet indexed) */
     int resolved = INT_MIN;
     int found = 0;
     if (g_const_sections != NULL) {
@@ -5706,12 +5961,17 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
             }
         }
     } else {
+        /* Index this const_section for future O(1) lookups */
+        const_decl_index_scan_section(const_section);
         if (resolve_const_int_in_section(identifier, const_section, &resolved, depth) == 0)
             found = 1;
     }
 
-    if (found)
+    if (found) {
+        /* Cache the resolved value so future lookups are O(1) */
+        register_const_int(identifier, resolved);
         return resolved;
+    }
     return fallback_value; /* Not found */
 }
 
