@@ -166,6 +166,10 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_UNICODESTRINGS");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_FEATURE_STACKCHECK");
     
+    /* KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant expressions,
+     * so define FPUSOFT to prevent FPC RTL from using them in const initializers. */
+    pascal_preprocessor_define(preprocessor, "FPUSOFT");
+
     /* FPC internal capabilities */
     pascal_preprocessor_define(preprocessor, "FPC_HAS_SETSJMP");
     pascal_preprocessor_define(preprocessor, "FPC_HAS_OPERATOR_ENUMERATOR");

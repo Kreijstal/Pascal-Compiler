@@ -848,6 +848,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
         // FPC floating-point type availability (KGPC maps Extended to Double)
         "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE",
+        // KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant expressions,
+        // so define FPUSOFT to prevent FPC RTL from using them in const initializers.
+        "FPUSOFT",
         "FPC_WIDESTRING_EQUAL_UNICODESTRING",
         "FPC_ANSI_TEXTFILEREC"
     };

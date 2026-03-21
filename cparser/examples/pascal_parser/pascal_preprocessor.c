@@ -99,6 +99,7 @@ static bool define_symbol(PascalPreprocessor *pp, const char *symbol);
 static bool define_symbol_const(PascalPreprocessor *pp, const char *name, const char *value);
 static bool undefine_symbol(PascalPreprocessor *pp, const char *symbol);
 static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol);
+static bool find_const_integer_in_source(PascalPreprocessor *pp, const char *symbol, int64_t *out_value);
 static void trim(char **begin, char **end);
 static char *duplicate_range(const char *start, const char *end);
 static void extract_directory(const char *filename, char *buffer, size_t buffer_size);
@@ -1959,6 +1960,249 @@ static bool symbol_is_defined(const PascalPreprocessor *pp, const char *symbol) 
     return false;
 }
 
+/* Evaluate a simple const expression from preprocessed Pascal source.
+ * Handles: integers, identifier references (recursive), +, -, *, div, mod, parentheses.
+ * This is a mini expression evaluator for const initializer expressions found in source. */
+static bool eval_const_expr(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth);
+
+static void skip_spaces_in_range(const char **cursor, const char *end) {
+    while (*cursor < end && isspace((unsigned char)**cursor))
+        ++(*cursor);
+}
+
+static bool eval_const_factor(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+    if (depth > 32) return false;
+    skip_spaces_in_range(cursor, end);
+    if (*cursor >= end) return false;
+
+    /* Unary minus */
+    if (**cursor == '-') {
+        ++(*cursor);
+        int64_t inner;
+        if (!eval_const_factor(pp, cursor, end, &inner, depth + 1)) return false;
+        *value = -inner;
+        return true;
+    }
+    /* Unary plus */
+    if (**cursor == '+') {
+        ++(*cursor);
+        return eval_const_factor(pp, cursor, end, value, depth + 1);
+    }
+    /* Parenthesized expression */
+    if (**cursor == '(') {
+        ++(*cursor);
+        if (!eval_const_expr(pp, cursor, end, value, depth + 1)) return false;
+        skip_spaces_in_range(cursor, end);
+        if (*cursor < end && **cursor == ')') ++(*cursor);
+        return true;
+    }
+    /* Hex literal */
+    if (**cursor == '$') {
+        ++(*cursor);
+        if (*cursor >= end || !isxdigit((unsigned char)**cursor)) return false;
+        int64_t v = 0;
+        while (*cursor < end && isxdigit((unsigned char)**cursor)) {
+            int d;
+            char c = **cursor;
+            if (c >= '0' && c <= '9') d = c - '0';
+            else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+            else d = c - 'A' + 10;
+            v = v * 16 + d;
+            ++(*cursor);
+        }
+        *value = v;
+        return true;
+    }
+    /* Number */
+    if (isdigit((unsigned char)**cursor)) {
+        int64_t v = 0;
+        while (*cursor < end && isdigit((unsigned char)**cursor)) {
+            v = v * 10 + (**cursor - '0');
+            ++(*cursor);
+        }
+        *value = v;
+        return true;
+    }
+    /* Identifier - recursive const lookup */
+    if (isalpha((unsigned char)**cursor) || **cursor == '_') {
+        const char *id_start = *cursor;
+        while (*cursor < end && (isalnum((unsigned char)**cursor) || **cursor == '_'))
+            ++(*cursor);
+        size_t id_len = (size_t)(*cursor - id_start);
+        char *id = malloc(id_len + 1);
+        if (!id) return false;
+        memcpy(id, id_start, id_len);
+        id[id_len] = '\0';
+
+        /* Check if it's TRUE/FALSE */
+        if (ascii_strncasecmp(id, "TRUE", 5) == 0 && id_len == 4) { *value = 1; free(id); return true; }
+        if (ascii_strncasecmp(id, "FALSE", 6) == 0 && id_len == 5) { *value = 0; free(id); return true; }
+
+        /* Try preprocessor defines first */
+        const char *val_str = get_symbol_value(pp, id);
+        if (val_str) {
+            char *endp;
+            int64_t v = strtoll(val_str, &endp, 0);
+            if (*endp == '\0') {
+                *value = v;
+                free(id);
+                return true;
+            }
+        }
+        /* Try const lookup from source */
+        int64_t v;
+        if (find_const_integer_in_source(pp, id, &v)) {
+            *value = v;
+            free(id);
+            return true;
+        }
+        free(id);
+        return false;
+    }
+    return false;
+}
+
+static bool eval_const_term(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+    if (!eval_const_factor(pp, cursor, end, value, depth)) return false;
+    for (;;) {
+        skip_spaces_in_range(cursor, end);
+        if (*cursor >= end) break;
+        if (**cursor == '*') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            *value *= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "DIV", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            if (right == 0) return false;
+            *value /= right;
+        } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "MOD", 3) == 0 &&
+                   (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
+            *cursor += 3;
+            int64_t right;
+            if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            if (right == 0) return false;
+            *value %= right;
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+static bool eval_const_expr(PascalPreprocessor *pp, const char **cursor, const char *end, int64_t *value, int depth) {
+    if (!eval_const_term(pp, cursor, end, value, depth)) return false;
+    for (;;) {
+        skip_spaces_in_range(cursor, end);
+        if (*cursor >= end) break;
+        if (**cursor == '+') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_term(pp, cursor, end, &right, depth)) return false;
+            *value += right;
+        } else if (**cursor == '-') {
+            ++(*cursor);
+            int64_t right;
+            if (!eval_const_term(pp, cursor, end, &right, depth)) return false;
+            *value -= right;
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+/* Search the already-preprocessed output for a Pascal const declaration like:
+ *   IDENTIFIER = EXPRESSION ;
+ * Evaluate the expression and cache the result in the defines table.
+ * Returns true if the const was found and evaluated successfully. */
+static bool find_const_integer_in_source(PascalPreprocessor *pp, const char *symbol, int64_t *out_value) {
+    if (!pp || !symbol || !pp->current_output || pp->current_output_len == 0)
+        return false;
+
+    size_t sym_len = strlen(symbol);
+    if (sym_len == 0) return false;
+
+    const char *src = pp->current_output;
+    size_t src_len = pp->current_output_len;
+
+    /* Scan for pattern: IDENTIFIER = EXPRESSION ;
+     * We look for the identifier followed by = (but not :=) and ending with ; */
+    const char *pos = src;
+    const char *src_end = src + src_len;
+
+    while (pos < src_end) {
+        /* Find the symbol name (case-insensitive) */
+        const char *found = pos;
+        while (found + sym_len <= src_end) {
+            /* Simple case-insensitive substring search */
+            bool match = true;
+            for (size_t i = 0; i < sym_len; i++) {
+                if (ascii_tolower(found[i]) != ascii_tolower(symbol[i])) {
+                    match = false;
+                    break;
+                }
+            }
+            if (match) {
+                /* Check that it's a whole word: char before must not be alnum/_, char after must not be alnum/_ */
+                bool word_start = (found == src || (!isalnum((unsigned char)found[-1]) && found[-1] != '_'));
+                bool word_end = (found + sym_len >= src_end || (!isalnum((unsigned char)found[sym_len]) && found[sym_len] != '_'));
+                if (word_start && word_end) break;
+            }
+            found++;
+        }
+        if (found + sym_len > src_end) break;
+
+        /* Now check that what follows is whitespace then '=' (but not ':=') */
+        const char *after = found + sym_len;
+        while (after < src_end && isspace((unsigned char)*after)) after++;
+
+        if (after < src_end && *after == '=') {
+            /* Make sure it's not ':=' by checking the char before '=' */
+            if (after > src && after[-1] == ':') {
+                pos = after + 1;
+                continue;
+            }
+            after++; /* skip '=' */
+
+            /* Find the semicolon that ends this const value */
+            const char *semi = after;
+            int paren_depth = 0;
+            while (semi < src_end) {
+                if (*semi == '(') paren_depth++;
+                else if (*semi == ')') paren_depth--;
+                else if (*semi == ';' && paren_depth <= 0) break;
+                semi++;
+            }
+            if (semi >= src_end) {
+                pos = after;
+                continue;
+            }
+
+            /* Try to evaluate the expression between after and semi */
+            const char *expr_cursor = after;
+            int64_t val;
+            if (eval_const_expr(pp, &expr_cursor, semi, &val, 0)) {
+                /* Verify we consumed all meaningful content */
+                skip_spaces_in_range(&expr_cursor, semi);
+                if (expr_cursor >= semi) {
+                    /* Cache the value */
+                    char val_str[32];
+                    snprintf(val_str, sizeof(val_str), "%lld", (long long)val);
+                    define_symbol_const(pp, symbol, val_str);
+                    *out_value = val;
+                    return true;
+                }
+            }
+        }
+        pos = found + 1;
+    }
+    return false;
+}
+
 /* Scan source text for Pascal declarations of the given identifier.
  * This is used by declared() to check if an identifier has been declared
  * in the Pascal source (var, const, type, function, procedure).
@@ -2951,15 +3195,21 @@ static bool parse_factor(const char **cursor,
                 else *value = parsed_val; // Best effort
             }
         } else {
-            // Undefined symbol -> error (matching FPC behavior)
-            // FPC requires symbols in {$if} expressions to be defined
-            bool err = set_error(
-                error_message,
-                "undefined macro '%s'",
-                sym
-            );
-            free(sym);
-            return err;
+            // Try to find a Pascal const integer in the preprocessed source
+            int64_t const_val;
+            if (find_const_integer_in_source(pp, sym, &const_val)) {
+                *value = const_val;
+            } else {
+                // Undefined symbol -> error (matching FPC behavior)
+                // FPC requires symbols in {$if} expressions to be defined
+                bool err = set_error(
+                    error_message,
+                    "undefined macro '%s'",
+                    sym
+                );
+                free(sym);
+                return err;
+            }
         }
         free(sym);
         return true;
