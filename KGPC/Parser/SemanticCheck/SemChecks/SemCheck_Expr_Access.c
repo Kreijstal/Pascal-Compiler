@@ -4345,6 +4345,42 @@ int semcheck_funccall(int *type_return,
                         if (mangled_method_name != NULL)
                             free(mangled_method_name);
 
+                        /* If this method is actually a constructor (but not named Create),
+                         * fix up the return type to ^record instead of procedure. */
+                        {
+                            struct RecordType *ctor_search = record_info;
+                            while (ctor_search != NULL)
+                            {
+                                struct MethodTemplate *tmpl =
+                                    from_cparser_get_method_template(ctor_search, method_name);
+                                if (tmpl != NULL)
+                                {
+                                    if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR &&
+                                        record_type_is_class(record_info) &&
+                                        !record_info->is_type_helper)
+                                    {
+                                        expr->expr_data.function_call_data.is_constructor_call = 1;
+                                        KgpcType *rec_type = create_record_type(record_info);
+                                        if (rec_type != NULL)
+                                        {
+                                            KgpcType *ctor_ret = create_pointer_type(rec_type);
+                                            if (ctor_ret != NULL)
+                                            {
+                                                semcheck_expr_set_resolved_kgpc_type_shared(expr, ctor_ret);
+                                                *type_return = POINTER_TYPE;
+                                            }
+                                            else
+                                            {
+                                                destroy_kgpc_type(rec_type);
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                                ctor_search = semcheck_lookup_parent_record(symtab, ctor_search);
+                            }
+                        }
+
                         /* Continue with normal function call processing using the resolved method */
                         hash_return = method_node;
                         goto method_call_resolved;
