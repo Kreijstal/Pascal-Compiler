@@ -4783,6 +4783,16 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             if (lhs_was_typecast)
                 goto assignment_types_ok;
 
+            /* Allow record = integer/pointer and integer = record (type helpers) */
+            if ((type_first == RECORD_TYPE && (is_integer_type(type_second) || type_second == ENUM_TYPE || type_second == POINTER_TYPE)) ||
+                (type_second == RECORD_TYPE && (is_integer_type(type_first) || type_first == ENUM_TYPE || type_first == POINTER_TYPE)) ||
+                (type_first == RECORD_TYPE && type_second == RECORD_TYPE))
+                goto assignment_types_ok;
+
+            /* Allow char = string (single-char string literal to char) */
+            if (type_first == CHAR_TYPE && (type_second == STRING_TYPE || type_second == SHORTSTRING_TYPE))
+                goto assignment_types_ok;
+
             const char *lhs_name = "<expression>";
             if (var != NULL && var->type == EXPR_VAR_ID)
                 lhs_name = var->expr_data.id;
