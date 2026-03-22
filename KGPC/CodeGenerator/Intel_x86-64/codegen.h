@@ -283,6 +283,7 @@ void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_
 void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
 ListNode_t *add_inst(ListNode_t *, const char *);
+void add_inst_invalidate_cache(void);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);

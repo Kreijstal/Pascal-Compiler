@@ -2108,6 +2108,20 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx)
 
 /* Adds instruction to instruction list */
 /* WARNING: Makes copy of given char * */
+/* Tail pointer for O(1) add_inst append.
+ * Tracks the (head, tail) of the last inst_list built by add_inst.
+ * When the same head is passed and the cached tail's ->next is still NULL,
+ * we append in O(1) instead of walking the entire list (O(n)).
+ * MUST be invalidated before free_inst_list and ConcatList. */
+static ListNode_t *g_inst_tail = NULL;
+static ListNode_t *g_inst_head = NULL;
+
+void add_inst_invalidate_cache(void)
+{
+    g_inst_tail = NULL;
+    g_inst_head = NULL;
+}
+
 ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
 {
     #ifdef DEBUG_CODEGEN
@@ -2122,10 +2136,18 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     {
         inst_list = new_node;
     }
+    else if (g_inst_head == inst_list && g_inst_tail != NULL && g_inst_tail->next == NULL)
+    {
+        /* Fast path: cached tail is valid, O(1) append */
+        g_inst_tail->next = new_node;
+    }
     else
     {
+        /* Slow path: walk to end */
         PushListNodeBack(inst_list, new_node);
     }
+    g_inst_head = inst_list;
+    g_inst_tail = new_node;
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -2143,6 +2165,10 @@ void free_inst_list(ListNode_t *inst_list)
 
     if(inst_list == NULL)
         return;
+
+    /* Invalidate the tail cache — the nodes about to be freed
+     * might include g_inst_tail. */
+    add_inst_invalidate_cache();
 
     cur = inst_list;
     while(cur != NULL)
@@ -5819,7 +5845,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             snprintf(ptr_buffer, sizeof(ptr_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                 ret_reg, return_dest_slot->offset);
             ListNode_t *record_return_inst = NULL;
+            add_inst_invalidate_cache(); /* switching to different list */
             record_return_inst = add_inst(record_return_inst, ptr_buffer);
+            add_inst_invalidate_cache(); /* ConcatList changes head */
             inst_list = ConcatList(record_return_inst, inst_list);
         }
     }
