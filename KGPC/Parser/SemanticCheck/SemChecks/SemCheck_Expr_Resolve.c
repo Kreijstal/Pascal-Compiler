@@ -197,6 +197,28 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id, owner_full, owner_outer);
     }
     
+    /* Fallback: search for nested type by suffix (e.g., "TPtrWrapper" matches
+     * "TMarshal.TPtrWrapper" registered under its owning class). */
+    if (type_node == NULL && type_id != NULL)
+    {
+        for (ScopeNode *cur = symtab->current_scope; cur != NULL && type_node == NULL; cur = cur->parent)
+        {
+            type_node = FindTypeBySuffixInTable(cur->table, type_id);
+        }
+        if (type_node == NULL)
+        {
+            for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+            {
+                if (symtab->unit_scopes[u] != NULL && symtab->unit_scopes[u]->table != NULL)
+                {
+                    type_node = FindTypeBySuffixInTable(symtab->unit_scopes[u]->table, type_id);
+                    if (type_node != NULL)
+                        break;
+                }
+            }
+        }
+    }
+
     if (type_node == NULL)
     {
         if (type_ref != NULL && type_ref->num_generic_args > 0)

@@ -356,6 +356,63 @@ HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix)
     return NULL;
 }
 
+HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix)
+{
+    assert(table != NULL);
+    assert(suffix != NULL);
+
+    /* Build ".suffix" pattern in canonical (lowercased) form */
+    size_t suffix_len = strlen(suffix);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char dot_suffix_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_suffix = pascal_identifier_lower_buf(suffix, stack_buf, sizeof(stack_buf));
+    if (canonical_suffix == NULL)
+        return NULL;
+    size_t dot_suffix_len = 1 + strlen(canonical_suffix);
+    char *dot_suffix;
+    if (dot_suffix_len + 1 <= sizeof(dot_suffix_buf))
+    {
+        dot_suffix = dot_suffix_buf;
+    }
+    else
+    {
+        dot_suffix = (char *)malloc(dot_suffix_len + 1);
+        if (dot_suffix == NULL)
+        {
+            pascal_identifier_lower_buf_free(canonical_suffix, stack_buf);
+            return NULL;
+        }
+    }
+    dot_suffix[0] = '.';
+    strcpy(dot_suffix + 1, canonical_suffix);
+    pascal_identifier_lower_buf_free(canonical_suffix, stack_buf);
+
+    for (int i = 0; i < TABLE_SIZE; ++i)
+    {
+        ListNode_t *cur = table->table[i];
+        while (cur != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)cur->cur;
+            if (hash_node->hash_type == HASHTYPE_TYPE)
+            {
+                size_t id_len = strlen(hash_node->canonical_id);
+                if (id_len > dot_suffix_len &&
+                    strcmp(hash_node->canonical_id + id_len - dot_suffix_len, dot_suffix) == 0)
+                {
+                    if (dot_suffix != dot_suffix_buf)
+                        free(dot_suffix);
+                    return hash_node;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    if (dot_suffix != dot_suffix_buf)
+        free(dot_suffix);
+    return NULL;
+}
+
 HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *prefix, int caller_unit_index)
 {
     assert(table != NULL);

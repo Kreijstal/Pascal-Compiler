@@ -4596,7 +4596,7 @@ FIELD_RESOLVED:
 
         if (type_node == NULL && record_info != NULL && record_info->type_id != NULL)
         {
-            snprintf(qualified_name_buf, sizeof(qualified_name_buf), "%s.%s", 
+            snprintf(qualified_name_buf, sizeof(qualified_name_buf), "%s.%s",
                      record_info->type_id, field_desc->type_id);
             type_node = semcheck_find_preferred_type_node(symtab, qualified_name_buf);
             if (type_node == NULL)
@@ -4605,6 +4605,24 @@ FIELD_RESOLVED:
             {
                 type_id_to_use = qualified_name_buf;
                 qualified_name_allocated = 1;
+            }
+        }
+        /* Fallback: suffix search for nested types (e.g., TPtrWrapper → TMarshal.TPtrWrapper) */
+        if (type_node == NULL && field_desc->type_id != NULL)
+        {
+            for (ScopeNode *cur = symtab->current_scope; cur != NULL && type_node == NULL; cur = cur->parent)
+                type_node = FindTypeBySuffixInTable(cur->table, field_desc->type_id);
+            if (type_node == NULL)
+            {
+                for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+                {
+                    if (symtab->unit_scopes[u] != NULL && symtab->unit_scopes[u]->table != NULL)
+                    {
+                        type_node = FindTypeBySuffixInTable(symtab->unit_scopes[u]->table, field_desc->type_id);
+                        if (type_node != NULL)
+                            break;
+                    }
+                }
             }
         }
         
