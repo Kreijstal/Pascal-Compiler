@@ -45,6 +45,7 @@ typedef struct SymTab
     ScopeNode *builtin_scope;                 /* Root of the tree; owns its table (builtins) */
     ScopeNode *current_scope;                 /* Active scope node */
     ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
+    int current_unit_index;                   /* Unit being compiled (0 = main program); set by SemCheck */
 } SymTab_t;
 
 /* Initializes the SymTab */

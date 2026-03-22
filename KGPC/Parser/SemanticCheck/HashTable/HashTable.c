@@ -64,7 +64,6 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     assert(table != NULL);
     assert(params != NULL);
     assert(params->id != NULL);
-
     char *canonical_id = pascal_identifier_lower_dup(params->id);
     if (canonical_id == NULL)
         return 1;

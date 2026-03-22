@@ -14368,6 +14368,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
     if (tree->tree_data.unit_data.unit_id != NULL)
         g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
+    symtab->current_unit_index = g_semcheck_current_unit_index;
     /* Fix up unit_index now that we know it */
     symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);
@@ -14724,6 +14725,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_name_add(tree->tree_data.unit_data.unit_id);
     if (tree->tree_data.unit_data.unit_id != NULL)
         g_semcheck_current_unit_index = unit_registry_add(tree->tree_data.unit_data.unit_id);
+    symtab->current_unit_index = g_semcheck_current_unit_index;
     /* Fix up unit_index now that we know it */
     symtab->current_scope->unit_index = g_semcheck_current_unit_index;
     semcheck_unit_names_add_list(tree->tree_data.unit_data.interface_uses);

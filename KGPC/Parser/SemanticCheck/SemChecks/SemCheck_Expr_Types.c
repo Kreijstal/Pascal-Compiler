@@ -4300,8 +4300,10 @@ SKIP_SELF_FIELD_REWRITE:
         }
 
         if (record_info != NULL && record_info->type_id != NULL)
+        {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, record field %s not found on type '%s'.\n",
                 expr->line_num, field_id, record_info->type_id);
+        }
         else
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, record field %s not found.\n",
                 expr->line_num, field_id);

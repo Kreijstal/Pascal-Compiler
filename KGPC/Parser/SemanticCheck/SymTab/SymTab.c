@@ -146,7 +146,6 @@ int PushConstOntoScope_Typed(SymTab_t *symtab, char *id, long long value, KgpcTy
     assert(symtab != NULL);
     assert(id != NULL);
     assert(type != NULL && "KgpcType must be provided for typed constant");
-
     HashTable_t *cur_hash = SymTab_GetTargetTable(symtab);
     int result = AddIdentToTable(cur_hash, id, NULL, HASHTYPE_CONST, type);
     if (result == 0)
@@ -191,7 +190,6 @@ int PushStringConstOntoScope(SymTab_t *symtab, char *id, const char *value)
     assert(symtab != NULL);
     assert(id != NULL);
     assert(value != NULL);
-
     HashTable_t *cur_hash = SymTab_GetTargetTable(symtab);
 
     KgpcType *kgpc_type = create_primitive_type(STRING_TYPE);
@@ -679,6 +677,11 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
                         i, scope->dep_scopes[i]->unit_index, (void*)scope->dep_scopes[i]->table, (void*)node);
                 if (node != NULL)
                 {
+                    /* Skip implementation-only symbols from foreign units —
+                     * they should not be visible outside their defining unit. */
+                    if (node->defined_in_unit && !node->unit_is_public &&
+                        node->source_unit_index != symtab->current_unit_index)
+                        continue;
                     *hash_return = node;
                     return 1;
                 }
