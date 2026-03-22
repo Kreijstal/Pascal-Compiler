@@ -249,10 +249,59 @@ type
     D4: array[0..7] of Byte;
   end;
 
+  TFloatSpecial = (fsZero, fsNZero, fsDenormal, fsNDenormal, fsPositive, fsNegative,
+                   fsInf, fsNInf, fsNaN, fsInvalidOp);
+
   TDoubleRec = packed record
-    case integer of
-      0: (Value: Double);
-      1: (Frac: QWord; Exp: Word; Sign: Word);
+  private
+  const
+    Bias = $3FF;
+    function GetExp : QWord;
+    procedure SetExp(e : QWord);
+    function GetSign : Boolean;
+    procedure SetSign(s : Boolean);
+    function GetFrac : QWord;
+    procedure SetFrac(e : QWord);
+  public
+    function Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+    function Fraction : ValReal;
+    function Exponent : Longint;
+    property Sign : Boolean read GetSign write SetSign;
+    property Exp : QWord read GetExp write SetExp;
+    property Frac : QWord read Getfrac write SetFrac;
+    function SpecialType : TFloatSpecial;
+    procedure BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+    case byte of
+      0: (Bytes : array[0..7] of Byte);
+      1: (Words : array[0..3] of Word);
+      2: (Data : QWord);
+      3: (Value: Double);
+  end;
+
+  TSingleRec = packed record
+  private
+  const
+    Bias = $7F;
+    function GetExp : QWord;
+    procedure SetExp(e : QWord);
+    function GetSign : Boolean;
+    procedure SetSign(s : Boolean);
+    function GetFrac : QWord;
+    procedure SetFrac(e : QWord);
+  public
+    function Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+    function Fraction : ValReal;
+    function Exponent : Longint;
+    property Sign : Boolean read GetSign write SetSign;
+    property Exp : QWord read GetExp write SetExp;
+    property Frac : QWord read Getfrac write SetFrac;
+    function SpecialType : TFloatSpecial;
+    procedure BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+    case byte of
+      0: (Bytes : array[0..3] of Byte);
+      1: (Words : array[0..1] of Word);
+      2: (Data : DWord);
+      3: (Value: Single);
   end;
 
   { IInterface / IUnknown - root interface type }

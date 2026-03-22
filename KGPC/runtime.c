@@ -8471,3 +8471,73 @@ void kgpc_runerror(int32_t code) {
     fprintf(stderr, "Runtime error %d\n", code);
     exit(code);
 }
+
+/* TDoubleRec property getters/setters (IEEE 754 double: sign=bit63, exp=bits52-62, frac=bits0-51) */
+uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    return (data >> 52) & 0x7FF;
+}
+void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    data = (data & ~(0x7FFULL << 52)) | ((e & 0x7FF) << 52);
+    memcpy(self, &data, sizeof(data));
+}
+int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    return (data >> 63) & 1;
+}
+void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    if (s) data |= (1ULL << 63); else data &= ~(1ULL << 63);
+    memcpy(self, &data, sizeof(data));
+}
+uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    return data & 0xFFFFFFFFFFFFFULL;
+}
+void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
+    uint64_t data;
+    memcpy(&data, self, sizeof(data));
+    data = (data & ~0xFFFFFFFFFFFFFULL) | (f & 0xFFFFFFFFFFFFFULL);
+    memcpy(self, &data, sizeof(data));
+}
+
+/* TSingleRec property getters/setters (IEEE 754 single: sign=bit31, exp=bits23-30, frac=bits0-22) */
+uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    return (data >> 23) & 0xFF;
+}
+void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    data = (data & ~(0xFFU << 23)) | (((uint32_t)(e & 0xFF)) << 23);
+    memcpy(self, &data, sizeof(data));
+}
+int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    return (data >> 31) & 1;
+}
+void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    if (s) data |= (1U << 31); else data &= ~(1U << 31);
+    memcpy(self, &data, sizeof(data));
+}
+uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    return data & 0x7FFFFF;
+}
+void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
+    uint32_t data;
+    memcpy(&data, self, sizeof(data));
+    data = (data & ~0x7FFFFF) | ((uint32_t)(f & 0x7FFFFF));
+    memcpy(self, &data, sizeof(data));
+}
