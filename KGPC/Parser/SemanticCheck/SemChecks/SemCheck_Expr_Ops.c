@@ -439,6 +439,11 @@ int semcheck_relop(int *type_return,
             expr->expr_data.mulop_data.right_factor = neg_one;
             return semcheck_mulop(type_return, symtab, expr, max_scope_lev, mutating);
         }
+        if (type_first == UNKNOWN_TYPE)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return return_val;
+        }
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected relational type after \"NOT\"!\n\n",
             expr->line_num);
         ++return_val;
@@ -961,6 +966,7 @@ relop_fallback:
                 if (!numeric_ok && !boolean_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE
+                    && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {
@@ -1277,6 +1283,8 @@ int semcheck_signterm(int *type_return,
     *type_return = semcheck_tag_from_kgpc(sign_kgpc_type);
 
     /* Checking types */
+    if (*type_return == UNKNOWN_TYPE)
+        return return_val;
     if(!is_type_ir(type_return))
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected int or real after \"-\"!\n\n",
@@ -1330,6 +1338,11 @@ int semcheck_addop(int *type_return,
                 *type_return = ENUM_TYPE;
             else
                 *type_return = INT_TYPE;
+            return return_val;
+        }
+        if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+        {
+            *type_return = UNKNOWN_TYPE;
             return return_val;
         }
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean or integer operands for OR expression!\n\n",
@@ -1753,6 +1766,12 @@ int semcheck_addop(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type_with_size(INT64_TYPE, 8);
         return return_val;
     }
+    /* Suppress cascading errors when either operand is already UNKNOWN_TYPE */
+    if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -1868,6 +1887,12 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
 
+        /* Suppress cascading errors from UNKNOWN_TYPE */
+        if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return return_val;
+        }
         /* Invalid operand types for AND/XOR */
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected boolean, integer, or set operands for %s expression!\n\n",
             expr->line_num, op_type == AND ? "AND" : "XOR");
@@ -2008,6 +2033,12 @@ int semcheck_mulop(int *type_return,
         }
     }
 
+    /* Suppress cascading errors when either operand is already UNKNOWN_TYPE */
+    if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
+    {
+        *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {

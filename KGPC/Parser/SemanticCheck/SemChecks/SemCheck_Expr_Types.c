@@ -1437,6 +1437,11 @@ int semcheck_pointer_deref(int *type_return,
 
     if (pointer_type != POINTER_TYPE)
     {
+        if (pointer_type == UNKNOWN_TYPE)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return error_count;
+        }
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, dereference operator requires a pointer expression.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
@@ -3305,6 +3310,11 @@ SKIP_SELF_FIELD_REWRITE:
                     rec_id != NULL ? rec_id : "(null)",
                     record_type,
                     field_id != NULL ? field_id : "(null)");
+            }
+            if (record_type == UNKNOWN_TYPE)
+            {
+                *type_return = UNKNOWN_TYPE;
+                return error_count;
             }
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, field access requires a record value.\n\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;

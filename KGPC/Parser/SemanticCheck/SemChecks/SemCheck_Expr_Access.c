@@ -685,6 +685,11 @@ int semcheck_arrayaccess(int *type_return,
 
     if (!array_expr->is_array_expr && !base_is_string && !base_is_pointer)
     {
+        if (base_type == UNKNOWN_TYPE)
+        {
+            *type_return = UNKNOWN_TYPE;
+            return return_val;
+        }
         int property_result = semcheck_try_indexed_property_getter(type_return, symtab,
             expr, max_scope_lev, mutating);
         if (property_result >= 0)
@@ -907,7 +912,7 @@ int semcheck_arrayaccess(int *type_return,
     KgpcType *index_kgpc_type = NULL;
     return_val += semcheck_expr_with_type(&index_kgpc_type, symtab, access_expr, max_scope_lev, NO_MUTATE);
     index_type = semcheck_tag_from_kgpc(index_kgpc_type);
-    if (!is_ordinal_type(index_type))
+    if (!is_ordinal_type(index_type) && index_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
             expr->line_num);
@@ -931,7 +936,7 @@ int semcheck_arrayaccess(int *type_return,
                 KgpcType *extra_kgpc_type = NULL;
                 return_val += semcheck_expr_with_type(&extra_kgpc_type, symtab, idx_expr, max_scope_lev, NO_MUTATE);
                 extra_idx_type = semcheck_tag_from_kgpc(extra_kgpc_type);
-                if (!is_ordinal_type(extra_idx_type))
+                if (!is_ordinal_type(extra_idx_type) && extra_idx_type != UNKNOWN_TYPE)
                 {
                     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected ordinal type (integer, char, boolean, or enum) in array index expression!\n\n",
                         expr->line_num);

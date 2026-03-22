@@ -8823,7 +8823,7 @@ int semcheck_ifthen(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
     return_val += semcheck_stmt_expr_tag(&if_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
 
-    if(if_type != BOOL)
+    if(if_type != BOOL && if_type != UNKNOWN_TYPE)
     {
         int err_line = stmt->line_num;
         int err_col = stmt->col_num;
@@ -8859,7 +8859,7 @@ int semcheck_while(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     while_stmt = stmt->stmt_data.while_data.while_stmt;
 
     return_val += semcheck_stmt_expr_tag(&while_type, symtab, relop_expr, INT_MAX, NO_MUTATE);
-    if(while_type != BOOL)
+    if(while_type != BOOL && while_type != UNKNOWN_TYPE)
     {
         int err_line = stmt->line_num;
         int err_col = stmt->col_num;
@@ -8901,7 +8901,7 @@ int semcheck_repeat(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
     semcheck_loop_depth--;
 
     return_val += semcheck_stmt_expr_tag(&until_type, symtab, stmt->stmt_data.repeat_data.until_expr, INT_MAX, NO_MUTATE);
-    if (until_type != BOOL)
+    if (until_type != BOOL && until_type != UNKNOWN_TYPE)
     {
         int err_line = stmt->line_num;
         int err_col = stmt->col_num;
@@ -8947,7 +8947,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         for_var = stmt->stmt_data.for_data.for_assign_data.var;
         return_val += semcheck_stmt_expr_tag(&for_type, symtab, for_var, max_scope_lev, BOTH_MUTATE_REFERENCE);
         /* Check for type */
-        if(!is_ordinal_type(for_type))
+        if(!is_ordinal_type(for_type) && for_type != UNKNOWN_TYPE)
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                     stmt->line_num);
@@ -9025,10 +9025,10 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         ++return_val;
     }
 
-    if (for_kgpc_type != NULL && !is_ordinal_type(for_type))
+    if (for_kgpc_type != NULL && !is_ordinal_type(for_type) && for_type != UNKNOWN_TYPE)
     {
         int legacy = semcheck_tag_from_kgpc(for_kgpc_type);
-        if (!is_ordinal_type(legacy))
+        if (!is_ordinal_type(legacy) && legacy != UNKNOWN_TYPE)
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, expected ordinal type in \"for\" assignment!\n\n",
                 stmt->line_num);
@@ -9306,7 +9306,7 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
         ++return_val;
     }
 
-    if (!is_ordinal_type(type_first))
+    if (!is_ordinal_type(type_first) && type_first != UNKNOWN_TYPE)
     {
         semcheck_error_with_context_at(for_assign->line_num, for_assign->col_num, for_assign->source_index,
             "Error on line %d, expected ordinal type in \"for\" assignment statement!\n\n",
