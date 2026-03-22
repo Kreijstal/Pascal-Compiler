@@ -1273,6 +1273,9 @@ static struct Expression *copy_default_expr(struct Expression *src)
         case EXPR_RECORD_ACCESS:
             copy = clone_expression(src);
             break;
+        case EXPR_FUNCTION_CALL:
+            copy = clone_expression(src);
+            break;
         case EXPR_SET:
             /* Support defaults like [] used by sysutils DateTimeToString options. */
             if (src->expr_data.set_data.elements == NULL)
