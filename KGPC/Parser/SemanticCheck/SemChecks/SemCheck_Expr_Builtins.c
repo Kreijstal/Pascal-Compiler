@@ -3288,7 +3288,38 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                         error_count++;
                     }
                 }
-                else
+
+                /* Try WITH context: SizeOf(field) inside `with record do` */
+                if (!size_computed && self_field == NULL && with_context_count > 0)
+                {
+                    struct Expression *with_expr = NULL;
+                    int ws = semcheck_with_try_resolve(arg_id, symtab, &with_expr,
+                        expr->line_num);
+                    if (ws == 0 && with_expr != NULL)
+                    {
+                        /* Successfully resolved via WITH — evaluate the
+                         * expression type to get SizeOf */
+                        KgpcType *with_type = NULL;
+                        int with_err = semcheck_expr_with_type(&with_type, symtab,
+                            with_expr, max_scope_lev, NO_MUTATE);
+                        if (with_err == 0 && with_type != NULL)
+                        {
+                            long long with_size = kgpc_type_sizeof(with_type);
+                            if (with_size >= 0)
+                            {
+                                computed_size = with_size;
+                                size_computed = 1;
+                            }
+                        }
+                        destroy_expr(with_expr);
+                    }
+                    else if (with_expr != NULL)
+                    {
+                        destroy_expr(with_expr);
+                    }
+                }
+
+                if (!size_computed && self_field == NULL)
                 {
                     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf references undeclared identifier %s.\n",
                         expr->line_num, arg_id);
