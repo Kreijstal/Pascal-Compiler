@@ -3334,9 +3334,10 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count > 2)
     {
-        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects one or two arguments.\\n", stmt->line_num);
         return 1;
     }
 
@@ -3366,9 +3367,10 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count > 2)
     {
-        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects one or two arguments.\\n", stmt->line_num);
         return 1;
     }
 
