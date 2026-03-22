@@ -9643,6 +9643,16 @@ if (record_info->parent_class_name != NULL) {
                             cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
                             cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
+
+                            /* For generic specializations, inherited methods must use
+                             * the specialized class name, not the parent's. Clear
+                             * resolved_mangled_id so the resolution pass re-resolves
+                             * with the correct class name. */
+                            if (record_info->is_generic_specialization && cloned->resolved_mangled_id != NULL)
+                            {
+                                free(cloned->resolved_mangled_id);
+                                cloned->resolved_mangled_id = NULL;
+                            }
                             
                             ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                             if (node != NULL) {
