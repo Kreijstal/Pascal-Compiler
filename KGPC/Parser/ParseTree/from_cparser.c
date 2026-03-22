@@ -7790,6 +7790,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
            cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_SET &&
+           cursor->typ != PASCAL_T_POINTER_TYPE &&
+           cursor->typ != PASCAL_T_ENUMERATED_TYPE &&
            cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
@@ -9060,7 +9063,10 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
 
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_SET &&
+           cursor->typ != PASCAL_T_POINTER_TYPE &&
+           cursor->typ != PASCAL_T_ENUMERATED_TYPE &&
            cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
