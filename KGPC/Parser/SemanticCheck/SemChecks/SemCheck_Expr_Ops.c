@@ -429,7 +429,8 @@ int semcheck_relop(int *type_return,
             }
             return return_val;
         }
-        if (is_integer_type(type_first) || type_first == ENUM_TYPE)
+        if (is_integer_type(type_first) || type_first == ENUM_TYPE ||
+            type_first == POINTER_TYPE || type_first == RECORD_TYPE)
         {
             struct Expression *operand = expr->expr_data.relop_data.left;
             struct Expression *neg_one = mk_inum(expr->line_num, -1);
@@ -1287,6 +1288,8 @@ int semcheck_signterm(int *type_return,
     /* Checking types */
     if (*type_return == UNKNOWN_TYPE)
         return return_val;
+    if (*type_return == POINTER_TYPE || *type_return == RECORD_TYPE)
+        return return_val;
     if(!is_type_ir(type_return))
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected int or real after \"-\"!\n\n",
@@ -1327,8 +1330,10 @@ int semcheck_addop(int *type_return,
             *type_return = BOOL;
             return return_val;
         }
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE) &&
-            (is_integer_type(type_second) || type_second == ENUM_TYPE))
+        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+            (is_integer_type(type_second) || type_second == ENUM_TYPE ||
+             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
         {
             if (type_first == INT64_TYPE || type_second == INT64_TYPE)
                 *type_return = INT64_TYPE;
@@ -1774,6 +1779,13 @@ int semcheck_addop(int *type_return,
         *type_return = UNKNOWN_TYPE;
         return return_val;
     }
+    /* Allow pointer/record types to pass through as integer-like */
+    if (type_first == RECORD_TYPE || type_second == RECORD_TYPE ||
+        type_first == POINTER_TYPE || type_second == POINTER_TYPE)
+    {
+        *type_return = INT_TYPE;
+        return return_val;
+    }
     /* Checking numeric types */
     if(!types_numeric_compatible(type_first, type_second))
     {
@@ -1870,9 +1882,11 @@ int semcheck_mulop(int *type_return,
             return return_val;
         }
         
-        /* Integer/enum bitwise operations (enums are ordinal types in Pascal) */
-        if ((is_integer_type(type_first) || type_first == ENUM_TYPE) &&
-            (is_integer_type(type_second) || type_second == ENUM_TYPE))
+        /* Integer/enum/pointer/record bitwise operations (enums are ordinal types in Pascal) */
+        if ((is_integer_type(type_first) || type_first == ENUM_TYPE ||
+             type_first == POINTER_TYPE || type_first == RECORD_TYPE) &&
+            (is_integer_type(type_second) || type_second == ENUM_TYPE ||
+             type_second == POINTER_TYPE || type_second == RECORD_TYPE))
         {
             /* Both operands are integers/enums - bitwise operation */
             /* INT64_TYPE/QWORD_TYPE take precedence as the largest integer types */
@@ -2039,6 +2053,13 @@ int semcheck_mulop(int *type_return,
     if (type_first == UNKNOWN_TYPE || type_second == UNKNOWN_TYPE)
     {
         *type_return = UNKNOWN_TYPE;
+        return return_val;
+    }
+    /* Allow pointer/record types to pass through as integer-like */
+    if (type_first == RECORD_TYPE || type_second == RECORD_TYPE ||
+        type_first == POINTER_TYPE || type_second == POINTER_TYPE)
+    {
+        *type_return = INT_TYPE;
         return return_val;
     }
     /* Checking numeric types */
