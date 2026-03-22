@@ -2339,7 +2339,7 @@ int main(int argc, char **argv)
 
     /* Check for frontend (parser/tree conversion) errors */
     int frontend_errors = from_cparser_get_error_count();
-    
+
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;

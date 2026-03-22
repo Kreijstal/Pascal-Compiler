@@ -745,6 +745,21 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
         scope = scope->parent;
     }
 
+    /* Transitive dep fallback: if nothing was found in the normal scope walk,
+     * search ALL unit scopes.  Types from transitively-used units (A uses B,
+     * B uses C — types from C visible in A) are needed for typecast resolution
+     * and field type lookups.  This fallback only fires when the normal walk
+     * found nothing, so it doesn't affect overload resolution. */
+    if (all == NULL)
+    {
+        for (int u = 1; u < SYMTAB_MAX_UNITS; u++)
+        {
+            if (symtab->unit_scopes[u] == NULL)
+                continue;
+            all = append_list(all, FindAllIdentsInTable(symtab->unit_scopes[u]->table, id));
+        }
+    }
+
     return all;
 }
 
