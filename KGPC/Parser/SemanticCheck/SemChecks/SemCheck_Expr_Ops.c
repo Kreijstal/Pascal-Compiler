@@ -969,6 +969,7 @@ relop_fallback:
                     && !record_ok && !set_ok && !class_record_ok && !unknown_nil_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE
                     && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE
+                    && type_first != RECORD_TYPE && type_second != RECORD_TYPE
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {

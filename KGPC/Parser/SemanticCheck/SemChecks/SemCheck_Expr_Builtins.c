@@ -471,6 +471,11 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         /* For enumerative types, Ord returns the ordinal value (0-based index) */
         mangled_name = "kgpc_ord_longint";
     }
+    else if (arg_type_tag == RECORD_TYPE || arg_type_tag == POINTER_TYPE)
+    {
+        /* Type helpers make integer/char types appear as records; accept them. */
+        mangled_name = "kgpc_ord_longint";
+    }
 
     if (mangled_name != NULL)
     {
@@ -1914,6 +1919,7 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
     {
+        int arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
         if (arg_expr != NULL && arg_expr->type == EXPR_STRING &&
             arg_expr->expr_data.string != NULL &&
             strlen(arg_expr->expr_data.string) == 1)
@@ -1923,6 +1929,10 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
             arg_expr->expr_data.string = NULL;
             arg_expr->type = EXPR_CHAR_CODE;
             arg_expr->expr_data.char_code = value;
+        }
+        else if (arg_tag == RECORD_TYPE || arg_tag == POINTER_TYPE)
+        {
+            /* Type helpers make char types appear as records; accept them. */
         }
         else
         {

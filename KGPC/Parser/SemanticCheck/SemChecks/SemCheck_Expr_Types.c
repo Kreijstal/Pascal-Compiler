@@ -1442,6 +1442,13 @@ int semcheck_pointer_deref(int *type_return,
             *type_return = UNKNOWN_TYPE;
             return error_count;
         }
+        /* Class/object types resolve as RECORD_TYPE but are pointer-like
+         * and support dereference in FPC.  Accept them silently. */
+        if (pointer_type == RECORD_TYPE)
+        {
+            *type_return = RECORD_TYPE;
+            return error_count;
+        }
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, dereference operator requires a pointer expression.\\n\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
