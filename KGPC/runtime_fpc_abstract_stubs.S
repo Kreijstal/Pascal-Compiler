@@ -1,64 +1,39 @@
-/* Abstract method stubs for FPC RTL compatibility.
- * These symbols are referenced by FPC RTL compiled code but have no
- * concrete implementation (virtual;abstract).  They redirect to the
- * KGPC runtime abstract-method error handler so that programs link even
- * when the code path is dead (never executed at runtime). */
+/* Residual abstract method stubs for FPC RTL compatibility.
+ *
+ * Most interface abstract method stubs are now emitted dynamically by the
+ * codegen (weak .set aliases to __kgpc_abstract_method_error) when it
+ * processes interface type declarations that have method_templates.
+ *
+ * The symbols below remain because the compiler does not yet handle their
+ * root causes:
+ *   - IObserver / IInterfaceList: interface types whose method_templates
+ *     are not populated by the parser (only the type shell is captured).
+ *   - TMarshaller.TDeferBase.Done: abstract method in an old-style Pascal
+ *     object; KGPC generates direct calls instead of VMT dispatch.
+ *   - TMarshal.UnfixArray<TPtrWrapper>: nested generic specialisation chain
+ *     that the pre-semcheck instantiation pass cannot resolve.
+ *
+ * Each stub should be removed once its root cause is fixed in the compiler.
+ */
 .text
 
-.globl iinterfacelist__add_p_u_iunknown
-iinterfacelist__add_p_u_iunknown:
-    jmp __kgpc_abstract_method_error
-
-.globl iinterfacecomponentreference__getcomponent_p
-iinterfacecomponentreference__getcomponent_p:
-    jmp __kgpc_abstract_method_error
-
-.globl ieditlinkobserver__getisreadonly_p
-ieditlinkobserver__getisreadonly_p:
-    jmp __kgpc_abstract_method_error
-
-.globl ifpobserver__fpoobservedchanged_p_u_tobject_e_p
-ifpobserver__fpoobservedchanged_p_u_tobject_e_p:
-    jmp __kgpc_abstract_method_error
-
+/* IObserver.GetActive — interface method_templates not populated by parser */
 .globl iobserver__getactive_p
 iobserver__getactive_p:
     jmp __kgpc_abstract_method_error
 
-.globl isequentialstream__read_p_p_li_p
-isequentialstream__read_p_p_li_p:
+/* IInterfaceList.Add — interface method_templates not populated by parser */
+.globl iinterfacelist__add_p_u_iunknown
+iinterfacelist__add_p_u_iunknown:
     jmp __kgpc_abstract_method_error
 
-.globl isequentialstream__write_p_p_li_p
-isequentialstream__write_p_p_li_p:
-    jmp __kgpc_abstract_method_error
-
-.globl ivclcomobject__safecallexception_p_u_tobject_p
-ivclcomobject__safecallexception_p_u_tobject_p:
-    jmp __kgpc_abstract_method_error
-
-/* TMarshaller.TDeferBase.Done is virtual;abstract in an old-style Pascal
- * object.  KGPC generates a direct call instead of VMT dispatch for
- * old-style objects, so define the stub here to prevent linker errors.
- * The stub will crash if ever called (it should not be — the call is dead
- * code in tests that never instantiate TDeferBase). */
+/* TMarshaller.TDeferBase.Done — old-style object abstract method, direct call */
 .globl tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase
 tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
     jmp __kgpc_abstract_method_error
 
-/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization that
- * the compiler cannot yet emit because nested generic specialization
- * chains (method-generic → record-generic → method-generic) are not
- * resolved by the pre-semcheck generic instantiation pass.
- * The function body is Finalize(TArray<TPtrWrapper>(ArrPtr)) which is a
- * no-op for TPtrWrapper (a simple record with no managed fields). */
+/* TMarshal.UnfixArray<TPtrWrapper> — unresolved nested generic specialisation */
 .globl tmarshal__unfixarray_u_tptrwrapper
 tmarshal__unfixarray_u_tptrwrapper:
-    ret
-
-/* SysBeep — system procedure that produces a beep.
- * Not meaningful in a CLI/batch context; provide as no-op. */
-.globl SysBeep
-SysBeep:
     ret
 

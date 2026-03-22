@@ -3219,6 +3219,42 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
+    /* Emit weak abstract-method stubs for interface types.
+     * Interface methods are all abstract; when the codegen emits direct calls
+     * to interface method symbols (e.g., ISequentialStream.Read) and no class
+     * provides an implementation via the dispatch thunks below, the linker
+     * would report undefined references.  Weak stubs ensure every interface
+     * method symbol exists; a strong .globl/.set alias from an implementing
+     * class overrides the weak stub at link time.
+     * We use .set (not a label:) so that later .set directives can reassign
+     * the symbol without "already defined" errors. */
+    if (record_info->is_interface && record_info->method_templates != NULL) {
+        fprintf(ctx->output_file, "\n# Weak abstract stubs for interface %s\n", class_label);
+        ListNode_t *tmpl_node = record_info->method_templates;
+        while (tmpl_node != NULL) {
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_node->cur;
+            if (tmpl != NULL && tmpl->name != NULL) {
+                /* Look up the full mangled name for this interface method */
+                char iface_base[512];
+                snprintf(iface_base, sizeof(iface_base), "%s__%s", class_label, tmpl->name);
+                ListNode_t *candidates = FindAllIdents(symtab, iface_base);
+                for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                    HashNode_t *cand = (HashNode_t *)c->cur;
+                    if (cand != NULL && cand->mangled_id != NULL &&
+                        (cand->hash_type == HASHTYPE_FUNCTION ||
+                         cand->hash_type == HASHTYPE_PROCEDURE)) {
+                        fprintf(ctx->output_file, ".weak %s\n", cand->mangled_id);
+                        fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
+                            cand->mangled_id);
+                        break;
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
+            tmpl_node = tmpl_node->next;
+        }
+    }
+
     /* Emit interface method dispatch thunks.
      * For each interface a class implements, generate global symbols for the
      * interface method names that forward to the implementing class methods.
@@ -3265,31 +3301,34 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             break;
                         }
                     }
-                    if (impl_func != NULL && impl_func->mangled_id != NULL) {
-                        /* Build the interface method mangled name: InterfaceName__MethodName */
-                        char iface_base[512];
-                        snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
-                        /* Find the interface method's full mangled name */
-                        ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
-                        HashNode_t *iface_func = NULL;
-                        for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
-                            HashNode_t *cand = (HashNode_t *)ic->cur;
-                            if (cand != NULL && cand->mangled_id != NULL &&
-                                (cand->hash_type == HASHTYPE_FUNCTION ||
-                                 cand->hash_type == HASHTYPE_PROCEDURE)) {
-                                iface_func = cand;
-                                break;
-                            }
+                    /* Look up the interface method's full mangled name */
+                    char iface_base[512];
+                    snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
+                    ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
+                    HashNode_t *iface_func = NULL;
+                    for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
+                        HashNode_t *cand = (HashNode_t *)ic->cur;
+                        if (cand != NULL && cand->mangled_id != NULL &&
+                            (cand->hash_type == HASHTYPE_FUNCTION ||
+                             cand->hash_type == HASHTYPE_PROCEDURE)) {
+                            iface_func = cand;
+                            break;
                         }
-                        if (iface_func != NULL && iface_func->mangled_id != NULL) {
+                    }
+                    if (iface_func != NULL && iface_func->mangled_id != NULL) {
+                        if (impl_func != NULL && impl_func->mangled_id != NULL) {
+                            /* Strong alias: interface method → class implementation */
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
                             fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
                             fprintf(ctx->output_file, ".set %s, %s\n",
                                 iface_func->mangled_id, impl_func->mangled_id);
                         }
-                        if (iface_candidates != NULL) DestroyList(iface_candidates);
+                        /* If no implementing method found, the interface's weak stub
+                         * (emitted above for the interface type) already provides the
+                         * fallback to __kgpc_abstract_method_error. */
                     }
+                    if (iface_candidates != NULL) DestroyList(iface_candidates);
                     if (impl_candidates != NULL) DestroyList(impl_candidates);
                 }
                 iface_method = iface_method->next;

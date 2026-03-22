@@ -8551,3 +8551,7 @@ void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
 void kgpc_readbarrier(void) {}
 void kgpc_writebarrier(void) {}
 void kgpc_readwritebarrier(void) {}
+
+/* SysBeep — system procedure that produces a beep.
+ * Not meaningful in a CLI/batch context; provided as no-op. */
+void SysBeep(int duration) { (void)duration; }
