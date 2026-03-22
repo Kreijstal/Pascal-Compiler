@@ -1995,6 +1995,20 @@ int semcheck_recordaccess(int *type_return,
              * found nothing; full bootstrap has many visible aliases with the same
              * base name, so raw FindSymbol() can pick the wrong owner. */
         }
+        /* If the type is still not found, try looking it up via the enclosing
+         * class owner chain (e.g., CheckFlag inside HeapTracer.PrevMgrToFreeBatch
+         * should resolve to HeapTracer.CheckFlag). */
+        if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+        {
+            const char *owner_full = semcheck_get_current_subprogram_owner_class_full();
+            const char *owner_outer = semcheck_get_current_subprogram_owner_class_outer();
+            if (owner_full == NULL)
+                owner_full = semcheck_get_current_method_owner();
+            HashNode_t *chain_node = semcheck_find_type_node_in_owner_chain(symtab,
+                record_expr->expr_data.id, owner_full, owner_outer);
+            if (chain_node != NULL && chain_node->hash_type == HASHTYPE_TYPE)
+                type_node = chain_node;
+        }
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
@@ -2006,10 +2020,15 @@ int semcheck_recordaccess(int *type_return,
                     (type_alias->target_type_ref != NULL && type_alias->target_type_ref->name != NULL))
                 {
                     int resolved = 0;
+                    /* Use the node's registered id (which may be qualified,
+                     * e.g. "HeapTracer.CheckFlag") so that scoped enum
+                     * resolution can find the type in the symbol table. */
+                    const char *resolve_name = (type_node->id != NULL)
+                        ? type_node->id : record_expr->expr_data.id;
                     if (type_alias->is_enum)
                     {
                         resolved = semcheck_resolve_scoped_enum_literal(symtab,
-                            record_expr->expr_data.id, field_id, &enum_value);
+                            resolve_name, field_id, &enum_value);
                     }
                     else if (type_alias->target_type_ref != NULL &&
                              type_alias->target_type_ref->name != NULL)
