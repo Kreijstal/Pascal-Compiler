@@ -6173,6 +6173,7 @@ method_call_resolved:
             /* First, build a string showing the actual argument types */
             char arg_types_buf[1024] = "(";
             int buf_pos = 1;
+            int any_arg_unknown = 0;
             if (args_given != NULL)
             {
                 int idx = 0;
@@ -6183,6 +6184,8 @@ method_call_resolved:
                     KgpcType *arg_kgpc_type_dbg = NULL;
                     semcheck_expr_with_type(&arg_kgpc_type_dbg, symtab, arg, max_scope_lev, NO_MUTATE);
                     tag = semcheck_tag_from_kgpc(arg_kgpc_type_dbg);
+                    if (tag == UNKNOWN_TYPE)
+                        any_arg_unknown = 1;
                     const char *type_name = semcheck_type_tag_name(tag);
                     
                     /* Also check for resolved_kgpc_type for better type info */
@@ -6284,24 +6287,30 @@ method_call_resolved:
                 }
             }
             
-            if (overloads_buf[0] != '\0')
+            /* Suppress error when any argument has UNKNOWN_TYPE — the root cause
+             * error was already reported upstream. */
+            if (!any_arg_unknown)
             {
-                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, 
-                    "Error on line %d, call to function %s%s does not match any available overload.\n"
-                    "Available overloads:\n%s",
-                    expr->line_num, id, arg_types_buf, overloads_buf);
-            }
-            else
-            {
-                /* No overloads found - function is not declared */
-                semcheck_error_with_context_at(
-                    expr->line_num, expr->col_num, expr->source_index,
-                    "Error on line %d, function %s%s is not declared.\n",
-                    expr->line_num, id, arg_types_buf);
+                if (overloads_buf[0] != '\0')
+                {
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+                        "Error on line %d, call to function %s%s does not match any available overload.\n"
+                        "Available overloads:\n%s",
+                        expr->line_num, id, arg_types_buf, overloads_buf);
+                }
+                else
+                {
+                    /* No overloads found - function is not declared */
+                    semcheck_error_with_context_at(
+                        expr->line_num, expr->col_num, expr->source_index,
+                        "Error on line %d, function %s%s is not declared.\n",
+                        expr->line_num, id, arg_types_buf);
+                }
+                ++return_val;
             }
         }
         *type_return = UNKNOWN_TYPE;
-        final_status = ++return_val;
+        final_status = return_val;
         goto funccall_cleanup;
     }
     else

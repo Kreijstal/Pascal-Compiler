@@ -7954,6 +7954,7 @@ proccall_parent_resolve_done:
             /* First, build a string showing the actual argument types */
             char arg_types_buf[1024] = "(";
             int buf_pos = 1;
+            int any_arg_unknown = 0;
             if (args_given != NULL)
             {
                 int idx = 0;
@@ -7962,6 +7963,8 @@ proccall_parent_resolve_done:
                     struct Expression *arg = (struct Expression *)cur->cur;
                     int tag = UNKNOWN_TYPE;
                     semcheck_stmt_expr_tag(&tag, symtab, arg, max_scope_lev, NO_MUTATE);
+                    if (tag == UNKNOWN_TYPE)
+                        any_arg_unknown = 1;
                     const char *type_name = semcheck_type_tag_name(tag);
                     
                     /* Also check for resolved_kgpc_type for better type info */
@@ -8053,12 +8056,19 @@ proccall_parent_resolve_done:
                 }
             }
 
-            if (overloads_buf[0] != '\0')
+            /* Suppress error when any argument has UNKNOWN_TYPE — the root cause
+             * error was already reported upstream. */
+            if (any_arg_unknown)
             {
-                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
+                /* Silently skip — cascading from unresolved arg types */
+            }
+            else if (overloads_buf[0] != '\0')
+            {
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                     "Error on line %d, call to procedure %s%s does not match any available overload.\n"
                     "Available overloads:\n%s",
                     stmt->line_num, proc_id, arg_types_buf, overloads_buf);
+                ++return_val;
             }
             else
             {
@@ -8087,14 +8097,15 @@ proccall_parent_resolve_done:
                     return return_val;
                 }
                 /* No overloads found - procedure is not declared */
-                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, 
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                     "Error on line %d, procedure %s%s is not declared.\n",
                     stmt->line_num, proc_id, arg_types_buf);
+                ++return_val;
             }
         }
         DestroyList(overload_candidates);
         free(mangled_name);
-        return ++return_val;
+        return return_val;
     }
     else
     {
