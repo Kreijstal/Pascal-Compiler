@@ -1934,6 +1934,10 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
         {
             /* Type helpers make char types appear as records; accept them. */
         }
+        else if (is_integer_type(arg_tag))
+        {
+            /* FPC accepts ordinal types in UpCase; treat as identity. */
+        }
         else
         {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, UpCase expects a char argument.\n",
