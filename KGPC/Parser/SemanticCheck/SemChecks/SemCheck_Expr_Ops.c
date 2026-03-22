@@ -476,14 +476,15 @@ int semcheck_relop(int *type_return,
                     semcheck_expr_set_resolved_type(expr1, CHAR_TYPE);
                 }
 
-                if (type_second != SET_TYPE)
+                if (type_second != SET_TYPE && type_second != UNKNOWN_TYPE)
                 {
                     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expected set operand on right side of IN expression!\n\n",
                         expr->line_num);
                     ++return_val;
                 }
                 if (!is_integer_type(type_first) && type_first != ENUM_TYPE &&
-                    type_first != CHAR_TYPE && type_first != BOOL)
+                    type_first != CHAR_TYPE && type_first != BOOL &&
+                    type_first != UNKNOWN_TYPE)
                 {
                     /* Fallback: check KgpcType for char/integer (e.g. PPAnsiChar^[i] indexing) */
                     int in_ok = 0;

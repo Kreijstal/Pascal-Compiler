@@ -3148,6 +3148,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
+    /* Suppress error for UNKNOWN_TYPE (cascading) and ENUM_TYPE (not yet implemented) */
+    if (arg_type == UNKNOWN_TYPE || arg_type == ENUM_TYPE)
+    {
+        *type_return = arg_type == ENUM_TYPE ? INT_TYPE : UNKNOWN_TYPE;
+        return 0;
+    }
     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s currently supports only array or string arguments.\n",
         expr->line_num, is_high ? "High" : "Low");
     *type_return = UNKNOWN_TYPE;
