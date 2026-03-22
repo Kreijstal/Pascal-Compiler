@@ -175,6 +175,11 @@ void pascal_frontend_reset_objfpc_mode(void)
     g_default_shortstring = false;
 }
 
+void pascal_frontend_set_objfpc_mode(void)
+{
+    g_objfpc_mode_detected = true;
+}
+
 bool pascal_frontend_default_shortstring(void)
 {
     return g_default_shortstring;
