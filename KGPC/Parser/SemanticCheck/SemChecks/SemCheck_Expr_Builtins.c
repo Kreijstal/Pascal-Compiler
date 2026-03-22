@@ -687,10 +687,11 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     int arg_count = ListLength(args);
 
-    /* Copy accepts 2 or 3 arguments:
+    /* Copy accepts 1, 2, or 3 arguments:
+       Copy(S) - copies entire string/array (FPC extension)
        Copy(S, Index) - copies from Index to end of string
        Copy(S, Index, Count) - copies Count characters starting from Index */
-    if (arg_count < 2 || arg_count > 3)
+    if (arg_count < 1 || arg_count > 3)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
@@ -698,7 +699,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *source_expr = (struct Expression *)args->cur;
-    struct Expression *index_expr = (struct Expression *)args->next->cur;
+    struct Expression *index_expr = (arg_count >= 2) ? (struct Expression *)args->next->cur : NULL;
     struct Expression *count_expr = NULL;
 
     int error_count = 0;
@@ -709,18 +710,24 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     int is_shortstring = semcheck_expr_is_shortstring(source_expr);
     int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
-    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring)
+    /* Also accept dynamic arrays for Copy */
+    int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY);
+
+    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
     }
 
-    KgpcType *index_kgpc_type = NULL;
-    error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+    if (index_expr != NULL)
     {
-        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
-        error_count++;
+        KgpcType *index_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+        {
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
+            error_count++;
+        }
     }
 
     if (arg_count == 3)
@@ -734,7 +741,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             error_count++;
         }
     }
-    else
+    else if (arg_count == 2)
     {
         /* 2-argument form: synthesize a large count value to copy to end of string.
            Using INT_MAX as runtime clips to available length. */
@@ -744,6 +751,23 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
         assert(count_node != NULL);
         args->next->next = count_node;
+    }
+    else
+    {
+        /* 1-argument form: Copy(S) — copy entire string/array.
+           Synthesize index=1 and count=INT_MAX. */
+        index_expr = mk_inum(expr->line_num, 1LL);
+        assert(index_expr != NULL);
+        semcheck_expr_set_resolved_type(index_expr, LONGINT_TYPE);
+        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+
+        count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
+        assert(count_expr != NULL);
+        semcheck_expr_set_resolved_type(count_expr, LONGINT_TYPE);
+        ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
+
+        index_node->next = count_node;
+        args->next = index_node;
     }
 
     if (error_count == 0)
