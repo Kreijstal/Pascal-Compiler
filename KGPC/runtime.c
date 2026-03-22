@@ -8541,3 +8541,13 @@ void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
     data = (data & ~0x7FFFFF) | ((uint32_t)(f & 0x7FFFFF));
     memcpy(self, &data, sizeof(data));
 }
+
+/* GetMemory/FreeMemory/ReallocMemory - C heap wrappers */
+void *kgpc_getmem_ptr(size_t size) { return malloc(size); }
+size_t kgpc_freemem_ptr(void *p) { free(p); return 0; }
+void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
+
+/* Memory barriers - no-ops on x86 (strong memory model) */
+void kgpc_readbarrier(void) {}
+void kgpc_writebarrier(void) {}
+void kgpc_readwritebarrier(void) {}

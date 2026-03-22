@@ -151,6 +151,11 @@ type
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  UTF8String = String;
+  PUTF8String = ^UTF8String;
+  UCS4Char = LongWord;
+  PUCS4Char = ^UCS4Char;
+  UCS4String = array of UCS4Char;
   RTLString = AnsiString;
   TAnsiStringArray = array of AnsiString;
   PAnsiString = ^AnsiString;
@@ -303,6 +308,21 @@ type
       2: (Data : DWord);
       3: (Value: Single);
   end;
+
+  TPtrWrapper = record
+  private
+    FValue: Pointer;
+    class function GetNilValue: TPtrWrapper; inline; static;
+  public
+    constructor Create(AValue: PtrInt); overload;
+    constructor Create(AValue: Pointer); overload;
+    function ToPointer: Pointer; inline;
+    function ToInteger: PtrInt; inline;
+    class property NilValue: TPtrWrapper read GetNilValue;
+    class operator =(Left, Right: TPtrWrapper): Boolean; inline;
+    property Value: Pointer read FValue write FValue;
+  end;
+  TPtrWrapperArray = Array of TPtrWrapper;
 
   { IInterface / IUnknown - root interface type }
   IInterface = interface
@@ -668,6 +688,12 @@ function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+function GetMemory(size: PtrUInt): Pointer; cdecl; external name 'kgpc_getmem_ptr';
+function FreeMemory(p: Pointer): PtrUInt; cdecl; external name 'kgpc_freemem_ptr';
+function ReallocMemory(p: Pointer; size: PtrUInt): Pointer; cdecl; external name 'kgpc_reallocmem_ptr';
+procedure ReadBarrier; inline;
+procedure WriteBarrier; inline;
+procedure ReadWriteBarrier; inline;
 function ArrayStringToPPchar(const S: TAnsiStringArray; reserveentries: LongInt): PPAnsiChar; cdecl; external name 'kgpc_array_string_to_ppchar';
 function SwapEndian(value: LongInt): LongInt; overload;
 function SwapEndian(value: Int64): Int64; overload;
