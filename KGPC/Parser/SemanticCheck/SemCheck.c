@@ -12238,6 +12238,27 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
             }
 
+            /* Register nested types under their short name too.
+             * E.g., "TCgExceptionStateHandler.TExceptionTemps" also as "TExceptionTemps". */
+            {
+                const char *type_id = tree->tree_data.type_decl_data.id;
+                if (type_id != NULL)
+                {
+                    const char *last_dot = strrchr(type_id, '.');
+                    if (last_dot != NULL && last_dot[1] != '\0')
+                    {
+                        const char *short_name = last_dot + 1;
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            KgpcType *short_type = type_node != NULL ? type_node->type : kgpc_type;
+                            if (short_type != NULL)
+                                PushTypeOntoScope_Typed(symtab, strdup(short_name), short_type);
+                        }
+                    }
+                }
+            }
+
             /* For generic specializations with inline record types, also register the
              * record type under its mangled name so cloned methods can find it */
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS && 
