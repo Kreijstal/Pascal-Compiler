@@ -2733,10 +2733,17 @@ int semcheck_recordaccess(int *type_return,
         KgpcType *ret_type = kgpc_type_get_return_type(record_kgpc_type);
         if (ret_type == NULL && record_kgpc_type->info.proc_info.return_type_id != NULL)
         {
+            /* The return_type was not materialized during AST construction
+             * (convert_field_decl passes NULL symtab).  Resolve it now and
+             * store it back so every subsequent use sees the resolved type. */
             HashNode_t *ret_node = NULL;
             if (FindSymbol(&ret_node, symtab, record_kgpc_type->info.proc_info.return_type_id) != 0 &&
                 ret_node != NULL && ret_node->type != NULL)
+            {
                 ret_type = ret_node->type;
+                kgpc_type_retain(ret_type);
+                record_kgpc_type->info.proc_info.return_type = ret_type;
+            }
         }
         if (ret_type != NULL)
         {

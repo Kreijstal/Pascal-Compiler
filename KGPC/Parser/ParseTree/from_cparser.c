@@ -3138,7 +3138,21 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
      * so source_index values map to the correct source buffer. */
     int saved_offset = g_source_offset;
     g_source_offset = method_template->source_offset;
+
+    /* Set the current generic context so that generic_registry_is_type_param()
+     * only checks the enclosing generic's type parameters, not all generics. */
+    GenericTypeDecl *saved_context = generic_registry_current_context();
+    if (record->generic_decl != NULL)
+        generic_registry_push_context(record->generic_decl);
+
     Tree_t *method_tree = convert_method_impl(method_copy);
+
+    /* Restore previous generic context. */
+    if (saved_context != NULL)
+        generic_registry_push_context(saved_context);
+    else
+        generic_registry_pop_context();
+
     g_source_offset = saved_offset;
 
     free_ast(method_copy);

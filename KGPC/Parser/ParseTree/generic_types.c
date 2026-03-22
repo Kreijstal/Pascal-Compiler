@@ -6,6 +6,9 @@
 // Global generic type registry
 static GenericRegistry g_generic_registry = {NULL, NULL};
 
+// Current generic context for scoped type-parameter checks
+static GenericTypeDecl *g_current_generic_context = NULL;
+
 void generic_registry_init(void) {
     g_generic_registry.generic_decls = NULL;
     g_generic_registry.specializations = NULL;
@@ -125,6 +128,19 @@ KgpcType* generic_substitute_type_parameter(KgpcType* type, const char* param_na
 
 int generic_registry_is_type_param(const char *name) {
     if (name == NULL) return 0;
+
+    /* If a current generic context is set, only check that generic's
+     * type parameters — not every registered generic. */
+    if (g_current_generic_context != NULL) {
+        for (int i = 0; i < g_current_generic_context->num_type_params; i++) {
+            if (g_current_generic_context->type_parameters[i] != NULL &&
+                strcasecmp(g_current_generic_context->type_parameters[i], name) == 0)
+                return 1;
+        }
+        return 0;
+    }
+
+    /* Fallback: no context set, scan all generics (legacy behavior). */
     for (GenericTypeDecl *decl = g_generic_registry.generic_decls; decl != NULL; decl = decl->next) {
         for (int i = 0; i < decl->num_type_params; i++) {
             if (decl->type_parameters[i] != NULL && strcasecmp(decl->type_parameters[i], name) == 0)
@@ -132,6 +148,18 @@ int generic_registry_is_type_param(const char *name) {
         }
     }
     return 0;
+}
+
+void generic_registry_push_context(GenericTypeDecl *decl) {
+    g_current_generic_context = decl;
+}
+
+void generic_registry_pop_context(void) {
+    g_current_generic_context = NULL;
+}
+
+GenericTypeDecl *generic_registry_current_context(void) {
+    return g_current_generic_context;
 }
 
 void generic_registry_cleanup(void) {
