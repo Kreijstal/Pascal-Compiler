@@ -156,6 +156,9 @@ type
   UCS4Char = LongWord;
   PUCS4Char = ^UCS4Char;
   UCS4String = array of UCS4Char;
+  TThreadID = PtrUInt;
+  PRTLEvent = type Pointer;
+  PEventState = Pointer;
   RTLString = AnsiString;
   TAnsiStringArray = array of AnsiString;
   PAnsiString = ^AnsiString;
