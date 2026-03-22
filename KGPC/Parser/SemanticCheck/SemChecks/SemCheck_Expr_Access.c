@@ -7021,7 +7021,7 @@ skip_overload_resolution:
                 {
                     arg_type = expected_type;
                 }
-                if (param_is_untyped || expected_type == UNKNOWN_TYPE || expected_type == BUILTIN_ANY_TYPE)
+                if (param_is_untyped || expected_type == UNKNOWN_TYPE || arg_type == UNKNOWN_TYPE || expected_type == BUILTIN_ANY_TYPE)
                 {
                     /* Untyped parameters accept any argument type. */
                     /* No validation needed. */

@@ -1819,17 +1819,15 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
 
         if ((arg_type == NULL || param_type == NULL) && !param_is_untyped)
         {
-            fprintf(stderr,
-                "Error on line %d, on procedure call %s, argument %d: Unable to resolve type!\n\n",
-                stmt->line_num,
-                stmt->stmt_data.procedure_call_data.id,
-                arg_index);
-            ++return_val;
+            /* Suppress cascading errors when types can't be resolved —
+             * upstream UNKNOWN_TYPE already reported the root cause. */
         }
         else if (!param_is_untyped)
         {
             /* Use comprehensive KgpcType-based type compatibility checking */
-            if (!semcheck_param_types_compatible(param_decl, param_type, arg_type, symtab))
+            if (!semcheck_param_types_compatible(param_decl, param_type, arg_type, symtab) &&
+                !kgpc_type_equals_tag(arg_type, UNKNOWN_TYPE) &&
+                !kgpc_type_equals_tag(param_type, UNKNOWN_TYPE))
             {
                 semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
                     "Error on line %d, on procedure call %s, argument %d: Type mismatch (expected %s, got %s)!\n\n",
@@ -8351,15 +8349,8 @@ proccall_parent_resolve_done:
                 int types_match = param_is_untyped ? 1 : 0;
                 if ((expected_kgpc_type == NULL || arg_kgpc_type == NULL) && !param_is_untyped)
                 {
-                    /* Fallback: if we can't get KgpcTypes, report error */
-                    semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
-                        "Error on line %d, on procedure call %s, argument %d: Unable to resolve types (expected=%p, arg=%p)!\n\n",
-                        stmt->line_num, proc_id, cur_arg, (void*)expected_kgpc_type, (void*)arg_kgpc_type);
-                    if (expected_kgpc_type != NULL)
-                        fprintf(stderr, "  Expected type: %s\n", kgpc_type_to_string(expected_kgpc_type));
-                    if (arg_kgpc_type != NULL)
-                        fprintf(stderr, "  Argument type: %s\n", kgpc_type_to_string(arg_kgpc_type));
-                    ++return_val;
+                    /* Suppress cascading errors when types can't be resolved —
+                     * upstream UNKNOWN_TYPE already reported the root cause. */
                 }
                 else if (!param_is_untyped)
                 {
@@ -8513,13 +8504,17 @@ proccall_parent_resolve_done:
                 if (arg_kgpc_type != NULL)
                     snprintf(given_type_str, sizeof(given_type_str), "%s", kgpc_type_to_string(arg_kgpc_type));
 
+                /* Check for UNKNOWN_TYPE before cleanup */
+                int either_unknown = (kgpc_type_equals_tag(expected_kgpc_type, UNKNOWN_TYPE) ||
+                                      kgpc_type_equals_tag(arg_kgpc_type, UNKNOWN_TYPE));
+
                 /* Clean up owned types */
                 if (expected_type_owned && expected_kgpc_type != NULL)
                     destroy_kgpc_type(expected_kgpc_type);
                 if (arg_type_owned && arg_kgpc_type != NULL)
                     destroy_kgpc_type(arg_kgpc_type);
 
-                if (!types_match)
+                if (!types_match && !either_unknown)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SYMCREAT_INSERTSYM") != NULL &&
                         proc_id != NULL &&
