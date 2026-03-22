@@ -2750,7 +2750,9 @@ static int semcheck_builtin_write_like(SymTab_t *symtab, struct Statement *stmt,
 
         if (!is_integer_type(expr_type) && expr_type != STRING_TYPE && expr_type != SHORTSTRING_TYPE &&
             expr_type != BOOL && expr_type != POINTER_TYPE && !expr_is_real &&
-            expr_type != CHAR_TYPE && expr_type != ENUM_TYPE && !expr_is_char_array)
+            expr_type != CHAR_TYPE && expr_type != ENUM_TYPE && !expr_is_char_array &&
+            expr_type != UNKNOWN_TYPE && expr_type != RECORD_TYPE &&
+            expr_type != PROCEDURE)
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, write argument %d must be integer, longint, real, boolean, string, pointer, or enum.\n",
                     stmt->line_num, arg_index);

@@ -2388,6 +2388,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
+    symtab->skip_unit_filter = 1;
 
     codegen_reset_finally_stack(ctx);
     codegen_reset_loop_stack(ctx);
@@ -2472,6 +2473,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
+    symtab->skip_unit_filter = 1;
 
     codegen_reset_finally_stack(ctx);
     codegen_reset_loop_stack(ctx);

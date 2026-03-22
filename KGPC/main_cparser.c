@@ -916,7 +916,7 @@ static char *build_unit_path(const char *unit_name)
     return unit_search_paths_resolve(&g_unit_paths, unit_name);
 }
 
-static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
+static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index, int is_public)
 {
     ListNode_t *node = sub_list;
     while (node != NULL)
@@ -927,6 +927,8 @@ static void mark_unit_subprograms(ListNode_t *sub_list, int unit_index)
             if (sub->type == TREE_SUBPROGRAM)
             {
                 sub->tree_data.subprogram_data.defined_in_unit = 1;
+                if (is_public)
+                    sub->tree_data.subprogram_data.unit_is_public = 1;
                 if (unit_index > 0 && sub->tree_data.subprogram_data.source_unit_index == 0)
                     sub->tree_data.subprogram_data.source_unit_index = unit_index;
                 /* Also mark formal parameters so type resolution (e.g. TSize)
@@ -1629,11 +1631,11 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
             mark_unit_type_decls(unit_tree->tree_data.unit_data.implementation_type_decls, 0, unit_idx);
             mark_unit_const_decls(unit_tree->tree_data.unit_data.implementation_const_decls, 0, unit_idx);
             mark_unit_var_decls(unit_tree->tree_data.unit_data.implementation_var_decls, 0, unit_idx);
-            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx, 0);
         }
         else
         {
-            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx);
+            mark_unit_subprograms(unit_tree->tree_data.unit_data.subprograms, unit_idx, 0);
         }
     }
 
@@ -2035,7 +2037,7 @@ static int compile_single_program(
             mark_stdlib_var_params(prelude_subs);
         if (prelude_subs != NULL)
         {
-            mark_unit_subprograms(prelude_subs, unit_registry_add("System"));
+            mark_unit_subprograms(prelude_subs, unit_registry_add("System"), 1);
             ListNode_t *last = prelude_subs;
             while (last->next != NULL)
                 last = last->next;
@@ -2532,7 +2534,7 @@ int main(int argc, char **argv)
             if (prelude_subs != NULL)
             {
                 int sys_idx = unit_registry_add("System");
-                mark_unit_subprograms(prelude_subs, sys_idx);
+                mark_unit_subprograms(prelude_subs, sys_idx, 1);
                 ListNode_t *last = prelude_subs;
                 while (last->next != NULL)
                     last = last->next;
@@ -2830,7 +2832,7 @@ int main(int argc, char **argv)
         {
             /* Mark prelude (system.p) subprograms as library procedures so they don't
              * incorrectly get static links when merged into user programs */
-            mark_unit_subprograms(prelude_subs, unit_registry_add("System"));
+            mark_unit_subprograms(prelude_subs, unit_registry_add("System"), 1);
 
             ListNode_t *last = prelude_subs;
             while (last->next != NULL)

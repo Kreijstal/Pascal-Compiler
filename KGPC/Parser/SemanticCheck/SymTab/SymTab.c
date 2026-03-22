@@ -65,6 +65,8 @@ SymTab_t *InitSymTab()
      * builtin_scope owns its table (the builtins hash table). */
     new_symtab->builtin_scope = CreateScope(NULL, 0, InitHashTable());
     new_symtab->current_scope = new_symtab->builtin_scope;
+    new_symtab->current_unit_index = 0;
+    new_symtab->skip_unit_filter = 0;
     memset(new_symtab->unit_scopes, 0, sizeof(new_symtab->unit_scopes));
 
     return new_symtab;
@@ -678,8 +680,11 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
                 if (node != NULL)
                 {
                     /* Skip implementation-only symbols from foreign units —
-                     * they should not be visible outside their defining unit. */
-                    if (node->defined_in_unit && !node->unit_is_public &&
+                     * they should not be visible outside their defining unit.
+                     * Bypass this filter during codegen (skip_unit_filter=1)
+                     * since codegen needs all types for size computation. */
+                    if (!symtab->skip_unit_filter &&
+                        node->defined_in_unit && !node->unit_is_public &&
                         node->source_unit_index != symtab->current_unit_index)
                         continue;
                     *hash_return = node;

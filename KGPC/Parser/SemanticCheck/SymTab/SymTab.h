@@ -46,6 +46,7 @@ typedef struct SymTab
     ScopeNode *current_scope;                 /* Active scope node */
     ScopeNode *unit_scopes[SYMTAB_MAX_UNITS]; /* O(1) lookup by unit index; each scope OWNS its table */
     int current_unit_index;                   /* Unit being compiled (0 = main program); set by SemCheck */
+    int skip_unit_filter;                     /* When 1, FindSymbol skips the unit_is_public filter (used by codegen) */
 } SymTab_t;
 
 /* Initializes the SymTab */

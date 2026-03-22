@@ -5077,6 +5077,8 @@ static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
         int sub_unit = subprogram->tree_data.subprogram_data.source_unit_index;
         if (node_unit == sub_unit || (node_unit == 0 && !node->defined_in_unit && sub_unit == 0))
             node->defined_in_unit = 1;
+        if (subprogram->tree_data.subprogram_data.unit_is_public)
+            node->unit_is_public = 1;
     }
     if (subprogram->tree_data.subprogram_data.is_nested_scope)
         node->is_nested_scope = 1;
@@ -17434,7 +17436,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 HashTable_t *target_table = SymTab_GetTargetTable(symtab);
                 HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
+                {
                     pushed->defined_in_unit = 1;
+                    if (subprogram->tree_data.subprogram_data.unit_is_public)
+                        pushed->unit_is_public = 1;
+                }
             }
             /* For nested type methods, also register the short alias. */
             register_nested_type_short_alias(symtab, id_to_use_for_lookup,
@@ -17603,7 +17609,11 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 HashTable_t *target_table = SymTab_GetTargetTable(symtab);
                 HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
+                {
                     pushed->defined_in_unit = 1;
+                    if (subprogram->tree_data.subprogram_data.unit_is_public)
+                        pushed->unit_is_public = 1;
+                }
             }
             /* For nested type methods like "Outer.Inner__Method", also register
              * the short alias "Inner__Method" so that generic method bodies using
@@ -18373,7 +18383,11 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
+                {
                     node->defined_in_unit = 1;
+                    if (subprogram->tree_data.subprogram_data.unit_is_public)
+                        node->unit_is_public = 1;
+                }
                 if (subprogram->tree_data.subprogram_data.is_nested_scope)
                     node->is_nested_scope = 1;
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
@@ -18441,7 +18455,11 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.is_varargs)
                     node->is_varargs = 1;
                 if (subprogram->tree_data.subprogram_data.defined_in_unit)
+                {
                     node->defined_in_unit = 1;
+                    if (subprogram->tree_data.subprogram_data.unit_is_public)
+                        node->unit_is_public = 1;
+                }
                 if (subprogram->tree_data.subprogram_data.is_nested_scope)
                     node->is_nested_scope = 1;
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {

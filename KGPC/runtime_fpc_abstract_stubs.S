@@ -46,3 +46,19 @@ ivclcomobject__safecallexception_p_u_tobject_p:
 tmarshaller.tdeferbase__done_u_tmarshaller_tdeferbase:
     jmp __kgpc_abstract_method_error
 
+/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization that
+ * the compiler cannot yet emit because nested generic specialization
+ * chains (method-generic → record-generic → method-generic) are not
+ * resolved by the pre-semcheck generic instantiation pass.
+ * The function body is Finalize(TArray<TPtrWrapper>(ArrPtr)) which is a
+ * no-op for TPtrWrapper (a simple record with no managed fields). */
+.globl tmarshal__unfixarray_u_tptrwrapper
+tmarshal__unfixarray_u_tptrwrapper:
+    ret
+
+/* SysBeep — system procedure that produces a beep.
+ * Not meaningful in a CLI/batch context; provide as no-op. */
+.globl SysBeep
+SysBeep:
+    ret
+

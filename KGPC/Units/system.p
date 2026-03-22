@@ -641,7 +641,7 @@ var
 procedure fpc_pchar_to_shortstr(var res: shortstring; p: PAnsiChar); cdecl; external name 'fpc_pchar_to_shortstr';
 
 { Math intrinsics — declared with internproc or external name to map to runtime functions }
-function Pi: ValReal; [internproc:fpc_in_pi_real];
+function Pi: Real; [internproc:fpc_in_pi_real];
 
 function Sqrt(x: Real): Real; cdecl; external name 'fpc_in_sqrt_real';
 function Sin(x: Real): Real; cdecl; external name 'fpc_in_sin_real';
@@ -691,7 +691,6 @@ function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
-procedure Error(ErrNo: Integer); cdecl; external name 'kgpc_runerror';
 function NtoBE(value: Word): Word; cdecl; external name 'kgpc_ntobe16';
 function NtoBE(value: LongInt): LongInt; cdecl; external name 'kgpc_ntobe32';
 function NtoBE(value: LongWord): LongWord; cdecl; external name 'kgpc_ntobe32';
