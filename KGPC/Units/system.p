@@ -233,6 +233,7 @@ type
   { Low-level I/O compatibility types }
   THandle = LongInt;
   HRESULT = LongInt;  { Windows COM result type }
+  HMODULE = PtrUInt;
   CodePointer = Pointer;
   PCodePointer = ^CodePointer;
 
@@ -428,6 +429,16 @@ type
   { Variant and PVariant are registered as built-in types (VARIANT_TYPE, 16 bytes)
     and auto-coerce to/from any value type.  No Pascal-level alias needed. }
   PVariant = ^Variant;
+
+  PExceptObject = ^TExceptObject;
+  TExceptObject = record
+    FObject    : TObject;
+    Addr       : CodePointer;
+    Next       : PExceptObject;
+    refcount   : LongInt;
+    Framecount : LongInt;
+    Frames     : PCodePointer;
+  end;
 
 const
   CP_ACP     = 0;     { default to ANSI code page }
@@ -689,8 +700,10 @@ function Lo(value: LongWord): Word; cdecl; external name 'kgpc_lo_dword';
 function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
+function compareword(const buf1; const buf2; len: Int64): Integer; cdecl; external name 'kgpc_compareword';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+function BackTraceStrFunc(Addr: Pointer): ShortString; cdecl; external name 'kgpc_backtracestrfunc';
 function NtoBE(value: Word): Word; cdecl; external name 'kgpc_ntobe16';
 function NtoBE(value: LongInt): LongInt; cdecl; external name 'kgpc_ntobe32';
 function NtoBE(value: LongWord): LongWord; cdecl; external name 'kgpc_ntobe32';
@@ -716,6 +729,7 @@ function InterlockedIncrement(var Target: LongWord): LongWord; cdecl; external n
 function InterlockedIncrement(var Target: Int64): Int64; cdecl; external name 'kgpc_interlockedincrement64';
 function InterlockedExchange(var Target: LongInt; Source: LongInt): LongInt; cdecl; external name 'kgpc_interlockedexchange';
 function InterlockedExchangeAdd(var Target: LongInt; Source: LongInt): LongInt; cdecl; external name 'kgpc_interlockedexchangeadd';
+function InterlockedExchangeAdd(var Target: LongWord; Source: LongWord): LongWord; cdecl; external name 'kgpc_interlockedexchangeadd';
 function InterlockedCompareExchange(var Target: LongInt; NewValue: LongInt; Comperand: LongInt): LongInt; cdecl; external name 'kgpc_interlockedcompareexchange';
 function InterlockedCompareExchange(var Target: Pointer; NewValue: Pointer; Comperand: Pointer): Pointer; cdecl; external name 'kgpc_interlockedcompareexchange_ptr';
 procedure RTLEventResetEvent(state: PRTLEvent); cdecl; external name 'kgpc_rtleventresetevent';
@@ -725,6 +739,8 @@ procedure RTLEventDestroy(state: PRTLEvent); cdecl; external name 'kgpc_rtlevent
 function BasicEventCreate(EventAttributes: Pointer; AManualReset: Boolean; InitialState: Boolean; const Name: AnsiString): PEventState; cdecl; external name 'kgpc_basiceventcreate';
 procedure BasicEventDestroy(state: PEventState); cdecl; external name 'kgpc_basiceventdestroy';
 procedure BasicEventResetEvent(state: PEventState); cdecl; external name 'kgpc_basiceventresetevent';
+procedure BasicEventSetEvent(Event: Pointer); cdecl; external name 'kgpc_basiceventresetevent';
+function BasicEventWaitFor(timeout: Int64; Event: Pointer): LongInt; cdecl; external name 'kgpc_basiceventwaitfor';
 function Utf8CodePointLen(p: PAnsiChar; MaxLen: SizeInt; IncludePartial: Boolean): SizeInt; cdecl; external name 'kgpc_utf8codepointlen';
 function UTF8Encode(const s: UnicodeString): RawByteString; cdecl; external name 'kgpc_utf8encode';
 function UnicodeToUtf8(Dest: PAnsiChar; MaxDestBytes: SizeUInt; Source: PUnicodeChar; SourceChars: SizeUInt): SizeUInt; cdecl; external name 'kgpc_unicodetoutf8';
@@ -735,6 +751,7 @@ function ReallocMemory(p: Pointer; size: PtrUInt): Pointer; cdecl; external name
 procedure ReadBarrier; inline;
 procedure WriteBarrier; inline;
 procedure ReadWriteBarrier; inline;
+procedure ReadDependencyBarrier; inline;
 function ArrayStringToPPchar(const S: TAnsiStringArray; reserveentries: LongInt): PPAnsiChar; cdecl; external name 'kgpc_array_string_to_ppchar';
 function SwapEndian(value: LongInt): LongInt; overload;
 function SwapEndian(value: Int64): Int64; overload;
@@ -747,6 +764,8 @@ function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper
 { HexStr(value, digits) - Converts an integer to a hexadecimal string }
 function HexStr(value: Int64; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
 function HexStr(value: LongWord; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
+function HexStr(Val: Pointer; Cnt: Integer): ShortString; overload; cdecl; external name 'kgpc_hexstr';
+function HexStr(Val: Pointer): ShortString; overload; cdecl; external name 'kgpc_hexstr';
 function OctStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'kgpc_octstr';
 function OctStr(value: LongInt; digits: Byte): AnsiString; cdecl; external name 'kgpc_octstr';
 function BinStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'kgpc_binstr';
@@ -760,6 +779,11 @@ function GetFPCHeapStatus: TFPCHeapStatus; cdecl; external name 'kgpc_get_fpc_he
 
 function RandomRange(low, high: LongInt): LongInt; cdecl; external name 'kgpc_random_range';
 function RandomRange(low, high: Int64): Int64; cdecl; external name 'kgpc_random_range';
+
+function has_init_list: Boolean; cdecl; external name 'kgpc_has_init_list';
+function GetInterfaceWeak(Instance: Pointer; const IID: TGUID; out Intf): Boolean; cdecl; external name 'kgpc_getinterfaceweak';
+function GetInterfaceEntry(Instance: Pointer; const IID: TGUID): Pointer; cdecl; external name 'kgpc_getinterfaceentry';
+function GetInterfaceEntryByStr(Instance: Pointer; const IIDStr: ShortString): Pointer; cdecl; external name 'kgpc_getinterfaceentrybystr';
 
 { Copy(s, index, count) - Returns a substring
   Example: Copy('Hello', 2, 3) returns 'ell'
@@ -1026,6 +1050,7 @@ begin
     Exit(result);
 end;
 
+
 function UpCase(c: char): char; overload;
 begin
     if (c >= 'a') and (c <= 'z') then
@@ -1115,6 +1140,11 @@ begin
         kgpc_text_setbuf(f, @buf[0], Length(buf))
     else
         kgpc_text_setbuf(f, nil, 0);
+end;
+
+procedure SetTextBuf(var f: text; var buf; size: Integer); overload;
+begin
+    kgpc_text_setbuf(f, @buf, size);
 end;
 
 
@@ -1410,6 +1440,11 @@ end;
 procedure FillByte(var dest; count: longint; value: integer);
 begin
     fillchar_impl(dest, count, value);
+end;
+
+procedure filldword(var x; count: LongInt; value: LongWord);
+begin
+    fillchar_impl(x, count * 4, 0);
 end;
 
 procedure getmem_impl(var target; size: longint);
