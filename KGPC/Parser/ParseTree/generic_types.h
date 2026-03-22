@@ -57,8 +57,14 @@ char* generic_mangle_name(const char* generic_name, char** concrete_types, int n
 // Perform type parameter substitution in a KgpcType
 KgpcType* generic_substitute_type_parameter(KgpcType* type, const char* param_name, KgpcType* concrete_type);
 
-// Check if a name is a type parameter of any registered generic
+// Check if a name is a type parameter of the current generic context
+// (falls back to scanning all generics if no context is set)
 int generic_registry_is_type_param(const char *name);
+
+// Set/get the current generic context for scoped type-parameter checks
+void generic_registry_push_context(GenericTypeDecl *decl);
+void generic_registry_pop_context(void);
+GenericTypeDecl *generic_registry_current_context(void);
 
 // Clean up the generic registry
 void generic_registry_cleanup(void);
