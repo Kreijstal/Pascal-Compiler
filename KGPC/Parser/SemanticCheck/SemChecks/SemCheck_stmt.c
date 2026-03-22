@@ -2067,6 +2067,16 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
             /* Array access result - valid for nested dynamic arrays (array of array of ...) */
             is_valid_array = 1;
         }
+        else if (array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
+        {
+            /* Pointer dereference - could point to a dynamic array */
+            is_valid_array = 1;
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_FUNCTION_CALL)
+        {
+            /* Function call result that returns a dynamic array reference */
+            is_valid_array = 1;
+        }
         
         if (!is_valid_array)
         {
@@ -9194,7 +9204,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
         if (!collection_is_array && !collection_is_list &&
             !collection_is_set && !collection_is_enum_domain &&
-            !collection_is_enumerator_class) {
+            !collection_is_enumerator_class &&
+            collection_type != RECORD_TYPE && collection_type != POINTER_TYPE &&
+            collection_type != UNKNOWN_TYPE) {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;

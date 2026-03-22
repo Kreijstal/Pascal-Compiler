@@ -1412,12 +1412,13 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
 
-    /* Assigned accepts pointers, procedure variables, and dynamic arrays
-     * (FPC uses Assigned(arr) as a nil-check on the descriptor pointer). */
-    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 
+    /* Assigned accepts pointers, procedure variables, dynamic arrays,
+     * and class/interface references (classes are heap-allocated pointers). */
+    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) ||
                         kgpc_type_is_procedure(arg_kgpc_type) ||
                         kgpc_type_is_dynamic_array(arg_kgpc_type) ||
-                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
+                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE) ||
+                        kgpc_type_equals_tag(arg_kgpc_type, RECORD_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
         semcheck_error_with_context_at(err_line, err_col, err_source_index,
@@ -3190,6 +3191,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     if (arg_type == UNKNOWN_TYPE || arg_type == ENUM_TYPE)
     {
         *type_return = arg_type == ENUM_TYPE ? INT_TYPE : UNKNOWN_TYPE;
+        return 0;
+    }
+    /* Accept record/pointer types (type helpers) and integer types silently */
+    if (arg_type == RECORD_TYPE || arg_type == POINTER_TYPE || is_integer_type(arg_type))
+    {
+        *type_return = INT_TYPE;
         return 0;
     }
     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s currently supports only array or string arguments.\n",
