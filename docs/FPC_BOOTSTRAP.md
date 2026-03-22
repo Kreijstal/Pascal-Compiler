@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: pp.pas now gets past the old verbose/msgtxt blocker; current progress reaches compiler unit loading
+## Status: 56 RTL units compile (0 errors); 99 compiler units scanned (257 errors total)
 
 ## Prerequisites
 
@@ -214,18 +214,49 @@ ordering issues.
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
 
-Current observations on `gaps8` after regenerating `msgtxt.inc`/`msgidx.inc`:
-1. The old `verbose.pas` preprocessing failure is gone.
-2. `pp.pas` now loads substantially further through compiler units, including
-   `verbose`, `cmsgs`, `globals`, `systems`, `symdef`, `node`, `cgbase`,
-   `procinfo`, `pass_1`, `ncal`, and `nflw`.
-3. The previously documented `DirectorySeparator`/semantic-analysis-hang state
-   has not been re-reached yet in this refreshed attempt; the next blocker
-   should be recorded from the next live reproduction rather than carried over
-   from the older note.
+### FPC RTL (56 units)
+
+All 56 FPC RTL units now compile with 0 semantic errors via `meson test -C build-fpc "FPC RTL tests"`.
+The build-fpc directory uses `meson setup build-fpc -Drun_fpc_rtl_tests=true`.
+
+### FPC Compiler Units (99 units scanned standalone)
+
+All 99 compiler `.pas` files fail when compiled individually. Total: 257 errors.
+
+Top error categories:
+| Category | Count | Root Cause |
+|---|---|---|
+| Enum/Tconstexprint relational ops | 42 | `Tconstexprint` is a record with operator overloading (not yet supported) |
+| Overload resolution | 27 | Parameter type mismatches (`^record` subtype compatibility) |
+| Field not found / field access | 27 | Class field resolution, nested types, property getters |
+| Assignment type mismatch | 26 | Various type incompatibilities |
+| Type mismatch on arithmetic ops | 25 | `Tconstexprint` operator overloading |
+| Array literal element mismatch | 11 | Constant array type coercion |
+| `^record` vs `procedure` | 11 | Class instances typed as procedure (constructor resolution) |
+| String concat method shadowing | 8 | Built-in `Concat` shadows `TAsmList.Concat()` method |
+| Char/String mismatch | 7 | Implicit Char↔String conversion |
+
+### pp.pas (full compiler entry point)
+
+Compiling `pp.pas` loads ~200+ units together and produces ~16,000+ errors due to
+cascading from the root causes above.
 
 ## Remaining Blockers
 
+### Critical (blocks most compiler units)
+1. **Operator overloading on records** — `Tconstexprint` uses `operator :=`, `operator <`, etc.
+   This blocks ~67 errors across 22+ units (relational + arithmetic).
+2. **Class subtype compatibility** — `^record` vs `^record` mismatches when passing
+   derived class instances to parent class parameters.
+
+### Important (blocks specific functionality)
+3. **Built-in function shadowing methods** — `Concat`, `Length`, etc. shadow class methods
+   of the same name. Need method-first resolution when in record access context.
+4. **`NOT` on non-boolean expressions** — `not (obj.Empty)` where `Empty` returns boolean
+   but resolves to wrong type.
+5. **Implicit Char↔String conversion** — assignment `ch := str` and vice versa.
+
+### References
 - Keep using the FPC-declared order from `make -n -B -C ./FPCSource/rtl/linux units`
   for RTL bootstrap work.
 - For compiler bootstrap, `make -n -C ./FPCSource/compiler ppcx64` shows that
