@@ -17372,6 +17372,38 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
             }
+            /* For nested type methods, also register the short alias. */
+            if (id_to_use_for_lookup != NULL)
+            {
+                const char *dunder = strstr(id_to_use_for_lookup, "__");
+                if (dunder != NULL && dunder > id_to_use_for_lookup)
+                {
+                    const char *last_dot = NULL;
+                    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                        if (*p == '.')
+                            last_dot = p;
+                    if (last_dot != NULL && last_dot + 1 < dunder)
+                    {
+                        char *short_name = strdup(last_dot + 1);
+                        if (short_name != NULL)
+                        {
+                            HashNode_t *existing_short = NULL;
+                            if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                            {
+                                PushProcedureOntoScope_Typed(symtab, short_name,
+                                    subprogram->tree_data.subprogram_data.mangled_id
+                                        ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                        : NULL,
+                                    proc_type);
+                            }
+                            else
+                            {
+                                free(short_name);
+                            }
+                        }
+                    }
+                }
+            }
             /* Still set existing_decl for subsequent code that needs it */
             FindSymbol(&existing_decl, symtab, id_to_use_for_lookup);
         }
@@ -17537,6 +17569,42 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
+            }
+            /* For nested type methods like "Outer.Inner__Method", also register
+             * the short alias "Inner__Method" so that generic method bodies using
+             * just the inner type name can find the method. */
+            if (id_to_use_for_lookup != NULL)
+            {
+                const char *dunder = strstr(id_to_use_for_lookup, "__");
+                if (dunder != NULL && dunder > id_to_use_for_lookup)
+                {
+                    /* Find the last dot before the "__" separator */
+                    const char *last_dot = NULL;
+                    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                        if (*p == '.')
+                            last_dot = p;
+                    if (last_dot != NULL && last_dot + 1 < dunder)
+                    {
+                        char *short_name = strdup(last_dot + 1);
+                        if (short_name != NULL)
+                        {
+                            /* short_name is "Inner__Method" */
+                            HashNode_t *existing_short = NULL;
+                            if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                            {
+                                PushFunctionOntoScope_Typed(symtab, short_name,
+                                    subprogram->tree_data.subprogram_data.mangled_id
+                                        ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                        : NULL,
+                                    func_type);
+                            }
+                            else
+                            {
+                                free(short_name);
+                            }
+                        }
+                    }
+                }
             }
         }
         else
@@ -18285,6 +18353,39 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
+        /* For nested type methods, also register the short alias during predeclaration. */
+        if (func_return == 0 && id_to_use_for_lookup != NULL)
+        {
+            const char *dunder = strstr(id_to_use_for_lookup, "__");
+            if (dunder != NULL && dunder > id_to_use_for_lookup)
+            {
+                const char *last_dot = NULL;
+                for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                    if (*p == '.')
+                        last_dot = p;
+                if (last_dot != NULL && last_dot + 1 < dunder)
+                {
+                    char *short_name = strdup(last_dot + 1);
+                    if (short_name != NULL)
+                    {
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            PushProcedureOntoScope_Typed(symtab, short_name,
+                                subprogram->tree_data.subprogram_data.mangled_id
+                                    ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                    : NULL,
+                                proc_type);
+                        }
+                        else
+                        {
+                            free(short_name);
+                        }
+                    }
+                }
+            }
+        }
+
         /* Propagate flags and method identity to the hash node.
          * Search only the TARGET TABLE where the node was just pushed,
          * not the full scope tree, to avoid mistakenly finding and modifying
@@ -18347,6 +18448,41 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             fprintf(stderr, "On line %d: redeclaration of name %s!\n",
                 subprogram->line_num, subprogram->tree_data.subprogram_data.id);
             return_val += func_return;
+        }
+
+        /* For nested type methods like "Outer.Inner__Method", also register
+         * the short alias "Inner__Method" during predeclaration so that
+         * generic method clones can find them. */
+        if (func_return == 0 && id_to_use_for_lookup != NULL)
+        {
+            const char *dunder = strstr(id_to_use_for_lookup, "__");
+            if (dunder != NULL && dunder > id_to_use_for_lookup)
+            {
+                const char *last_dot = NULL;
+                for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                    if (*p == '.')
+                        last_dot = p;
+                if (last_dot != NULL && last_dot + 1 < dunder)
+                {
+                    char *short_name = strdup(last_dot + 1);
+                    if (short_name != NULL)
+                    {
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            PushFunctionOntoScope_Typed(symtab, short_name,
+                                subprogram->tree_data.subprogram_data.mangled_id
+                                    ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                    : NULL,
+                                func_type);
+                        }
+                        else
+                        {
+                            free(short_name);
+                        }
+                    }
+                }
+            }
         }
 
         /* Propagate flags — search only the target table (see proc case above). */

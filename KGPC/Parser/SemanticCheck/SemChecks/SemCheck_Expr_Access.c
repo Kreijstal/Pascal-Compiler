@@ -2110,6 +2110,35 @@ int semcheck_funccall(int *type_return,
                     if (looks_like_unit)
                         can_strip = 1;
                     }
+                    /* Handle static method calls where the receiver type is not
+                     * directly in the symbol table (e.g. nested type used as a
+                     * generic type argument). If "Receiver__Method" exists as a
+                     * function and the method is static, rewrite to a direct call.
+                     * Non-static methods (constructors, etc.) need Self so we
+                     * must NOT strip the receiver for them. */
+                    if (!can_strip && !looks_like_self_field && id != NULL &&
+                        first_arg->expr_data.id != NULL &&
+                        from_cparser_is_method_static(first_arg->expr_data.id, id))
+                    {
+                        size_t recv_len = strlen(first_arg->expr_data.id);
+                        size_t id_len = strlen(id);
+                        char *mangled_method = (char *)malloc(recv_len + 2 + id_len + 1);
+                        if (mangled_method != NULL)
+                        {
+                            snprintf(mangled_method, recv_len + 2 + id_len + 1, "%s__%s",
+                                first_arg->expr_data.id, id);
+                            ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method);
+                            if (method_candidates != NULL)
+                            {
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = strdup(mangled_method);
+                                id = expr->expr_data.function_call_data.id;
+                                can_strip = 1;
+                                DestroyList(method_candidates);
+                            }
+                            free(mangled_method);
+                        }
+                    }
                 }
                 else if (first_node->hash_type == HASHTYPE_TYPE)
                 {
