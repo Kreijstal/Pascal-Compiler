@@ -11084,6 +11084,24 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             }
                                         }
 
+                                        /* For constructors without explicit return type, set the
+                                         * return type to a pointer to the owning class. This ensures
+                                         * that constructor calls like ClassName.ppuload() return the
+                                         * class instance type, not procedure/unknown. */
+                                        if (return_type == NULL &&
+                                            tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR &&
+                                            record_info != NULL &&
+                                            record_type_is_class(record_info))
+                                        {
+                                            KgpcType *rec_type = create_record_type(record_info);
+                                            if (rec_type != NULL)
+                                            {
+                                                return_type = create_pointer_type(rec_type);
+                                                if (return_type == NULL)
+                                                    destroy_kgpc_type(rec_type);
+                                            }
+                                        }
+
                                         KgpcType *proc_type = create_procedure_type(params, return_type);
                                         /* create_procedure_type retains return_type; release our ref */
                                         if (return_type != NULL)
