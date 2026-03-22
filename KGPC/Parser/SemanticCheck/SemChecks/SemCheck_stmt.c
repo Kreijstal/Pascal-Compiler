@@ -740,6 +740,10 @@ static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
          pascal_identifier_equals(cand->method_name, ":=") ||
          pascal_identifier_equals(cand->method_name, "Implicit")))
         return 1;
+    /* Standalone operators: id like "int64__op_assign_Tconstexprint" */
+    if (cand->is_operator && cand->id != NULL &&
+        strcasestr(cand->id, "__op_assign") != NULL)
+        return 1;
     return 0;
 }
 
@@ -941,7 +945,9 @@ static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
     operator_node = semcheck_find_record_assign_operator_candidate(symtab,
         target_type_id, source_type_id, target_type, *source_type, &return_type);
     if (operator_node == NULL || return_type == NULL)
+    {
         return 0;
+    }
     if (!are_types_compatible_for_assignment(target_type, return_type, symtab))
         return 0;
 

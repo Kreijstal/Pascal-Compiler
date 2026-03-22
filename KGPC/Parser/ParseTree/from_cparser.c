@@ -18900,6 +18900,8 @@ static Tree_t *convert_function(ast_t *func_node) {
     } else if (result_var_name != NULL) {
         free(result_var_name);
     }
+    if (tree != NULL && is_standalone_operator)
+        tree->tree_data.subprogram_data.is_operator = 1;
     return tree;
 }
 
