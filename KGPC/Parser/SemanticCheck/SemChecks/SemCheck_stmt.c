@@ -7547,11 +7547,27 @@ proccall_parent_resolve_done:
     if (match_count == 0 && proc_id != NULL && with_context_count > 0 &&
         !stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
     {
-        /* Skip WITH interception if a non-method symbol with this name exists */
+        /* Skip WITH interception if a non-method, non-builtin symbol with this
+         * name exists AND has matching arity.  Builtin functions like Concat are
+         * registered with 0 params but are actually variadic — they must not
+         * prevent WITH methods from being found (e.g., `with LinkScript do
+         * Concat('...')` where LinkScript has a Concat method). */
         HashNode_t *global_proc = NULL;
-        int has_global_proc = (FindSymbol(&global_proc, symtab, proc_id) && global_proc != NULL &&
+        int has_global_proc = 0;
+        if (FindSymbol(&global_proc, symtab, proc_id) && global_proc != NULL &&
             (global_proc->hash_type == HASHTYPE_FUNCTION ||
-             global_proc->hash_type == HASHTYPE_PROCEDURE));
+             global_proc->hash_type == HASHTYPE_PROCEDURE))
+        {
+            /* Check if the global proc's param count matches the call args.
+             * If the global proc has 0 params but the call has args, it's
+             * likely a variadic builtin and should not block WITH resolution. */
+            int global_param_count = 0;
+            if (global_proc->type != NULL && kgpc_type_is_procedure(global_proc->type))
+                global_param_count = ListLength(global_proc->type->info.proc_info.params);
+            int call_arg_count = ListLength(stmt->stmt_data.procedure_call_data.expr_args);
+            if (global_param_count > 0 || call_arg_count == 0)
+                has_global_proc = 1;
+        }
 
         struct Expression *with_expr = NULL;
         int wm = has_global_proc ? 1 : semcheck_with_try_resolve_method(proc_id, symtab, &with_expr, stmt->line_num);
