@@ -3250,8 +3250,13 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
  * owns the memory and DestroyHashTable can free it uniformly. */
 static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
 {
-    if (node == NULL || subprogram == NULL ||
-        subprogram->tree_data.subprogram_data.method_name == NULL)
+    if (node == NULL || subprogram == NULL)
+        return;
+    if (subprogram->tree_data.subprogram_data.is_operator)
+        node->is_operator = 1;
+    if (subprogram->tree_data.subprogram_data.is_nested_scope)
+        node->is_nested_scope = 1;
+    if (subprogram->tree_data.subprogram_data.method_name == NULL)
         return;
     if (node->method_name == NULL)
         node->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
@@ -3261,10 +3266,6 @@ static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
         node->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
     if (node->owner_class_outer == NULL && subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
         node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
-    if (subprogram->tree_data.subprogram_data.is_operator)
-        node->is_operator = 1;
-    if (subprogram->tree_data.subprogram_data.is_nested_scope)
-        node->is_nested_scope = 1;
 }
 
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
