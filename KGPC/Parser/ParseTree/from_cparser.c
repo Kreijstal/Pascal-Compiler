@@ -2931,16 +2931,11 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     /* Set the current generic context so that generic_registry_is_type_param()
      * only checks the enclosing generic's type parameters, not all generics. */
     GenericTypeDecl *saved_context = generic_registry_current_context();
-    if (record->generic_decl != NULL)
-        generic_registry_push_context(record->generic_decl);
+    generic_registry_set_context(record->generic_decl);
 
     Tree_t *method_tree = convert_method_impl(method_copy);
 
-    /* Restore previous generic context. */
-    if (saved_context != NULL)
-        generic_registry_push_context(saved_context);
-    else
-        generic_registry_pop_context();
+    generic_registry_set_context(saved_context);
 
     g_source_offset = saved_offset;
 
@@ -14447,11 +14442,13 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                  * generic type parameter (e.g. specialize T<T> inside a
                  * generic method body — not a concrete specialization). */
                 int has_type_param_arg = 0;
-                for (ListNode_t *a = type_args; a != NULL; a = a->next) {
-                    if (a->type == LIST_STRING && a->cur != NULL &&
-                        generic_registry_is_type_param((const char *)a->cur)) {
-                        has_type_param_arg = 1;
-                        break;
+                if (generic_registry_current_context() != NULL) {
+                    for (ListNode_t *a = type_args; a != NULL; a = a->next) {
+                        if (a->type == LIST_STRING && a->cur != NULL &&
+                            generic_registry_is_type_param((const char *)a->cur)) {
+                            has_type_param_arg = 1;
+                            break;
+                        }
                     }
                 }
                 if (has_type_param_arg) goto skip_inline_spec;
