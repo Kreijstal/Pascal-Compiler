@@ -4963,7 +4963,7 @@ assignment_types_ok:
             }
         }
 
-        if (!types_compatible)
+        if (!types_compatible && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
         {
             if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL)
             {
@@ -9018,7 +9018,7 @@ int semcheck_for(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
         }
     }
 
-    if (!bounds_compatible)
+    if (!bounds_compatible && for_type != UNKNOWN_TYPE && to_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, type mismatch in \"to\" assignment!\n\n",
                 stmt->line_num);
@@ -9298,7 +9298,7 @@ int semcheck_for_assign(SymTab_t *symtab, struct Statement *for_assign, int max_
         }
     }
 
-    if (!types_compatible)
+    if (!types_compatible && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE)
     {
         semcheck_error_with_context_at(for_assign->line_num, for_assign->col_num, for_assign->source_index,
             "Error on line %d, type mismatch in \"for\" assignment statement!\n\n",

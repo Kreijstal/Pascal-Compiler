@@ -1249,6 +1249,7 @@ relop_fallback:
                 if(!numeric_ok && !string_ok && !char_ok && !pointer_ok && !enum_ok && !string_pchar_ok && !dynarray_nil_ok && !pointer_nil_ok
                     && !record_ok && !set_ok
                     && type_first != VARIANT_TYPE && type_second != VARIANT_TYPE
+                    && type_first != UNKNOWN_TYPE && type_second != UNKNOWN_TYPE
                     && !((is_integer_type(type_first) && type_second == POINTER_TYPE) ||
                          (type_first == POINTER_TYPE && is_integer_type(type_second))))
                 {
