@@ -2094,7 +2094,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     int string_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
-    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
+    if (string_type != STRING_TYPE && string_type != SHORTSTRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
         ++return_val;

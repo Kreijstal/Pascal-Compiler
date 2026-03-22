@@ -2721,6 +2721,37 @@ int semcheck_recordaccess(int *type_return,
             type_str != NULL ? type_str : "<null>");
     }
 
+    /* When the record expression resolved to a function/procedure type (e.g. a
+     * function pointer field like `GetFPCHeapStatus: function: TFPCHeapStatus`),
+     * and we are trying to access a field on it (e.g. `.CurrHeapUsed`), treat
+     * this as an implicit call of the parameterless function pointer and use
+     * the return type for the field access.  This mirrors FPC semantics where
+     * `rec.FuncPtrField.ResultField` implicitly invokes the function pointer. */
+    if (record_type == PROCEDURE && record_kgpc_type != NULL &&
+        kgpc_type_is_procedure(record_kgpc_type))
+    {
+        KgpcType *ret_type = kgpc_type_get_return_type(record_kgpc_type);
+        if (ret_type == NULL && record_kgpc_type->info.proc_info.return_type_id != NULL)
+        {
+            HashNode_t *ret_node = NULL;
+            if (FindSymbol(&ret_node, symtab, record_kgpc_type->info.proc_info.return_type_id) != 0 &&
+                ret_node != NULL && ret_node->type != NULL)
+                ret_type = ret_node->type;
+        }
+        if (ret_type != NULL)
+        {
+            int ret_tag = semcheck_tag_from_kgpc(ret_type);
+            if (ret_tag == RECORD_TYPE)
+            {
+                if (record_kgpc_type != NULL)
+                    kgpc_type_release(record_kgpc_type);
+                record_kgpc_type = ret_type;
+                kgpc_type_retain(record_kgpc_type);
+                record_type = RECORD_TYPE;
+            }
+        }
+    }
+
     if (record_expr->type == EXPR_RECORD_ACCESS)
     {
         struct Expression *inner_rec = record_expr->expr_data.record_access_data.record_expr;
