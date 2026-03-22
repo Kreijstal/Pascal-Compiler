@@ -307,6 +307,30 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
 
+            /* Fallback: try FindAllIdents which searches all unit scopes.
+             * Methods from other units may not be visible through direct deps. */
+            if (method_node == NULL)
+            {
+                ListNode_t *all = FindAllIdents(symtab, mangled_name);
+                if (all != NULL)
+                {
+                    ListNode_t *cur = all;
+                    while (cur != NULL)
+                    {
+                        HashNode_t *candidate = (HashNode_t *)cur->cur;
+                        if (candidate != NULL &&
+                            (candidate->hash_type == HASHTYPE_FUNCTION ||
+                             candidate->hash_type == HASHTYPE_PROCEDURE))
+                        {
+                            method_node = candidate;
+                            break;
+                        }
+                        cur = cur->next;
+                    }
+                    DestroyList(all);
+                }
+            }
+
             if (method_node != NULL)
             {
                 if (method_node->hash_type == HASHTYPE_FUNCTION_RETURN)
