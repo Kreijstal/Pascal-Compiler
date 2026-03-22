@@ -1041,6 +1041,16 @@ typedef struct PendingGenericAlias {
 
 static PendingGenericAlias *g_pending_generic_aliases = NULL;
 static int g_allow_pending_specializations = 0;
+
+/* Deferred inline specializations: when `specialize Foo<T>` appears in
+ * expression context (e.g. `specialize Foo<T>.Method(...)`), we need to
+ * instantiate the generic record and create a type declaration so that
+ * append_generic_method_clones() can emit method implementations. */
+typedef struct DeferredInlineSpec {
+    Tree_t *type_decl;
+    struct DeferredInlineSpec *next;
+} DeferredInlineSpec;
+static DeferredInlineSpec *g_deferred_inline_specs = NULL;
 static ListNode_t *g_const_sections = NULL;
 static ListNode_t *g_const_sections_tail = NULL; /* tail pointer for O(1) append */
 
@@ -3104,6 +3114,20 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     if (method_template == NULL || method_template->method_impl_ast == NULL || record == NULL)
         return NULL;
 
+    /* Register method bindings for the specialized class name so that
+     * convert_method_impl can look up is_static / is_class_method correctly.
+     * The original bindings are registered under the generic class name,
+     * but the cloned method will have the specialized class name. */
+    if (record->type_id != NULL && method_template->name != NULL)
+    {
+        int param_count = from_cparser_count_params_ast(method_template->params_ast);
+        char *param_sig = param_type_signature_from_params_ast(method_template->params_ast);
+        register_class_method_ex(record->type_id, method_template->name,
+            method_template->is_virtual, method_template->is_override,
+            method_template->is_static, method_template->is_class_method,
+            param_count, param_sig);
+    }
+
     ast_t *method_copy = copy_ast(method_template->method_impl_ast);
     if (method_copy == NULL)
         return NULL;
@@ -4006,6 +4030,51 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
     }
     if (appended_any)
         record->method_clones_emitted = 1;
+}
+
+void flush_deferred_inline_specializations(Tree_t *program_tree)
+{
+    DeferredInlineSpec *cur = g_deferred_inline_specs;
+    g_deferred_inline_specs = NULL;
+
+    ListNode_t **type_list = NULL;
+    ListNode_t **subprograms = NULL;
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+        subprograms = &program_tree->tree_data.program_data.subprograms;
+    } else if (program_tree != NULL && program_tree->type == TREE_UNIT) {
+        type_list = &program_tree->tree_data.unit_data.interface_type_decls;
+        subprograms = &program_tree->tree_data.unit_data.subprograms;
+    }
+
+    if (type_list == NULL) {
+        while (cur != NULL) {
+            DeferredInlineSpec *next = cur->next;
+            if (cur->type_decl != NULL)
+                destroy_tree(cur->type_decl);
+            free(cur);
+            cur = next;
+        }
+        return;
+    }
+
+    while (cur != NULL) {
+        DeferredInlineSpec *next = cur->next;
+        if (cur->type_decl != NULL) {
+            /* Emit method clones for this inline specialization */
+            if (subprograms != NULL)
+                append_specialized_method_clones(cur->type_decl, subprograms);
+            ListNode_t *node = CreateListNode(cur->type_decl, LIST_TREE);
+            if (node != NULL) {
+                node->next = *type_list;
+                *type_list = node;
+            } else {
+                destroy_tree(cur->type_decl);
+            }
+        }
+        free(cur);
+        cur = next;
+    }
 }
 
 void append_generic_method_clones(Tree_t *program_tree)
@@ -13133,6 +13202,23 @@ static void rewrite_class_const_expr_nested_types(struct Expression *expr,
     switch (expr->type) {
         case EXPR_FUNCTION_CALL: {
             const char *func_id = expr->expr_data.function_call_data.id;
+            /* A function call whose id matches a nested type is really a typecast
+               (e.g. Node(nil^) where Node is a nested record type).  Qualify
+               the id so the semantic checker can resolve it. */
+            if (func_id != NULL &&
+                type_name_exists_in_sections(func_id, nested_type_sections))
+            {
+                size_t olen = strlen(owner_id);
+                size_t flen = strlen(func_id);
+                char *qualified = (char *)malloc(olen + 1 + flen + 1);
+                if (qualified != NULL)
+                {
+                    snprintf(qualified, olen + 1 + flen + 1, "%s.%s", owner_id, func_id);
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = qualified;
+                    func_id = qualified;
+                }
+            }
             int is_type_intrinsic = func_id != NULL &&
                 (pascal_identifier_equals(func_id, "SizeOf") ||
                  pascal_identifier_equals(func_id, "TypeInfo") ||
@@ -14598,6 +14684,64 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             char *specialized_name = mangle_specialized_name_from_list(base_name, type_args);
             if (specialized_name == NULL && base_name != NULL)
                 specialized_name = strdup(base_name);
+
+            /* Trigger generic instantiation for inline specialize in expression
+             * context — but only if this specialization hasn't already been
+             * registered by the normal type-declaration pipeline. */
+            if (base_name != NULL && type_args != NULL) {
+                /* Skip inline spec creation if any type arg is itself a
+                 * generic type parameter (e.g. specialize T<T> inside a
+                 * generic method body — not a concrete specialization). */
+                int has_type_param_arg = 0;
+                for (ListNode_t *a = type_args; a != NULL; a = a->next) {
+                    if (a->type == LIST_STRING && a->cur != NULL &&
+                        generic_registry_is_type_param((const char *)a->cur)) {
+                        has_type_param_arg = 1;
+                        break;
+                    }
+                }
+                if (has_type_param_arg) goto skip_inline_spec;
+
+                ListNode_t *args_copy = NULL;
+                ListNode_t *args_tail = NULL;
+                for (ListNode_t *a = type_args; a != NULL; a = a->next) {
+                    if (a->type == LIST_STRING && a->cur != NULL) {
+                        ListNode_t *n = CreateListNode(strdup((char *)a->cur), LIST_STRING);
+                        if (n != NULL) {
+                            if (args_tail != NULL) { args_tail->next = n; args_tail = n; }
+                            else { args_copy = n; args_tail = n; }
+                        }
+                    }
+                }
+                if (args_copy != NULL) {
+                    char *inst_name = NULL;
+                    struct RecordType *record = instantiate_generic_record(
+                        base_name, args_copy, &inst_name);
+                    if (record != NULL) {
+                        char *rec_id = inst_name != NULL ? strdup(inst_name) : strdup(specialized_name);
+                        Tree_t *type_decl = mk_record_type(expr_node->line, rec_id, record);
+                        if (type_decl != NULL) {
+                            DeferredInlineSpec *entry = (DeferredInlineSpec *)calloc(1, sizeof(DeferredInlineSpec));
+                            if (entry != NULL) {
+                                entry->type_decl = type_decl;
+                                entry->next = g_deferred_inline_specs;
+                                g_deferred_inline_specs = entry;
+                            } else {
+                                destroy_tree(type_decl);
+                            }
+                        }
+                    }
+                    /* args_copy ownership: instantiate_generic_record takes ownership
+                     * on success (it stores args in the record); on failure it may or
+                     * may not have freed them, but we can safely destroy_list a NULL. */
+                    if (record == NULL)
+                        destroy_list(args_copy);
+                    if (inst_name != NULL)
+                        free(inst_name);
+                }
+                skip_inline_spec: ;
+            }
+
             if (type_args != NULL)
                 destroy_list(type_args);
             if (base_name != NULL)
@@ -18876,6 +19020,15 @@ void from_cparser_cleanup(void)
             destroy_list(g_pending_generic_aliases->type_args);
         free(g_pending_generic_aliases);
         g_pending_generic_aliases = next;
+    }
+
+    /* Free deferred inline specializations */
+    while (g_deferred_inline_specs != NULL) {
+        DeferredInlineSpec *next = g_deferred_inline_specs->next;
+        if (g_deferred_inline_specs->type_decl != NULL)
+            destroy_tree(g_deferred_inline_specs->type_decl);
+        free(g_deferred_inline_specs);
+        g_deferred_inline_specs = next;
     }
 
     /* Free scoped enum source cache */

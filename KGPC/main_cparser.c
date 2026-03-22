@@ -2664,6 +2664,14 @@ int main(int argc, char **argv)
          * the target unit tree so semcheck can see them. */
         build_combined_program_view(&unit_comp_ctx);
 
+        /* Flush deferred inline specializations and emit generic method clones
+         * for unit compilation.  Unlike program compilation which calls
+         * append_generic_method_clones() on ALL type declarations,
+         * flush_deferred_inline_specializations() only emits clones for the
+         * newly created inline specializations (avoiding duplicates with
+         * method clones already present in imported units). */
+        flush_deferred_inline_specializations(user_tree);
+
         if (saved_preprocessed_source != NULL)
         {
             if (preprocessed_source != NULL)
@@ -2946,6 +2954,7 @@ int main(int argc, char **argv)
     resolve_pending_generic_aliases(user_tree);
     emit_profile_stage("program: resolve generic aliases", current_time_seconds() - generic_alias_start);
     from_cparser_resolve_deferred_arrays(user_tree);
+    flush_deferred_inline_specializations(user_tree);
     double generic_method_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     append_generic_method_clones(user_tree);
     emit_profile_stage("program: append generic method clones", current_time_seconds() - generic_method_start);

@@ -2002,6 +2002,60 @@ int semcheck_funccall(int *type_return,
         struct Expression *first_arg = (struct Expression *)args_given->cur;
         if (first_arg != NULL && first_arg->type == EXPR_VAR_ID && first_arg->expr_data.id != NULL)
         {
+            /* Handle specialized generic type as receiver: specialize T<A>.Method(...)
+             * The parser produces receiver="T$A" which may or may not be in the symbol
+             * table, but the base type "T" is.  Look up the base type and resolve the
+             * method through it (e.g. T$A__Method). */
+            const char *dollar = strchr(first_arg->expr_data.id, '$');
+            if (dollar != NULL && dollar > first_arg->expr_data.id &&
+                expr->expr_data.function_call_data.placeholder_method_name != NULL)
+            {
+                size_t base_len = (size_t)(dollar - first_arg->expr_data.id);
+                char *base_name = strndup(first_arg->expr_data.id, base_len);
+                if (base_name != NULL)
+                {
+                    HashNode_t *base_type_node = NULL;
+                    if (FindSymbol(&base_type_node, symtab, base_name) != 0 &&
+                        base_type_node != NULL && base_type_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        const char *method_name = expr->expr_data.function_call_data.placeholder_method_name;
+                        /* Build mangled method name: "T$A__Method" using the full specialized name */
+                        const char *spec_name = first_arg->expr_data.id;
+                        size_t spec_len = strlen(spec_name);
+                        size_t method_len = strlen(method_name);
+                        char *mangled_method = (char *)malloc(spec_len + 2 + method_len + 1);
+                        if (mangled_method != NULL)
+                        {
+                            snprintf(mangled_method, spec_len + 2 + method_len + 1,
+                                "%s__%s", spec_name, method_name);
+                            ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method);
+                            if (method_candidates != NULL)
+                            {
+                                /* Strip the receiver arg and rewrite to direct call */
+                                ListNode_t *remaining_args = args_given->next;
+                                destroy_expr(first_arg);
+                                args_given->cur = NULL;
+                                free(args_given);
+
+                                expr->expr_data.function_call_data.args_expr = remaining_args;
+                                args_given = remaining_args;
+
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = mangled_method;
+                                id = mangled_method;
+                                mangled_method = NULL;
+
+                                DestroyList(method_candidates);
+                                was_unit_qualified = 1;
+                                expr->expr_data.function_call_data.is_method_call_placeholder = 0;
+                            }
+                            if (mangled_method != NULL)
+                                free(mangled_method);
+                        }
+                    }
+                    free(base_name);
+                }
+            }
             int is_unit_qualifier = semcheck_is_unit_name(first_arg->expr_data.id);
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {
@@ -2056,6 +2110,35 @@ int semcheck_funccall(int *type_return,
                     if (looks_like_unit)
                         can_strip = 1;
                     }
+                    /* Handle static method calls where the receiver type is not
+                     * directly in the symbol table (e.g. nested type used as a
+                     * generic type argument). If "Receiver__Method" exists as a
+                     * function and the method is static, rewrite to a direct call.
+                     * Non-static methods (constructors, etc.) need Self so we
+                     * must NOT strip the receiver for them. */
+                    if (!can_strip && !looks_like_self_field && id != NULL &&
+                        first_arg->expr_data.id != NULL &&
+                        from_cparser_is_method_static(first_arg->expr_data.id, id))
+                    {
+                        size_t recv_len = strlen(first_arg->expr_data.id);
+                        size_t id_len = strlen(id);
+                        char *mangled_method = (char *)malloc(recv_len + 2 + id_len + 1);
+                        if (mangled_method != NULL)
+                        {
+                            snprintf(mangled_method, recv_len + 2 + id_len + 1, "%s__%s",
+                                first_arg->expr_data.id, id);
+                            ListNode_t *method_candidates = FindAllIdents(symtab, mangled_method);
+                            if (method_candidates != NULL)
+                            {
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = strdup(mangled_method);
+                                id = expr->expr_data.function_call_data.id;
+                                can_strip = 1;
+                                DestroyList(method_candidates);
+                            }
+                            free(mangled_method);
+                        }
+                    }
                 }
                 else if (first_node->hash_type == HASHTYPE_TYPE)
                 {
@@ -2066,6 +2149,31 @@ int semcheck_funccall(int *type_return,
                     {
                         can_strip = 1;
                     }
+                    /* If the id is not a top-level type, check if it's a nested type
+                     * within the receiver type (e.g., HeapTracer.Node where Node is
+                     * a nested type declared inside HeapTracer). Nested types are
+                     * stored in the symbol table with qualified names like "HeapTracer.Node". */
+                    if (!can_strip && id != NULL && first_arg->expr_data.id != NULL)
+                    {
+                        size_t recv_len = strlen(first_arg->expr_data.id);
+                        size_t id_len = strlen(id);
+                        char *qualified_id = (char *)malloc(recv_len + 1 + id_len + 1);
+                        if (qualified_id != NULL)
+                        {
+                            snprintf(qualified_id, recv_len + 1 + id_len + 1, "%s.%s",
+                                first_arg->expr_data.id, id);
+                            HashNode_t *qual_type_node = NULL;
+                            if (FindSymbol(&qual_type_node, symtab, qualified_id) != 0 &&
+                                qual_type_node != NULL && qual_type_node->hash_type == HASHTYPE_TYPE)
+                            {
+                                free(expr->expr_data.function_call_data.id);
+                                expr->expr_data.function_call_data.id = strdup(qualified_id);
+                                id = expr->expr_data.function_call_data.id;
+                                can_strip = 1;
+                            }
+                            free(qualified_id);
+                        }
+                    }
                 }
 
                 if (can_strip)
@@ -2075,6 +2183,17 @@ int semcheck_funccall(int *type_return,
                     {
                         is_unit_qualifier = 1;
                         DestroyList(func_candidates);
+                    }
+                    /* Qualified nested type names may not be found by FindAllIdents.
+                     * Fall back to FindSymbol since we already verified the type. */
+                    if (!is_unit_qualifier)
+                    {
+                        HashNode_t *type_verify = NULL;
+                        if (FindSymbol(&type_verify, symtab, id) != 0 &&
+                            type_verify != NULL && type_verify->hash_type == HASHTYPE_TYPE)
+                        {
+                            is_unit_qualifier = 1;
+                        }
                     }
                 }
             }
@@ -4182,6 +4301,20 @@ int semcheck_funccall(int *type_return,
 
                             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                 fprintf(stderr, "[SemCheck] semcheck_funccall: Removed type arg for static method call\n");
+                            }
+                        }
+                        else if (is_static && !any_has_self && !first_arg_is_type_ident &&
+                                 args_given != NULL && args_given->cur != NULL) {
+                            /* Static method called via instance variable (e.g. ht.StaticMethod(arg)).
+                             * The instance is not needed since static methods have no Self parameter.
+                             * Strip the instance receiver from the argument list. */
+                            ListNode_t *old_head = args_given;
+                            expr->expr_data.function_call_data.args_expr = old_head->next;
+                            old_head->next = NULL;
+                            args_given = expr->expr_data.function_call_data.args_expr;
+
+                            if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                                fprintf(stderr, "[SemCheck] semcheck_funccall: Removed instance arg for static method call\n");
                             }
                         }
 

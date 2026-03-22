@@ -7106,6 +7106,78 @@ low_cleanup:
                 fprintf(stderr, "Error: unsupported relational operator in const expression.\n");
             return 1;
         }
+        case EXPR_ADDR:
+        {
+            /* Handle @Record(nil^).field as compile-time offsetof() */
+            struct Expression *inner = expr->expr_data.addr_data.expr;
+            if (inner == NULL || inner->type != EXPR_RECORD_ACCESS)
+                break;
+
+            char *field_id = inner->expr_data.record_access_data.field_id;
+            struct Expression *base_expr = inner->expr_data.record_access_data.record_expr;
+            if (field_id == NULL || base_expr == NULL)
+                break;
+
+            /* The base expression must be a nil pointer dereference typecast:
+             * Either EXPR_FUNCTION_CALL(TypeName, args=[EXPR_POINTER_DEREF(EXPR_NIL)])
+             * or EXPR_TYPECAST(TypeName, expr=EXPR_POINTER_DEREF(EXPR_NIL)) */
+            const char *type_name = NULL;
+            struct Expression *deref_check = NULL;
+
+            if (base_expr->type == EXPR_FUNCTION_CALL)
+            {
+                ListNode_t *args = base_expr->expr_data.function_call_data.args_expr;
+                if (args != NULL && args->next == NULL && args->cur != NULL)
+                {
+                    deref_check = (struct Expression *)args->cur;
+                    type_name = base_expr->expr_data.function_call_data.id;
+                }
+            }
+            else if (base_expr->type == EXPR_TYPECAST)
+            {
+                deref_check = base_expr->expr_data.typecast_data.expr;
+                type_name = base_expr->expr_data.typecast_data.target_type_id;
+            }
+
+            if (type_name == NULL || deref_check == NULL)
+                break;
+
+            /* Verify that the argument is nil^ (EXPR_POINTER_DEREF(EXPR_NIL)) */
+            if (deref_check->type != EXPR_POINTER_DEREF ||
+                deref_check->expr_data.pointer_deref_data.pointer_expr == NULL ||
+                deref_check->expr_data.pointer_deref_data.pointer_expr->type != EXPR_NIL)
+                break;
+
+            /* Look up the record type in the symbol table */
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+            if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+            {
+                /* Try stripping unit prefix (e.g. "HeapTracer.Node" -> "Node") */
+                const char *dot = strrchr(type_name, '.');
+                if (dot != NULL)
+                {
+                    type_node = semcheck_find_preferred_type_node(symtab, dot + 1);
+                }
+                if (type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+                    break;
+            }
+
+            struct RecordType *record = hashnode_get_record_type(type_node);
+            if (record == NULL)
+                break;
+
+            /* Compute field offset using resolve_record_field */
+            struct RecordField *field_desc = NULL;
+            long long field_offset = 0;
+            if (resolve_record_field(symtab, record, field_id, &field_desc,
+                                     &field_offset, expr->line_num, 1) == 0 &&
+                field_desc != NULL)
+            {
+                *out_value = field_offset;
+                return 0;
+            }
+            break;
+        }
         default:
             break;
     }
@@ -12582,15 +12654,36 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
                     }
                 }
             }
+            /* If this const belongs to a record (id contains '.'), temporarily
+               set the method owner so that unqualified nested type references
+               (e.g. Node inside HeapTracer) resolve correctly via the owner chain. */
+            const char *prev_method_owner = semcheck_get_current_method_owner();
+            char *const_owner = NULL;
+            {
+                const char *const_id = tree->tree_data.const_decl_data.id;
+                if (const_id != NULL)
+                {
+                    const char *dot = strrchr(const_id, '.');
+                    if (dot != NULL && dot != const_id)
+                    {
+                        const_owner = strndup(const_id, (size_t)(dot - const_id));
+                        semcheck_set_current_method_owner(const_owner);
+                    }
+                }
+            }
             semcheck_expr_main(symtab, value_expr, INT_MAX, NO_MUTATE, &expr_type);
-            
+
             if (evaluate_const_expr(symtab, value_expr, &value) != 0)
             {
                 semcheck_error_with_context_at(tree->line_num, 0, tree->source_index, "Error on line %d, unsupported const expression.\n", tree->line_num);
                 ++return_val;
+                semcheck_set_current_method_owner(prev_method_owner);
+                free(const_owner);
             }
             else
             {
+                semcheck_set_current_method_owner(prev_method_owner);
+                free(const_owner);
                 /* Check if constant already exists with same value (for re-exports like ARG_MAX = UnixType.ARG_MAX) */
                 HashNode_t *existing = NULL;
                 if (FindSymbol(&existing, symtab, tree->tree_data.const_decl_data.id) && existing != NULL &&
@@ -17279,6 +17372,38 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
             }
+            /* For nested type methods, also register the short alias. */
+            if (id_to_use_for_lookup != NULL)
+            {
+                const char *dunder = strstr(id_to_use_for_lookup, "__");
+                if (dunder != NULL && dunder > id_to_use_for_lookup)
+                {
+                    const char *last_dot = NULL;
+                    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                        if (*p == '.')
+                            last_dot = p;
+                    if (last_dot != NULL && last_dot + 1 < dunder)
+                    {
+                        char *short_name = strdup(last_dot + 1);
+                        if (short_name != NULL)
+                        {
+                            HashNode_t *existing_short = NULL;
+                            if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                            {
+                                PushProcedureOntoScope_Typed(symtab, short_name,
+                                    subprogram->tree_data.subprogram_data.mangled_id
+                                        ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                        : NULL,
+                                    proc_type);
+                            }
+                            else
+                            {
+                                free(short_name);
+                            }
+                        }
+                    }
+                }
+            }
             /* Still set existing_decl for subsequent code that needs it */
             FindSymbol(&existing_decl, symtab, id_to_use_for_lookup);
         }
@@ -17444,6 +17569,42 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 HashNode_t *pushed = FindIdentInTable(target_table, id_to_use_for_lookup);
                 if (pushed != NULL)
                     pushed->defined_in_unit = 1;
+            }
+            /* For nested type methods like "Outer.Inner__Method", also register
+             * the short alias "Inner__Method" so that generic method bodies using
+             * just the inner type name can find the method. */
+            if (id_to_use_for_lookup != NULL)
+            {
+                const char *dunder = strstr(id_to_use_for_lookup, "__");
+                if (dunder != NULL && dunder > id_to_use_for_lookup)
+                {
+                    /* Find the last dot before the "__" separator */
+                    const char *last_dot = NULL;
+                    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                        if (*p == '.')
+                            last_dot = p;
+                    if (last_dot != NULL && last_dot + 1 < dunder)
+                    {
+                        char *short_name = strdup(last_dot + 1);
+                        if (short_name != NULL)
+                        {
+                            /* short_name is "Inner__Method" */
+                            HashNode_t *existing_short = NULL;
+                            if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                            {
+                                PushFunctionOntoScope_Typed(symtab, short_name,
+                                    subprogram->tree_data.subprogram_data.mangled_id
+                                        ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                        : NULL,
+                                    func_type);
+                            }
+                            else
+                            {
+                                free(short_name);
+                            }
+                        }
+                    }
+                }
             }
         }
         else
@@ -18192,6 +18353,39 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             return_val += func_return;
         }
 
+        /* For nested type methods, also register the short alias during predeclaration. */
+        if (func_return == 0 && id_to_use_for_lookup != NULL)
+        {
+            const char *dunder = strstr(id_to_use_for_lookup, "__");
+            if (dunder != NULL && dunder > id_to_use_for_lookup)
+            {
+                const char *last_dot = NULL;
+                for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                    if (*p == '.')
+                        last_dot = p;
+                if (last_dot != NULL && last_dot + 1 < dunder)
+                {
+                    char *short_name = strdup(last_dot + 1);
+                    if (short_name != NULL)
+                    {
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            PushProcedureOntoScope_Typed(symtab, short_name,
+                                subprogram->tree_data.subprogram_data.mangled_id
+                                    ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                    : NULL,
+                                proc_type);
+                        }
+                        else
+                        {
+                            free(short_name);
+                        }
+                    }
+                }
+            }
+        }
+
         /* Propagate flags and method identity to the hash node.
          * Search only the TARGET TABLE where the node was just pushed,
          * not the full scope tree, to avoid mistakenly finding and modifying
@@ -18254,6 +18448,41 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
             fprintf(stderr, "On line %d: redeclaration of name %s!\n",
                 subprogram->line_num, subprogram->tree_data.subprogram_data.id);
             return_val += func_return;
+        }
+
+        /* For nested type methods like "Outer.Inner__Method", also register
+         * the short alias "Inner__Method" during predeclaration so that
+         * generic method clones can find them. */
+        if (func_return == 0 && id_to_use_for_lookup != NULL)
+        {
+            const char *dunder = strstr(id_to_use_for_lookup, "__");
+            if (dunder != NULL && dunder > id_to_use_for_lookup)
+            {
+                const char *last_dot = NULL;
+                for (const char *p = id_to_use_for_lookup; p < dunder; p++)
+                    if (*p == '.')
+                        last_dot = p;
+                if (last_dot != NULL && last_dot + 1 < dunder)
+                {
+                    char *short_name = strdup(last_dot + 1);
+                    if (short_name != NULL)
+                    {
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            PushFunctionOntoScope_Typed(symtab, short_name,
+                                subprogram->tree_data.subprogram_data.mangled_id
+                                    ? strdup(subprogram->tree_data.subprogram_data.mangled_id)
+                                    : NULL,
+                                func_type);
+                        }
+                        else
+                        {
+                            free(short_name);
+                        }
+                    }
+                }
+            }
         }
 
         /* Propagate flags — search only the target table (see proc case above). */

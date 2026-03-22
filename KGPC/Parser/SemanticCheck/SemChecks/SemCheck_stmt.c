@@ -1273,6 +1273,9 @@ static struct Expression *copy_default_expr(struct Expression *src)
         case EXPR_RECORD_ACCESS:
             copy = clone_expression(src);
             break;
+        case EXPR_FUNCTION_CALL:
+            copy = clone_expression(src);
+            break;
         case EXPR_SET:
             /* Support defaults like [] used by sysutils DateTimeToString options. */
             if (src->expr_data.set_data.elements == NULL)
@@ -2091,7 +2094,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     int string_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
     int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
-    if (string_type != STRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
+    if (string_type != STRING_TYPE && string_type != SHORTSTRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
         ++return_val;
@@ -5052,10 +5055,24 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
         if (node == NULL)
             continue;
         if (node->hash_type == HASHTYPE_VAR || node->hash_type == HASHTYPE_ARRAY ||
-            node->hash_type == HASHTYPE_CONST || node->hash_type == HASHTYPE_FUNCTION_RETURN)
+            node->hash_type == HASHTYPE_FUNCTION_RETURN)
         {
             has_storage_symbol = 1;
             break;
+        }
+        /* Enum constants are not assignable, so they should not block
+         * module-property setter lookup.  Only non-enum constants
+         * (typed consts, literal consts) count as storage symbols. */
+        if (node->hash_type == HASHTYPE_CONST)
+        {
+            int is_enum_literal = (node->type != NULL &&
+                node->type->kind == TYPE_KIND_PRIMITIVE &&
+                kgpc_type_get_primitive_tag(node->type) == ENUM_TYPE);
+            if (!is_enum_literal)
+            {
+                has_storage_symbol = 1;
+                break;
+            }
         }
         if (node->hash_type == HASHTYPE_PROCEDURE && node->type != NULL &&
             node->type->kind == TYPE_KIND_PROCEDURE)
@@ -5613,8 +5630,32 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                 goto skip_type_receiver_rewrite;
 
             HashNode_t *type_node = NULL;
-            if (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
-                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+            int type_found = (FindSymbol(&type_node, symtab, first_arg->expr_data.id) != 0 &&
+                type_node != NULL && type_node->hash_type == HASHTYPE_TYPE);
+
+            /* Handle specialized generic type receiver: specialize T<A>.Method(...)
+             * The parser produces receiver="T$A" which may not be in the symbol
+             * table directly, but the base type "T" is.  Fall back to the base name. */
+            if (!type_found)
+            {
+                const char *dollar = strchr(first_arg->expr_data.id, '$');
+                if (dollar != NULL && dollar > first_arg->expr_data.id)
+                {
+                    char *gen_base = strndup(first_arg->expr_data.id, (size_t)(dollar - first_arg->expr_data.id));
+                    if (gen_base != NULL)
+                    {
+                        type_node = NULL;
+                        if (FindSymbol(&type_node, symtab, gen_base) != 0 &&
+                            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                        {
+                            type_found = 1;
+                        }
+                        free(gen_base);
+                    }
+                }
+            }
+
+            if (type_found)
             {
                 struct RecordType *record_info = semcheck_stmt_get_record_type_from_node(type_node);
                 if (record_info != NULL && record_info->type_id != NULL &&
@@ -6697,20 +6738,13 @@ skip_type_receiver_rewrite:
                 }
                 else if (is_static && !receiver_is_type_ident && args_given != NULL)
                 {
-                    /* Static method called from within the class with implicit Self prepended.
-                     * Self must be stripped since static methods have no Self parameter.
-                     * Check if the first arg is "Self". */
-                    struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-                    if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
-                        receiver_expr->expr_data.id != NULL &&
-                        pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
-                    {
-                        ListNode_t *old_head = args_given;
-                        stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
-                        old_head->next = NULL;
-                        args_given = stmt->stmt_data.procedure_call_data.expr_args;
-                        static_arg_already_removed = 1;
-                    }
+                    /* Static method called via instance variable or implicit Self.
+                     * Static methods have no Self parameter, so strip the receiver. */
+                    ListNode_t *old_head = args_given;
+                    stmt->stmt_data.procedure_call_data.expr_args = old_head->next;
+                    old_head->next = NULL;
+                    args_given = stmt->stmt_data.procedure_call_data.expr_args;
+                    static_arg_already_removed = 1;
                 }
             }
             else
@@ -7005,18 +7039,13 @@ skip_type_receiver_rewrite:
             }
             else if (is_static && !receiver_is_type_ident && args_given != NULL)
             {
-                /* Static method called with implicit Self - strip it */
-                struct Expression *receiver_expr = (struct Expression *)args_given->cur;
-                if (receiver_expr != NULL && receiver_expr->type == EXPR_VAR_ID &&
-                    receiver_expr->expr_data.id != NULL &&
-                    pascal_identifier_equals(receiver_expr->expr_data.id, "Self"))
-                {
-                    args_given = args_given->next;
-                    stmt->stmt_data.procedure_call_data.expr_args = args_given;
-                }
+                /* Static method called via instance variable or implicit Self.
+                 * Static methods have no Self parameter, so strip the receiver. */
+                args_given = args_given->next;
+                stmt->stmt_data.procedure_call_data.expr_args = args_given;
             }
         }
-        
+
         if (need_free_class_name && class_name != NULL) {
             free((void *)class_name);
         }
