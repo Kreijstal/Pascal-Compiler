@@ -93,6 +93,7 @@ typedef struct {
 } CodeGenStringSet;
 
 static CodeGenStringSet g_codegen_callable_exports;
+static CodeGenStringSet g_codegen_call_targets;  /* All call targets emitted by codegen */
 
 static unsigned codegen_hash(const char *s)
 {
@@ -157,6 +158,117 @@ static void codegen_set_destroy(CodeGenStringSet *set)
     }
 }
 /* ---- End string hash set ---- */
+
+/* Collect all call targets (mangled_id) from statement trees and expression trees
+ * into g_codegen_call_targets. This identifies symbols that codegen will emit
+ * `call` instructions for, so we can later provide stubs for undefined ones. */
+static void collect_call_targets_from_expr(struct Expression *expr);
+static void collect_call_targets_from_stmt(struct Statement *stmt)
+{
+    if (stmt == NULL) return;
+    switch (stmt->type) {
+    case STMT_PROCEDURE_CALL:
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            codegen_set_insert(&g_codegen_call_targets, stmt->stmt_data.procedure_call_data.mangled_id);
+        {
+            ListNode_t *arg = stmt->stmt_data.procedure_call_data.expr_args;
+            while (arg != NULL) {
+                if (arg->type == LIST_EXPR) collect_call_targets_from_expr((struct Expression *)arg->cur);
+                arg = arg->next;
+            }
+        }
+        break;
+    case STMT_VAR_ASSIGN:
+        collect_call_targets_from_expr(stmt->stmt_data.var_assign_data.expr);
+        break;
+    case STMT_EXPR:
+        collect_call_targets_from_expr(stmt->stmt_data.expr_stmt_data.expr);
+        break;
+    case STMT_COMPOUND_STATEMENT:
+        {
+            ListNode_t *s = stmt->stmt_data.compound_data.stmts;
+            while (s != NULL) {
+                if (s->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)s->cur);
+                s = s->next;
+            }
+        }
+        break;
+    case STMT_FOR_LOOP:
+        collect_call_targets_from_stmt(stmt->stmt_data.for_loop_data.stmt);
+        break;
+    case STMT_WHILE_LOOP:
+        collect_call_targets_from_stmt(stmt->stmt_data.while_loop_data.stmt);
+        break;
+    case STMT_IF:
+        collect_call_targets_from_stmt(stmt->stmt_data.if_data.if_stmt);
+        collect_call_targets_from_stmt(stmt->stmt_data.if_data.else_stmt);
+        break;
+    case STMT_REPEAT_UNTIL:
+        {
+            ListNode_t *s = stmt->stmt_data.repeat_until_data.stmts;
+            while (s != NULL) {
+                if (s->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)s->cur);
+                s = s->next;
+            }
+        }
+        break;
+    case STMT_WITH:
+        collect_call_targets_from_stmt(stmt->stmt_data.with_data.stmt);
+        break;
+    case STMT_CASE:
+        {
+            ListNode_t *c = stmt->stmt_data.case_data.case_list;
+            while (c != NULL) {
+                if (c->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)c->cur);
+                c = c->next;
+            }
+            collect_call_targets_from_stmt(stmt->stmt_data.case_data.else_stmt);
+        }
+        break;
+    case STMT_TRY_EXCEPT:
+        collect_call_targets_from_stmt(stmt->stmt_data.try_except_data.try_block);
+        collect_call_targets_from_stmt(stmt->stmt_data.try_except_data.except_block);
+        break;
+    case STMT_TRY_FINALLY:
+        collect_call_targets_from_stmt(stmt->stmt_data.try_finally_data.try_block);
+        collect_call_targets_from_stmt(stmt->stmt_data.try_finally_data.finally_block);
+        break;
+    default:
+        break;
+    }
+}
+
+static void collect_call_targets_from_expr(struct Expression *expr)
+{
+    if (expr == NULL) return;
+    if (expr->type == EXPR_FUNCTION_CALL) {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+            codegen_set_insert(&g_codegen_call_targets, expr->expr_data.function_call_data.mangled_id);
+        ListNode_t *arg = expr->expr_data.function_call_data.args_expr;
+        while (arg != NULL) {
+            if (arg->type == LIST_EXPR) collect_call_targets_from_expr((struct Expression *)arg->cur);
+            arg = arg->next;
+        }
+    }
+    if (expr->left != NULL) collect_call_targets_from_expr(expr->left);
+    if (expr->right != NULL) collect_call_targets_from_expr(expr->right);
+}
+
+static void collect_call_targets_from_subprograms(ListNode_t *sub_list)
+{
+    while (sub_list != NULL) {
+        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
+            Tree_t *sub = (Tree_t *)sub_list->cur;
+            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.statement_list != NULL) {
+                struct Statement *stmt = sub->tree_data.subprogram_data.statement_list;
+                collect_call_targets_from_stmt(stmt);
+                /* Also recurse into nested subprograms */
+                collect_call_targets_from_subprograms(sub->tree_data.subprogram_data.subprograms);
+            }
+        }
+        sub_list = sub_list->next;
+    }
+}
 
 static int codegen_list_contains_string(ListNode_t *list, const char *value)
 {
@@ -2386,6 +2498,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
+    memset(&g_codegen_call_targets, 0, sizeof(g_codegen_call_targets));
 
     ctx->symtab = symtab;
     symtab->skip_unit_filter = 1;
@@ -2422,10 +2535,55 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     }
     codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
 
+    /* Collect all call targets from subprogram bodies so we can emit
+     * abstract stubs for any that remain undefined after codegen. */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                collect_call_targets_from_subprograms(unit->tree_data.unit_data.subprograms);
+        }
+    }
+    collect_call_targets_from_subprograms(tree->tree_data.program_data.subprograms);
+
     codegen_vmt(ctx, symtab, tree, comp_ctx);
 
     prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
     codegen_main(prgm_name, ctx);
+
+    /* Emit abstract stubs for call targets that were never defined.
+     * This handles interface methods (e.g. IObserver.GetActive) and generic
+     * specialisations (e.g. TMarshal.UnfixArray) whose symbols exist only
+     * as call targets in subprogram bodies, not as defined subprograms. */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, "\n# Abstract stubs for undefined call targets\n");
+        fprintf(ctx->output_file, ".text\n");
+        for (int b = 0; b < CODEGEN_HASHSET_SIZE; b++) {
+            for (CodeGenHashEntry *e = g_codegen_call_targets.buckets[b]; e != NULL; e = e->next) {
+                const char *target = e->key;
+                if (target == NULL) continue;
+                /* Skip if it was emitted as a subprogram, cname alias, or VMT stub */
+                if (codegen_list_contains_string(g_codegen_available_subprograms, target))
+                    continue;
+                /* Check ctx->emitted_subprograms too */
+                int found = 0;
+                for (ListNode_t *es = ctx->emitted_subprograms; es != NULL; es = es->next) {
+                    if (es->type == LIST_STRING && es->cur != NULL &&
+                        strcmp((const char *)es->cur, target) == 0) {
+                        found = 1; break;
+                    }
+                }
+                if (found) continue;
+                /* Skip runtime/C library symbols (lowercase without __) */
+                if (strchr(target, '_') != NULL && strncmp(target, "kgpc_", 5) == 0) continue;
+                if (strchr(target, '_') != NULL && strncmp(target, "fpc_", 4) == 0) continue;
+                /* Emit the stub */
+                fprintf(ctx->output_file, ".globl %s\n", target);
+                fprintf(ctx->output_file, "%s:\n", target);
+                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+            }
+        }
+    }
 
     codegen_program_footer(ctx);
 
@@ -2440,6 +2598,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         g_codegen_available_subprograms = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
+    codegen_set_destroy(&g_codegen_call_targets);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -2471,6 +2630,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
+    memset(&g_codegen_call_targets, 0, sizeof(g_codegen_call_targets));
 
     ctx->symtab = symtab;
     symtab->skip_unit_filter = 1;
@@ -2615,6 +2775,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         g_codegen_available_subprograms = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
+    codegen_set_destroy(&g_codegen_call_targets);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -3713,56 +3874,77 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
      * method_templates are not populated by the parser.
      * We use the structured owner_class field on HashNode to identify
      * methods belonging to interface types — no string parsing needed. */
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = scope->table;
-        if (table == NULL)
-            continue;
-        for (int b = 0; b < TABLE_SIZE; b++)
+        /* Collect all scopes to scan: parent chain + unit scopes */
+        ScopeNode *scopes_to_scan[SYMTAB_MAX_UNITS + 64];
+        int scope_count = 0;
+        for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent) {
+            if (scope_count < (int)(sizeof(scopes_to_scan)/sizeof(scopes_to_scan[0])))
+                scopes_to_scan[scope_count++] = scope;
+        }
+        for (int u = 0; u < SYMTAB_MAX_UNITS; u++) {
+            if (symtab->unit_scopes[u] != NULL &&
+                scope_count < (int)(sizeof(scopes_to_scan)/sizeof(scopes_to_scan[0]))) {
+                /* Only add if not already in the parent chain */
+                int already = 0;
+                for (int k = 0; k < scope_count; k++) {
+                    if (scopes_to_scan[k] == symtab->unit_scopes[u]) { already = 1; break; }
+                }
+                if (!already)
+                    scopes_to_scan[scope_count++] = symtab->unit_scopes[u];
+            }
+        }
+        for (int si = 0; si < scope_count; si++)
         {
-            ListNode_t *node = table->table[b];
-            while (node != NULL)
+            HashTable_t *table = scopes_to_scan[si]->table;
+            if (table == NULL)
+                continue;
+            for (int b = 0; b < TABLE_SIZE; b++)
             {
-                HashNode_t *hash_node = (HashNode_t *)node->cur;
-                if (hash_node != NULL &&
-                    (hash_node->hash_type == HASHTYPE_FUNCTION ||
-                     hash_node->hash_type == HASHTYPE_PROCEDURE) &&
-                    hash_node->mangled_id != NULL &&
-                    hash_node->owner_class != NULL &&
-                    !hash_node->is_operator &&
-                    !codegen_set_contains(&iface_dispatch_set, hash_node->mangled_id) &&
-                    !codegen_list_contains_string(g_codegen_available_subprograms, hash_node->mangled_id))
+                ListNode_t *node = table->table[b];
+                while (node != NULL)
                 {
-                    /* Check if the owner class is an interface type */
-                    HashNode_t *cls_node = NULL;
-                    if (FindSymbol(&cls_node, symtab, hash_node->owner_class) != 0 &&
-                        cls_node != NULL)
+                    HashNode_t *hash_node = (HashNode_t *)node->cur;
+                    if (hash_node != NULL &&
+                        (hash_node->hash_type == HASHTYPE_FUNCTION ||
+                         hash_node->hash_type == HASHTYPE_PROCEDURE) &&
+                        hash_node->mangled_id != NULL &&
+                        hash_node->owner_class != NULL &&
+                        !hash_node->is_operator &&
+                        !codegen_set_contains(&iface_dispatch_set, hash_node->mangled_id) &&
+                        !codegen_list_contains_string(g_codegen_available_subprograms, hash_node->mangled_id))
                     {
-                        struct RecordType *rec = get_record_type_from_node(cls_node);
-                        if (rec == NULL && cls_node->type != NULL &&
-                            cls_node->type->kind == TYPE_KIND_POINTER &&
-                            cls_node->type->info.points_to != NULL &&
-                            cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                            rec = cls_node->type->info.points_to->info.record_info;
-                        if (rec != NULL && rec->is_interface)
+                        /* Check if the owner class is an interface type */
+                        HashNode_t *cls_node = NULL;
+                        if (FindSymbol(&cls_node, symtab, hash_node->owner_class) != 0 &&
+                            cls_node != NULL)
                         {
-                            /* Check no implementation body exists */
-                            int has_body = 0;
-                            if (hash_node->type != NULL &&
-                                hash_node->type->kind == TYPE_KIND_PROCEDURE &&
-                                hash_node->type->info.proc_info.definition != NULL &&
-                                hash_node->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
-                                has_body = 1;
-                            if (!has_body) {
-                                fprintf(ctx->output_file, ".globl %s\n", hash_node->mangled_id);
-                                fprintf(ctx->output_file, "%s:\n", hash_node->mangled_id);
-                                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
-                                codegen_set_insert(&iface_dispatch_set, hash_node->mangled_id);
+                            struct RecordType *rec = get_record_type_from_node(cls_node);
+                            if (rec == NULL && cls_node->type != NULL &&
+                                cls_node->type->kind == TYPE_KIND_POINTER &&
+                                cls_node->type->info.points_to != NULL &&
+                                cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                rec = cls_node->type->info.points_to->info.record_info;
+                            if (rec != NULL && rec->is_interface)
+                            {
+                                /* Check no implementation body exists */
+                                int has_body = 0;
+                                if (hash_node->type != NULL &&
+                                    hash_node->type->kind == TYPE_KIND_PROCEDURE &&
+                                    hash_node->type->info.proc_info.definition != NULL &&
+                                    hash_node->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                                    has_body = 1;
+                                if (!has_body) {
+                                    fprintf(ctx->output_file, ".globl %s\n", hash_node->mangled_id);
+                                    fprintf(ctx->output_file, "%s:\n", hash_node->mangled_id);
+                                    fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                                    codegen_set_insert(&iface_dispatch_set, hash_node->mangled_id);
+                                }
                             }
                         }
                     }
+                    node = node->next;
                 }
-                node = node->next;
             }
         }
     }
