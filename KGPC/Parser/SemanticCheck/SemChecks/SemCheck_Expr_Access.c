@@ -1248,11 +1248,12 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.args_expr = self_arg;
                         args_given = self_arg;
 
-                        /* Rewrite the call id to the parent's mangled name */
+                        /* Rewrite the call id to the parent's mangled name.
+                         * Keep is_inherited_call set so downstream code skips
+                         * VMT dispatch — inherited calls must be direct. */
                         free(expr->expr_data.function_call_data.id);
                         expr->expr_data.function_call_data.id = strdup(parent_mangled);
                         id = expr->expr_data.function_call_data.id;
-                        expr->expr_data.function_call_data.is_inherited_call = 0;
                         break;
                     }
                     /* Walk up to grandparent */
@@ -2823,6 +2824,7 @@ int semcheck_funccall(int *type_return,
                                 }
                             }
                             if (class_name != NULL &&
+                                !expr->expr_data.function_call_data.is_inherited_call &&
                                 from_cparser_is_method_virtual_with_signature(class_name, id,
                                     method_param_count, NULL) &&
                                 !from_cparser_is_method_static(class_name, id))
@@ -6020,6 +6022,7 @@ method_call_resolved:
         }
         if (best_match->owner_class != NULL && best_match->method_name != NULL &&
             !expr->expr_data.function_call_data.is_virtual_call &&
+            !expr->expr_data.function_call_data.is_inherited_call &&
             !from_cparser_is_method_static(best_match->owner_class, best_match->method_name) &&
             from_cparser_is_method_virtual_with_signature(best_match->owner_class,
                 best_match->method_name,
