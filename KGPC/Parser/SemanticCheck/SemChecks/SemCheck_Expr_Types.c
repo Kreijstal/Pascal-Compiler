@@ -736,20 +736,19 @@ int semcheck_typecast(int *type_return,
                 resolved_ptr = target_node->type;
                 kgpc_type_retain(resolved_ptr);
 
-                if (resolved_ptr->kind == TYPE_KIND_POINTER &&
-                    resolved_ptr->info.points_to != NULL)
+                if (resolved_ptr->kind == TYPE_KIND_POINTER)
                 {
-                    KgpcType *points_to = resolved_ptr->info.points_to;
-                    if (points_to->kind == TYPE_KIND_RECORD && points_to->info.record_info != NULL)
+                    KgpcType *points_to = kgpc_type_resolve_pointer_pointee(resolved_ptr, symtab);
+                    if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD && points_to->info.record_info != NULL)
                     {
                         semcheck_set_pointer_info(expr, RECORD_TYPE, points_to->info.record_info->type_id);
                     }
-                    else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                    else if (points_to != NULL && points_to->kind == TYPE_KIND_PRIMITIVE)
                     {
                         int subtype = kgpc_type_get_primitive_tag(points_to);
                         semcheck_set_pointer_info(expr, subtype, NULL);
                     }
-                    else if (points_to->kind == TYPE_KIND_ARRAY)
+                    else if (points_to != NULL && points_to->kind == TYPE_KIND_ARRAY)
                     {
                         /* Pointer to array: propagate the array type id so that
                          * dereference can set is_array_expr on the result.
@@ -775,22 +774,21 @@ int semcheck_typecast(int *type_return,
                         destroy_kgpc_type(resolved_ptr);
                     resolved_ptr = alias_type;
 
-                    if (resolved_ptr->kind == TYPE_KIND_POINTER &&
-                        resolved_ptr->info.points_to != NULL)
+                    if (resolved_ptr->kind == TYPE_KIND_POINTER)
                     {
-                        KgpcType *points_to = resolved_ptr->info.points_to;
-                        if (points_to->kind == TYPE_KIND_RECORD &&
+                        KgpcType *points_to = kgpc_type_resolve_pointer_pointee(resolved_ptr, symtab);
+                        if (points_to != NULL && points_to->kind == TYPE_KIND_RECORD &&
                             points_to->info.record_info != NULL)
                         {
                             semcheck_set_pointer_info(expr, RECORD_TYPE,
                                 points_to->info.record_info->type_id);
                         }
-                        else if (points_to->kind == TYPE_KIND_PRIMITIVE)
+                        else if (points_to != NULL && points_to->kind == TYPE_KIND_PRIMITIVE)
                         {
                             int subtype = kgpc_type_get_primitive_tag(points_to);
                             semcheck_set_pointer_info(expr, subtype, NULL);
                         }
-                        else if (points_to->kind == TYPE_KIND_ARRAY)
+                        else if (points_to != NULL && points_to->kind == TYPE_KIND_ARRAY)
                         {
                             const char *arr_subtype_id = NULL;
                             if (alias != NULL && alias->pointer_type_id != NULL)
@@ -1554,7 +1552,8 @@ int semcheck_pointer_deref(int *type_return,
     if (target_type == UNKNOWN_TYPE && pointer_expr->resolved_kgpc_type != NULL &&
         pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
     {
-        KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+        KgpcType *points_to = kgpc_type_resolve_pointer_pointee(
+            pointer_expr->resolved_kgpc_type, symtab);
         if (points_to != NULL)
         {
             /* Check the actual kind of the pointed-to type first */
@@ -1627,13 +1626,14 @@ int semcheck_pointer_deref(int *type_return,
 
         /* Try to resolve from KgpcType chain first */
         if (pointer_expr->resolved_kgpc_type != NULL &&
-            pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER &&
-            pointer_expr->resolved_kgpc_type->info.points_to != NULL)
+            pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
         {
-            KgpcType *deref_type = pointer_expr->resolved_kgpc_type->info.points_to;
-            if (deref_type->kind == TYPE_KIND_POINTER && deref_type->info.points_to != NULL)
+            KgpcType *deref_type = kgpc_type_resolve_pointer_pointee(
+                pointer_expr->resolved_kgpc_type, symtab);
+            if (deref_type != NULL && deref_type->kind == TYPE_KIND_POINTER)
             {
-                KgpcType *sub_points_to = deref_type->info.points_to;
+                KgpcType *sub_points_to = kgpc_type_resolve_pointer_pointee(
+                    deref_type, symtab);
                 resolved_subtype = semcheck_tag_from_kgpc(sub_points_to);
                 if (resolved_subtype == UNKNOWN_TYPE)
                 {
@@ -1696,7 +1696,8 @@ int semcheck_pointer_deref(int *type_return,
     if (pointer_expr->resolved_kgpc_type != NULL &&
         pointer_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
     {
-        KgpcType *points_to = pointer_expr->resolved_kgpc_type->info.points_to;
+        KgpcType *points_to = kgpc_type_resolve_pointer_pointee(
+            pointer_expr->resolved_kgpc_type, symtab);
         if (points_to != NULL)
         {
             kgpc_type_retain(points_to);
@@ -3066,7 +3067,8 @@ SKIP_SELF_FIELD_REWRITE:
         /* Try resolved KgpcType pointer target */
         if (record_info == NULL && record_expr->resolved_kgpc_type != NULL &&
             record_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER) {
-            KgpcType *pointee = record_expr->resolved_kgpc_type->info.points_to;
+            KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                record_expr->resolved_kgpc_type, symtab);
             if (pointee != NULL && kgpc_type_is_record(pointee)) {
                 record_info = kgpc_type_get_record(pointee);
             }
