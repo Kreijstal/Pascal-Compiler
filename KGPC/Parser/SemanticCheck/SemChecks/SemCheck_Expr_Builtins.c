@@ -1413,10 +1413,8 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
     }
 
     /* Assigned accepts pointers, procedure variables, dynamic arrays,
-     * and class/interface references (classes are heap-allocated pointers).
-     * Also accept unresolved types (NULL kgpc) to avoid cascading errors. */
-    int is_valid_type = arg_kgpc_type == NULL ||
-                        kgpc_type_is_pointer(arg_kgpc_type) ||
+     * and class/interface references (classes are heap-allocated pointers). */
+    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) ||
                         kgpc_type_is_procedure(arg_kgpc_type) ||
                         kgpc_type_is_dynamic_array(arg_kgpc_type) ||
                         kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE) ||
