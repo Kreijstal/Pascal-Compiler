@@ -218,8 +218,13 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
 
         /* Skip unspecialized generic subprogram templates — only their
          * specializations (which have generic_type_params cleared) should
-         * be emitted. */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0) {
+         * be emitted.
+         * Specializations may still have num_generic_type_params > 0 if the
+         * semcheck didn't clear the count, but their mangled names won't
+         * contain '$' (the unspecialized type-param marker).  Allow those
+         * (e.g. tmarshal__unfixarray_u_tptrwrapper). */
+        if (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
+            (mangled_id == NULL || strchr(mangled_id, '$') != NULL)) {
             sub_list = sub_list->next;
             continue;
         }
@@ -3716,11 +3721,15 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         }
         if (cls_record == NULL)
             continue;
-        /* Only emit abstract stubs for classes and interfaces — plain
-         * record types (like TDoubleRec/TSingleRec) cannot have abstract
-         * methods.  Their methods may be implemented in C (runtime.c)
-         * rather than Pascal, so stubbing them causes linker conflicts. */
-        if (!cls_record->is_class && !cls_record->is_interface)
+        /* Only emit abstract stubs for classes, interfaces, and object types
+         * with virtual methods.  Skip plain record types (like
+         * TDoubleRec/TSingleRec) whose methods may be implemented in C
+         * (runtime.c) rather than Pascal — stubbing them causes linker
+         * conflicts.  Object types (is_class=0, is_interface=0) that have
+         * a parent class or a methods list are genuine Pascal objects
+         * (e.g. TDeferBase) and can have virtual abstract methods. */
+        if (!cls_record->is_class && !cls_record->is_interface &&
+            cls_record->parent_class_name == NULL && cls_record->methods == NULL)
             continue;
         if (cls_record->method_templates == NULL)
             continue;
@@ -5376,9 +5385,10 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         /* Skip unspecialized generic subprogram templates.
          * Specializations may still have num_generic_type_params > 0 if the
          * semcheck didn't clear the count, but their mangled names won't
-         * contain '$' (the unspecialized type-param marker).  Allow those. */
+         * contain '$' (the unspecialized type-param marker).  Allow those
+         * (e.g. tmarshal__unfixarray_u_tptrwrapper). */
         if (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
-            mangled_id != NULL && strchr(mangled_id, '$') != NULL)
+            (mangled_id == NULL || strchr(mangled_id, '$') != NULL))
         {
             sub_list = sub_list->next;
             continue;
