@@ -3,10 +3,6 @@
 /* arctan2_r_r, tan_r, cotan_r, log2_r are provided by runtime_fpc_abstract_stubs.S
  * which is always included. Do not duplicate them here. */
 
-.globl PopCnt
-PopCnt:
-    jmp fpc_in_popcnt_x
-
 
 /* FindComponentClass / ReadDeltaStream: FPC TReader/TComponent class methods that
  * are referenced but rarely executed.  Redirect to the abstract-method error
