@@ -119,6 +119,25 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
         DestroyList(builtin_matches);
     }
 
+    /* Check if id is a field of Self (implicit class field access inside methods).
+     * This prevents unit-name resolution from shadowing class fields when a unit
+     * name collides with a field name (e.g., field "symtable" vs unit "symtable"). */
+    {
+        HashNode_t *self_node = NULL;
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                struct RecordField *field = NULL;
+                long long offset = 0;
+                if (resolve_record_field(symtab, self_record, id, &field, &offset, 0, 1) == 0 &&
+                    field != NULL)
+                    return 1;
+            }
+        }
+    }
+
     return 0;
 }
 
@@ -3710,20 +3729,28 @@ SKIP_SELF_FIELD_REWRITE:
         }
 
         /* Check for methods (including constructors) */
-        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, NULL);
+        struct RecordType *method_owner_record = NULL;
+        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, &method_owner_record);
         if (method_node != NULL)
         {
             /* Found a method/constructor */
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found method %s\n", field_id);
             }
-                
-                if (method_node->hash_type == HASHTYPE_FUNCTION || 
+
+                if (method_node->hash_type == HASHTYPE_FUNCTION ||
                     method_node->hash_type == HASHTYPE_PROCEDURE)
                 {
                     int is_static_method = 0;
                     if (record_info->type_id != NULL && field_id != NULL) {
                         is_static_method = from_cparser_is_method_static(record_info->type_id, field_id);
+                    }
+                    /* If not found on the receiver's class, check the actual owner
+                     * (inherited static methods are registered under the declaring class). */
+                    if (!is_static_method && method_owner_record != NULL &&
+                        method_owner_record->type_id != NULL &&
+                        field_id != NULL) {
+                        is_static_method = from_cparser_is_method_static(method_owner_record->type_id, field_id);
                     }
 
                     /* For overloaded methods, we need to find the correct overload based on

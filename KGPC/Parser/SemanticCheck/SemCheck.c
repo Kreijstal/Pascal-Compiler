@@ -3250,8 +3250,13 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
  * owns the memory and DestroyHashTable can free it uniformly. */
 static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
 {
-    if (node == NULL || subprogram == NULL ||
-        subprogram->tree_data.subprogram_data.method_name == NULL)
+    if (node == NULL || subprogram == NULL)
+        return;
+    if (subprogram->tree_data.subprogram_data.is_operator)
+        node->is_operator = 1;
+    if (subprogram->tree_data.subprogram_data.is_nested_scope)
+        node->is_nested_scope = 1;
+    if (subprogram->tree_data.subprogram_data.method_name == NULL)
         return;
     if (node->method_name == NULL)
         node->method_name = strdup(subprogram->tree_data.subprogram_data.method_name);
@@ -3261,10 +3266,6 @@ static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
         node->owner_class_full = strdup(subprogram->tree_data.subprogram_data.owner_class_full);
     if (node->owner_class_outer == NULL && subprogram->tree_data.subprogram_data.owner_class_outer != NULL)
         node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
-    if (subprogram->tree_data.subprogram_data.is_operator)
-        node->is_operator = 1;
-    if (subprogram->tree_data.subprogram_data.is_nested_scope)
-        node->is_nested_scope = 1;
 }
 
 static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
@@ -12237,6 +12238,27 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.defined_in_unit,
                     tree->tree_data.type_decl_data.unit_is_public);
                 mark_hashnode_source_unit(type_node, tree->tree_data.type_decl_data.source_unit_index);
+            }
+
+            /* Register nested types under their short name too.
+             * E.g., "TCgExceptionStateHandler.TExceptionTemps" also as "TExceptionTemps". */
+            {
+                const char *type_id = tree->tree_data.type_decl_data.id;
+                if (type_id != NULL)
+                {
+                    const char *last_dot = strrchr(type_id, '.');
+                    if (last_dot != NULL && last_dot[1] != '\0')
+                    {
+                        const char *short_name = last_dot + 1;
+                        HashNode_t *existing_short = NULL;
+                        if (FindSymbol(&existing_short, symtab, short_name) == 0)
+                        {
+                            KgpcType *short_type = type_node != NULL ? type_node->type : kgpc_type;
+                            if (short_type != NULL)
+                                PushTypeOntoScope_Typed(symtab, strdup(short_name), short_type);
+                        }
+                    }
+                }
             }
 
             /* For generic specializations with inline record types, also register the

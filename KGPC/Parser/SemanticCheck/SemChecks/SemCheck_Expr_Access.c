@@ -3025,7 +3025,7 @@ int semcheck_funccall(int *type_return,
                         {
                             Tree_t *formal_decl = (Tree_t *)formal->cur;
                             struct Expression *actual_expr = (struct Expression *)actual->cur;
-                            
+
                             int formal_type = resolve_param_type(formal_decl, symtab);
                             int actual_type = UNKNOWN_TYPE;
                             KgpcType *actual_kgpc_type = NULL;
@@ -3058,7 +3058,7 @@ int semcheck_funccall(int *type_return,
                                     return ++return_val;
                                 }
                             }
-                            
+
                             formal = formal->next;
                             actual = actual->next;
                         }
@@ -3138,6 +3138,41 @@ int semcheck_funccall(int *type_return,
 
                     /* We no longer treat this as a method call; proceed with validated arguments */
                     return return_val;
+                }
+                else if (expr->expr_data.function_call_data.is_method_call_placeholder &&
+                         args_given->next == NULL)
+                {
+                    /* Non-procedural field accessed via method call placeholder (obj.field parsed
+                     * as a function call). Convert to EXPR_RECORD_ACCESS and delegate to the
+                     * record access semantic checker. */
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] treating %s.%s as regular field access\n",
+                            receiver_expr->type == EXPR_VAR_ID ? receiver_expr->expr_data.id : "<expr>", id);
+                    }
+
+                    /* Detach receiver from the argument list before converting */
+                    args_given->cur = NULL;
+                    expr->expr_data.function_call_data.args_expr = NULL;
+                    free(args_given);
+
+                    /* Convert the node from EXPR_FUNCTION_CALL to EXPR_RECORD_ACCESS */
+                    char *field_id_copy = strdup(field_lookup);
+
+                    /* Clear function call data that is no longer relevant */
+                    if (expr->expr_data.function_call_data.id != NULL)
+                        free(expr->expr_data.function_call_data.id);
+                    if (expr->expr_data.function_call_data.mangled_id != NULL)
+                        free(expr->expr_data.function_call_data.mangled_id);
+
+                    /* Rewrite the node as a record access */
+                    expr->type = EXPR_RECORD_ACCESS;
+                    memset(&expr->expr_data, 0, sizeof(expr->expr_data));
+                    expr->expr_data.record_access_data.record_expr = receiver_expr;
+                    expr->expr_data.record_access_data.field_id = field_id_copy;
+                    expr->expr_data.record_access_data.field_offset = (int)field_offset;
+
+                    /* Delegate full type resolution to the record access handler */
+                    return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
         }
@@ -4127,6 +4162,37 @@ int semcheck_funccall(int *type_return,
                         first_arg->pointer_subtype_id);
                 }
 
+                /* Strategy 4: unresolved primitive placeholder — the points_to
+                 * is PRIMITIVE(RECORD_TYPE) from a forward-declared class type.
+                 * Try type_alias target_type_id, pointer_type_id, and alias_name. */
+                if (record_info == NULL && owner_type->info.points_to != NULL &&
+                    owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    if (owner_type->type_alias != NULL)
+                    {
+                        if (record_info == NULL && owner_type->type_alias->target_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->target_type_id);
+                        if (record_info == NULL && owner_type->type_alias->pointer_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->pointer_type_id);
+                        if (record_info == NULL && owner_type->type_alias->alias_name != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->alias_name);
+                    }
+                    if (record_info == NULL &&
+                        owner_type->info.points_to->type_alias != NULL)
+                    {
+                        struct TypeAlias *pt_alias = owner_type->info.points_to->type_alias;
+                        if (record_info == NULL && pt_alias->alias_name != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                pt_alias->alias_name);
+                        if (record_info == NULL && pt_alias->target_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                pt_alias->target_type_id);
+                    }
+                }
+
                 /* Fix the KgpcType's points_to so overload resolution sees the
                  * correct record type instead of the unresolved primitive placeholder. */
                 if (record_info != NULL && owner_type->info.points_to != NULL &&
@@ -4142,6 +4208,15 @@ int semcheck_funccall(int *type_return,
                 }
             }
 
+            /* Fallback: if record_info is still NULL for a method call placeholder,
+             * check if first_arg->record_type is set (e.g. for class instances whose
+             * KgpcType has an unresolved PRIMITIVE placeholder as points_to). */
+            if (record_info == NULL && first_arg != NULL &&
+                first_arg->record_type != NULL &&
+                record_type_is_class(first_arg->record_type))
+            {
+                record_info = first_arg->record_type;
+            }
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                     ? expr->expr_data.function_call_data.placeholder_method_name : id;
@@ -4153,18 +4228,24 @@ int semcheck_funccall(int *type_return,
                 }
                 else
                 {
-                    /* Check if this is a static method */
-                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
-                
-                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                    fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
-                        record_info->type_id, method_name, is_static);
-                }
-                
                     /* Look up the method and capture the actual owner when inherited. */
                     struct RecordType *actual_method_owner = NULL;
                     HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
                         method_name, &actual_method_owner);
+
+                    /* Check if this is a static method — try the receiver's class first,
+                     * then the actual owner (inherited static methods are registered
+                     * under the declaring class, not the receiver's class). */
+                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                    if (!is_static && actual_method_owner != NULL &&
+                        actual_method_owner->type_id != NULL && method_name != NULL) {
+                        is_static = from_cparser_is_method_static(actual_method_owner->type_id, method_name);
+                    }
+
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
+                        record_info->type_id, method_name, is_static);
+                }
                     
                     /* If method not found on record directly, try record helper */
                     struct RecordType *effective_record =
@@ -7601,6 +7682,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
                 is_static_getter = 1;
         }
 
+        /* Save extra_indices before transformation clears array_access_data */
+        ListNode_t *extra_indices = expr->expr_data.array_access_data.extra_indices;
+        expr->expr_data.array_access_data.extra_indices = NULL;
+
         /* Detach record_expr from array_expr before destroying it. */
         array_expr->expr_data.record_access_data.record_expr = NULL;
         destroy_expr(array_expr);
@@ -7628,6 +7713,17 @@ int semcheck_try_indexed_property_getter(int *type_return,
             args_tail->next = index_node;
         else
             args_head = index_node;
+        args_tail = index_node;
+
+        /* Append extra indices for multi-index properties (e.g. bitmap[x,y]) */
+        while (extra_indices != NULL)
+        {
+            ListNode_t *next = extra_indices->next;
+            extra_indices->next = NULL;
+            args_tail->next = extra_indices;
+            args_tail = extra_indices;
+            extra_indices = next;
+        }
 
         char *id_copy = getter_node->id != NULL ? strdup(getter_node->id) : NULL;
         char *mangled_copy = NULL;

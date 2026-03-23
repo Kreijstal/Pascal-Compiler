@@ -740,6 +740,10 @@ static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
          pascal_identifier_equals(cand->method_name, ":=") ||
          pascal_identifier_equals(cand->method_name, "Implicit")))
         return 1;
+    /* Standalone operators: id like "int64__op_assign_Tconstexprint" */
+    if (cand->is_operator && cand->id != NULL &&
+        strcasestr(cand->id, "__op_assign") != NULL)
+        return 1;
     return 0;
 }
 
@@ -941,7 +945,9 @@ static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
     operator_node = semcheck_find_record_assign_operator_candidate(symtab,
         target_type_id, source_type_id, target_type, *source_type, &return_type);
     if (operator_node == NULL || return_type == NULL)
+    {
         return 0;
+    }
     if (!are_types_compatible_for_assignment(target_type, return_type, symtab))
         return 0;
 
@@ -2059,6 +2065,16 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
         else if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
         {
             /* Array access result - valid for nested dynamic arrays (array of array of ...) */
+            is_valid_array = 1;
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_POINTER_DEREF)
+        {
+            /* Pointer dereference - could point to a dynamic array */
+            is_valid_array = 1;
+        }
+        else if (array_expr != NULL && array_expr->type == EXPR_FUNCTION_CALL)
+        {
+            /* Function call result that returns a dynamic array reference */
             is_valid_array = 1;
         }
         
@@ -3328,9 +3344,10 @@ static int semcheck_builtin_new(SymTab_t *symtab, struct Statement *stmt, int ma
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count > 2)
     {
-        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, New expects one or two arguments.\\n", stmt->line_num);
         return 1;
     }
 
@@ -3360,9 +3377,10 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
         return 0;
 
     ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args == NULL || args->next != NULL)
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count > 2)
     {
-        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects exactly one argument.\\n", stmt->line_num);
+        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects one or two arguments.\\n", stmt->line_num);
         return 1;
     }
 
@@ -5389,6 +5407,10 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
             is_static_setter = 1;
     }
 
+    /* Save extra_indices before transformation clears array_access_data */
+    ListNode_t *extra_indices = lhs->expr_data.array_access_data.extra_indices;
+    lhs->expr_data.array_access_data.extra_indices = NULL;
+
     /* Detach needed subexpressions before destroying lhs. */
     if (array_expr->type == EXPR_RECORD_ACCESS)
         array_expr->expr_data.record_access_data.record_expr = NULL;
@@ -5437,6 +5459,16 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     else
         args_head = index_arg;
     args_tail = index_arg;
+
+    /* Append extra indices for multi-index properties (e.g. bitmap[x,y]) */
+    while (extra_indices != NULL)
+    {
+        ListNode_t *next = extra_indices->next;
+        extra_indices->next = NULL;
+        args_tail->next = extra_indices;
+        args_tail = extra_indices;
+        extra_indices = next;
+    }
 
     ListNode_t *value_arg = CreateListNode(rhs, LIST_EXPR);
     if (value_arg == NULL)
@@ -6670,11 +6702,21 @@ skip_type_receiver_rewrite:
             const char *method_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
 
+            struct RecordType *actual_method_owner = NULL;
+            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            /* Check the actual method owner for inherited static methods */
+            if (!is_static && actual_method_owner != NULL &&
+                actual_method_owner->type_id != NULL && method_name != NULL) {
+                is_static = from_cparser_is_method_static(actual_method_owner->type_id, method_name);
+            }
             int is_nonstatic_class_method =
                 (!is_static &&
                  from_cparser_is_method_class_method(record_info->type_id, method_name));
-            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+            if (!is_nonstatic_class_method && !is_static && actual_method_owner != NULL &&
+                actual_method_owner->type_id != NULL && method_name != NULL) {
+                is_nonstatic_class_method = from_cparser_is_method_class_method(actual_method_owner->type_id, method_name);
+            }
 
             if (method_node != NULL) {
                 /* Keep class-prefixed id for static/class calls (e.g. ClassName.Create),
@@ -9186,7 +9228,9 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 
         if (!collection_is_array && !collection_is_list &&
             !collection_is_set && !collection_is_enum_domain &&
-            !collection_is_enumerator_class) {
+            !collection_is_enumerator_class &&
+            collection_type != RECORD_TYPE && collection_type != POINTER_TYPE &&
+            collection_type != UNKNOWN_TYPE) {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d: for-in loop requires an array expression!\n\n",
                     stmt->line_num);
             ++return_val;

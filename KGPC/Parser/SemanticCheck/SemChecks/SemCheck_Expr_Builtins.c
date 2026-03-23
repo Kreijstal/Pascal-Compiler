@@ -687,10 +687,11 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     int arg_count = ListLength(args);
 
-    /* Copy accepts 2 or 3 arguments:
+    /* Copy accepts 1, 2, or 3 arguments:
+       Copy(S) - copies entire string/array (FPC extension)
        Copy(S, Index) - copies from Index to end of string
        Copy(S, Index, Count) - copies Count characters starting from Index */
-    if (arg_count < 2 || arg_count > 3)
+    if (arg_count < 1 || arg_count > 3)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
@@ -698,7 +699,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *source_expr = (struct Expression *)args->cur;
-    struct Expression *index_expr = (struct Expression *)args->next->cur;
+    struct Expression *index_expr = (arg_count >= 2) ? (struct Expression *)args->next->cur : NULL;
     struct Expression *count_expr = NULL;
 
     int error_count = 0;
@@ -709,18 +710,24 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     int is_shortstring = semcheck_expr_is_shortstring(source_expr);
     int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
-    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring)
+    /* Also accept dynamic arrays for Copy */
+    int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY);
+
+    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
     }
 
-    KgpcType *index_kgpc_type = NULL;
-    error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+    if (index_expr != NULL)
     {
-        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
-        error_count++;
+        KgpcType *index_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+        {
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
+            error_count++;
+        }
     }
 
     if (arg_count == 3)
@@ -734,7 +741,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             error_count++;
         }
     }
-    else
+    else if (arg_count == 2)
     {
         /* 2-argument form: synthesize a large count value to copy to end of string.
            Using INT_MAX as runtime clips to available length. */
@@ -744,6 +751,23 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
         assert(count_node != NULL);
         args->next->next = count_node;
+    }
+    else
+    {
+        /* 1-argument form: Copy(S) — copy entire string/array.
+           Synthesize index=1 and count=INT_MAX. */
+        index_expr = mk_inum(expr->line_num, 1LL);
+        assert(index_expr != NULL);
+        semcheck_expr_set_resolved_type(index_expr, LONGINT_TYPE);
+        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+
+        count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
+        assert(count_expr != NULL);
+        semcheck_expr_set_resolved_type(count_expr, LONGINT_TYPE);
+        ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
+
+        index_node->next = count_node;
+        args->next = index_node;
     }
 
     if (error_count == 0)
@@ -1388,12 +1412,13 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
 
-    /* Assigned accepts pointers, procedure variables, and dynamic arrays
-     * (FPC uses Assigned(arr) as a nil-check on the descriptor pointer). */
-    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 
+    /* Assigned accepts pointers, procedure variables, dynamic arrays,
+     * and class/interface references (classes are heap-allocated pointers). */
+    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) ||
                         kgpc_type_is_procedure(arg_kgpc_type) ||
                         kgpc_type_is_dynamic_array(arg_kgpc_type) ||
-                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
+                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE) ||
+                        kgpc_type_equals_tag(arg_kgpc_type, RECORD_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
         semcheck_error_with_context_at(err_line, err_col, err_source_index,
@@ -1933,6 +1958,10 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
         else if (arg_tag == RECORD_TYPE || arg_tag == POINTER_TYPE)
         {
             /* Type helpers make char types appear as records; accept them. */
+        }
+        else if (is_integer_type(arg_tag))
+        {
+            /* FPC accepts ordinal types in UpCase; treat as identity. */
         }
         else
         {
@@ -3162,6 +3191,12 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     if (arg_type == UNKNOWN_TYPE || arg_type == ENUM_TYPE)
     {
         *type_return = arg_type == ENUM_TYPE ? INT_TYPE : UNKNOWN_TYPE;
+        return 0;
+    }
+    /* Accept record/pointer types (type helpers) and integer types silently */
+    if (arg_type == RECORD_TYPE || arg_type == POINTER_TYPE || is_integer_type(arg_type))
+    {
+        *type_return = INT_TYPE;
         return 0;
     }
     semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s currently supports only array or string arguments.\n",
