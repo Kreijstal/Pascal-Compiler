@@ -2925,7 +2925,8 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
 
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
-    EmittedClassSet *emitted_classes)
+    EmittedClassSet *emitted_classes,
+    CodeGenStringSet *iface_dispatch_set)
 {
     if (record_info == NULL || !record_type_is_class(record_info) || class_label == NULL)
         return;
@@ -3219,42 +3220,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
-    /* Emit weak abstract-method stubs for interface types.
-     * Interface methods are all abstract; when the codegen emits direct calls
-     * to interface method symbols (e.g., ISequentialStream.Read) and no class
-     * provides an implementation via the dispatch thunks below, the linker
-     * would report undefined references.  Weak stubs ensure every interface
-     * method symbol exists; a strong .globl/.set alias from an implementing
-     * class overrides the weak stub at link time.
-     * We use .set (not a label:) so that later .set directives can reassign
-     * the symbol without "already defined" errors. */
-    if (record_info->is_interface && record_info->method_templates != NULL) {
-        fprintf(ctx->output_file, "\n# Weak abstract stubs for interface %s\n", class_label);
-        ListNode_t *tmpl_node = record_info->method_templates;
-        while (tmpl_node != NULL) {
-            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_node->cur;
-            if (tmpl != NULL && tmpl->name != NULL) {
-                /* Look up the full mangled name for this interface method */
-                char iface_base[512];
-                snprintf(iface_base, sizeof(iface_base), "%s__%s", class_label, tmpl->name);
-                ListNode_t *candidates = FindAllIdents(symtab, iface_base);
-                for (ListNode_t *c = candidates; c != NULL; c = c->next) {
-                    HashNode_t *cand = (HashNode_t *)c->cur;
-                    if (cand != NULL && cand->mangled_id != NULL &&
-                        (cand->hash_type == HASHTYPE_FUNCTION ||
-                         cand->hash_type == HASHTYPE_PROCEDURE)) {
-                        fprintf(ctx->output_file, ".weak %s\n", cand->mangled_id);
-                        fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
-                            cand->mangled_id);
-                        break;
-                    }
-                }
-                if (candidates != NULL) DestroyList(candidates);
-            }
-            tmpl_node = tmpl_node->next;
-        }
-    }
-
     /* Emit interface method dispatch thunks.
      * For each interface a class implements, generate global symbols for the
      * interface method names that forward to the implementing class methods.
@@ -3323,10 +3288,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
                             fprintf(ctx->output_file, ".set %s, %s\n",
                                 iface_func->mangled_id, impl_func->mangled_id);
+                            /* Record this symbol so we don't emit a duplicate
+                             * abstract stub for it at the end of codegen_vmt(). */
+                            if (iface_dispatch_set != NULL)
+                                codegen_set_insert(iface_dispatch_set, iface_func->mangled_id);
                         }
-                        /* If no implementing method found, the interface's weak stub
-                         * (emitted above for the interface type) already provides the
-                         * fallback to __kgpc_abstract_method_error. */
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);
                     if (impl_candidates != NULL) DestroyList(impl_candidates);
@@ -3470,7 +3436,8 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
 /* Helper: emit VMTs/RTTI for all type declarations in a list. */
 static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                                         ListNode_t *type_decls,
-                                        EmittedClassSet *emitted_classes)
+                                        EmittedClassSet *emitted_classes,
+                                        CodeGenStringSet *iface_dispatch_set)
 {
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
@@ -3500,7 +3467,7 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
             }
 
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                emitted_classes);
+                emitted_classes, iface_dispatch_set);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                 emitted_classes);
         }
@@ -3555,6 +3522,10 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
 
     EmittedClassSet emitted_classes = {0};
+    /* Track interface method symbols emitted by dispatch thunks so we can
+     * emit abstract-method error stubs only for the remaining ones. */
+    CodeGenStringSet iface_dispatch_set;
+    memset(&iface_dispatch_set, 0, sizeof(iface_dispatch_set));
 
     /* Emit VMTs from loaded units first */
     if (comp_ctx != NULL) {
@@ -3562,14 +3533,16 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit != NULL && unit->type == TREE_UNIT)
                 codegen_vmt_from_type_list(ctx, symtab,
-                    unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
+                    unit->tree_data.unit_data.interface_type_decls, &emitted_classes,
+                    &iface_dispatch_set);
         }
     }
 
     /* Emit VMTs from program type declarations */
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_from_type_list(ctx, symtab,
-            tree->tree_data.program_data.type_declaration, &emitted_classes);
+            tree->tree_data.program_data.type_declaration, &emitted_classes,
+            &iface_dispatch_set);
 
     /* Also emit VMTs for class types that exist only in the symbol table
      * (e.g., specializations pulled in from units like FGL). */
@@ -3605,7 +3578,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                         class_label = hash_node->id;
 
                     codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                        &emitted_classes);
+                        &emitted_classes, &iface_dispatch_set);
                     codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                         &emitted_classes);
                 }
@@ -3627,7 +3600,115 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         codegen_vmt_aliases_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
+    /* Emit abstract-method error stubs for interface methods that no class
+     * provided via dispatch thunks.  These are genuine abstract methods —
+     * calling one at runtime is a program error.  Using .globl (not .weak)
+     * ensures portability across all linkers.
+     *
+     * Also scan non-interface types for method_templates whose implementations
+     * are missing (old-style object abstract methods, generic specialisations). */
+    fprintf(ctx->output_file, "\n# Abstract method stubs for unresolved class/interface methods\n");
+    fprintf(ctx->output_file, ".text\n");
+    for (int i = 0; i < emitted_classes.count; ++i) {
+        const char *cls_label = emitted_classes.labels[i];
+        if (cls_label == NULL) continue;
+        HashNode_t *cls_node = NULL;
+        struct RecordType *cls_record = NULL;
+        if (FindSymbol(&cls_node, symtab, cls_label) != 0 && cls_node != NULL) {
+            cls_record = get_record_type_from_node(cls_node);
+            if (cls_record == NULL && cls_node->type != NULL &&
+                cls_node->type->kind == TYPE_KIND_POINTER &&
+                cls_node->type->info.points_to != NULL &&
+                cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                cls_record = cls_node->type->info.points_to->info.record_info;
+        }
+        if (cls_record == NULL)
+            continue;
+        if (cls_record->method_templates == NULL)
+            continue;
+        /* For each method_template, check if it was resolved */
+        ListNode_t *tmpl_node = cls_record->method_templates;
+        while (tmpl_node != NULL) {
+            struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_node->cur;
+            if (tmpl != NULL && tmpl->name != NULL) {
+                char method_base[512];
+                snprintf(method_base, sizeof(method_base), "%s__%s", cls_label, tmpl->name);
+                ListNode_t *candidates = FindAllIdents(symtab, method_base);
+                for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                    HashNode_t *cand = (HashNode_t *)c->cur;
+                    if (cand != NULL && cand->mangled_id != NULL &&
+                        (cand->hash_type == HASHTYPE_FUNCTION ||
+                         cand->hash_type == HASHTYPE_PROCEDURE)) {
+                        /* Skip mangled names containing characters that are
+                         * invalid in assembly labels (operator overloads like
+                         * :=, =, <>, etc.) — these have their own codegen path
+                         * with sanitized labels. */
+                        int has_invalid_chars = (strpbrk(cand->mangled_id, ":=<>") != NULL);
+                        if (!has_invalid_chars &&
+                            !codegen_set_contains(&iface_dispatch_set, cand->mangled_id) &&
+                            !codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
+                            /* Check the symtab to see if this method has an
+                             * actual implementation (statement_list != NULL).
+                             * If so, codegen_subprograms will emit it later. */
+                            int has_body = 0;
+                            if (cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE &&
+                                cand->type->info.proc_info.definition != NULL &&
+                                cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                                has_body = 1;
+                            if (!has_body) {
+                                /* No dispatch thunk, no subprogram body, no
+                                 * implementation — emit an abstract stub */
+                                fprintf(ctx->output_file, ".globl %s\n", cand->mangled_id);
+                                fprintf(ctx->output_file, "%s:\n", cand->mangled_id);
+                                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                            }
+                            codegen_set_insert(&iface_dispatch_set, cand->mangled_id);
+                        }
+                        break;
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
+            tmpl_node = tmpl_node->next;
+        }
+        /* Also scan the methods list (MethodInfo) for abstract/unresolved
+         * methods — covers generic specialisations like TMarshal.UnfixArray
+         * that appear in the methods list but not method_templates. */
+        if (cls_record->methods != NULL) {
+            ListNode_t *method_node = cls_record->methods;
+            while (method_node != NULL) {
+                struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+                if (method != NULL && method->mangled_name != NULL) {
+                    const char *m_mangled = method->resolved_mangled_id;
+                    if (m_mangled == NULL) m_mangled = method->mangled_name;
+                    int m_invalid = (strpbrk(m_mangled, ":=<>") != NULL);
+                    if (!m_invalid &&
+                        !codegen_set_contains(&iface_dispatch_set, m_mangled) &&
+                        !codegen_list_contains_string(g_codegen_available_subprograms, m_mangled)) {
+                        int has_body = 0;
+                        HashNode_t *msym = NULL;
+                        if (FindSymbol(&msym, symtab, m_mangled) != 0 && msym != NULL &&
+                            msym->type != NULL && msym->type->kind == TYPE_KIND_PROCEDURE &&
+                            msym->type->info.proc_info.definition != NULL &&
+                            msym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                            has_body = 1;
+                        if (!has_body) {
+                            fprintf(ctx->output_file, ".globl %s\n", m_mangled);
+                            fprintf(ctx->output_file, "%s:\n", m_mangled);
+                            fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                        }
+                        codegen_set_insert(&iface_dispatch_set, m_mangled);
+                    }
+                }
+                method_node = method_node->next;
+            }
+        }
+    }
+
+    codegen_set_destroy(&iface_dispatch_set);
     emitted_class_set_destroy(&emitted_classes);
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     fprintf(ctx->output_file, ".text\n");
 
     #ifdef DEBUG_CODEGEN
@@ -4131,6 +4212,58 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             }
             next_fwd:
             fwd_scan = fwd_scan->next;
+        }
+    }
+
+    /* Emit abstract-method error stubs for class/object method forward
+     * declarations that have no implementation and were not resolved by any
+     * alias pass.  This covers old-style object abstract methods (e.g.,
+     * TDeferBase.Done) and unresolved generic specialisations (e.g.,
+     * TMarshal.UnfixArray).  We restrict to method-like symbols (containing
+     * '__') to avoid interfering with regular procedure forward declarations
+     * that resolve through the cname_override alias system. */
+    if (ctx->output_file != NULL) {
+        fprintf(ctx->output_file, "\n# Abstract method stubs for unresolved forward declarations\n");
+        ListNode_t *abs_scan = all_subprograms;
+        while (abs_scan != NULL) {
+            if (abs_scan->type == LIST_TREE && abs_scan->cur != NULL) {
+                Tree_t *fwd = (Tree_t *)abs_scan->cur;
+                if (fwd->type == TREE_SUBPROGRAM &&
+                    fwd->tree_data.subprogram_data.statement_list == NULL) {
+                    const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
+                    const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
+                    /* Only handle method-like symbols (ClassName__MethodName)
+                     * that have no cname_override alias system entry. */
+                    if (fwd_mangled != NULL && fwd_cname == NULL &&
+                        strstr(fwd_mangled, "__") != NULL &&
+                        !codegen_set_contains(&emitted_labels, fwd_mangled) &&
+                        !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
+                        /* Check if a same-named implementation exists anywhere */
+                        int has_impl = 0;
+                        ListNode_t *impl_scan = all_subprograms;
+                        while (impl_scan != NULL) {
+                            if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
+                                Tree_t *impl = (Tree_t *)impl_scan->cur;
+                                if (impl != fwd && impl->type == TREE_SUBPROGRAM &&
+                                    impl->tree_data.subprogram_data.statement_list != NULL &&
+                                    impl->tree_data.subprogram_data.mangled_id != NULL &&
+                                    strcmp(impl->tree_data.subprogram_data.mangled_id, fwd_mangled) == 0) {
+                                    has_impl = 1;
+                                    break;
+                                }
+                            }
+                            impl_scan = impl_scan->next;
+                        }
+                        if (!has_impl) {
+                            fprintf(ctx->output_file, ".globl %s\n", fwd_mangled);
+                            fprintf(ctx->output_file, "%s:\n", fwd_mangled);
+                            fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                            codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
+                        }
+                    }
+                }
+            }
+            abs_scan = abs_scan->next;
         }
     }
 
