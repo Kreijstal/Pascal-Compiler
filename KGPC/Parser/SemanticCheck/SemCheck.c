@@ -2160,8 +2160,28 @@ static int resolve_unit_error_location(int source_index, int line_num,
         }
         else
         {
-            /* Can't find unit path — fall back to unit name */
-            strncpy(directive_file_out, unit_name, dir_size - 1);
+            /* Can't find unit path by source_index — search registered
+             * source buffers for one whose filename matches the unit name. */
+            const char *fallback_path = unit_name;
+            for (int i = 0; i < g_source_buffer_count; i++)
+            {
+                const char *p = g_source_buffer_registry[i].path;
+                if (p == NULL)
+                    continue;
+                /* Extract basename from path */
+                const char *slash = strrchr(p, '/');
+                const char *base = slash ? slash + 1 : p;
+                /* Compare basename (without extension) against unit name */
+                size_t ulen = strlen(unit_name);
+                if (strlen(base) > ulen &&
+                    base[ulen] == '.' &&
+                    strncasecmp(base, unit_name, ulen) == 0)
+                {
+                    fallback_path = p;
+                    break;
+                }
+            }
+            strncpy(directive_file_out, fallback_path, dir_size - 1);
             directive_file_out[dir_size - 1] = '\0';
         }
     }
@@ -9419,12 +9439,12 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
                 line_num, class_name ? class_name : "<unknown>");
         return 1;
     }
-    
+
     /* Look up parent class in symbol table */
     HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
     if (parent_node == NULL)
     {
-        semcheck_error_with_context("Error on line %d, parent class '%s' not found!\n", 
+        semcheck_error_with_context("Error on line %d, parent class '%s' not found!\n",
                 line_num, record_info->parent_class_name);
         return 1;
     }
@@ -10840,6 +10860,25 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
         ScopeNode *saved_scope_for_type = semcheck_switch_to_unit_scope(
             symtab, tree->tree_data.type_decl_data.source_unit_index);
+
+        /* Set error context to the type's source unit so that errors
+         * (e.g. parent class not found) report the correct file/line
+         * instead of the main program's file. */
+        const char *saved_error_unit_name = g_semcheck_error_unit_name;
+        int saved_error_source_index = g_semcheck_error_source_index;
+        if (tree->tree_data.type_decl_data.defined_in_unit &&
+            tree->tree_data.type_decl_data.source_unit_index > 0)
+        {
+            const char *uname = unit_registry_get(tree->tree_data.type_decl_data.source_unit_index);
+            if (uname != NULL)
+            {
+                g_semcheck_error_unit_name = uname;
+                /* Reset source_index so resolve_unit_error_location uses
+                 * the AST line_num and finds the file path by unit name
+                 * instead of by byte offset into the wrong buffer. */
+                g_semcheck_error_source_index = -1;
+            }
+        }
 
         const char *debug_pss = kgpc_getenv("KGPC_DEBUG_PSHORTSTRING");
         if (debug_pss != NULL &&
@@ -12358,6 +12397,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         }
 
 semcheck_type_decls_next:
+        g_semcheck_error_unit_name = saved_error_unit_name;
+        g_semcheck_error_source_index = saved_error_source_index;
         semcheck_restore_scope(symtab, saved_scope_for_type);
         cur = cur->next;
     }
