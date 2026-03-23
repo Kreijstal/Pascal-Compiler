@@ -2129,7 +2129,6 @@ static int resolve_unit_error_location(int source_index, int line_num,
     /* Build the include chain annotation */
     if (unit_chain_out != NULL && chain_size > 0 && g_semcheck_error_unit_name != NULL)
     {
-        const char *unit_name = g_semcheck_error_unit_name;
         /* Find the registered path for this unit's buffer */
         const char *unit_path = NULL;
         if (source_index >= 0)
@@ -2160,29 +2159,7 @@ static int resolve_unit_error_location(int source_index, int line_num,
         }
         else
         {
-            /* Can't find unit path by source_index — search registered
-             * source buffers for one whose filename matches the unit name. */
-            const char *fallback_path = unit_name;
-            for (int i = 0; i < g_source_buffer_count; i++)
-            {
-                const char *p = g_source_buffer_registry[i].path;
-                if (p == NULL)
-                    continue;
-                /* Extract basename from path */
-                const char *slash = strrchr(p, '/');
-                const char *base = slash ? slash + 1 : p;
-                /* Compare basename (without extension) against unit name */
-                size_t ulen = strlen(unit_name);
-                if (strlen(base) > ulen &&
-                    base[ulen] == '.' &&
-                    strncasecmp(base, unit_name, ulen) == 0)
-                {
-                    fallback_path = p;
-                    break;
-                }
-            }
-            strncpy(directive_file_out, fallback_path, dir_size - 1);
-            directive_file_out[dir_size - 1] = '\0';
+            assert(0 && "resolve_unit_error_location: unit path not found");
         }
     }
 
