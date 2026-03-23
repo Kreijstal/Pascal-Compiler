@@ -10198,6 +10198,19 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             stmt->stmt_data.procedure_call_data.is_virtual_call;
         call_expr->expr_data.function_call_data.vmt_index =
             stmt->stmt_data.procedure_call_data.vmt_index;
+        call_expr->expr_data.function_call_data.is_interface_call =
+            stmt->stmt_data.procedure_call_data.is_interface_call;
+        call_expr->expr_data.function_call_data.interface_method_slot =
+            stmt->stmt_data.procedure_call_data.interface_method_slot;
+        call_expr->expr_data.function_call_data.interface_guid_d1 =
+            stmt->stmt_data.procedure_call_data.interface_guid_d1;
+        call_expr->expr_data.function_call_data.interface_guid_d2 =
+            stmt->stmt_data.procedure_call_data.interface_guid_d2;
+        call_expr->expr_data.function_call_data.interface_guid_d3 =
+            stmt->stmt_data.procedure_call_data.interface_guid_d3;
+        memcpy(call_expr->expr_data.function_call_data.interface_guid_d4,
+            stmt->stmt_data.procedure_call_data.interface_guid_d4,
+            sizeof(call_expr->expr_data.function_call_data.interface_guid_d4));
         if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
             call_expr->expr_data.function_call_data.self_class_name =
                 strdup(stmt->stmt_data.procedure_call_data.self_class_name);
@@ -10577,6 +10590,99 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_offset);
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (stmt->stmt_data.procedure_call_data.is_interface_call &&
+            stmt->stmt_data.procedure_call_data.interface_method_slot >= 0)
+        {
+            int self_arg_index = should_pass_static_link ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            int slot = stmt->stmt_data.procedure_call_data.interface_method_slot;
+            int loop_label = ++ctx->label_counter;
+            int scan_label = ++ctx->label_counter;
+            int found_label = ++ctx->label_counter;
+            int fail_label = ++ctx->label_counter;
+            unsigned long long guid_d4 = 0;
+            for (int i = 0; i < 8; ++i)
+                guid_d4 |= ((unsigned long long)
+                    stmt->stmt_data.procedure_call_data.interface_guid_d4[i]) << (i * 8);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t56(%%r11), %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", loop_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestq\t%%r10, %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tje\t.L%d\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t24(%%r10), %%r9\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t32(%%r10), %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%%r8d, %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjle\t.L%d\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0x%08X, 0(%%r9)\n",
+                stmt->stmt_data.procedure_call_data.interface_guid_d1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpw\t$0x%04X, 4(%%r9)\n",
+                stmt->stmt_data.procedure_call_data.interface_guid_d2);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpw\t$0x%04X, 6(%%r9)\n",
+                stmt->stmt_data.procedure_call_data.interface_guid_d3);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t$0x%016llX, %%rax\n", guid_d4);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpq\t%%rax, 8(%%r9)\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tje\t.L%d\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_next:\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\taddq\t$40, %%r9\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tdecl\t%%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d\n", scan_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%%r8d, %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjg\t.L%d_hit\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t0(%%r10), %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d\n", loop_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_hit:\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t24(%%r9), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", slot * 8);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d_done\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcall\t__kgpc_abstract_method_error\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_done:\n", fail_label);
             inst_list = add_inst(inst_list, buffer);
         }
         else

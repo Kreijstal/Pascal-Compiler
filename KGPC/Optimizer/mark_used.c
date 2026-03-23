@@ -149,6 +149,9 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map);
 static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
     const char *method_name, SubprogramMap *map);
+static void build_loaded_unit_subprogram_map(SubprogramMap *map);
+static void mark_vmt_methods_used_for_type_list(ListNode_t *type_list,
+    ListNode_t *subprograms, SubprogramMap *map);
 
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
@@ -696,6 +699,20 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
     }
 }
 
+static void build_loaded_unit_subprogram_map(SubprogramMap *map)
+{
+    CompilationContext *comp_ctx = compilation_context_get_active();
+    if (comp_ctx == NULL)
+        return;
+
+    for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+        Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+        if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+            continue;
+        build_subprogram_map(unit_tree->tree_data.unit_data.subprograms, map);
+    }
+}
+
 void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     if (program == NULL || symtab == NULL || program->type != TREE_PROGRAM_TYPE) return;
     
@@ -704,6 +721,7 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     
     /* Build map of all subprograms */
     build_subprogram_map(program->tree_data.program_data.subprograms, &map);
+    build_loaded_unit_subprogram_map(&map);
     
     /* First, traverse bodies of already-used subprograms (e.g., from previous call).
      * This ensures that functions called by specialized methods are discovered. */
@@ -766,23 +784,49 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     
     /* IMPORTANT: Second pass to sync forward declarations with implementations */
     /* For each subprogram, if it has the same mangled_id as another, sync is_used */
-    ListNode_t *sub_list = program->tree_data.program_data.subprograms;
-    while (sub_list != NULL) {
-        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
-            Tree_t *sub = (Tree_t*)sub_list->cur;
-            if (sub->type == TREE_SUBPROGRAM) {
-                char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-                if (mangled_id != NULL) {
-                    /* Find the canonical version in the map */
-                    Tree_t *canonical = map_find(&map, mangled_id);
-                    if (canonical != NULL && canonical != sub) {
-                        /* Sync the is_used flag */
-                        sub->tree_data.subprogram_data.is_used = canonical->tree_data.subprogram_data.is_used;
+    {
+        ListNode_t *sub_list = program->tree_data.program_data.subprograms;
+        while (sub_list != NULL) {
+            if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
+                Tree_t *sub = (Tree_t*)sub_list->cur;
+                if (sub->type == TREE_SUBPROGRAM) {
+                    char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+                    if (mangled_id != NULL) {
+                        Tree_t *canonical = map_find(&map, mangled_id);
+                        if (canonical != NULL && canonical != sub) {
+                            sub->tree_data.subprogram_data.is_used = canonical->tree_data.subprogram_data.is_used;
+                        }
                     }
                 }
             }
+            sub_list = sub_list->next;
         }
-        sub_list = sub_list->next;
+
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                ListNode_t *unit_subs;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                unit_subs = unit_tree->tree_data.unit_data.subprograms;
+                while (unit_subs != NULL) {
+                    if (unit_subs->type == LIST_TREE && unit_subs->cur != NULL) {
+                        Tree_t *sub = (Tree_t*)unit_subs->cur;
+                        if (sub->type == TREE_SUBPROGRAM) {
+                            char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+                            if (mangled_id != NULL) {
+                                Tree_t *canonical = map_find(&map, mangled_id);
+                                if (canonical != NULL && canonical != sub) {
+                                    sub->tree_data.subprogram_data.is_used = canonical->tree_data.subprogram_data.is_used;
+                                }
+                            }
+                        }
+                    }
+                    unit_subs = unit_subs->next;
+                }
+            }
+        }
     }
     
     #ifdef DEBUG_OPTIMIZER
@@ -797,7 +841,29 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
     if (program == NULL || program->type != TREE_PROGRAM_TYPE || map == NULL)
         return;
 
-    ListNode_t *type_node = program->tree_data.program_data.type_declaration;
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                mark_vmt_methods_used_for_type_list(
+                    unit_tree->tree_data.unit_data.interface_type_decls,
+                    unit_tree->tree_data.unit_data.subprograms,
+                    map);
+            }
+        }
+    }
+
+    mark_vmt_methods_used_for_type_list(program->tree_data.program_data.type_declaration,
+        program->tree_data.program_data.subprograms, map);
+}
+
+static void mark_vmt_methods_used_for_type_list(ListNode_t *type_list,
+    ListNode_t *subprograms, SubprogramMap *map)
+{
+    ListNode_t *type_node = type_list;
     while (type_node != NULL)
     {
         if (type_node->type == LIST_TREE && type_node->cur != NULL)
@@ -840,7 +906,7 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                             if (sub == NULL && method->name != NULL)
                             {
                                 mark_class_methods_by_owner(
-                                    program->tree_data.program_data.subprograms,
+                                    subprograms,
                                     type_tree->tree_data.type_decl_data.id,
                                     method->name, map);
                                 mark_subprograms_by_id(map, method->name);
@@ -861,7 +927,7 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                             if (iface_name == NULL || class_id == NULL) continue;
                             /* Find the interface type in the type declarations list */
                             struct RecordType *iface_record = NULL;
-                            ListNode_t *search = program->tree_data.program_data.type_declaration;
+                            ListNode_t *search = type_list;
                             while (search != NULL) {
                                 if (search->type == LIST_TREE && search->cur != NULL) {
                                     Tree_t *st = (Tree_t *)search->cur;
@@ -900,11 +966,25 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                                         if (mi != NULL) method_name = mi->name;
                                     }
                                     if (method_name != NULL) {
-                                        /* Build: ClassName__MethodName */
-                                        char impl_id[512];
-                                        snprintf(impl_id, sizeof(impl_id), "%s__%s",
-                                            class_id, method_name);
-                                        mark_subprograms_by_id(map, impl_id);
+                                        const struct RecordType *scan_record = record_info;
+                                        const char *scan_class = class_id;
+                                        CompilationContext *comp_ctx = compilation_context_get_active();
+                                        while (scan_record != NULL && scan_class != NULL) {
+                                            char impl_id[512];
+                                            snprintf(impl_id, sizeof(impl_id), "%s__%s",
+                                                scan_class, method_name);
+                                            mark_subprograms_by_id(map, impl_id);
+                                            scan_class = scan_record->parent_class_name;
+                                            if (scan_class == NULL)
+                                                break;
+                                            HashNode_t *parent_node = NULL;
+                                            if (comp_ctx != NULL && comp_ctx->symtab != NULL &&
+                                                FindSymbol(&parent_node, comp_ctx->symtab, scan_class) != 0 &&
+                                                parent_node != NULL)
+                                                scan_record = hashnode_get_record_type(parent_node);
+                                            else
+                                                scan_record = NULL;
+                                        }
                                     }
                                     imethod = imethod->next;
                                 }

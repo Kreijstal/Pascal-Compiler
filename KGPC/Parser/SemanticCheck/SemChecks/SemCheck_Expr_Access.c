@@ -228,6 +228,48 @@ static void semcheck_clear_array_linearization(struct Expression *expr)
     expr->expr_data.array_access_data.linear_info_valid = 0;
 }
 
+static int semcheck_bind_interface_dispatch_expr(struct Expression *expr,
+    SymTab_t *symtab, const char *interface_name, const char *method_name,
+    int param_count)
+{
+    struct RecordType *iface_record;
+    int slot;
+
+    if (expr == NULL || symtab == NULL || interface_name == NULL || method_name == NULL)
+        return 0;
+
+    iface_record = semcheck_lookup_record_type(symtab, interface_name);
+    if (iface_record == NULL || !iface_record->is_interface ||
+        !iface_record->has_guid || iface_record->method_templates == NULL)
+        return 0;
+
+    slot = 0;
+    for (ListNode_t *cur = iface_record->method_templates; cur != NULL; cur = cur->next, slot++)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        int wanted_params;
+        if (tmpl == NULL || tmpl->name == NULL)
+            continue;
+        if (strcasecmp(tmpl->name, method_name) != 0)
+            continue;
+        wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
+        if (param_count >= 0 && wanted_params >= 0 && wanted_params != param_count)
+            continue;
+
+        expr->expr_data.function_call_data.is_interface_call = 1;
+        expr->expr_data.function_call_data.interface_method_slot = slot;
+        expr->expr_data.function_call_data.interface_guid_d1 = iface_record->guid_d1;
+        expr->expr_data.function_call_data.interface_guid_d2 = iface_record->guid_d2;
+        expr->expr_data.function_call_data.interface_guid_d3 = iface_record->guid_d3;
+        memcpy(expr->expr_data.function_call_data.interface_guid_d4,
+            iface_record->guid_d4,
+            sizeof(expr->expr_data.function_call_data.interface_guid_d4));
+        return 1;
+    }
+
+    return 0;
+}
+
 static void semcheck_compute_array_linearization(SymTab_t *symtab,
     struct Expression *expr, struct Expression *array_expr)
 {
@@ -2822,6 +2864,11 @@ int semcheck_funccall(int *type_return,
                                     else
                                         method_param_count = 0;
                                 }
+                            }
+                            if (self_record != NULL && self_record->is_interface)
+                            {
+                                (void)semcheck_bind_interface_dispatch_expr(expr, symtab,
+                                    self_record->type_id, id, method_param_count);
                             }
                             if (class_name != NULL &&
                                 !expr->expr_data.function_call_data.is_inherited_call &&
@@ -6020,18 +6067,51 @@ method_call_resolved:
                     best_match_param_count = 0;
             }
         }
-        if (best_match->owner_class != NULL && best_match->method_name != NULL &&
+        const char *best_match_owner = best_match->owner_class;
+        const char *best_match_method_name = best_match->method_name;
+        if (best_match_method_name == NULL && best_match->id != NULL)
+        {
+            const char *sep = strstr(best_match->id, "__");
+            if (sep != NULL)
+            {
+                best_match_method_name = sep + 2;
+                if (best_match_owner == NULL && sep > best_match->id)
+                {
+                    size_t owner_len = (size_t)(sep - best_match->id);
+                    char *owner_copy = (char *)malloc(owner_len + 1);
+                    if (owner_copy != NULL)
+                    {
+                        memcpy(owner_copy, best_match->id, owner_len);
+                        owner_copy[owner_len] = '\0';
+                        best_match_owner = owner_copy;
+                    }
+                }
+            }
+            else
+            {
+                best_match_method_name = best_match->id;
+            }
+        }
+        if (best_match_owner != NULL && best_match_method_name != NULL &&
+            !expr->expr_data.function_call_data.is_interface_call)
+        {
+            (void)semcheck_bind_interface_dispatch_expr(expr, symtab,
+                best_match_owner, best_match_method_name,
+                best_match_param_count);
+        }
+        if (best_match_owner != NULL && best_match_method_name != NULL &&
             !expr->expr_data.function_call_data.is_virtual_call &&
+            !expr->expr_data.function_call_data.is_interface_call &&
             !expr->expr_data.function_call_data.is_inherited_call &&
-            !from_cparser_is_method_static(best_match->owner_class, best_match->method_name) &&
-            from_cparser_is_method_virtual_with_signature(best_match->owner_class,
-                best_match->method_name,
+            !from_cparser_is_method_static(best_match_owner, best_match_method_name) &&
+            from_cparser_is_method_virtual_with_signature(best_match_owner,
+                best_match_method_name,
                 best_match_param_count,
                 NULL))
         {
             {
                 struct RecordType *class_record = semcheck_lookup_record_type(symtab,
-                    best_match->owner_class);
+                    best_match_owner);
                 if (class_record != NULL && record_type_is_class(class_record) &&
                     class_record->methods != NULL)
                 {
@@ -6040,7 +6120,7 @@ method_call_resolved:
                         struct MethodInfo *mi = (struct MethodInfo *)me->cur;
                         if (mi != NULL && mi->name != NULL &&
                             (mi->is_virtual || mi->is_override) &&
-                            strcasecmp(mi->name, best_match->method_name) == 0)
+                            strcasecmp(mi->name, best_match_method_name) == 0)
                         {
                             if (best_match_param_count >= 0 && mi->param_count >= 0 &&
                                 best_match_param_count != mi->param_count)
@@ -6049,7 +6129,7 @@ method_call_resolved:
                             expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
                             if (expr->expr_data.function_call_data.self_class_name == NULL)
                                 expr->expr_data.function_call_data.self_class_name =
-                                    strdup(best_match->owner_class);
+                                    strdup(best_match_owner);
                             break;
                         }
                     }

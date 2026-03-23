@@ -2675,6 +2675,102 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = add_inst(inst_list, buffer);
             regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
         }
+        else if (expr->expr_data.function_call_data.is_interface_call &&
+                 expr->expr_data.function_call_data.interface_method_slot >= 0)
+        {
+            int self_arg_index = has_record_return ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            int slot = expr->expr_data.function_call_data.interface_method_slot;
+            int loop_label = ++ctx->label_counter;
+            int parent_label = ++ctx->label_counter;
+            int found_label = ++ctx->label_counter;
+            int fail_label = ++ctx->label_counter;
+            unsigned long long guid_d4 = 0;
+            for (int i = 0; i < 8; ++i)
+                guid_d4 |= ((unsigned long long)
+                    expr->expr_data.function_call_data.interface_guid_d4[i]) << (i * 8);
+
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t56(%%r11), %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", loop_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestq\t%%r10, %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tje\t.L%d\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t24(%%r10), %%r9\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t32(%%r10), %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%%r8d, %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjle\t.L%d\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpl\t$0x%08X, 0(%%r9)\n",
+                expr->expr_data.function_call_data.interface_guid_d1);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpw\t$0x%04X, 4(%%r9)\n",
+                expr->expr_data.function_call_data.interface_guid_d2);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpw\t$0x%04X, 6(%%r9)\n",
+                expr->expr_data.function_call_data.interface_guid_d3);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjne\t.L%d_next\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovabsq\t$0x%016llX, %%rax\n", guid_d4);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcmpq\t%%rax, 8(%%r9)\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tje\t.L%d\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_next:\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\taddq\t$40, %%r9\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tdecl\t%%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d\n", parent_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%%r8d, %%r8d\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjg\t.L%d_hit\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t0(%%r10), %%r10\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d\n", loop_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_hit:\n", found_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t24(%%r9), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", slot * 8);
+            inst_list = add_inst(inst_list, buffer);
+            CallerSaveState caller_state;
+            regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+            snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+            snprintf(buffer, sizeof(buffer), "\tjmp\t.L%d_done\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d:\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tcall\t__kgpc_abstract_method_error\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), ".L%d_done:\n", fail_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
         else
         {
             /* Normal function call */

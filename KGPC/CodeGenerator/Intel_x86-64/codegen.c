@@ -123,6 +123,56 @@ static int codegen_set_contains_ci(const CodeGenStringSet *set, const char *key)
     return 0;
 }
 
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node);
+
+static HashNode_t *codegen_find_method_impl_in_class_chain(SymTab_t *symtab,
+    const struct RecordType *record_info, const char *class_label,
+    const char *method_name)
+{
+    const struct RecordType *scan_record = record_info;
+    const char *scan_class = class_label;
+
+    while (scan_record != NULL && scan_class != NULL)
+    {
+        char impl_base[512];
+        snprintf(impl_base, sizeof(impl_base), "%s__%s", scan_class, method_name);
+        ListNode_t *impl_candidates = FindAllIdents(symtab, impl_base);
+        HashNode_t *impl_func = NULL;
+        for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
+            HashNode_t *cand = (HashNode_t *)ic->cur;
+            if (cand != NULL && cand->mangled_id != NULL &&
+                cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
+                cand->type->info.proc_info.definition != NULL) {
+                Tree_t *def = cand->type->info.proc_info.definition;
+                int has_body = (def->tree_data.subprogram_data.statement_list != NULL);
+                int has_external_target =
+                    (def->tree_data.subprogram_data.cname_flag != 0 ||
+                     def->tree_data.subprogram_data.cname_override != NULL);
+                if (!has_body && !has_external_target)
+                    continue;
+                impl_func = cand;
+                break;
+            }
+        }
+        if (impl_candidates != NULL)
+            DestroyList(impl_candidates);
+        if (impl_func != NULL)
+            return impl_func;
+
+        scan_class = scan_record->parent_class_name;
+        if (scan_class == NULL)
+            break;
+
+        HashNode_t *parent_node = NULL;
+        if (FindSymbol(&parent_node, symtab, scan_class) != 0 && parent_node != NULL)
+            scan_record = get_record_type_from_node(parent_node);
+        else
+            scan_record = NULL;
+    }
+
+    return NULL;
+}
+
 static void codegen_set_insert(CodeGenStringSet *set, const char *key)
 {
     unsigned idx = codegen_hash(key);
@@ -165,6 +215,30 @@ static int codegen_list_contains_string(ListNode_t *list, const char *value)
             strcmp((const char *)cur->cur, value) == 0)
             return 1;
     }
+    return 0;
+}
+
+static int codegen_is_unresolved_generic_template(const Tree_t *sub)
+{
+    if (sub == NULL || sub->type != TREE_SUBPROGRAM)
+        return 0;
+
+    const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+    int has_generic_metadata =
+        sub->tree_data.subprogram_data.generic_type_params != NULL ||
+        sub->tree_data.subprogram_data.num_generic_type_params > 0 ||
+        sub->tree_data.subprogram_data.generic_template_ast != NULL;
+
+    /* A remaining '$' in the mangled symbol marks an unresolved generic
+     * placeholder only when this subprogram still carries generic metadata.
+     * Plain lexical nested routines also use '$' in their mangled names and
+     * must still be emitted normally.  Concrete-ABI generic methods in FPC
+     * RTL can carry generic bookkeeping, but if their mangled symbol contains
+     * no unresolved placeholder they are the real implementation we must emit. */
+    if (has_generic_metadata &&
+        mangled_id != NULL && strchr(mangled_id, '$') != NULL)
+        return 1;
+
     return 0;
 }
 
@@ -216,27 +290,11 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
             continue;
         }
 
-        /* Skip unspecialized generic subprogram templates — only their
-         * specializations (which have generic_type_params cleared) should
-         * be emitted.
-         *
-         * Two complementary checks are needed:
-         * 1) generic_type_params != NULL — the template still owns its
-         *    type-param name array (e.g. user-defined generics like
-         *    swap<T>).
-         * 2) num_generic_type_params > 0 AND mangled name contains '$' —
-         *    covers templates where the params array was not allocated but
-         *    the count is set and the '$' in the mangled name marks an
-         *    unresolved type-param placeholder (e.g. FPC RTL generics
-         *    like taddressableunfixarrayspecialization$t).
-         *
-         * Specializations from non-instantiate paths (e.g.
-         * tmarshal__unfixarray_u_tptrwrapper) may still have
-         * num_generic_type_params > 0 but will NOT have '$' in their
-         * mangled name, so they pass through correctly. */
-        if (sub->tree_data.subprogram_data.generic_type_params != NULL ||
-            (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
-             mangled_id != NULL && strchr(mangled_id, '$') != NULL)) {
+        /* Tree metadata alone is not enough to classify generic methods:
+         * FPC RTL can attach generic bookkeeping to concrete callable bodies
+         * such as TMarshal.UnfixArray<TPtrWrapper>.  Skip only bodies whose
+         * mangled symbol still carries an unresolved '$' placeholder. */
+        if (codegen_is_unresolved_generic_template(sub)) {
             sub_list = sub_list->next;
             continue;
         }
@@ -2990,15 +3048,19 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 d3 = (unsigned int)iface_record->guid_d3;
                 memcpy(d4, iface_record->guid_d4, sizeof(d4));
             }
+            int iface_method_count = 0;
+            if (iface_record != NULL && iface_record->method_templates != NULL)
+                iface_method_count = ListLength(iface_record->method_templates);
             fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
             fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
                 d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
-            /* Padding to align the name pointer to 8 bytes.
-             * GUID is 4+2+2+8 = 16 bytes, already aligned. */
             fprintf(ctx->output_file, "\t.quad\t__iface_name_%s_%s\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.quad\t__iface_dispatch_%s_%s\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.long\t%d\n", iface_method_count);
+            fprintf(ctx->output_file, "\t.long\t0\n");
             actual_iface_count++;
         }
         /* Emit interface name strings */
@@ -3007,6 +3069,58 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             if (iface_name == NULL) continue;
             fprintf(ctx->output_file, "__iface_name_%s_%s:\n", class_label, iface_name);
             fprintf(ctx->output_file, "\t.string \"%s\"\n", iface_name);
+        }
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL) continue;
+            HashNode_t *iface_node = NULL;
+            struct RecordType *iface_record = NULL;
+            if (FindSymbol(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
+                iface_record = get_record_type_from_node(iface_node);
+                if (iface_record == NULL && iface_node->type != NULL &&
+                    iface_node->type->kind == TYPE_KIND_POINTER &&
+                    iface_node->type->info.points_to != NULL &&
+                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    iface_record = iface_node->type->info.points_to->info.record_info;
+            }
+            fprintf(ctx->output_file, "__iface_dispatch_%s_%s:\n", class_label, iface_name);
+            if (iface_record == NULL || iface_record->method_templates == NULL)
+                continue;
+            for (ListNode_t *iface_method = iface_record->method_templates;
+                 iface_method != NULL; iface_method = iface_method->next) {
+                struct MethodTemplate *imethod =
+                    (struct MethodTemplate *)iface_method->cur;
+                HashNode_t *impl_func = NULL;
+                if (imethod != NULL && imethod->name != NULL) {
+                    impl_func = codegen_find_method_impl_in_class_chain(symtab,
+                        record_info, class_label, imethod->name);
+                    if (impl_func != NULL && impl_func->mangled_id != NULL)
+                        fprintf(ctx->output_file, "\t.quad\t%s\n", impl_func->mangled_id);
+                    else
+                    {
+                        char iface_base[512];
+                        snprintf(iface_base, sizeof(iface_base), "%s__%s",
+                            iface_name, imethod->name);
+                        ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
+                        HashNode_t *iface_func = NULL;
+                        for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
+                            HashNode_t *cand = (HashNode_t *)ic->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                (cand->hash_type == HASHTYPE_FUNCTION ||
+                                 cand->hash_type == HASHTYPE_PROCEDURE)) {
+                                iface_func = cand;
+                                break;
+                            }
+                        }
+                        if (iface_func != NULL && iface_func->mangled_id != NULL)
+                            fprintf(ctx->output_file, "\t.quad\t%s\n", iface_func->mangled_id);
+                        else
+                            fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+                        if (iface_candidates != NULL)
+                            DestroyList(iface_candidates);
+                    }
+                }
+            }
         }
     }
 
@@ -3244,13 +3358,9 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
-    /* Emit interface method dispatch thunks.
-     * For each interface a class implements, generate global symbols for the
-     * interface method names that forward to the implementing class methods.
-     * This enables interface method calls (e.g., FStream.Read(...)) to link
-     * when emitted as direct calls to the interface method mangled name.
-     * TODO: Replace with proper vtable-based interface dispatch for cases
-     * where multiple classes implement the same interface. */
+    /* Emit legacy interface aliases for any remaining direct interface call
+     * sites. Real execution should go through the interface dispatch tables
+     * emitted above; these aliases are compatibility-only. */
     if (record_info->num_interfaces > 0 && !record_info->is_interface) {
         for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
             const char *iface_name = record_info->interface_names[iidx];
@@ -3275,21 +3385,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             while (iface_method != NULL) {
                 struct MethodTemplate *imethod = (struct MethodTemplate *)iface_method->cur;
                 if (imethod != NULL && imethod->name != NULL) {
-                    /* Build the class's implementation mangled name: ClassName__MethodName */
-                    char impl_base[512];
-                    snprintf(impl_base, sizeof(impl_base), "%s__%s", class_label, imethod->name);
-                    /* Find the implementing method in the symbol table to get its full mangled name */
-                    ListNode_t *impl_candidates = FindAllIdents(symtab, impl_base);
-                    HashNode_t *impl_func = NULL;
-                    for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
-                        HashNode_t *cand = (HashNode_t *)ic->cur;
-                        if (cand != NULL && cand->mangled_id != NULL &&
-                            cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
-                            cand->type->info.proc_info.definition != NULL) {
-                            impl_func = cand;
-                            break;
-                        }
-                    }
+                    HashNode_t *impl_func = codegen_find_method_impl_in_class_chain(symtab,
+                        record_info, class_label, imethod->name);
                     /* Look up the interface method's full mangled name */
                     char iface_base[512];
                     snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
@@ -3319,7 +3416,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         }
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);
-                    if (impl_candidates != NULL) DestroyList(impl_candidates);
                 }
                 iface_method = iface_method->next;
             }
@@ -5301,7 +5397,6 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub->type == TREE_SUBPROGRAM);
 
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
         {
             ListNode_t *seen = ctx->emitted_subprograms;
@@ -5398,9 +5493,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
          * See codegen_collect_available_subprogram_labels for the full
          * rationale.  Two checks: (1) generic_type_params != NULL, or
          * (2) num_generic_type_params > 0 with '$' in mangled name. */
-        if (sub->tree_data.subprogram_data.generic_type_params != NULL ||
-            (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
-             mangled_id != NULL && strchr(mangled_id, '$') != NULL))
+        if (codegen_is_unresolved_generic_template(sub))
         {
             sub_list = sub_list->next;
             continue;

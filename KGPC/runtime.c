@@ -1524,6 +1524,40 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
     return 0;
 }
 
+const void *kgpc_lookup_interface_method(const void *self, uint32_t guid_d1,
+    uint16_t guid_d2, uint16_t guid_d3, const uint8_t guid_d4[8], int slot)
+{
+    if (self == NULL || guid_d4 == NULL || slot < 0)
+        return NULL;
+
+    const void *vmt = *(const void * const *)self;
+    if (vmt == NULL)
+        return NULL;
+
+    const kgpc_class_typeinfo *typeinfo =
+        *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
+
+    while (typeinfo != NULL) {
+        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
+            for (int i = 0; i < typeinfo->num_interfaces; i++) {
+                const kgpc_interface_entry *entry = &typeinfo->interfaces[i];
+                if (entry->guid_d1 != guid_d1 || entry->guid_d2 != guid_d2 ||
+                    entry->guid_d3 != guid_d3)
+                    continue;
+                if (memcmp(entry->guid_d4, guid_d4, 8) != 0)
+                    continue;
+                if (entry->dispatch_table == NULL || slot >= entry->num_methods)
+                    return NULL;
+                const void * const *dispatch_table =
+                    (const void * const *)entry->dispatch_table;
+                return dispatch_table[slot];
+            }
+        }
+        typeinfo = typeinfo->parent;
+    }
+    return NULL;
+}
+
 const void *kgpc_class_parent(const void *self)
 {
     if (self == NULL)

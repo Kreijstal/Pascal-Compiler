@@ -294,6 +294,12 @@ struct Statement
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
+            int is_interface_call;           /* 1 if this call dispatches through an interface table */
+            int interface_method_slot;       /* Interface method slot index (-1 if not set) */
+            uint32_t interface_guid_d1;      /* Static interface GUID for dispatch */
+            uint16_t interface_guid_d2;
+            uint16_t interface_guid_d3;
+            uint8_t interface_guid_d4[8];
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
             char *call_qualifier;            /* Unit prefix if call was qualified, e.g. "System" (NULL if unqualified) */
         } procedure_call_data;
@@ -536,6 +542,12 @@ struct Expression
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
+            int is_interface_call;                   /* 1 if this call dispatches through an interface table */
+            int interface_method_slot;               /* Interface method slot index (-1 if not set) */
+            uint32_t interface_guid_d1;              /* Static interface GUID for dispatch */
+            uint16_t interface_guid_d2;
+            uint16_t interface_guid_d3;
+            uint8_t interface_guid_d4[8];
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
             struct Expression *constructor_receiver_expr; /* Original explicit constructor receiver for codegen */
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */

@@ -3153,6 +3153,17 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     g_source_offset = saved_offset;
 
     free_ast(method_copy);
+
+    if (method_tree != NULL &&
+        method_tree->tree_data.subprogram_data.generic_type_params != NULL)
+    {
+        for (int i = 0; i < method_tree->tree_data.subprogram_data.num_generic_type_params; i++)
+            free(method_tree->tree_data.subprogram_data.generic_type_params[i]);
+        free(method_tree->tree_data.subprogram_data.generic_type_params);
+        method_tree->tree_data.subprogram_data.generic_type_params = NULL;
+        method_tree->tree_data.subprogram_data.num_generic_type_params = 0;
+    }
+
     return method_tree;
 }
 
@@ -4090,17 +4101,28 @@ void flush_deferred_inline_specializations(Tree_t *program_tree)
 
 void append_generic_method_clones(Tree_t *program_tree)
 {
-    if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
+    ListNode_t *type_cursor = NULL;
+    ListNode_t **subprograms = NULL;
+
+    if (program_tree == NULL)
         return;
 
-    ListNode_t *type_cursor = program_tree->tree_data.program_data.type_declaration;
+    if (program_tree->type == TREE_PROGRAM_TYPE) {
+        type_cursor = program_tree->tree_data.program_data.type_declaration;
+        subprograms = &program_tree->tree_data.program_data.subprograms;
+    } else if (program_tree->type == TREE_UNIT) {
+        type_cursor = program_tree->tree_data.unit_data.interface_type_decls;
+        subprograms = &program_tree->tree_data.unit_data.subprograms;
+    } else {
+        return;
+    }
+
     while (type_cursor != NULL)
     {
         if (type_cursor->type == LIST_TREE && type_cursor->cur != NULL)
         {
             Tree_t *decl = (Tree_t *)type_cursor->cur;
-            append_specialized_method_clones(decl,
-                &program_tree->tree_data.program_data.subprograms);
+            append_specialized_method_clones(decl, subprograms);
         }
         type_cursor = type_cursor->next;
     }
