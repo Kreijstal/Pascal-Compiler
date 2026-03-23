@@ -3025,7 +3025,7 @@ int semcheck_funccall(int *type_return,
                         {
                             Tree_t *formal_decl = (Tree_t *)formal->cur;
                             struct Expression *actual_expr = (struct Expression *)actual->cur;
-                            
+
                             int formal_type = resolve_param_type(formal_decl, symtab);
                             int actual_type = UNKNOWN_TYPE;
                             KgpcType *actual_kgpc_type = NULL;
@@ -3058,7 +3058,7 @@ int semcheck_funccall(int *type_return,
                                     return ++return_val;
                                 }
                             }
-                            
+
                             formal = formal->next;
                             actual = actual->next;
                         }
@@ -3138,6 +3138,41 @@ int semcheck_funccall(int *type_return,
 
                     /* We no longer treat this as a method call; proceed with validated arguments */
                     return return_val;
+                }
+                else if (expr->expr_data.function_call_data.is_method_call_placeholder &&
+                         args_given->next == NULL)
+                {
+                    /* Non-procedural field accessed via method call placeholder (obj.field parsed
+                     * as a function call). Convert to EXPR_RECORD_ACCESS and delegate to the
+                     * record access semantic checker. */
+                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                        fprintf(stderr, "[SemCheck] treating %s.%s as regular field access\n",
+                            receiver_expr->type == EXPR_VAR_ID ? receiver_expr->expr_data.id : "<expr>", id);
+                    }
+
+                    /* Detach receiver from the argument list before converting */
+                    args_given->cur = NULL;
+                    expr->expr_data.function_call_data.args_expr = NULL;
+                    free(args_given);
+
+                    /* Convert the node from EXPR_FUNCTION_CALL to EXPR_RECORD_ACCESS */
+                    char *field_id_copy = strdup(field_lookup);
+
+                    /* Clear function call data that is no longer relevant */
+                    if (expr->expr_data.function_call_data.id != NULL)
+                        free(expr->expr_data.function_call_data.id);
+                    if (expr->expr_data.function_call_data.mangled_id != NULL)
+                        free(expr->expr_data.function_call_data.mangled_id);
+
+                    /* Rewrite the node as a record access */
+                    expr->type = EXPR_RECORD_ACCESS;
+                    memset(&expr->expr_data, 0, sizeof(expr->expr_data));
+                    expr->expr_data.record_access_data.record_expr = receiver_expr;
+                    expr->expr_data.record_access_data.field_id = field_id_copy;
+                    expr->expr_data.record_access_data.field_offset = (int)field_offset;
+
+                    /* Delegate full type resolution to the record access handler */
+                    return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
                 }
             }
         }
