@@ -9460,11 +9460,19 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         return 1;
     }
 
-    /* Ensure parent has its own parent fields merged before we clone from it */
+    /* Ensure parent has its own parent fields merged before we clone from it.
+     * Switch to the parent's unit scope so that the grandparent lookup
+     * searches the parent unit's dependencies (e.g. if A uses B uses C,
+     * and B's class inherits from C's class, we need C's scope visible). */
     if (parent_record->parent_class_name != NULL && !parent_record->parent_fields_merged)
     {
+        ScopeNode *saved_scope_for_parent = NULL;
+        if (parent_node->source_unit_index > 0)
+            saved_scope_for_parent = semcheck_switch_to_unit_scope(symtab, parent_node->source_unit_index);
         int parent_merge_result = merge_parent_class_fields(symtab, parent_record,
             record_info->parent_class_name, line_num);
+        if (saved_scope_for_parent != NULL)
+            semcheck_restore_scope(symtab, saved_scope_for_parent);
         if (parent_merge_result > 0)
             return parent_merge_result;
     }
