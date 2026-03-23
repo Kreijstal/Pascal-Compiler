@@ -2386,7 +2386,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
-    memset(&g_codegen_call_targets, 0, sizeof(g_codegen_call_targets));
 
     ctx->symtab = symtab;
     symtab->skip_unit_filter = 1;
@@ -2423,55 +2422,10 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     }
     codegen_collect_available_subprogram_labels(tree->tree_data.program_data.subprograms);
 
-    /* Collect all call targets from subprogram bodies so we can emit
-     * abstract stubs for any that remain undefined after codegen. */
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
-                collect_call_targets_from_subprograms(unit->tree_data.unit_data.subprograms);
-        }
-    }
-    collect_call_targets_from_subprograms(tree->tree_data.program_data.subprograms);
-
     codegen_vmt(ctx, symtab, tree, comp_ctx);
 
     prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
     codegen_main(prgm_name, ctx);
-
-    /* Emit abstract stubs for call targets that were never defined.
-     * This handles interface methods (e.g. IObserver.GetActive) and generic
-     * specialisations (e.g. TMarshal.UnfixArray) whose symbols exist only
-     * as call targets in subprogram bodies, not as defined subprograms. */
-    if (ctx->output_file != NULL) {
-        fprintf(ctx->output_file, "\n# Abstract stubs for undefined call targets\n");
-        fprintf(ctx->output_file, ".text\n");
-        for (int b = 0; b < CODEGEN_HASHSET_SIZE; b++) {
-            for (CodeGenHashEntry *e = g_codegen_call_targets.buckets[b]; e != NULL; e = e->next) {
-                const char *target = e->key;
-                if (target == NULL) continue;
-                /* Skip if it was emitted as a subprogram, cname alias, or VMT stub */
-                if (codegen_list_contains_string(g_codegen_available_subprograms, target))
-                    continue;
-                /* Check ctx->emitted_subprograms too */
-                int found = 0;
-                for (ListNode_t *es = ctx->emitted_subprograms; es != NULL; es = es->next) {
-                    if (es->type == LIST_STRING && es->cur != NULL &&
-                        strcmp((const char *)es->cur, target) == 0) {
-                        found = 1; break;
-                    }
-                }
-                if (found) continue;
-                /* Skip runtime/C library symbols (lowercase without __) */
-                if (strchr(target, '_') != NULL && strncmp(target, "kgpc_", 5) == 0) continue;
-                if (strchr(target, '_') != NULL && strncmp(target, "fpc_", 4) == 0) continue;
-                /* Emit the stub */
-                fprintf(ctx->output_file, ".globl %s\n", target);
-                fprintf(ctx->output_file, "%s:\n", target);
-                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
-            }
-        }
-    }
 
     codegen_program_footer(ctx);
 
@@ -2486,7 +2440,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         g_codegen_available_subprograms = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
-    codegen_set_destroy(&g_codegen_call_targets);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
@@ -2518,7 +2471,6 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
-    memset(&g_codegen_call_targets, 0, sizeof(g_codegen_call_targets));
 
     ctx->symtab = symtab;
     symtab->skip_unit_filter = 1;
@@ -2663,7 +2615,6 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         g_codegen_available_subprograms = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
-    codegen_set_destroy(&g_codegen_call_targets);
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
