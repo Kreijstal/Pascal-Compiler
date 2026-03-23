@@ -468,6 +468,58 @@ struct Expression *clone_expression(const struct Expression *expr)
             }
             break;
         }
+        case EXPR_AS:
+            clone->expr_data.as_data.expr =
+                clone_expression(expr->expr_data.as_data.expr);
+            if (expr->expr_data.as_data.expr != NULL &&
+                clone->expr_data.as_data.expr == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.as_data.target_type =
+                expr->expr_data.as_data.target_type;
+            clone->expr_data.as_data.target_type_id =
+                expr->expr_data.as_data.target_type_id != NULL ?
+                    strdup(expr->expr_data.as_data.target_type_id) : NULL;
+            if (expr->expr_data.as_data.target_type_id != NULL &&
+                clone->expr_data.as_data.target_type_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.as_data.target_type_ref =
+                expr->expr_data.as_data.target_type_ref;
+            clone->expr_data.as_data.target_record_type =
+                expr->expr_data.as_data.target_record_type;
+            break;
+
+        case EXPR_IS:
+            clone->expr_data.is_data.expr =
+                clone_expression(expr->expr_data.is_data.expr);
+            if (expr->expr_data.is_data.expr != NULL &&
+                clone->expr_data.is_data.expr == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.is_data.target_type =
+                expr->expr_data.is_data.target_type;
+            clone->expr_data.is_data.target_type_id =
+                expr->expr_data.is_data.target_type_id != NULL ?
+                    strdup(expr->expr_data.is_data.target_type_id) : NULL;
+            if (expr->expr_data.is_data.target_type_id != NULL &&
+                clone->expr_data.is_data.target_type_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.is_data.target_type_ref =
+                expr->expr_data.is_data.target_type_ref;
+            clone->expr_data.is_data.target_record_type =
+                expr->expr_data.is_data.target_record_type;
+            break;
+
         default:
             destroy_expr(clone);
             return NULL;
