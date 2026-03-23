@@ -1476,6 +1476,8 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
         if (pascal_identifier_equals(id, "Default"))
             return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
+        if (pascal_identifier_equals(id, "New"))
+            return semcheck_builtin_new_func(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Power"))
             return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Aligned"))
@@ -4094,8 +4096,12 @@ int semcheck_funccall(int *type_return,
         {
             KgpcType *mutating_type = NULL;
             semcheck_expr_with_type(&mutating_type, symtab, first_arg, max_scope_lev, MUTATE);
-            if (mutating_type != NULL)
-                destroy_kgpc_type(mutating_type);
+            /* Do NOT destroy mutating_type here: it is a borrowed reference
+             * to first_arg->resolved_kgpc_type (owned by the expression).
+             * Destroying it would double-release the type, leaving a dangling
+             * pointer in the expression and in any hash node that shares
+             * the same KgpcType. */
+            (void)mutating_type;
         }
         if (first_arg != NULL && first_arg->resolved_kgpc_type == NULL &&
             first_arg->record_type != NULL)
@@ -6109,6 +6115,12 @@ method_call_resolved:
             !expr->expr_data.function_call_data.is_method_call_placeholder &&
             expr->expr_data.function_call_data.call_qualifier == NULL)
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
+
+        if (id != NULL &&
+            pascal_identifier_equals(id, "New") &&
+            !expr->expr_data.function_call_data.is_method_call_placeholder &&
+            expr->expr_data.function_call_data.call_qualifier == NULL)
+            return semcheck_builtin_new_func(type_return, symtab, expr, max_scope_lev);
 
         /* WITH context fallback: if the function call couldn't be resolved in
          * normal scope, try resolving via active WITH contexts.  This handles

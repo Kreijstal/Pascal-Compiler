@@ -4002,3 +4002,73 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     *type_return = POINTER_TYPE;
     return 0;
 }
+
+int semcheck_builtin_new_func(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count < 1 || arg_count > 2)
+    {
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+            "New as function expects one or two arguments.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* First argument should be a pointer type identifier.
+     * Resolve it — if it's a pointer variable, use its type directly.
+     * If it resolved as PROCEDURE (because the type name matched the
+     * builtin procedure "New"), look it up as a type instead. */
+    struct Expression *type_arg = (struct Expression *)args->cur;
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, type_arg, max_scope_lev, NO_MUTATE);
+
+    int resolved_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (resolved_tag == POINTER_TYPE)
+    {
+        /* First arg is a pointer variable — return same pointer type */
+        expr->pointer_subtype = type_arg->pointer_subtype;
+        expr->pointer_subtype_id = type_arg->pointer_subtype_id != NULL
+            ? strdup(type_arg->pointer_subtype_id) : NULL;
+    }
+    else
+    {
+        /* First arg is likely a pointer type name. Look it up as a type. */
+        const char *type_name = NULL;
+        if (type_arg->type == EXPR_FUNCTION_CALL)
+            type_name = type_arg->expr_data.function_call_data.id;
+        else if (type_arg->type == EXPR_VAR_ID)
+            type_name = type_arg->expr_data.id;
+
+        if (type_name != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+            if (type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_pointer(type_node->type))
+            {
+                expr->pointer_subtype_id = strdup(type_name);
+            }
+        }
+    }
+
+    /* Check second argument (constructor call) if present */
+    if (arg_count == 2 && args->next != NULL)
+    {
+        struct Expression *ctor_arg = (struct Expression *)args->next->cur;
+        if (ctor_arg != NULL)
+        {
+            KgpcType *ctor_type = NULL;
+            error_count += semcheck_expr_with_type(&ctor_type, symtab, ctor_arg, max_scope_lev, NO_MUTATE);
+        }
+    }
+
+    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+    *type_return = POINTER_TYPE;
+    return error_count;
+}

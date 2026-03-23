@@ -144,7 +144,7 @@ static char *g_semcheck_source_buffer = NULL;
 static size_t g_semcheck_source_length = 0;
 static int g_semcheck_warning_count = 0;
 
-#define MAX_SOURCE_BUFFERS 64
+#define MAX_SOURCE_BUFFERS 512
 static struct {
     char *path;
     char *buffer;
@@ -210,8 +210,8 @@ int semcheck_register_source_buffer(const char *path, const char *buffer, size_t
 {
     if (path == NULL || buffer == NULL || length == 0)
         return 0;
-    if (g_source_buffer_count >= MAX_SOURCE_BUFFERS)
-        return 0;
+    assert(g_source_buffer_count < MAX_SOURCE_BUFFERS &&
+           "source buffer registry full — increase MAX_SOURCE_BUFFERS");
 
     for (int i = 0; i < g_source_buffer_count; i++)
     {
@@ -2062,7 +2062,7 @@ static int resolve_error_source_context(int source_index,
         {
             int gs = g_source_buffer_registry[i].global_start;
             int len = (int)g_source_buffer_registry[i].length;
-            if (source_index >= gs && source_index < gs + len)
+            if (source_index >= gs && source_index <= gs + len)
             {
                 int local_offset = source_index - gs;
                 char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
@@ -2141,7 +2141,7 @@ static int resolve_unit_error_location(int source_index, int line_num,
             {
                 int gs = g_source_buffer_registry[i].global_start;
                 int len = (int)g_source_buffer_registry[i].length;
-                if (source_index >= gs && source_index < gs + len)
+                if (source_index >= gs && source_index <= gs + len)
                 {
                     unit_path = g_source_buffer_registry[i].path;
                     break;
@@ -2325,22 +2325,51 @@ static void v_semcheck_format_error_with_context(
     /* Inline source context */
     if (effective_line > 0)
     {
-        size_t context_len = preprocessed_length;
-        if (context_len == 0 && preprocessed_source != NULL)
-            context_len = strlen(preprocessed_source);
-        const char *context_buf = preprocessed_source;
-        size_t context_buf_len = context_len;
+        /* Look up the correct source buffer for this error's source_index.
+         * Previously this always used the main preprocessed_source, which
+         * showed wrong file contents for errors in imported units. */
+        const char *context_buf = NULL;
+        size_t context_buf_len = 0;
+        if (source_index >= 0)
+        {
+            for (int i = 0; i < g_source_buffer_count; i++)
+            {
+                int gs = g_source_buffer_registry[i].global_start;
+                int len = (int)g_source_buffer_registry[i].length;
+                if (source_index >= gs && source_index <= gs + len)
+                {
+                    context_buf = g_source_buffer_registry[i].buffer;
+                    context_buf_len = g_source_buffer_registry[i].length;
+                    break;
+                }
+            }
+        }
         if (context_buf == NULL || context_buf_len == 0)
         {
-            context_buf = g_semcheck_source_buffer;
-            context_buf_len = g_semcheck_source_length;
+            /* Do NOT fall back to the main program's preprocessed buffer
+             * when we're inside a unit — it shows wrong source content.
+             * Use preprocessed_source only when NOT inside a unit context. */
+            if (g_semcheck_error_unit_name == NULL || source_index < 0)
+            {
+                context_buf = preprocessed_source;
+                context_buf_len = preprocessed_length;
+                if (context_buf_len == 0 && context_buf != NULL)
+                    context_buf_len = strlen(context_buf);
+            }
+        }
+        if (context_buf == NULL || context_buf_len == 0)
+        {
+            if (g_semcheck_error_unit_name == NULL)
+            {
+                context_buf = g_semcheck_source_buffer;
+                context_buf_len = g_semcheck_source_length;
+            }
         }
         if (kgpc_getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
-                "[SemCheck] context file=%s pre_len=%zu buf_len=%zu line=%d col=%d offset=%d\n",
+                "[SemCheck] context file=%s buf_len=%zu line=%d col=%d offset=%d\n",
                 file_path != NULL ? file_path : "<null>",
-                context_len,
                 context_buf_len,
                 effective_line,
                 effective_col,
@@ -17034,6 +17063,30 @@ next_identifier:
                                         elem_tag == literal_elem_tag)
                                     {
                                         compatible = 1;
+                                    }
+                                }
+                            }
+
+                            /* Dynamic array typed constant with single-element initializer:
+                             * const inv: TIntArray = (42);
+                             * The parser strips the parentheses for a single value, producing
+                             * a scalar expression instead of EXPR_ARRAY_LITERAL.  Accept if
+                             * the scalar type matches the array's element type. */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY &&
+                                init_expr != NULL && init_expr->type != EXPR_ARRAY_LITERAL)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && kgpc_type_is_dynamic_array(var_type))
+                                {
+                                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                                    if (elem_tag != UNKNOWN_TYPE && expr_tag != UNKNOWN_TYPE)
+                                    {
+                                        if (elem_tag == expr_tag ||
+                                            (is_integer_type(elem_tag) && is_integer_type(expr_tag)))
+                                        {
+                                            compatible = 1;
+                                        }
                                     }
                                 }
                             }
