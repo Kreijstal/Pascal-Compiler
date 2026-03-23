@@ -4273,6 +4273,15 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             return return_val + indexed_property_result;
     }
 
+    /* Re-read var and expr from the statement after the property checks and
+     * LHS semcheck_stmt_expr_tag.  The LHS expression may have been
+     * transformed in-place (e.g. VAR_ID -> RECORD_ACCESS via WITH, or
+     * FUNCTION_CALL -> TYPECAST), and the property helpers may in the future
+     * rewrite the statement even on the failure path.  Keeping the local
+     * pointers in sync avoids stale-pointer / use-after-free crashes. */
+    var = stmt->stmt_data.var_assign_data.var;
+    expr = stmt->stmt_data.var_assign_data.expr;
+
     if (expr != NULL && expr->type == EXPR_RECORD_CONSTRUCTOR &&
         (expr->resolved_kgpc_type == NULL ||
          !kgpc_type_is_record(expr->resolved_kgpc_type)))

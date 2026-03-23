@@ -4094,8 +4094,12 @@ int semcheck_funccall(int *type_return,
         {
             KgpcType *mutating_type = NULL;
             semcheck_expr_with_type(&mutating_type, symtab, first_arg, max_scope_lev, MUTATE);
-            if (mutating_type != NULL)
-                destroy_kgpc_type(mutating_type);
+            /* Do NOT destroy mutating_type here: it is a borrowed reference
+             * to first_arg->resolved_kgpc_type (owned by the expression).
+             * Destroying it would double-release the type, leaving a dangling
+             * pointer in the expression and in any hash node that shares
+             * the same KgpcType. */
+            (void)mutating_type;
         }
         if (first_arg != NULL && first_arg->resolved_kgpc_type == NULL &&
             first_arg->record_type != NULL)

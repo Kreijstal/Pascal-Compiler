@@ -2448,6 +2448,14 @@ int semcheck_varid(int *type_return,
         return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
     }
 
+    if (id == NULL)
+    {
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+            "Error on line %d, variable identifier is NULL.\n\n", expr->line_num);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
     scope_return = FindSymbol(&hash_return, symtab, id);
 
     /* When in assignment context, an enum constant cannot be the target.
