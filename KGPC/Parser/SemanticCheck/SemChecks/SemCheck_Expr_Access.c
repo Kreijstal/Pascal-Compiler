@@ -11,6 +11,7 @@
 #include "SemCheck_Expr_Internal.h"
 #include <time.h>
 #include <ctype.h>
+#include <limits.h>
 
 #define FUNCCALL_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_FUNCCALL_TIMINGS") != NULL)
 
@@ -2474,8 +2475,12 @@ int semcheck_funccall(int *type_return,
                         }
                         if (all_methods != NULL)
                         {
-                            /* Find the overload that matches our argument count */
+                            /* Find the best overload that matches our argument count.
+                             * Prefer the candidate with fewest total params (closest
+                             * arity match) to avoid selecting an overload with many
+                             * default params when a tighter match exists. */
                             ListNode_t *cur = all_methods;
+                            int best_total = INT_MAX;
                             while (cur != NULL)
                             {
                                 HashNode_t *candidate = (HashNode_t *)cur->cur;
@@ -2488,19 +2493,20 @@ int semcheck_funccall(int *type_return,
                                     int candidate_expects_self = 0;
                                     int candidate_compatible = semcheck_method_accepts_arg_count(candidate_params,
                                         args_count, &candidate_expects_self, candidate->is_varargs);
-                                    
+                                    int candidate_total = semcheck_count_total_params(candidate_params);
+
                                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                         fprintf(stderr, "[SemCheck] Method overload check: candidate=%s params=%d args=%d compatible=%d\n",
                                             candidate->mangled_id ? candidate->mangled_id : candidate->id,
-                                            semcheck_count_total_params(candidate_params), args_count, candidate_compatible);
+                                            candidate_total, args_count, candidate_compatible);
                                     }
-                                    
-                                    if (candidate_compatible)
+
+                                    if (candidate_compatible && candidate_total < best_total)
                                     {
                                         method_node = candidate;
                                         method_params = candidate_params;
                                         expects_self = candidate_expects_self;
-                                        break;
+                                        best_total = candidate_total;
                                     }
                                 }
                                 cur = cur->next;
