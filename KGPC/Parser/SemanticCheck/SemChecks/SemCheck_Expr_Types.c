@@ -119,6 +119,25 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
         DestroyList(builtin_matches);
     }
 
+    /* Check if id is a field of Self (implicit class field access inside methods).
+     * This prevents unit-name resolution from shadowing class fields when a unit
+     * name collides with a field name (e.g., field "symtable" vs unit "symtable"). */
+    {
+        HashNode_t *self_node = NULL;
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                struct RecordField *field = NULL;
+                long long offset = 0;
+                if (resolve_record_field(symtab, self_record, id, &field, &offset, 0, 1) == 0 &&
+                    field != NULL)
+                    return 1;
+            }
+        }
+    }
+
     return 0;
 }
 
