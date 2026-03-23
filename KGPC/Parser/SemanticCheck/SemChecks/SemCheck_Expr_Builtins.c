@@ -788,7 +788,14 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        if (is_wide_string)
+        if (is_array)
+        {
+            int tag = semcheck_tag_from_kgpc(source_kgpc_type);
+            semcheck_expr_set_resolved_type(expr, tag);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, source_kgpc_type);
+            *type_return = tag;
+        }
+        else if (is_wide_string)
         {
             semcheck_expr_set_resolved_type(expr, STRING_TYPE);
             if (source_expr->resolved_kgpc_type != NULL)
