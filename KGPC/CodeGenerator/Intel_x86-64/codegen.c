@@ -3624,6 +3624,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         }
         if (cls_record == NULL)
             continue;
+        /* Only emit abstract stubs for classes and interfaces — plain
+         * record types (like TDoubleRec/TSingleRec) cannot have abstract
+         * methods.  Their methods may be implemented in C (runtime.c)
+         * rather than Pascal, so stubbing them causes linker conflicts. */
+        if (!cls_record->is_class && !cls_record->is_interface)
+            continue;
         if (cls_record->method_templates == NULL)
             continue;
         /* For each method_template, check if it was resolved */
@@ -3645,7 +3651,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                          * entry, or the template kind as fallback. */
                         if (!cand->is_operator &&
                             tmpl->kind != METHOD_TEMPLATE_OPERATOR &&
+                            codegen_is_valid_asm_symbol_name(cand->mangled_id) &&
                             !codegen_set_contains(&iface_dispatch_set, cand->mangled_id) &&
+                            !codegen_set_contains_ci(&g_codegen_callable_exports, cand->mangled_id) &&
                             !codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
                             /* Check the symtab to see if this method has an
                              * actual implementation (statement_list != NULL).
@@ -3685,7 +3693,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                     /* Skip operator overloads — they have their own codegen
                      * path with sanitized assembly labels. */
                     if (!method->is_operator &&
+                        codegen_is_valid_asm_symbol_name(m_mangled) &&
                         !codegen_set_contains(&iface_dispatch_set, m_mangled) &&
+                        !codegen_set_contains_ci(&g_codegen_callable_exports, m_mangled) &&
                         !codegen_list_contains_string(g_codegen_available_subprograms, m_mangled)) {
                         int has_body = 0;
                         HashNode_t *msym = NULL;
@@ -3703,87 +3713,6 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                     }
                 }
                 method_node = method_node->next;
-            }
-        }
-    }
-
-    /* Second pass: scan the entire symbol table for interface methods
-     * that weren't covered by the method_templates/methods lists above.
-     * This handles interfaces like IObserver/IInterfaceList whose
-     * method_templates are not populated by the parser.
-     * We use the structured owner_class field on HashNode to identify
-     * methods belonging to interface types — no string parsing needed. */
-    {
-        /* Collect all scopes to scan: parent chain + unit scopes */
-        ScopeNode *scopes_to_scan[SYMTAB_MAX_UNITS + 64];
-        int scope_count = 0;
-        for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent) {
-            if (scope_count < (int)(sizeof(scopes_to_scan)/sizeof(scopes_to_scan[0])))
-                scopes_to_scan[scope_count++] = scope;
-        }
-        for (int u = 0; u < SYMTAB_MAX_UNITS; u++) {
-            if (symtab->unit_scopes[u] != NULL &&
-                scope_count < (int)(sizeof(scopes_to_scan)/sizeof(scopes_to_scan[0]))) {
-                /* Only add if not already in the parent chain */
-                int already = 0;
-                for (int k = 0; k < scope_count; k++) {
-                    if (scopes_to_scan[k] == symtab->unit_scopes[u]) { already = 1; break; }
-                }
-                if (!already)
-                    scopes_to_scan[scope_count++] = symtab->unit_scopes[u];
-            }
-        }
-        for (int si = 0; si < scope_count; si++)
-        {
-            HashTable_t *table = scopes_to_scan[si]->table;
-            if (table == NULL)
-                continue;
-            for (int b = 0; b < TABLE_SIZE; b++)
-            {
-                ListNode_t *node = table->table[b];
-                while (node != NULL)
-                {
-                    HashNode_t *hash_node = (HashNode_t *)node->cur;
-                    if (hash_node != NULL &&
-                        (hash_node->hash_type == HASHTYPE_FUNCTION ||
-                         hash_node->hash_type == HASHTYPE_PROCEDURE) &&
-                        hash_node->mangled_id != NULL &&
-                        hash_node->owner_class != NULL &&
-                        !hash_node->is_operator &&
-                        !codegen_set_contains(&iface_dispatch_set, hash_node->mangled_id) &&
-                        !codegen_list_contains_string(g_codegen_available_subprograms, hash_node->mangled_id))
-                    {
-                        /* Check if the owner class is an interface type */
-                        HashNode_t *cls_node = NULL;
-                        if (FindSymbol(&cls_node, symtab, hash_node->owner_class) != 0 &&
-                            cls_node != NULL)
-                        {
-                            struct RecordType *rec = get_record_type_from_node(cls_node);
-                            if (rec == NULL && cls_node->type != NULL &&
-                                cls_node->type->kind == TYPE_KIND_POINTER &&
-                                cls_node->type->info.points_to != NULL &&
-                                cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                                rec = cls_node->type->info.points_to->info.record_info;
-                            if (rec != NULL && rec->is_interface)
-                            {
-                                /* Check no implementation body exists */
-                                int has_body = 0;
-                                if (hash_node->type != NULL &&
-                                    hash_node->type->kind == TYPE_KIND_PROCEDURE &&
-                                    hash_node->type->info.proc_info.definition != NULL &&
-                                    hash_node->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
-                                    has_body = 1;
-                                if (!has_body) {
-                                    fprintf(ctx->output_file, ".globl %s\n", hash_node->mangled_id);
-                                    fprintf(ctx->output_file, "%s:\n", hash_node->mangled_id);
-                                    fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
-                                    codegen_set_insert(&iface_dispatch_set, hash_node->mangled_id);
-                                }
-                            }
-                        }
-                    }
-                    node = node->next;
-                }
             }
         }
     }
