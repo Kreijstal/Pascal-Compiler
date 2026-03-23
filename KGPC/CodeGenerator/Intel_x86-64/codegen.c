@@ -2628,12 +2628,19 @@ static int codegen_is_valid_asm_symbol_name(const char *id)
     if (id == NULL || id[0] == '\0')
         return 0;
 
-    if (!(isalpha((unsigned char)id[0]) || id[0] == '_'))
+    /* First character must be letter, underscore, or dot.
+     * GNU assembler (gas) supports '.', '$' and '_' in symbol names
+     * in addition to alphanumeric characters. We allow '.' and '$'
+     * because they appear in mangled names for nested types
+     * (e.g. tmarshaller.tdeferbase__done) and generic specializations
+     * (e.g. taddressableunfixarrayspecialization$t). */
+    if (!(isalpha((unsigned char)id[0]) || id[0] == '_' || id[0] == '.'))
         return 0;
 
     for (size_t i = 1; id[i] != '\0'; ++i)
     {
-        if (!(isalnum((unsigned char)id[i]) || id[i] == '_'))
+        if (!(isalnum((unsigned char)id[i]) || id[i] == '_' ||
+              id[i] == '.' || id[i] == '$'))
             return 0;
     }
 
@@ -4332,10 +4339,12 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                     fwd->tree_data.subprogram_data.statement_list == NULL) {
                     const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
                     const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
-                    /* Only handle methods (has owner_class) that have no
+                    /* Handle methods (has owner_class) or method-like symbols
+                     * (containing '__' in mangled name) that have no
                      * cname_override alias system entry. */
                     if (fwd_mangled != NULL && fwd_cname == NULL &&
-                        fwd->tree_data.subprogram_data.owner_class != NULL &&
+                        (fwd->tree_data.subprogram_data.owner_class != NULL ||
+                         strstr(fwd_mangled, "__") != NULL) &&
                         !codegen_set_contains(&emitted_labels, fwd_mangled) &&
                         !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
                         /* Check if a same-named implementation exists anywhere */
