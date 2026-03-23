@@ -4162,6 +4162,37 @@ int semcheck_funccall(int *type_return,
                         first_arg->pointer_subtype_id);
                 }
 
+                /* Strategy 4: unresolved primitive placeholder — the points_to
+                 * is PRIMITIVE(RECORD_TYPE) from a forward-declared class type.
+                 * Try type_alias target_type_id, pointer_type_id, and alias_name. */
+                if (record_info == NULL && owner_type->info.points_to != NULL &&
+                    owner_type->info.points_to->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    if (owner_type->type_alias != NULL)
+                    {
+                        if (record_info == NULL && owner_type->type_alias->target_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->target_type_id);
+                        if (record_info == NULL && owner_type->type_alias->pointer_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->pointer_type_id);
+                        if (record_info == NULL && owner_type->type_alias->alias_name != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                owner_type->type_alias->alias_name);
+                    }
+                    if (record_info == NULL &&
+                        owner_type->info.points_to->type_alias != NULL)
+                    {
+                        struct TypeAlias *pt_alias = owner_type->info.points_to->type_alias;
+                        if (record_info == NULL && pt_alias->alias_name != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                pt_alias->alias_name);
+                        if (record_info == NULL && pt_alias->target_type_id != NULL)
+                            record_info = semcheck_lookup_record_type(symtab,
+                                pt_alias->target_type_id);
+                    }
+                }
+
                 /* Fix the KgpcType's points_to so overload resolution sees the
                  * correct record type instead of the unresolved primitive placeholder. */
                 if (record_info != NULL && owner_type->info.points_to != NULL &&
@@ -4177,6 +4208,15 @@ int semcheck_funccall(int *type_return,
                 }
             }
 
+            /* Fallback: if record_info is still NULL for a method call placeholder,
+             * check if first_arg->record_type is set (e.g. for class instances whose
+             * KgpcType has an unresolved PRIMITIVE placeholder as points_to). */
+            if (record_info == NULL && first_arg != NULL &&
+                first_arg->record_type != NULL &&
+                record_type_is_class(first_arg->record_type))
+            {
+                record_info = first_arg->record_type;
+            }
             if (record_info != NULL && record_info->type_id != NULL) {
                 const char *method_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                     ? expr->expr_data.function_call_data.placeholder_method_name : id;
