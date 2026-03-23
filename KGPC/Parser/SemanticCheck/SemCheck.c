@@ -16766,6 +16766,63 @@ next_identifier:
                         }
                         return_val += semcheck_expr_main(symtab, init_expr, INT_MAX, NO_MUTATE, &expr_type);
 
+                        /* AST TRANSFORMATION: When a typed constant has a procedural target type
+                         * and the initializer is a bare procedure/function name, treat it as
+                         * taking the address (implicit @) rather than calling the function.
+                         * e.g. const do_stop: TStopProc = DefStop; means @DefStop */
+                        if (tree->tree_data.var_decl_data.is_typed_const &&
+                            var_node != NULL && var_node->type != NULL &&
+                            kgpc_type_is_procedure(var_node->type) &&
+                            init_expr != NULL &&
+                            init_expr->type != EXPR_ADDR_OF_PROC)
+                        {
+                            HashNode_t *proc_symbol = NULL;
+                            const char *proc_name_ref = NULL;
+                            if (init_expr->type == EXPR_VAR_ID)
+                            {
+                                proc_name_ref = init_expr->expr_data.id;
+                            }
+                            else if (init_expr->type == EXPR_FUNCTION_CALL &&
+                                     init_expr->expr_data.function_call_data.args_expr == NULL)
+                            {
+                                proc_name_ref = init_expr->expr_data.function_call_data.id;
+                            }
+                            if (proc_name_ref != NULL &&
+                                FindSymbol(&proc_symbol, symtab, proc_name_ref) != 0 &&
+                                proc_symbol != NULL &&
+                                (proc_symbol->hash_type == HASHTYPE_PROCEDURE ||
+                                 proc_symbol->hash_type == HASHTYPE_FUNCTION))
+                            {
+                                init_expr->type = EXPR_ADDR_OF_PROC;
+                                init_expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                                    proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
+                                init_expr->expr_data.addr_of_proc_data.proc_id =
+                                    proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                /* Resolve the type NOW while the symbol is still alive. */
+                                if (expr_type != NULL)
+                                    destroy_kgpc_type(expr_type);
+                                if (proc_symbol->type != NULL &&
+                                    proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
+                                {
+                                    kgpc_type_retain(proc_symbol->type);
+                                    if (init_expr->resolved_kgpc_type != NULL)
+                                        destroy_kgpc_type(init_expr->resolved_kgpc_type);
+                                    init_expr->resolved_kgpc_type = create_pointer_type(proc_symbol->type);
+                                }
+                                else
+                                {
+                                    KgpcType *generic_proc = create_procedure_type(NULL, NULL);
+                                    if (init_expr->resolved_kgpc_type != NULL)
+                                        destroy_kgpc_type(init_expr->resolved_kgpc_type);
+                                    init_expr->resolved_kgpc_type = create_pointer_type(generic_proc);
+                                    if (generic_proc != NULL)
+                                        destroy_kgpc_type(generic_proc);
+                                }
+                                expr_type = var_node->type;
+                                kgpc_type_retain(expr_type);
+                            }
+                        }
+
                         if (tree->tree_data.var_decl_data.is_typed_const && var_node != NULL &&
                             init_expr->type != EXPR_ADDR && init_expr->type != EXPR_ADDR_OF_PROC &&
                             init_expr->type != EXPR_RECORD_CONSTRUCTOR &&
@@ -16915,6 +16972,10 @@ next_identifier:
                             case POINTER_TYPE:
                                 inferred_var_type = HASHVAR_POINTER;
                                 normalized_type = POINTER_TYPE;
+                                break;
+                            case PROCEDURE:
+                                inferred_var_type = HASHVAR_PROCEDURE;
+                                normalized_type = PROCEDURE;
                                 break;
                             case RECORD_TYPE:
                                 inferred_var_type = HASHVAR_RECORD;

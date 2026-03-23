@@ -553,6 +553,7 @@ struct Expression
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
             int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
+            int is_bare_inherited;             /* 1 if bare "inherited" (no explicit method name) — forward enclosing args */
             int is_operator_call;              /* 1 if this call targets an operator (set by parser) */
         } function_call_data;
 

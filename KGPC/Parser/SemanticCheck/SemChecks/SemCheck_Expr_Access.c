@@ -1247,8 +1247,11 @@ int semcheck_funccall(int *type_return,
      * E.g., T(inherited Get(Index)^) should call TFPSList.Get, not TFPGList.Get. */
     if (expr->expr_data.function_call_data.is_inherited_call && id != NULL)
     {
-        if (args_given == NULL)
+        if (args_given == NULL && expr->expr_data.function_call_data.is_bare_inherited)
         {
+            /* Only auto-forward enclosing method's args for bare "inherited"
+             * (no explicit method name).  "inherited MethodName" with no args
+             * is a zero-argument call and must NOT inherit the outer params. */
             ListNode_t *forwarded_args = semcheck_clone_current_subprogram_actual_args(0);
             if (forwarded_args != NULL)
             {
@@ -3960,6 +3963,13 @@ int semcheck_funccall(int *type_return,
 
                             /* Set return type from the procedural type */
                             KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                            if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                            {
+                                HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                    proc_kgpc_type->info.proc_info.return_type_id);
+                                if (ret_node != NULL && ret_node->type != NULL)
+                                    ret = ret_node->type;
+                            }
                             if (ret != NULL)
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
@@ -4589,6 +4599,13 @@ int semcheck_funccall(int *type_return,
 
                                 /* Set return type from the procedural type */
                                 KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                                if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                                {
+                                    HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                        proc_kgpc_type->info.proc_info.return_type_id);
+                                    if (ret_node != NULL && ret_node->type != NULL)
+                                        ret = ret_node->type;
+                                }
                                 if (ret != NULL)
                                 {
                                     *type_return = semcheck_tag_from_kgpc(ret);
@@ -6242,6 +6259,13 @@ method_call_resolved:
                         {
                             /* Set return type from the procedural type */
                             KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                            if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                            {
+                                HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                    proc_kgpc_type->info.proc_info.return_type_id);
+                                if (ret_node != NULL && ret_node->type != NULL)
+                                    ret = ret_node->type;
+                            }
                             if (ret != NULL)
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
