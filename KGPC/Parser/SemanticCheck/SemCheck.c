@@ -17061,6 +17061,30 @@ next_identifier:
                                     }
                                 }
                             }
+
+                            /* Dynamic array typed constant with single-element initializer:
+                             * const inv: TIntArray = (42);
+                             * The parser strips the parentheses for a single value, producing
+                             * a scalar expression instead of EXPR_ARRAY_LITERAL.  Accept if
+                             * the scalar type matches the array's element type. */
+                            if (!compatible && current_var_type == HASHVAR_ARRAY &&
+                                init_expr != NULL && init_expr->type != EXPR_ARRAY_LITERAL)
+                            {
+                                KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
+                                if (var_type != NULL && kgpc_type_is_dynamic_array(var_type))
+                                {
+                                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_type, symtab);
+                                    int elem_tag = semcheck_tag_from_kgpc(elem_type);
+                                    if (elem_tag != UNKNOWN_TYPE && expr_tag != UNKNOWN_TYPE)
+                                    {
+                                        if (elem_tag == expr_tag ||
+                                            (is_integer_type(elem_tag) && is_integer_type(expr_tag)))
+                                        {
+                                            compatible = 1;
+                                        }
+                                    }
+                                }
+                            }
                             
                             /* Allow pointer type initializers (including nil) for pointer variables.
                              * Both the initializer expression type and the declared variable type must
