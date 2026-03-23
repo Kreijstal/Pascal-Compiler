@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: 56 RTL units compile (0 errors); 99 compiler units scanned (257 errors total)
+## Status: 56 RTL units compile (0 errors); pp.pas compiles with 78 errors (down from 1279)
 
 ## Prerequisites
 
@@ -241,20 +241,59 @@ Top error categories:
 Compiling `pp.pas` loads ~200+ units together and produces ~16,000+ errors due to
 cascading from the root causes above.
 
-## Remaining Blockers
+## Performance
 
-### Critical (blocks most compiler units)
+### Hash Table Size
+
+`TABLE_SIZE` was increased from 211 to 4099 (prime). With 267 units merged into
+a flat scope, the old 211-bucket hash table had severe collisions (~hundreds of
+entries per bucket), making every identifier lookup O(n).
+
+### Semantic Analysis of Imported Implementation Bodies
+
+With `KGPC_SKIP_IMPORTED_IMPL_BODIES=1`, pp.pas semantic analysis completes in
+~3-6 seconds. Without it, the compiler hangs indefinitely (~8000+ subprogram
+bodies are checked, hanging around method 8368 in `tppumodule__buildderefunitimportsyms`).
+
+The stack trace shows deep chains: `semcheck_proccall` → `MangleFunctionNameFromCallSite`
+→ `GetFlatTypeListFromCallSite` → `semcheck_expr_main` → `semcheck_funccall` →
+`FindAllIdents`, with `semcheck_with_try_resolve` and `sizeof_from_type_ref` in
+the middle. The combination of 267 units' worth of symbols + deep expression
+chains in FPC compiler source makes full body checking prohibitively slow.
+
+**Workaround**: Set `KGPC_SKIP_IMPORTED_IMPL_BODIES=1` to skip semantic checking
+of imported unit implementation bodies. This is safe when the program has errors
+(codegen is skipped anyway).
+
+### Parser Cache
+
+The AST parser cache (`kgpc_ast_cache_<hash>`) is keyed on the binary hash.
+Every recompile invalidates the cache, requiring a full re-parse of all 267
+units (~44 seconds uncached vs ~3-5 seconds cached).
+
+## Remaining Blockers (78 errors in pp.pas)
+
+### Error Categories
+| Category | Count | Root Cause |
+|---|---|---|
+| typecast unknown type (get_def_dwarf_labs) | 12 | Parser treats method call as typecast |
+| record field shiftval (TLongIntHelper) | 10 | Type helper method not resolved through helper chain |
+| overload resolution (createsection etc.) | 10 | semcheck_proccall uses different overload resolution than semcheck_funccall |
+| equality comparison (shortstring vs char) | 0 | **FIXED** — string-char comparisons now accepted |
+| UpCase expects char | 6 | Cascade from unresolved array access type |
+| Assigned expects pointer | 3 | Cascade from unresolved types |
+| function else() not declared | 4 | `{$else}` directive parsed as code |
+| function childcount() not declared | 4 | Line tracking, misattributed errors |
+| find/FindWithHash overload | 9 | ShortString/String overload matching |
+| initializer mismatch (inv) | 4 | Type mismatch in variable init |
+| for-in loop requires array | 3 | Unresolved iterator type |
+| Low/High non-array | 3 | Type resolution cascade |
+| Various 1-off errors | ~10 | Mixed causes |
+
+### Critical (blocks most remaining errors)
 1. **Operator overloading on records** — `Tconstexprint` uses `operator :=`, `operator <`, etc.
-   This blocks ~67 errors across 22+ units (relational + arithmetic).
-2. **Class subtype compatibility** — `^record` vs `^record` mismatches when passing
-   derived class instances to parent class parameters.
-
-### Important (blocks specific functionality)
-3. **Built-in function shadowing methods** — `Concat`, `Length`, etc. shadow class methods
-   of the same name. Need method-first resolution when in record access context.
-4. **`NOT` on non-boolean expressions** — `not (obj.Empty)` where `Empty` returns boolean
-   but resolves to wrong type.
-5. **Implicit Char↔String conversion** — assignment `ch := str` and vice versa.
+2. **Type helper method resolution** — `shiftval` on integer types via `TLongIntHelper`
+3. **`{$else}` directive handling** — Conditional compilation directives parsed as code
 
 ### References
 - Keep using the FPC-declared order from `make -n -B -C ./FPCSource/rtl/linux units`
