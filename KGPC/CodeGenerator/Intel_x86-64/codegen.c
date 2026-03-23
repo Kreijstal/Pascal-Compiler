@@ -3479,23 +3479,40 @@ static void codegen_emit_bodiless_method_stubs(CodeGenContext *ctx,
             continue;
         }
 
-        /* Check if this is a method of an interface or class */
+        /* Check if this is a method of a class, interface, or object type.
+         * Emit abstract-method-error stubs for bodiless methods.
+         * The availability check at lines above already filters out
+         * methods that have C implementations (g_codegen_available_subprograms). */
         if (data->owner_class != NULL) {
             HashNode_t *cls_node = NULL;
-            if (FindSymbol(&cls_node, symtab, data->owner_class) != 0 &&
-                cls_node != NULL) {
+            int found = FindSymbol(&cls_node, symtab, data->owner_class) != 0 &&
+                        cls_node != NULL;
+            int should_stub = 0;
+            if (found) {
                 struct RecordType *rec = get_record_type_from_node(cls_node);
                 if (rec == NULL && cls_node->type != NULL &&
                     cls_node->type->kind == TYPE_KIND_POINTER &&
                     cls_node->type->info.points_to != NULL &&
                     cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                     rec = cls_node->type->info.points_to->info.record_info;
-                if (rec != NULL && (rec->is_interface || rec->is_class)) {
-                    fprintf(ctx->output_file, ".globl %s\n", mangled);
-                    fprintf(ctx->output_file, "%s:\n", mangled);
-                    fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
-                    codegen_set_insert(iface_dispatch_set, mangled);
-                }
+                /* Stub for classes, interfaces, and object types.
+                 * Object types (is_class=0, is_interface=0) can have virtual
+                 * abstract methods (e.g. TDeferBase.Done).  Only skip plain
+                 * records that have no methods list (pure data types). */
+                if (rec != NULL && (rec->is_interface || rec->is_class ||
+                    rec->methods != NULL || rec->parent_class_name != NULL))
+                    should_stub = 1;
+            } else {
+                /* Owner class not found in symtab — likely a nested type
+                 * (e.g. TMarshaller.TDeferBase) whose dotted name isn't
+                 * directly resolvable.  Emit a stub to be safe. */
+                should_stub = 1;
+            }
+            if (should_stub) {
+                fprintf(ctx->output_file, ".globl %s\n", mangled);
+                fprintf(ctx->output_file, "%s:\n", mangled);
+                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                codegen_set_insert(iface_dispatch_set, mangled);
             }
         }
 
@@ -4125,33 +4142,88 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     /* Build a temporary combined subprogram list for alias post-passes.
      * The alias passes need to scan all subprograms (units + program) to find
-     * forward decl → implementation matches across unit boundaries. */
+     * forward decl → implementation matches across unit boundaries.
+     * We recurse into nested subprograms so that methods of nested types
+     * (e.g. TMarshaller.TDeferBase.Done) and generic specializations
+     * (e.g. TMarshal.UnfixArray<TPtrWrapper>) are included. */
     ListNode_t *all_subprograms = NULL;
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit == NULL || unit->type != TREE_UNIT)
-                continue;
-            ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
-            while (usubs != NULL) {
-                ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
+    /* Helper macro-style: collect subprograms recursively via an explicit stack */
+    {
+        /* Seed the worklist with top-level subprogram lists */
+        ListNode_t *worklist = NULL;   /* list of ListNode_t* to process */
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit == NULL || unit->type != TREE_UNIT)
+                    continue;
+                ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
+                while (usubs != NULL) {
+                    ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
+                    if (copy != NULL) {
+                        copy->next = all_subprograms;
+                        all_subprograms = copy;
+                    }
+                    /* If this subprogram has nested subprograms, queue them */
+                    if (usubs->cur != NULL && usubs->type == LIST_TREE) {
+                        Tree_t *sub = (Tree_t *)usubs->cur;
+                        if (sub->type == TREE_SUBPROGRAM &&
+                            sub->tree_data.subprogram_data.subprograms != NULL) {
+                            ListNode_t *wl = CreateListNode(
+                                (void *)sub->tree_data.subprogram_data.subprograms,
+                                LIST_DATA);
+                            if (wl != NULL) { wl->next = worklist; worklist = wl; }
+                        }
+                    }
+                    usubs = usubs->next;
+                }
+            }
+        }
+        {
+            ListNode_t *psubs = data->subprograms;
+            while (psubs != NULL) {
+                ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
                 if (copy != NULL) {
                     copy->next = all_subprograms;
                     all_subprograms = copy;
                 }
-                usubs = usubs->next;
+                if (psubs->cur != NULL && psubs->type == LIST_TREE) {
+                    Tree_t *sub = (Tree_t *)psubs->cur;
+                    if (sub->type == TREE_SUBPROGRAM &&
+                        sub->tree_data.subprogram_data.subprograms != NULL) {
+                        ListNode_t *wl = CreateListNode(
+                            (void *)sub->tree_data.subprogram_data.subprograms,
+                            LIST_DATA);
+                        if (wl != NULL) { wl->next = worklist; worklist = wl; }
+                    }
+                }
+                psubs = psubs->next;
             }
         }
-    }
-    {
-        ListNode_t *psubs = data->subprograms;
-        while (psubs != NULL) {
-            ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
-            if (copy != NULL) {
-                copy->next = all_subprograms;
-                all_subprograms = copy;
+        /* Process nested subprogram lists from the worklist */
+        while (worklist != NULL) {
+            ListNode_t *wl_entry = worklist;
+            worklist = worklist->next;
+            ListNode_t *nested = (ListNode_t *)wl_entry->cur;
+            wl_entry->cur = NULL;
+            free(wl_entry);
+            while (nested != NULL) {
+                ListNode_t *copy = CreateListNode(nested->cur, nested->type);
+                if (copy != NULL) {
+                    copy->next = all_subprograms;
+                    all_subprograms = copy;
+                }
+                if (nested->cur != NULL && nested->type == LIST_TREE) {
+                    Tree_t *sub = (Tree_t *)nested->cur;
+                    if (sub->type == TREE_SUBPROGRAM &&
+                        sub->tree_data.subprogram_data.subprograms != NULL) {
+                        ListNode_t *wl = CreateListNode(
+                            (void *)sub->tree_data.subprogram_data.subprograms,
+                            LIST_DATA);
+                        if (wl != NULL) { wl->next = worklist; worklist = wl; }
+                    }
+                }
+                nested = nested->next;
             }
-            psubs = psubs->next;
         }
     }
 
