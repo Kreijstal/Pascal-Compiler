@@ -3639,12 +3639,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                     if (cand != NULL && cand->mangled_id != NULL &&
                         (cand->hash_type == HASHTYPE_FUNCTION ||
                          cand->hash_type == HASHTYPE_PROCEDURE)) {
-                        /* Skip mangled names containing characters that are
-                         * invalid in assembly labels (operator overloads like
-                         * :=, =, <>, etc.) — these have their own codegen path
-                         * with sanitized labels. */
-                        int has_invalid_chars = (strpbrk(cand->mangled_id, ":=<>") != NULL);
-                        if (!has_invalid_chars &&
+                        /* Skip operator overloads — they have their own
+                         * codegen path with sanitized assembly labels.
+                         * Use the structured is_operator flag from the symtab
+                         * entry, or the template kind as fallback. */
+                        if (!cand->is_operator &&
+                            tmpl->kind != METHOD_TEMPLATE_OPERATOR &&
                             !codegen_set_contains(&iface_dispatch_set, cand->mangled_id) &&
                             !codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
                             /* Check the symtab to see if this method has an
@@ -3682,8 +3682,9 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                 if (method != NULL && method->mangled_name != NULL) {
                     const char *m_mangled = method->resolved_mangled_id;
                     if (m_mangled == NULL) m_mangled = method->mangled_name;
-                    int m_invalid = (strpbrk(m_mangled, ":=<>") != NULL);
-                    if (!m_invalid &&
+                    /* Skip operator overloads — they have their own codegen
+                     * path with sanitized assembly labels. */
+                    if (!method->is_operator &&
                         !codegen_set_contains(&iface_dispatch_set, m_mangled) &&
                         !codegen_list_contains_string(g_codegen_available_subprograms, m_mangled)) {
                         int has_body = 0;
@@ -3702,6 +3703,66 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                     }
                 }
                 method_node = method_node->next;
+            }
+        }
+    }
+
+    /* Second pass: scan the entire symbol table for interface methods
+     * that weren't covered by the method_templates/methods lists above.
+     * This handles interfaces like IObserver/IInterfaceList whose
+     * method_templates are not populated by the parser.
+     * We use the structured owner_class field on HashNode to identify
+     * methods belonging to interface types — no string parsing needed. */
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    {
+        HashTable_t *table = scope->table;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++)
+        {
+            ListNode_t *node = table->table[b];
+            while (node != NULL)
+            {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node != NULL &&
+                    (hash_node->hash_type == HASHTYPE_FUNCTION ||
+                     hash_node->hash_type == HASHTYPE_PROCEDURE) &&
+                    hash_node->mangled_id != NULL &&
+                    hash_node->owner_class != NULL &&
+                    !hash_node->is_operator &&
+                    !codegen_set_contains(&iface_dispatch_set, hash_node->mangled_id) &&
+                    !codegen_list_contains_string(g_codegen_available_subprograms, hash_node->mangled_id))
+                {
+                    /* Check if the owner class is an interface type */
+                    HashNode_t *cls_node = NULL;
+                    if (FindSymbol(&cls_node, symtab, hash_node->owner_class) != 0 &&
+                        cls_node != NULL)
+                    {
+                        struct RecordType *rec = get_record_type_from_node(cls_node);
+                        if (rec == NULL && cls_node->type != NULL &&
+                            cls_node->type->kind == TYPE_KIND_POINTER &&
+                            cls_node->type->info.points_to != NULL &&
+                            cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            rec = cls_node->type->info.points_to->info.record_info;
+                        if (rec != NULL && rec->is_interface)
+                        {
+                            /* Check no implementation body exists */
+                            int has_body = 0;
+                            if (hash_node->type != NULL &&
+                                hash_node->type->kind == TYPE_KIND_PROCEDURE &&
+                                hash_node->type->info.proc_info.definition != NULL &&
+                                hash_node->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                                has_body = 1;
+                            if (!has_body) {
+                                fprintf(ctx->output_file, ".globl %s\n", hash_node->mangled_id);
+                                fprintf(ctx->output_file, "%s:\n", hash_node->mangled_id);
+                                fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                                codegen_set_insert(&iface_dispatch_set, hash_node->mangled_id);
+                            }
+                        }
+                    }
+                }
+                node = node->next;
             }
         }
     }
@@ -4080,7 +4141,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                                                  strncmp(alias, "KGPC_", 5) == 0);
 
                         /* If this node has a body AND was emitted, emit alias directly.
-                           Use .weak so we don't override C library symbols. */
+                           Use .globl since these are internal FPC/KGPC aliases. */
                         if (is_internal_alias &&
                             sub->tree_data.subprogram_data.statement_list != NULL &&
                             label != NULL && strcmp(alias, label) != 0 &&
@@ -4232,10 +4293,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                     fwd->tree_data.subprogram_data.statement_list == NULL) {
                     const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
                     const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
-                    /* Only handle method-like symbols (ClassName__MethodName)
-                     * that have no cname_override alias system entry. */
+                    /* Only handle methods (has owner_class) that have no
+                     * cname_override alias system entry. */
                     if (fwd_mangled != NULL && fwd_cname == NULL &&
-                        strstr(fwd_mangled, "__") != NULL &&
+                        fwd->tree_data.subprogram_data.owner_class != NULL &&
                         !codegen_set_contains(&emitted_labels, fwd_mangled) &&
                         !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
                         /* Check if a same-named implementation exists anywhere */

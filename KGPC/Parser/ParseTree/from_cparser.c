@@ -1852,7 +1852,7 @@ static char *param_type_signature_from_method_impl(ast_t *method_node) {
 
 static void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
-                                      int is_class_method,
+                                      int is_class_method, int is_operator,
                                       int param_count, char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
@@ -1867,6 +1867,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_override = is_override;
     binding->is_static = is_static;
     binding->is_class_method = is_class_method;
+    binding->is_operator = is_operator;
     binding->param_count = param_count;
     binding->param_sig = param_sig;
 
@@ -1900,7 +1901,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
     int is_virtual, int is_override, int is_static, int param_count) {
     register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
-        0, param_count, NULL);
+        0, 0, param_count, NULL);
 }
 
 
@@ -3125,6 +3126,7 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
         register_class_method_ex(record->type_id, method_template->name,
             method_template->is_virtual, method_template->is_override,
             method_template->is_static, method_template->is_class_method,
+            (method_template->kind == METHOD_TEMPLATE_OPERATOR),
             param_count, param_sig);
     }
 
@@ -8820,6 +8822,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                                     register_class_method_ex(class_name, template->name,
                                         template->is_virtual, template->is_override, template->is_static,
                                         template->is_class_method,
+                                        (template->kind == METHOD_TEMPLATE_OPERATOR),
                                         param_count, param_sig);
                                 }
                                 if (method_builder != NULL)
@@ -8912,6 +8915,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     register_class_method_ex(class_name, template->name,
                         template->is_virtual, template->is_override, template->is_static,
                         template->is_class_method,
+                        (template->kind == METHOD_TEMPLATE_OPERATOR),
                         param_count, param_sig);
                 }
 
@@ -12494,6 +12498,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
+                                (template->kind == METHOD_TEMPLATE_OPERATOR),
                                 param_count, param_sig);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
@@ -12524,6 +12529,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
+                                (template->kind == METHOD_TEMPLATE_OPERATOR),
                                 param_count, param_sig);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
