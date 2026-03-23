@@ -1205,8 +1205,11 @@ int semcheck_funccall(int *type_return,
      * E.g., T(inherited Get(Index)^) should call TFPSList.Get, not TFPGList.Get. */
     if (expr->expr_data.function_call_data.is_inherited_call && id != NULL)
     {
-        if (args_given == NULL)
+        if (args_given == NULL && expr->expr_data.function_call_data.is_bare_inherited)
         {
+            /* Only auto-forward enclosing method's args for bare "inherited"
+             * (no explicit method name).  "inherited MethodName" with no args
+             * is a zero-argument call and must NOT inherit the outer params. */
             ListNode_t *forwarded_args = semcheck_clone_current_subprogram_actual_args(0);
             if (forwarded_args != NULL)
             {

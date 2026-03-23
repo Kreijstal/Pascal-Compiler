@@ -14887,10 +14887,12 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 }
             }
         }
+        int is_bare_inherited = 0;
         if (id == NULL && saw_inherited && g_current_method_name != NULL) {
             /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
+            is_bare_inherited = 1;
         }
         if (saw_inherited && id != NULL)
         {
@@ -14904,8 +14906,10 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         ListNode_t *args = convert_expression_list(child);
         struct Expression *result = mk_functioncall(expr_node->line, id, args);
         tag_operator_call(result, is_operator_token_name(id));
-        if (saw_inherited && result != NULL)
+        if (saw_inherited && result != NULL) {
             result->expr_data.function_call_data.is_inherited_call = 1;
+            result->expr_data.function_call_data.is_bare_inherited = is_bare_inherited;
+        }
         return result;
     }
     case PASCAL_T_ARRAY_ACCESS: {

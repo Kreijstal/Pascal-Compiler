@@ -457,6 +457,12 @@ struct Expression *clone_expression(const struct Expression *expr)
             }
             clone->expr_data.function_call_data.arg0_is_dynarray_descriptor =
                 expr->expr_data.function_call_data.arg0_is_dynarray_descriptor;
+            clone->expr_data.function_call_data.is_inherited_call =
+                expr->expr_data.function_call_data.is_inherited_call;
+            clone->expr_data.function_call_data.is_bare_inherited =
+                expr->expr_data.function_call_data.is_bare_inherited;
+            clone->expr_data.function_call_data.is_operator_call =
+                expr->expr_data.function_call_data.is_operator_call;
             clone->expr_data.function_call_data.call_qualifier =
                 expr->expr_data.function_call_data.call_qualifier != NULL ?
                     strdup(expr->expr_data.function_call_data.call_qualifier) : NULL;
