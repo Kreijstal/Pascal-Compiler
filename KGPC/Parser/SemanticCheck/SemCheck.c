@@ -526,7 +526,10 @@ static int semcheck_record_candidate_is_forward_stub(struct RecordType *record)
     if (record->method_templates != NULL)
         return 0;
     if (record->parent_class_name != NULL &&
-        !pascal_identifier_equals(record->parent_class_name, "TObject"))
+        !pascal_identifier_equals(record->parent_class_name, "TObject") &&
+        !(record->is_interface &&
+          (pascal_identifier_equals(record->parent_class_name, "IInterface") ||
+           pascal_identifier_equals(record->parent_class_name, "IUnknown"))))
         return 0;
 
     return 1;

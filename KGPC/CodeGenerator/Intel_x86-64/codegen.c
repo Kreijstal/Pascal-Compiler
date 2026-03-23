@@ -93,7 +93,6 @@ typedef struct {
 } CodeGenStringSet;
 
 static CodeGenStringSet g_codegen_callable_exports;
-static CodeGenStringSet g_codegen_call_targets;  /* All call targets emitted by codegen */
 
 static unsigned codegen_hash(const char *s)
 {
@@ -158,117 +157,6 @@ static void codegen_set_destroy(CodeGenStringSet *set)
     }
 }
 /* ---- End string hash set ---- */
-
-/* Collect all call targets (mangled_id) from statement trees and expression trees
- * into g_codegen_call_targets. This identifies symbols that codegen will emit
- * `call` instructions for, so we can later provide stubs for undefined ones. */
-static void collect_call_targets_from_expr(struct Expression *expr);
-static void collect_call_targets_from_stmt(struct Statement *stmt)
-{
-    if (stmt == NULL) return;
-    switch (stmt->type) {
-    case STMT_PROCEDURE_CALL:
-        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-            codegen_set_insert(&g_codegen_call_targets, stmt->stmt_data.procedure_call_data.mangled_id);
-        {
-            ListNode_t *arg = stmt->stmt_data.procedure_call_data.expr_args;
-            while (arg != NULL) {
-                if (arg->type == LIST_EXPR) collect_call_targets_from_expr((struct Expression *)arg->cur);
-                arg = arg->next;
-            }
-        }
-        break;
-    case STMT_VAR_ASSIGN:
-        collect_call_targets_from_expr(stmt->stmt_data.var_assign_data.expr);
-        break;
-    case STMT_EXPR:
-        collect_call_targets_from_expr(stmt->stmt_data.expr_stmt_data.expr);
-        break;
-    case STMT_COMPOUND_STATEMENT:
-        {
-            ListNode_t *s = stmt->stmt_data.compound_data.stmts;
-            while (s != NULL) {
-                if (s->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)s->cur);
-                s = s->next;
-            }
-        }
-        break;
-    case STMT_FOR_LOOP:
-        collect_call_targets_from_stmt(stmt->stmt_data.for_loop_data.stmt);
-        break;
-    case STMT_WHILE_LOOP:
-        collect_call_targets_from_stmt(stmt->stmt_data.while_loop_data.stmt);
-        break;
-    case STMT_IF:
-        collect_call_targets_from_stmt(stmt->stmt_data.if_data.if_stmt);
-        collect_call_targets_from_stmt(stmt->stmt_data.if_data.else_stmt);
-        break;
-    case STMT_REPEAT_UNTIL:
-        {
-            ListNode_t *s = stmt->stmt_data.repeat_until_data.stmts;
-            while (s != NULL) {
-                if (s->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)s->cur);
-                s = s->next;
-            }
-        }
-        break;
-    case STMT_WITH:
-        collect_call_targets_from_stmt(stmt->stmt_data.with_data.stmt);
-        break;
-    case STMT_CASE:
-        {
-            ListNode_t *c = stmt->stmt_data.case_data.case_list;
-            while (c != NULL) {
-                if (c->type == LIST_STMT) collect_call_targets_from_stmt((struct Statement *)c->cur);
-                c = c->next;
-            }
-            collect_call_targets_from_stmt(stmt->stmt_data.case_data.else_stmt);
-        }
-        break;
-    case STMT_TRY_EXCEPT:
-        collect_call_targets_from_stmt(stmt->stmt_data.try_except_data.try_block);
-        collect_call_targets_from_stmt(stmt->stmt_data.try_except_data.except_block);
-        break;
-    case STMT_TRY_FINALLY:
-        collect_call_targets_from_stmt(stmt->stmt_data.try_finally_data.try_block);
-        collect_call_targets_from_stmt(stmt->stmt_data.try_finally_data.finally_block);
-        break;
-    default:
-        break;
-    }
-}
-
-static void collect_call_targets_from_expr(struct Expression *expr)
-{
-    if (expr == NULL) return;
-    if (expr->type == EXPR_FUNCTION_CALL) {
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-            codegen_set_insert(&g_codegen_call_targets, expr->expr_data.function_call_data.mangled_id);
-        ListNode_t *arg = expr->expr_data.function_call_data.args_expr;
-        while (arg != NULL) {
-            if (arg->type == LIST_EXPR) collect_call_targets_from_expr((struct Expression *)arg->cur);
-            arg = arg->next;
-        }
-    }
-    if (expr->left != NULL) collect_call_targets_from_expr(expr->left);
-    if (expr->right != NULL) collect_call_targets_from_expr(expr->right);
-}
-
-static void collect_call_targets_from_subprograms(ListNode_t *sub_list)
-{
-    while (sub_list != NULL) {
-        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
-            Tree_t *sub = (Tree_t *)sub_list->cur;
-            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.statement_list != NULL) {
-                struct Statement *stmt = sub->tree_data.subprogram_data.statement_list;
-                collect_call_targets_from_stmt(stmt);
-                /* Also recurse into nested subprograms */
-                collect_call_targets_from_subprograms(sub->tree_data.subprogram_data.subprograms);
-            }
-        }
-        sub_list = sub_list->next;
-    }
-}
 
 static int codegen_list_contains_string(ListNode_t *list, const char *value)
 {
