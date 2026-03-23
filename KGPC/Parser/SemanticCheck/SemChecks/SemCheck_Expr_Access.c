@@ -4188,18 +4188,24 @@ int semcheck_funccall(int *type_return,
                 }
                 else
                 {
-                    /* Check if this is a static method */
-                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
-                
-                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                    fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
-                        record_info->type_id, method_name, is_static);
-                }
-                
                     /* Look up the method and capture the actual owner when inherited. */
                     struct RecordType *actual_method_owner = NULL;
                     HashNode_t *method_node = semcheck_find_class_method(symtab, record_info,
                         method_name, &actual_method_owner);
+
+                    /* Check if this is a static method — try the receiver's class first,
+                     * then the actual owner (inherited static methods are registered
+                     * under the declaring class, not the receiver's class). */
+                    int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+                    if (!is_static && actual_method_owner != NULL &&
+                        actual_method_owner->type_id != NULL && method_name != NULL) {
+                        is_static = from_cparser_is_method_static(actual_method_owner->type_id, method_name);
+                    }
+
+                if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
+                    fprintf(stderr, "[SemCheck] semcheck_funccall: __method call type=%s method=%s is_static=%d\n",
+                        record_info->type_id, method_name, is_static);
+                }
                     
                     /* If method not found on record directly, try record helper */
                     struct RecordType *effective_record =

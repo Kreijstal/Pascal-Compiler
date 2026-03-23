@@ -3729,20 +3729,28 @@ SKIP_SELF_FIELD_REWRITE:
         }
 
         /* Check for methods (including constructors) */
-        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, NULL);
+        struct RecordType *method_owner_record = NULL;
+        HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, field_id, &method_owner_record);
         if (method_node != NULL)
         {
             /* Found a method/constructor */
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                 fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found method %s\n", field_id);
             }
-                
-                if (method_node->hash_type == HASHTYPE_FUNCTION || 
+
+                if (method_node->hash_type == HASHTYPE_FUNCTION ||
                     method_node->hash_type == HASHTYPE_PROCEDURE)
                 {
                     int is_static_method = 0;
                     if (record_info->type_id != NULL && field_id != NULL) {
                         is_static_method = from_cparser_is_method_static(record_info->type_id, field_id);
+                    }
+                    /* If not found on the receiver's class, check the actual owner
+                     * (inherited static methods are registered under the declaring class). */
+                    if (!is_static_method && method_owner_record != NULL &&
+                        method_owner_record->type_id != NULL &&
+                        field_id != NULL) {
+                        is_static_method = from_cparser_is_method_static(method_owner_record->type_id, field_id);
                     }
 
                     /* For overloaded methods, we need to find the correct overload based on
