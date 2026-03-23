@@ -742,7 +742,7 @@ static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
         return 1;
     /* Standalone operators: id like "int64__op_assign_Tconstexprint" */
     if (cand->is_operator && cand->id != NULL &&
-        strcasestr(cand->id, "__op_assign") != NULL)
+        pascal_strcasestr(cand->id, "__op_assign") != NULL)
         return 1;
     return 0;
 }
