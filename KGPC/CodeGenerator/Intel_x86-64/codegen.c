@@ -218,13 +218,12 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
 
         /* Skip unspecialized generic subprogram templates — only their
          * specializations (which have generic_type_params cleared) should
-         * be emitted.
-         * Specializations may still have num_generic_type_params > 0 if the
-         * semcheck didn't clear the count, but their mangled names won't
-         * contain '$' (the unspecialized type-param marker).  Allow those
-         * (e.g. tmarshal__unfixarray_u_tptrwrapper). */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
-            (mangled_id == NULL || strchr(mangled_id, '$') != NULL)) {
+         * be emitted.  We check generic_type_params != NULL rather than
+         * num_generic_type_params > 0 because some specializations (e.g.
+         * tmarshal__unfixarray_u_tptrwrapper) may still have a non-zero
+         * count but will have their params array cleared to NULL during
+         * instantiation. */
+        if (sub->tree_data.subprogram_data.generic_type_params != NULL) {
             sub_list = sub_list->next;
             continue;
         }
@@ -5383,12 +5382,12 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         }
 
         /* Skip unspecialized generic subprogram templates.
-         * Specializations may still have num_generic_type_params > 0 if the
-         * semcheck didn't clear the count, but their mangled names won't
-         * contain '$' (the unspecialized type-param marker).  Allow those
-         * (e.g. tmarshal__unfixarray_u_tptrwrapper). */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
-            (mangled_id == NULL || strchr(mangled_id, '$') != NULL))
+         * We check generic_type_params != NULL rather than
+         * num_generic_type_params > 0 because some specializations (e.g.
+         * tmarshal__unfixarray_u_tptrwrapper) may still have a non-zero
+         * count but will have their params array cleared to NULL during
+         * instantiation. */
+        if (sub->tree_data.subprogram_data.generic_type_params != NULL)
         {
             sub_list = sub_list->next;
             continue;
