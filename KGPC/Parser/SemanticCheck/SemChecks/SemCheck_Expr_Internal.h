@@ -466,6 +466,8 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
 int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev);
+int semcheck_builtin_new_func(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev);
 
 /*===========================================================================
  * Miscellaneous Internal Helpers

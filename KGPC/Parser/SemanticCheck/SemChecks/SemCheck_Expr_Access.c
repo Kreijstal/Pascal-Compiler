@@ -1476,6 +1476,8 @@ int semcheck_funccall(int *type_return,
             return semcheck_builtin_lowhigh(type_return, symtab, expr, max_scope_lev, 1);
         if (pascal_identifier_equals(id, "Default"))
             return semcheck_builtin_default(type_return, symtab, expr, max_scope_lev);
+        if (pascal_identifier_equals(id, "New"))
+            return semcheck_builtin_new_func(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Power"))
             return semcheck_builtin_power(type_return, symtab, expr, max_scope_lev);
         if (pascal_identifier_equals(id, "Aligned"))
@@ -6113,6 +6115,12 @@ method_call_resolved:
             !expr->expr_data.function_call_data.is_method_call_placeholder &&
             expr->expr_data.function_call_data.call_qualifier == NULL)
             return semcheck_builtin_allocmem(type_return, symtab, expr, max_scope_lev);
+
+        if (id != NULL &&
+            pascal_identifier_equals(id, "New") &&
+            !expr->expr_data.function_call_data.is_method_call_placeholder &&
+            expr->expr_data.function_call_data.call_qualifier == NULL)
+            return semcheck_builtin_new_func(type_return, symtab, expr, max_scope_lev);
 
         /* WITH context fallback: if the function call couldn't be resolved in
          * normal scope, try resolving via active WITH contexts.  This handles
