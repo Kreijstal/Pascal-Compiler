@@ -3913,6 +3913,13 @@ int semcheck_funccall(int *type_return,
 
                             /* Set return type from the procedural type */
                             KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                            if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                            {
+                                HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                    proc_kgpc_type->info.proc_info.return_type_id);
+                                if (ret_node != NULL && ret_node->type != NULL)
+                                    ret = ret_node->type;
+                            }
                             if (ret != NULL)
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
@@ -4542,6 +4549,13 @@ int semcheck_funccall(int *type_return,
 
                                 /* Set return type from the procedural type */
                                 KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                                if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                                {
+                                    HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                        proc_kgpc_type->info.proc_info.return_type_id);
+                                    if (ret_node != NULL && ret_node->type != NULL)
+                                        ret = ret_node->type;
+                                }
                                 if (ret != NULL)
                                 {
                                     *type_return = semcheck_tag_from_kgpc(ret);
@@ -6162,6 +6176,13 @@ method_call_resolved:
                         {
                             /* Set return type from the procedural type */
                             KgpcType *ret = proc_kgpc_type->info.proc_info.return_type;
+                            if (ret == NULL && proc_kgpc_type->info.proc_info.return_type_id != NULL)
+                            {
+                                HashNode_t *ret_node = semcheck_find_preferred_type_node(symtab,
+                                    proc_kgpc_type->info.proc_info.return_type_id);
+                                if (ret_node != NULL && ret_node->type != NULL)
+                                    ret = ret_node->type;
+                            }
                             if (ret != NULL)
                             {
                                 *type_return = semcheck_tag_from_kgpc(ret);
