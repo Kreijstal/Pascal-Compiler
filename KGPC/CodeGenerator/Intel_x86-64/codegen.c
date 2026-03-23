@@ -3433,6 +3433,74 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
+/* Helper: scan a subprogram tree for bodiless methods belonging to
+ * interfaces or classes and emit abstract-method-error stubs for them.
+ * This catches interface methods that weren't covered by the
+ * method_templates/methods lists in the first pass. */
+static void codegen_emit_bodiless_method_stubs(CodeGenContext *ctx,
+    ListNode_t *sub_list, SymTab_t *symtab, CodeGenStringSet *iface_dispatch_set)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (sub == NULL || sub->type != TREE_SUBPROGRAM) {
+            sub_list = sub_list->next;
+            continue;
+        }
+        struct Subprogram *data = &sub->tree_data.subprogram_data;
+        const char *mangled = data->mangled_id;
+
+        /* Only interested in bodiless declarations */
+        if (data->statement_list != NULL || mangled == NULL) {
+            /* Recurse into nested subprograms even if this one has a body */
+            if (data->subprograms != NULL)
+                codegen_emit_bodiless_method_stubs(ctx, data->subprograms,
+                                                   symtab, iface_dispatch_set);
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        /* Skip if not a valid assembly symbol name */
+        if (!codegen_is_valid_asm_symbol_name(mangled)) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        /* Skip if already stubbed or available */
+        if (codegen_set_contains(iface_dispatch_set, mangled) ||
+            codegen_list_contains_string(g_codegen_available_subprograms, mangled)) {
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        /* Check if this is a method of an interface or class */
+        if (data->owner_class != NULL) {
+            HashNode_t *cls_node = NULL;
+            if (FindSymbol(&cls_node, symtab, data->owner_class) != 0 &&
+                cls_node != NULL) {
+                struct RecordType *rec = get_record_type_from_node(cls_node);
+                if (rec == NULL && cls_node->type != NULL &&
+                    cls_node->type->kind == TYPE_KIND_POINTER &&
+                    cls_node->type->info.points_to != NULL &&
+                    cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    rec = cls_node->type->info.points_to->info.record_info;
+                if (rec != NULL && (rec->is_interface || rec->is_class)) {
+                    fprintf(ctx->output_file, ".globl %s\n", mangled);
+                    fprintf(ctx->output_file, "%s:\n", mangled);
+                    fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+                    codegen_set_insert(iface_dispatch_set, mangled);
+                }
+            }
+        }
+
+        /* Recurse into nested subprograms */
+        if (data->subprograms != NULL)
+            codegen_emit_bodiless_method_stubs(ctx, data->subprograms,
+                                               symtab, iface_dispatch_set);
+
+        sub_list = sub_list->next;
+    }
+}
+
 /* Helper: emit VMTs/RTTI for all type declarations in a list. */
 static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                                         ListNode_t *type_decls,
@@ -3715,6 +3783,27 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                 method_node = method_node->next;
             }
         }
+    }
+
+    /* Second pass: scan all unit subprogram trees for bodiless methods
+     * belonging to interfaces or classes.  This handles interfaces like
+     * ISequentialStream/IFPObserver whose method_templates may not be
+     * populated by the parser.  We scan the actual tree data rather than
+     * the symtab scopes, which avoids scope-visibility issues. */
+    {
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit != NULL && unit->type == TREE_UNIT)
+                    codegen_emit_bodiless_method_stubs(ctx,
+                        unit->tree_data.unit_data.subprograms,
+                        symtab, &iface_dispatch_set);
+            }
+        }
+        if (tree->type == TREE_PROGRAM_TYPE)
+            codegen_emit_bodiless_method_stubs(ctx,
+                tree->tree_data.program_data.subprograms,
+                symtab, &iface_dispatch_set);
     }
 
     codegen_set_destroy(&iface_dispatch_set);
@@ -4265,7 +4354,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                             }
                             impl_scan = impl_scan->next;
                         }
-                        if (!has_impl) {
+                        if (!has_impl &&
+                            codegen_is_valid_asm_symbol_name(fwd_mangled)) {
                             fprintf(ctx->output_file, ".globl %s\n", fwd_mangled);
                             fprintf(ctx->output_file, "%s:\n", fwd_mangled);
                             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
