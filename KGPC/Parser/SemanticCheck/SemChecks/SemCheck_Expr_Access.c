@@ -7636,6 +7636,10 @@ int semcheck_try_indexed_property_getter(int *type_return,
                 is_static_getter = 1;
         }
 
+        /* Save extra_indices before transformation clears array_access_data */
+        ListNode_t *extra_indices = expr->expr_data.array_access_data.extra_indices;
+        expr->expr_data.array_access_data.extra_indices = NULL;
+
         /* Detach record_expr from array_expr before destroying it. */
         array_expr->expr_data.record_access_data.record_expr = NULL;
         destroy_expr(array_expr);
@@ -7663,6 +7667,17 @@ int semcheck_try_indexed_property_getter(int *type_return,
             args_tail->next = index_node;
         else
             args_head = index_node;
+        args_tail = index_node;
+
+        /* Append extra indices for multi-index properties (e.g. bitmap[x,y]) */
+        while (extra_indices != NULL)
+        {
+            ListNode_t *next = extra_indices->next;
+            extra_indices->next = NULL;
+            args_tail->next = extra_indices;
+            args_tail = extra_indices;
+            extra_indices = next;
+        }
 
         char *id_copy = getter_node->id != NULL ? strdup(getter_node->id) : NULL;
         char *mangled_copy = NULL;

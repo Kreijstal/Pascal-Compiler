@@ -5407,6 +5407,10 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
             is_static_setter = 1;
     }
 
+    /* Save extra_indices before transformation clears array_access_data */
+    ListNode_t *extra_indices = lhs->expr_data.array_access_data.extra_indices;
+    lhs->expr_data.array_access_data.extra_indices = NULL;
+
     /* Detach needed subexpressions before destroying lhs. */
     if (array_expr->type == EXPR_RECORD_ACCESS)
         array_expr->expr_data.record_access_data.record_expr = NULL;
@@ -5455,6 +5459,16 @@ static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     else
         args_head = index_arg;
     args_tail = index_arg;
+
+    /* Append extra indices for multi-index properties (e.g. bitmap[x,y]) */
+    while (extra_indices != NULL)
+    {
+        ListNode_t *next = extra_indices->next;
+        extra_indices->next = NULL;
+        args_tail->next = extra_indices;
+        args_tail = extra_indices;
+        extra_indices = next;
+    }
 
     ListNode_t *value_arg = CreateListNode(rhs, LIST_EXPR);
     if (value_arg == NULL)
