@@ -489,7 +489,7 @@ struct Expression *clone_expression(const struct Expression *expr)
                 return NULL;
             }
             clone->expr_data.as_data.target_type_ref =
-                expr->expr_data.as_data.target_type_ref;
+                type_ref_clone(expr->expr_data.as_data.target_type_ref);
             clone->expr_data.as_data.target_record_type =
                 expr->expr_data.as_data.target_record_type;
             break;
@@ -515,7 +515,7 @@ struct Expression *clone_expression(const struct Expression *expr)
                 return NULL;
             }
             clone->expr_data.is_data.target_type_ref =
-                expr->expr_data.is_data.target_type_ref;
+                type_ref_clone(expr->expr_data.is_data.target_type_ref);
             clone->expr_data.is_data.target_record_type =
                 expr->expr_data.is_data.target_record_type;
             break;
@@ -576,7 +576,7 @@ struct Expression *clone_expression(const struct Expression *expr)
                 return NULL;
             }
             clone->expr_data.typeinfo_data.type_ref =
-                expr->expr_data.typeinfo_data.type_ref;
+                type_ref_clone(expr->expr_data.typeinfo_data.type_ref);
             break;
 
         case EXPR_ADDR_OF_PROC:
