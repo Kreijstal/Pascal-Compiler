@@ -3141,11 +3141,11 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
     ast_t *param_cursor = decl_params_ast;
     if (decl_params_ast->typ == PASCAL_T_PARAM_LIST)
         param_cursor = decl_params_ast->child;
-    
+
     /* Iterate through implementation params and declaration params in parallel,
      * copying defaults from declaration to implementation */
     ListNode_t *impl_param = subprogram->tree_data.subprogram_data.args_var;
-    
+
     /* Skip the Self parameter if present (it won't be in the declaration) */
     if (impl_param != NULL)
     {
@@ -3161,7 +3161,27 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
             }
         }
     }
-    
+
+    /* For overloaded methods, verify that the template's parameter count matches
+     * the implementation's parameter count.  from_cparser_get_method_template
+     * matches by name only, so for overloaded methods it may return the wrong
+     * template.  Copying defaults from a mismatched template corrupts the
+     * parameter list and breaks overload resolution. */
+    {
+        int decl_count = 0;
+        for (ast_t *p = param_cursor; p != NULL; p = p->next)
+            if (p->typ == PASCAL_T_PARAM)
+                decl_count++;
+        int impl_count = 0;
+        for (ListNode_t *p = impl_param; p != NULL; p = p->next)
+            impl_count++;
+        if (decl_count != impl_count)
+        {
+            free(class_name);
+            return;
+        }
+    }
+
     while (param_cursor != NULL && impl_param != NULL)
     {
         ast_t *decl_param = param_cursor;
