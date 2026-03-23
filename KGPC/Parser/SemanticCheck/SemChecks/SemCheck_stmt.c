@@ -6702,11 +6702,21 @@ skip_type_receiver_rewrite:
             const char *method_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 ? stmt->stmt_data.procedure_call_data.placeholder_method_name : proc_id;
 
+            struct RecordType *actual_method_owner = NULL;
+            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            /* Check the actual method owner for inherited static methods */
+            if (!is_static && actual_method_owner != NULL &&
+                actual_method_owner->type_id != NULL && method_name != NULL) {
+                is_static = from_cparser_is_method_static(actual_method_owner->type_id, method_name);
+            }
             int is_nonstatic_class_method =
                 (!is_static &&
                  from_cparser_is_method_class_method(record_info->type_id, method_name));
-            HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, NULL);
+            if (!is_nonstatic_class_method && !is_static && actual_method_owner != NULL &&
+                actual_method_owner->type_id != NULL && method_name != NULL) {
+                is_nonstatic_class_method = from_cparser_is_method_class_method(actual_method_owner->type_id, method_name);
+            }
 
             if (method_node != NULL) {
                 /* Keep class-prefixed id for static/class calls (e.g. ClassName.Create),
