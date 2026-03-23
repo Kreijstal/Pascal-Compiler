@@ -69,9 +69,6 @@ static size_t comb_free_count = 0;
  * and should skip memoization since their IDs are never reused. */
 static size_t ephemeral_memo_threshold = 0;
 
-/* When true, free_combinator_recursive ignores the cached flag.
- * Used by free_combinator_graph() for full shutdown cleanup. */
-static bool g_force_free_cached = false;
 
 /* Lightweight profiling: count parse() calls by combinator type */
 static size_t parse_type_counts[64] = {0};
@@ -2001,8 +1998,8 @@ static void visited_set_destroy(visited_set* set);
 static bool visited_set_contains(const visited_set* set, const void* ptr);
 static void visited_set_insert(visited_set* set, const void* ptr);
 
-static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras);
-static void release_extra_nodes(extra_node** extras, visited_set* visited);
+static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras, bool force);
+static void release_extra_nodes(extra_node** extras, visited_set* visited, bool force);
 
 static size_t visited_hash_ptr(const void* ptr) {
     uintptr_t x = (uintptr_t)ptr;
@@ -2106,11 +2103,11 @@ void free_combinator(combinator_t* comb) {
     visited_set visited;
     visited_set_init(&visited);
     extra_node* extras = NULL;
-    free_combinator_recursive(comb, &visited, &extras);
+    free_combinator_recursive(comb, &visited, &extras, false);
     // Drain any heap-allocated pointer wrappers that were deferred during the
     // recursive walk. These nodes own both the wrapper pointer itself and, when
     // present, the combinator the pointer referenced at creation time.
-    release_extra_nodes(&extras, &visited);
+    release_extra_nodes(&extras, &visited, false);
     visited_set_destroy(&visited);
 }
 
@@ -2118,12 +2115,10 @@ void free_combinator_graph(combinator_t **roots, size_t count) {
     visited_set visited;
     visited_set_init(&visited);
     extra_node* extras = NULL;
-    g_force_free_cached = true;
     for (size_t i = 0; i < count; i++) {
-        free_combinator_recursive(roots[i], &visited, &extras);
+        free_combinator_recursive(roots[i], &visited, &extras, true);
     }
-    release_extra_nodes(&extras, &visited);
-    g_force_free_cached = false;
+    release_extra_nodes(&extras, &visited, true);
     visited_set_destroy(&visited);
 }
 
@@ -2136,9 +2131,9 @@ void parser_drain_free_list(void) {
     comb_free_count = 0;
 }
 
-static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras) {
+static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras, bool force) {
     if (comb == NULL || visited_set_contains(visited, comb)) return;
-    if (comb->cached && !g_force_free_cached) return;  /* Do not free cached/shared combinators */
+    if (comb->cached && !force) return;  /* Do not free cached/shared combinators */
     visited_set_insert(visited, comb);
 
     // Ensure type is valid to avoid uninitialised value warnings
@@ -2173,25 +2168,25 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 break;
             case COMB_EXPECT: {
                 expect_args* args = (expect_args*)comb->args;
-                free_combinator_recursive(args->comb, visited, extras);
+                free_combinator_recursive(args->comb, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_OPTIONAL: {
                 optional_args* args = (optional_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_ERRMAP: {
                 errmap_args* args = (errmap_args*)comb->args;
-                free_combinator_recursive(args->parser, visited, extras);
+                free_combinator_recursive(args->parser, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_MAP: {
                 map_args* args = (map_args*)comb->args;
-                free_combinator_recursive(args->parser, visited, extras);
+                free_combinator_recursive(args->parser, visited, extras, force);
                 free(args);
                 break;
             }
@@ -2203,43 +2198,43 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             }
             case COMB_CHAINL1: {
                 chainl1_args* args = (chainl1_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
-                free_combinator_recursive(args->op, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
+                free_combinator_recursive(args->op, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_SEP_END_BY: {
                 sep_end_by_args* args = (sep_end_by_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
-                free_combinator_recursive(args->sep, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
+                free_combinator_recursive(args->sep, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_SEP_BY:
             case COMB_SEP_BY1: {
                 sep_by_args* args = (sep_by_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
-                free_combinator_recursive(args->sep, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
+                free_combinator_recursive(args->sep, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_NOT: {
                 not_args* args = (not_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_PEEK: {
                 peek_args* args = (peek_args*)comb->args;
-                free_combinator_recursive(args->p, visited, extras);
+                free_combinator_recursive(args->p, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_BETWEEN: {
                 between_args* args = (between_args*)comb->args;
-                free_combinator_recursive(args->open, visited, extras);
-                free_combinator_recursive(args->close, visited, extras);
-                free_combinator_recursive(args->p, visited, extras);
+                free_combinator_recursive(args->open, visited, extras, force);
+                free_combinator_recursive(args->close, visited, extras, force);
+                free_combinator_recursive(args->p, visited, extras, force);
                 free(args);
                 break;
             }
@@ -2249,7 +2244,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 seq_args* args = (seq_args*)comb->args;
                 seq_list* current = args->list;
                 while (current != NULL) {
-                    free_combinator_recursive(current->comb, visited, extras);
+                    free_combinator_recursive(current->comb, visited, extras, force);
                     seq_list* temp = current;
                     current = current->next;
                     free(temp);
@@ -2259,14 +2254,14 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             }
             case COMB_FLATMAP: {
                 flatMap_args* args = (flatMap_args*)comb->args;
-                free_combinator_recursive(args->parser, visited, extras);
+                free_combinator_recursive(args->parser, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_COMMIT: {
                 combinator_t* inner = (combinator_t*)comb->args;
                 if (inner != NULL) {
-                    free_combinator_recursive(inner, visited, extras);
+                    free_combinator_recursive(inner, visited, extras, force);
                 }
                 break;
             }
@@ -2274,7 +2269,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 until_args* args = (until_args*)comb->args;
                 if (args != NULL) {
                     if (args->delimiter != NULL) {
-                        free_combinator_recursive(args->delimiter, visited, extras);
+                        free_combinator_recursive(args->delimiter, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2284,10 +2279,10 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 for_init_dispatch_args_t* args = (for_init_dispatch_args_t*)comb->args;
                 if (args != NULL) {
                     if (args->assignment_parser) {
-                        free_combinator_recursive(args->assignment_parser, visited, extras);
+                        free_combinator_recursive(args->assignment_parser, visited, extras, force);
                     }
                     if (args->identifier_parser) {
-                        free_combinator_recursive(args->identifier_parser, visited, extras);
+                        free_combinator_recursive(args->identifier_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2296,7 +2291,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             case COMB_ASSIGNMENT_GUARD:
             case COMB_LABEL_GUARD: {
                 if (comb->args != NULL) {
-                    free_combinator_recursive((combinator_t*)comb->args, visited, extras);
+                    free_combinator_recursive((combinator_t*)comb->args, visited, extras, force);
                 }
                 break;
             }
@@ -2306,19 +2301,19 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->keyword_parsers != NULL) {
                         for (size_t i = 0; i < args->keyword_count; ++i) {
                             if (args->keyword_parsers[i] != NULL) {
-                                free_combinator_recursive(args->keyword_parsers[i], visited, extras);
+                                free_combinator_recursive(args->keyword_parsers[i], visited, extras, force);
                             }
                         }
                         free(args->keyword_parsers);
                     }
                     if (args->label_parser != NULL) {
-                        free_combinator_recursive(args->label_parser, visited, extras);
+                        free_combinator_recursive(args->label_parser, visited, extras, force);
                     }
                     if (args->assignment_parser != NULL) {
-                        free_combinator_recursive(args->assignment_parser, visited, extras);
+                        free_combinator_recursive(args->assignment_parser, visited, extras, force);
                     }
                     if (args->expr_parser != NULL) {
-                        free_combinator_recursive(args->expr_parser, visited, extras);
+                        free_combinator_recursive(args->expr_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2328,7 +2323,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 expr_lvalue_args* args = (expr_lvalue_args*)comb->args;
                 if (args != NULL) {
                     if (args->expr_parser != NULL) {
-                        free_combinator_recursive(args->expr_parser, visited, extras);
+                        free_combinator_recursive(args->expr_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2338,25 +2333,25 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 class_member_dispatch_args_t* args = (class_member_dispatch_args_t*)comb->args;
                 if (args != NULL) {
                     if (args->constructor_parser) {
-                        free_combinator_recursive(args->constructor_parser, visited, extras);
+                        free_combinator_recursive(args->constructor_parser, visited, extras, force);
                     }
                     if (args->destructor_parser) {
-                        free_combinator_recursive(args->destructor_parser, visited, extras);
+                        free_combinator_recursive(args->destructor_parser, visited, extras, force);
                     }
                     if (args->procedure_parser) {
-                        free_combinator_recursive(args->procedure_parser, visited, extras);
+                        free_combinator_recursive(args->procedure_parser, visited, extras, force);
                     }
                     if (args->function_parser) {
-                        free_combinator_recursive(args->function_parser, visited, extras);
+                        free_combinator_recursive(args->function_parser, visited, extras, force);
                     }
                     if (args->operator_parser) {
-                        free_combinator_recursive(args->operator_parser, visited, extras);
+                        free_combinator_recursive(args->operator_parser, visited, extras, force);
                     }
                     if (args->property_parser) {
-                        free_combinator_recursive(args->property_parser, visited, extras);
+                        free_combinator_recursive(args->property_parser, visited, extras, force);
                     }
                     if (args->field_parser) {
-                        free_combinator_recursive(args->field_parser, visited, extras);
+                        free_combinator_recursive(args->field_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2368,13 +2363,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     if (args->entries != NULL) {
                         for (size_t i = 0; i < args->entry_count; ++i) {
                             if (args->entries[i].parser != NULL) {
-                                free_combinator_recursive(args->entries[i].parser, visited, extras);
+                                free_combinator_recursive(args->entries[i].parser, visited, extras, force);
                             }
                         }
                         free(args->entries);
                     }
                     if (args->fallback_parser != NULL) {
-                        free_combinator_recursive(args->fallback_parser, visited, extras);
+                        free_combinator_recursive(args->fallback_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2384,64 +2379,64 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 type_dispatch_args_t* args = (type_dispatch_args_t*)comb->args;
                 if (args != NULL) {
                     if (args->helper_parser) {
-                        free_combinator_recursive(args->helper_parser, visited, extras);
+                        free_combinator_recursive(args->helper_parser, visited, extras, force);
                     }
                     if (args->reference_parser) {
-                        free_combinator_recursive(args->reference_parser, visited, extras);
+                        free_combinator_recursive(args->reference_parser, visited, extras, force);
                     }
                     if (args->interface_parser) {
-                        free_combinator_recursive(args->interface_parser, visited, extras);
+                        free_combinator_recursive(args->interface_parser, visited, extras, force);
                     }
                     if (args->class_parser) {
-                        free_combinator_recursive(args->class_parser, visited, extras);
+                        free_combinator_recursive(args->class_parser, visited, extras, force);
                     }
                     if (args->class_of_parser) {
-                        free_combinator_recursive(args->class_of_parser, visited, extras);
+                        free_combinator_recursive(args->class_of_parser, visited, extras, force);
                     }
                     if (args->record_parser) {
-                        free_combinator_recursive(args->record_parser, visited, extras);
+                        free_combinator_recursive(args->record_parser, visited, extras, force);
                     }
                     if (args->object_parser) {
-                        free_combinator_recursive(args->object_parser, visited, extras);
+                        free_combinator_recursive(args->object_parser, visited, extras, force);
                     }
                     if (args->enumerated_parser) {
-                        free_combinator_recursive(args->enumerated_parser, visited, extras);
+                        free_combinator_recursive(args->enumerated_parser, visited, extras, force);
                     }
                     if (args->array_parser) {
-                        free_combinator_recursive(args->array_parser, visited, extras);
+                        free_combinator_recursive(args->array_parser, visited, extras, force);
                     }
                     if (args->file_parser) {
-                        free_combinator_recursive(args->file_parser, visited, extras);
+                        free_combinator_recursive(args->file_parser, visited, extras, force);
                     }
                     if (args->set_parser) {
-                        free_combinator_recursive(args->set_parser, visited, extras);
+                        free_combinator_recursive(args->set_parser, visited, extras, force);
                     }
                     if (args->range_parser) {
-                        free_combinator_recursive(args->range_parser, visited, extras);
+                        free_combinator_recursive(args->range_parser, visited, extras, force);
                     }
                     if (args->pointer_parser) {
-                        free_combinator_recursive(args->pointer_parser, visited, extras);
+                        free_combinator_recursive(args->pointer_parser, visited, extras, force);
                     }
                     if (args->specialize_parser) {
-                        free_combinator_recursive(args->specialize_parser, visited, extras);
+                        free_combinator_recursive(args->specialize_parser, visited, extras, force);
                     }
                     if (args->constructed_parser) {
-                        free_combinator_recursive(args->constructed_parser, visited, extras);
+                        free_combinator_recursive(args->constructed_parser, visited, extras, force);
                     }
                     if (args->identifier_parser) {
-                        free_combinator_recursive(args->identifier_parser, visited, extras);
+                        free_combinator_recursive(args->identifier_parser, visited, extras, force);
                     }
                     if (args->distinct_type_parser) {
-                        free_combinator_recursive(args->distinct_type_parser, visited, extras);
+                        free_combinator_recursive(args->distinct_type_parser, visited, extras, force);
                     }
                     if (args->distinct_type_range_parser) {
-                        free_combinator_recursive(args->distinct_type_range_parser, visited, extras);
+                        free_combinator_recursive(args->distinct_type_range_parser, visited, extras, force);
                     }
                     if (args->procedure_parser) {
-                        free_combinator_recursive(args->procedure_parser, visited, extras);
+                        free_combinator_recursive(args->procedure_parser, visited, extras, force);
                     }
                     if (args->function_parser) {
-                        free_combinator_recursive(args->function_parser, visited, extras);
+                        free_combinator_recursive(args->function_parser, visited, extras, force);
                     }
                     free(args);
                 }
@@ -2463,7 +2458,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                     }
                     if (args->owns_parser && args->parser_ptr != NULL && !parser_ptr_freed &&
                         *args->parser_ptr != NULL) {
-                        free_combinator_recursive(*args->parser_ptr, visited, extras);
+                        free_combinator_recursive(*args->parser_ptr, visited, extras, force);
                     }
                     if (args->owns_parser_ptr && args->parser_ptr != NULL && !parser_ptr_freed) {
                         visited_set_insert(visited, args->parser_ptr);
@@ -2478,11 +2473,11 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 expr_list* list = (expr_list*)comb->args;
                 while (list != NULL) {
                     if (list->fix == EXPR_BASE) {
-                        free_combinator_recursive(list->comb, visited, extras);
+                        free_combinator_recursive(list->comb, visited, extras, force);
                     }
                     op_t* op = list->op;
                     while (op != NULL) {
-                        free_combinator_recursive(op->comb, visited, extras);
+                        free_combinator_recursive(op->comb, visited, extras, force);
                         op_t* temp_op = op;
                         op = op->next;
                         free(temp_op);
@@ -2500,13 +2495,13 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
             case COMB_LEFT:
             case COMB_RIGHT: {
                 pair_args* args = (pair_args*)comb->args;
-                free_combinator_recursive(args->p1, visited, extras);
-                free_combinator_recursive(args->p2, visited, extras);
+                free_combinator_recursive(args->p1, visited, extras, force);
+                free_combinator_recursive(args->p2, visited, extras, force);
                 free(args);
                 break;
             }
             case COMB_MANY: {
-                free_combinator_recursive((combinator_t*)comb->args, visited, extras);
+                free_combinator_recursive((combinator_t*)comb->args, visited, extras, force);
                 break;
             }
             case COMB_VARIANT_TAG: {
@@ -2520,9 +2515,9 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
                 variant_part_args* args = (variant_part_args*)comb->args;
                 if (args != NULL) {
                     if (args->tag_parser != NULL)
-                        free_combinator_recursive(args->tag_parser, visited, extras);
+                        free_combinator_recursive(args->tag_parser, visited, extras, force);
                     if (args->branch_parser != NULL)
-                        free_combinator_recursive(args->branch_parser, visited, extras);
+                        free_combinator_recursive(args->branch_parser, visited, extras, force);
                     free(args);
                 }
                 break;
@@ -2558,7 +2553,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
     /* Recycle combinator struct instead of freeing.
      * During forced shutdown cleanup, free directly to avoid corrupting
      * the free list with combinators that may be visited later. */
-    if (g_force_free_cached) {
+    if (force) {
         free(comb);
     } else if (comb_free_count < COMB_FREE_LIST_MAX) {
         comb->extra_to_free = (void *)comb_free_list;
@@ -2569,7 +2564,7 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
     }
 }
 
-static void release_extra_nodes(extra_node** extras, visited_set* visited) {
+static void release_extra_nodes(extra_node** extras, visited_set* visited, bool force) {
     while (*extras != NULL) {
         extra_node* node = *extras;
         *extras = node->next;
@@ -2578,7 +2573,7 @@ static void release_extra_nodes(extra_node** extras, visited_set* visited) {
             // enqueued. Any additional extra_to_free entries discovered during
             // this call are appended to the shared list referenced by
             // `extras` so they can be drained in-order.
-            free_combinator_recursive(node->comb, visited, extras);
+            free_combinator_recursive(node->comb, visited, extras, force);
         }
         free(node->ptr);
         free(node);
