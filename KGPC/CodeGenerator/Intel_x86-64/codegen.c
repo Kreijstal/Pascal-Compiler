@@ -93,6 +93,7 @@ typedef struct {
 } CodeGenStringSet;
 
 static CodeGenStringSet g_codegen_callable_exports;
+static int codegen_list_contains_string(ListNode_t *list, const char *value);
 
 static unsigned codegen_hash(const char *s)
 {
@@ -168,6 +169,70 @@ static HashNode_t *codegen_find_method_impl_in_class_chain(SymTab_t *symtab,
             scan_record = get_record_type_from_node(parent_node);
         else
             scan_record = NULL;
+    }
+
+    return NULL;
+}
+
+static void codegen_mark_callable_used(HashNode_t *func_node)
+{
+    if (func_node == NULL || func_node->type == NULL ||
+        func_node->type->kind != TYPE_KIND_PROCEDURE ||
+        func_node->type->info.proc_info.definition == NULL)
+        return;
+
+    func_node->type->info.proc_info.definition->tree_data.subprogram_data.is_used = 1;
+}
+
+static int codegen_symbol_is_emittable(const char *symbol,
+    const CodeGenStringSet *iface_dispatch_set)
+{
+    if (symbol == NULL)
+        return 0;
+
+    if (g_codegen_available_subprograms != NULL &&
+        codegen_list_contains_string(g_codegen_available_subprograms, symbol))
+        return 1;
+
+    if (iface_dispatch_set != NULL && codegen_set_contains(iface_dispatch_set, symbol))
+        return 1;
+
+    return 0;
+}
+
+static HashNode_t *codegen_find_emittable_interface_method(SymTab_t *symtab,
+    const char *iface_name, struct RecordType *iface_record, const char *method_name,
+    const CodeGenStringSet *iface_dispatch_set)
+{
+    while (iface_name != NULL) {
+        char iface_base[512];
+        snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, method_name);
+        ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
+        HashNode_t *iface_func = NULL;
+        for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
+            HashNode_t *cand = (HashNode_t *)ic->cur;
+            if (cand != NULL && cand->mangled_id != NULL &&
+                (cand->hash_type == HASHTYPE_FUNCTION ||
+                 cand->hash_type == HASHTYPE_PROCEDURE) &&
+                codegen_symbol_is_emittable(cand->mangled_id, iface_dispatch_set)) {
+                iface_func = cand;
+                break;
+            }
+        }
+        if (iface_candidates != NULL)
+            DestroyList(iface_candidates);
+        if (iface_func != NULL)
+            return iface_func;
+
+        iface_name = NULL;
+        if (iface_record != NULL && iface_record->parent_class_name != NULL) {
+            iface_name = iface_record->parent_class_name;
+            HashNode_t *parent_node = NULL;
+            if (FindSymbol(&parent_node, symtab, iface_name) != 0 && parent_node != NULL)
+                iface_record = get_record_type_from_node(parent_node);
+            else
+                iface_record = NULL;
+        }
     }
 
     return NULL;
@@ -3094,30 +3159,21 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (imethod != NULL && imethod->name != NULL) {
                     impl_func = codegen_find_method_impl_in_class_chain(symtab,
                         record_info, class_label, imethod->name);
-                    if (impl_func != NULL && impl_func->mangled_id != NULL)
+                    if (impl_func != NULL && impl_func->mangled_id != NULL &&
+                        codegen_symbol_is_emittable(impl_func->mangled_id, iface_dispatch_set)) {
+                        codegen_mark_callable_used(impl_func);
                         fprintf(ctx->output_file, "\t.quad\t%s\n", impl_func->mangled_id);
-                    else
+                    } else
                     {
-                        char iface_base[512];
-                        snprintf(iface_base, sizeof(iface_base), "%s__%s",
-                            iface_name, imethod->name);
-                        ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
-                        HashNode_t *iface_func = NULL;
-                        for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
-                            HashNode_t *cand = (HashNode_t *)ic->cur;
-                            if (cand != NULL && cand->mangled_id != NULL &&
-                                (cand->hash_type == HASHTYPE_FUNCTION ||
-                                 cand->hash_type == HASHTYPE_PROCEDURE)) {
-                                iface_func = cand;
-                                break;
-                            }
-                        }
+                        HashNode_t *iface_func = codegen_find_emittable_interface_method(
+                            symtab, iface_name, iface_record, imethod->name, iface_dispatch_set);
                         if (iface_func != NULL && iface_func->mangled_id != NULL)
+                        {
+                            codegen_mark_callable_used(iface_func);
                             fprintf(ctx->output_file, "\t.quad\t%s\n", iface_func->mangled_id);
+                        }
                         else
                             fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
-                        if (iface_candidates != NULL)
-                            DestroyList(iface_candidates);
                     }
                 }
             }
@@ -3387,22 +3443,12 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (imethod != NULL && imethod->name != NULL) {
                     HashNode_t *impl_func = codegen_find_method_impl_in_class_chain(symtab,
                         record_info, class_label, imethod->name);
-                    /* Look up the interface method's full mangled name */
-                    char iface_base[512];
-                    snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
-                    ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
-                    HashNode_t *iface_func = NULL;
-                    for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
-                        HashNode_t *cand = (HashNode_t *)ic->cur;
-                        if (cand != NULL && cand->mangled_id != NULL &&
-                            (cand->hash_type == HASHTYPE_FUNCTION ||
-                             cand->hash_type == HASHTYPE_PROCEDURE)) {
-                            iface_func = cand;
-                            break;
-                        }
-                    }
+                    HashNode_t *iface_func = codegen_find_emittable_interface_method(
+                        symtab, iface_name, iface_record, imethod->name, iface_dispatch_set);
                     if (iface_func != NULL && iface_func->mangled_id != NULL) {
-                        if (impl_func != NULL && impl_func->mangled_id != NULL) {
+                        if (impl_func != NULL && impl_func->mangled_id != NULL &&
+                            codegen_symbol_is_emittable(impl_func->mangled_id, iface_dispatch_set)) {
+                            codegen_mark_callable_used(impl_func);
                             /* Strong alias: interface method → class implementation */
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
@@ -3415,7 +3461,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                                 codegen_set_insert(iface_dispatch_set, iface_func->mangled_id);
                         }
                     }
-                    if (iface_candidates != NULL) DestroyList(iface_candidates);
                 }
                 iface_method = iface_method->next;
             }

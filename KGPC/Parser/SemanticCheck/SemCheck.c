@@ -8257,6 +8257,22 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     free(existing_record->parent_class_name);
                                     existing_record->parent_class_name = new_parent_copy;
                                 }
+                                if (new_record->guid_string != NULL &&
+                                    existing_record != new_record)
+                                {
+                                    char *new_guid_copy = strdup(new_record->guid_string);
+                                    free(existing_record->guid_string);
+                                    existing_record->guid_string = new_guid_copy;
+                                }
+                                if (new_record->has_guid)
+                                {
+                                    existing_record->has_guid = 1;
+                                    existing_record->guid_d1 = new_record->guid_d1;
+                                    existing_record->guid_d2 = new_record->guid_d2;
+                                    existing_record->guid_d3 = new_record->guid_d3;
+                                    memcpy(existing_record->guid_d4, new_record->guid_d4,
+                                        sizeof(existing_record->guid_d4));
+                                }
                                 if (new_record->interface_names != NULL &&
                                     existing_record != new_record)
                                 {
@@ -8428,6 +8444,20 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                 existing_record->properties = record_info->properties;
                                             if (record_info->parent_class_name != NULL && existing_record->parent_class_name == NULL)
                                                 existing_record->parent_class_name = strdup(record_info->parent_class_name);
+                                            if (record_info->guid_string != NULL)
+                                            {
+                                                free(existing_record->guid_string);
+                                                existing_record->guid_string = strdup(record_info->guid_string);
+                                            }
+                                            if (record_info->has_guid)
+                                            {
+                                                existing_record->has_guid = 1;
+                                                existing_record->guid_d1 = record_info->guid_d1;
+                                                existing_record->guid_d2 = record_info->guid_d2;
+                                                existing_record->guid_d3 = record_info->guid_d3;
+                                                memcpy(existing_record->guid_d4, record_info->guid_d4,
+                                                    sizeof(existing_record->guid_d4));
+                                            }
                                             if (record_info->interface_names != NULL)
                                             {
                                                 existing_record->interface_names = record_info->interface_names;

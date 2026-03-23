@@ -54,6 +54,17 @@ static int semcheck_bind_interface_dispatch_getter(struct Expression *expr,
         }
     }
 
+    if (dispatch_owner != NULL && dispatch_owner->is_interface &&
+        (!dispatch_owner->has_guid || dispatch_owner->method_templates == NULL) &&
+        dispatch_owner->type_id != NULL)
+    {
+        HashNode_t *canonical_node = semcheck_find_preferred_type_node(symtab, dispatch_owner->type_id);
+        struct RecordType *canonical_record = get_record_type_from_node(canonical_node);
+        if (canonical_record != NULL && canonical_record->is_interface &&
+            canonical_record->has_guid && canonical_record->method_templates != NULL)
+            dispatch_owner = canonical_record;
+    }
+
     if (dispatch_owner == NULL || !dispatch_owner->is_interface ||
         !dispatch_owner->has_guid || dispatch_owner->method_templates == NULL)
         return 0;
@@ -1955,8 +1966,13 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->array_element_record_type = NULL;
     expr->array_element_size = 0;
 
-    /* Keep legacy_tag here - expression is rewritten and needs re-checking with int type_return */
-    return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
+    /* Keep legacy_tag here - expression is rewritten and needs re-checking with int type_return.
+     * Re-assert interface dispatch afterward because the re-check may rewrite the callable
+     * target while preserving the getter semantics. */
+    int result = semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
+    if (result == 0 && expr->type == EXPR_FUNCTION_CALL)
+        (void)semcheck_bind_interface_dispatch_getter(expr, symtab, owner_record, method_node);
+    return result;
 }
 
 int semcheck_recordaccess(int *type_return,
