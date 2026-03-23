@@ -14,6 +14,7 @@
 #include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
+#include "../string_intern.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -631,11 +632,20 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
-    /* Parser graphs still share combinator subtrees in ways free_combinator()
-     * does not model safely. Keep the cached parsers alive until process exit
-     * instead of risking a teardown-time UAF after a successful compile. */
+    /* Free the cached parser graphs. free_combinator_graph() uses a shared
+     * visited set and ignores the cached flag, so shared subtrees between
+     * the unit and program parsers are freed exactly once. */
+    combinator_t *roots[2];
+    size_t root_count = 0;
+    if (cached_unit_parser != NULL)
+        roots[root_count++] = cached_unit_parser;
+    if (cached_program_parser != NULL)
+        roots[root_count++] = cached_program_parser;
+    if (root_count > 0)
+        free_combinator_graph(roots, root_count);
     cached_unit_parser = NULL;
     cached_program_parser = NULL;
+    parser_drain_free_list();
     if (generic_registry_ready)
     {
         generic_registry_cleanup();
@@ -663,6 +673,7 @@ void pascal_frontend_cleanup(void)
         g_ast_cache_dir = NULL;
     }
     from_cparser_cleanup();
+    string_intern_reset();
 }
 
 /* Compute the cache file path for a given source path.

@@ -69,6 +69,10 @@ static size_t comb_free_count = 0;
  * and should skip memoization since their IDs are never reused. */
 static size_t ephemeral_memo_threshold = 0;
 
+/* When true, free_combinator_recursive ignores the cached flag.
+ * Used by free_combinator_graph() for full shutdown cleanup. */
+static bool g_force_free_cached = false;
+
 /* Lightweight profiling: count parse() calls by combinator type */
 static size_t parse_type_counts[64] = {0};
 void parser_reset_type_profile(void) {
@@ -2110,9 +2114,31 @@ void free_combinator(combinator_t* comb) {
     visited_set_destroy(&visited);
 }
 
+void free_combinator_graph(combinator_t **roots, size_t count) {
+    visited_set visited;
+    visited_set_init(&visited);
+    extra_node* extras = NULL;
+    g_force_free_cached = true;
+    for (size_t i = 0; i < count; i++) {
+        free_combinator_recursive(roots[i], &visited, &extras);
+    }
+    release_extra_nodes(&extras, &visited);
+    g_force_free_cached = false;
+    visited_set_destroy(&visited);
+}
+
+void parser_drain_free_list(void) {
+    while (comb_free_list != NULL) {
+        combinator_t *next = (combinator_t *)comb_free_list->extra_to_free;
+        free(comb_free_list);
+        comb_free_list = next;
+    }
+    comb_free_count = 0;
+}
+
 static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras) {
     if (comb == NULL || visited_set_contains(visited, comb)) return;
-    if (comb->cached) return;  /* Do not free cached/shared combinators */
+    if (comb->cached && !g_force_free_cached) return;  /* Do not free cached/shared combinators */
     visited_set_insert(visited, comb);
 
     // Ensure type is valid to avoid uninitialised value warnings
