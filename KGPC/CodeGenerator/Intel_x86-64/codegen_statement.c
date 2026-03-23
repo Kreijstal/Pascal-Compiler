@@ -1887,6 +1887,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         if (assign_stmt == NULL)
                             goto cleanup;
                         inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                        free(assign_stmt);
                         element_node = element_node->next;
                         ++index;
                     }
@@ -1899,6 +1900,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 if (assign_stmt == NULL)
                     goto cleanup;
                 inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                free(assign_stmt);
             }
             field_node = field_node->next;
         }

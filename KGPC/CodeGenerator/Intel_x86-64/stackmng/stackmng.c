@@ -747,19 +747,8 @@ RegStack_t *init_reg_stack()
     reg_stack = (RegStack_t *)malloc(sizeof(RegStack_t));
     assert(reg_stack != NULL);
 
-    /* %rax - return register, always safe to use for expressions */
-    Register_t *rax = (Register_t *)malloc(sizeof(Register_t));
-    assert(rax != NULL);
-    rax->reg_id = REG_RAX;
-    rax->bit_64 = strdup("%rax");
-    rax->bit_32 = strdup("%eax");
-    rax->spill_location = NULL;
-    rax->last_use_seq = 0;
-    rax->spill_callback = NULL;
-    rax->spill_context = NULL;
-#if USE_GRAPH_COLORING_ALLOCATOR
-    rax->current_live_range = NULL;
-#endif
+    /* %rax is caller-saved — not in the allocatable pool.
+       It is used as return value and varargs indicator. */
 
     /* %r10, %r11 are caller-saved scratch registers.
        They are NOT in the allocatable pool — only used explicitly
@@ -844,8 +833,6 @@ RegStack_t *init_reg_stack()
     registers = PushListNodeBack(registers, CreateListNode(r13, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r14, LIST_UNSPECIFIED));
     registers = PushListNodeBack(registers, CreateListNode(r15, LIST_UNSPECIFIED));
-    /* %rax is caller-saved but NOT in the pool — it's used as return value
-       and varargs indicator, and the spill mechanism cannot properly restore it. */
 
     reg_stack->registers_allocated = NULL;
     reg_stack->registers_free = registers;

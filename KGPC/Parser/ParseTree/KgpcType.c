@@ -3242,6 +3242,84 @@ KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *sy
     return NULL;
 }
 
+KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
+{
+    if (type == NULL || type->kind != TYPE_KIND_POINTER)
+        return type != NULL ? type->info.points_to : NULL;
+
+    KgpcType *pointee = type->info.points_to;
+
+    /* Already fully resolved */
+    if (pointee != NULL && pointee->kind == TYPE_KIND_RECORD)
+        return pointee;
+
+    /* Only try to resolve PRIMITIVE placeholders (from forward-declared types) */
+    if (pointee == NULL || pointee->kind != TYPE_KIND_PRIMITIVE ||
+        pointee->info.primitive_type_tag != RECORD_TYPE)
+        return pointee;
+
+    if (symtab == NULL)
+        return pointee;
+
+    /* Try to find the actual record type using type_alias metadata */
+    const char *target_id = NULL;
+
+    /* First try the pointer's own type_alias */
+    if (type->type_alias != NULL)
+    {
+        if (type->type_alias->pointer_type_id != NULL)
+            target_id = type->type_alias->pointer_type_id;
+        else if (type->type_alias->target_type_id != NULL)
+            target_id = type->type_alias->target_type_id;
+    }
+
+    /* Also try the pointee's type_alias */
+    if (target_id == NULL && pointee->type_alias != NULL)
+    {
+        if (pointee->type_alias->alias_name != NULL)
+            target_id = pointee->type_alias->alias_name;
+        else if (pointee->type_alias->target_type_id != NULL)
+            target_id = pointee->type_alias->target_type_id;
+    }
+
+    if (target_id == NULL)
+    {
+        /* Last resort: if the pointer's type_alias has a pointer_type_ref,
+         * try to resolve through that */
+        if (type->type_alias != NULL && type->type_alias->pointer_type_ref != NULL)
+        {
+            HashNode_t *ref_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+                type->type_alias->pointer_type_ref, 0);
+            if (ref_node != NULL && ref_node->type != NULL &&
+                ref_node->type->kind == TYPE_KIND_RECORD &&
+                ref_node->type->info.record_info != NULL)
+            {
+                KgpcType *resolved = ref_node->type;
+                kgpc_type_retain(resolved);
+                kgpc_type_release(pointee);
+                type->info.points_to = resolved;
+                return resolved;
+            }
+        }
+        return pointee;
+    }
+
+    HashNode_t *target_node = kgpc_find_type_node(symtab, target_id);
+    if (target_node != NULL && target_node->type != NULL &&
+        target_node->type->kind == TYPE_KIND_RECORD &&
+        target_node->type->info.record_info != NULL)
+    {
+        /* Found the actual record type — patch the pointer's points_to */
+        KgpcType *resolved = target_node->type;
+        kgpc_type_retain(resolved);
+        kgpc_type_release(pointee);
+        type->info.points_to = resolved;
+        return resolved;
+    }
+
+    return pointee;
+}
+
 ListNode_t* kgpc_type_get_procedure_params(KgpcType *type)
 {
     if (type == NULL || type->kind != TYPE_KIND_PROCEDURE)

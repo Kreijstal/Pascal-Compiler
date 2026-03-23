@@ -742,7 +742,7 @@ static int semcheck_symbol_is_assign_operator(HashNode_t *cand)
         return 1;
     /* Standalone operators: id like "int64__op_assign_Tconstexprint" */
     if (cand->is_operator && cand->id != NULL &&
-        strcasestr(cand->id, "__op_assign") != NULL)
+        pascal_strcasestr(cand->id, "__op_assign") != NULL)
         return 1;
     return 0;
 }
@@ -6670,17 +6670,16 @@ skip_type_receiver_rewrite:
         if (owner_type != NULL) {
             if (owner_type->kind == TYPE_KIND_RECORD) {
                 record_info = owner_type->info.record_info;
-            } else if (owner_type->kind == TYPE_KIND_POINTER &&
-                       owner_type->info.points_to != NULL &&
-                       owner_type->info.points_to->kind == TYPE_KIND_RECORD) {
-                record_info = owner_type->info.points_to->info.record_info;
-            } else if (owner_type->kind == TYPE_KIND_POINTER &&
-                       owner_type->info.points_to != NULL &&
-                       owner_type->info.points_to->kind == TYPE_KIND_POINTER &&
-                       owner_type->info.points_to->info.points_to != NULL &&
-                       owner_type->info.points_to->info.points_to->kind == TYPE_KIND_RECORD) {
-                /* Double-pointer deref: pts^^.Method where pts: ^^Record */
-                record_info = owner_type->info.points_to->info.points_to->info.record_info;
+            } else if (owner_type->kind == TYPE_KIND_POINTER) {
+                /* Try lazy resolution of unresolved pointer pointees */
+                KgpcType *pointee = kgpc_type_resolve_pointer_pointee(owner_type, symtab);
+                if (pointee != NULL && pointee->kind == TYPE_KIND_RECORD) {
+                    record_info = pointee->info.record_info;
+                } else if (pointee != NULL && pointee->kind == TYPE_KIND_POINTER) {
+                    KgpcType *pointee2 = kgpc_type_resolve_pointer_pointee(pointee, symtab);
+                    if (pointee2 != NULL && pointee2->kind == TYPE_KIND_RECORD)
+                        record_info = pointee2->info.record_info;
+                }
             }
         }
 

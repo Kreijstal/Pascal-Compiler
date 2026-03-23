@@ -190,6 +190,12 @@ KgpcType* kgpc_type_get_array_element_type(KgpcType *type);
  * Returns NULL if not an array or if resolution fails. */
 KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, struct SymTab *symtab);
 
+/* For pointer types with unresolved PRIMITIVE(RECORD_TYPE) pointees, try to
+ * resolve the actual record type through the symbol table.  Patches the
+ * pointer's points_to in place on success (like the array element resolver).
+ * Returns the (possibly updated) points_to, or NULL. */
+KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, struct SymTab *symtab);
+
 /* Get formal parameters from a procedure/function type.
  * Returns NULL if not a procedure type. */
 ListNode_t* kgpc_type_get_procedure_params(KgpcType *type);

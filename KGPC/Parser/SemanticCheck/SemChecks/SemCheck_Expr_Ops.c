@@ -710,11 +710,18 @@ relop_fallback:
                         string_ok = 1;
                     }
                 }
+                /* FPC allows comparing strings with chars (e.g. shortstring = char). */
+                if (!string_ok)
+                {
+                    if ((is_string_type(type_first) && type_second == CHAR_TYPE) ||
+                        (type_first == CHAR_TYPE && is_string_type(type_second)))
+                        string_ok = 1;
+                }
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE) ||
                               (type_first == CHAR_TYPE && is_integer_type(type_second)) ||
                               (is_integer_type(type_first) && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
-                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
+                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) &&
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
                 if (!pointer_ok && expr1 != NULL && expr2 != NULL)
                 {
@@ -1093,11 +1100,18 @@ relop_fallback:
                         string_ok = 1;
                     }
                 }
+                /* FPC allows comparing strings with chars. */
+                if (!string_ok)
+                {
+                    if ((is_string_type(type_first) && type_second == CHAR_TYPE) ||
+                        (type_first == CHAR_TYPE && is_string_type(type_second)))
+                        string_ok = 1;
+                }
                 int char_ok = (type_first == CHAR_TYPE && type_second == CHAR_TYPE) ||
                               (type_first == CHAR_TYPE && is_integer_type(type_second)) ||
                               (is_integer_type(type_first) && type_second == CHAR_TYPE);
                 /* Allow comparison of pointers AND procedures */
-                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) && 
+                int pointer_ok = ((type_first == POINTER_TYPE || type_first == PROCEDURE) &&
                                   (type_second == POINTER_TYPE || type_second == PROCEDURE));
                 if (!pointer_ok && expr1 != NULL && expr2 != NULL)
                 {

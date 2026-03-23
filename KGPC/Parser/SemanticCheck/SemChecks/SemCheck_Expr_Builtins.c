@@ -1963,6 +1963,11 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
         {
             /* FPC accepts ordinal types in UpCase; treat as identity. */
         }
+        else if (arg_tag == SHORTSTRING_TYPE || kgpc_type_is_string(arg_kgpc_type) ||
+                 kgpc_type_is_shortstring(arg_kgpc_type))
+        {
+            /* FPC UpCase accepts string arguments, returning uppercased string. */
+        }
         else
         {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, UpCase expects a char argument.\n",
