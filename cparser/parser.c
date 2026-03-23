@@ -2555,8 +2555,12 @@ static void free_combinator_recursive(combinator_t* comb, visited_set* visited, 
         *extras = node;
         comb->extra_to_free = NULL;
     }
-    /* Recycle combinator struct instead of freeing */
-    if (comb_free_count < COMB_FREE_LIST_MAX) {
+    /* Recycle combinator struct instead of freeing.
+     * During forced shutdown cleanup, free directly to avoid corrupting
+     * the free list with combinators that may be visited later. */
+    if (g_force_free_cached) {
+        free(comb);
+    } else if (comb_free_count < COMB_FREE_LIST_MAX) {
         comb->extra_to_free = (void *)comb_free_list;
         comb_free_list = comb;
         comb_free_count++;
