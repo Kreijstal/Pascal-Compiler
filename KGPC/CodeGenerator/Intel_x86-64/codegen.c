@@ -218,12 +218,25 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
 
         /* Skip unspecialized generic subprogram templates — only their
          * specializations (which have generic_type_params cleared) should
-         * be emitted.  We check generic_type_params != NULL rather than
-         * num_generic_type_params > 0 because some specializations (e.g.
-         * tmarshal__unfixarray_u_tptrwrapper) may still have a non-zero
-         * count but will have their params array cleared to NULL during
-         * instantiation. */
-        if (sub->tree_data.subprogram_data.generic_type_params != NULL) {
+         * be emitted.
+         *
+         * Two complementary checks are needed:
+         * 1) generic_type_params != NULL — the template still owns its
+         *    type-param name array (e.g. user-defined generics like
+         *    swap<T>).
+         * 2) num_generic_type_params > 0 AND mangled name contains '$' —
+         *    covers templates where the params array was not allocated but
+         *    the count is set and the '$' in the mangled name marks an
+         *    unresolved type-param placeholder (e.g. FPC RTL generics
+         *    like taddressableunfixarrayspecialization$t).
+         *
+         * Specializations from non-instantiate paths (e.g.
+         * tmarshal__unfixarray_u_tptrwrapper) may still have
+         * num_generic_type_params > 0 but will NOT have '$' in their
+         * mangled name, so they pass through correctly. */
+        if (sub->tree_data.subprogram_data.generic_type_params != NULL ||
+            (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
+             mangled_id != NULL && strchr(mangled_id, '$') != NULL)) {
             sub_list = sub_list->next;
             continue;
         }
@@ -5382,12 +5395,12 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         }
 
         /* Skip unspecialized generic subprogram templates.
-         * We check generic_type_params != NULL rather than
-         * num_generic_type_params > 0 because some specializations (e.g.
-         * tmarshal__unfixarray_u_tptrwrapper) may still have a non-zero
-         * count but will have their params array cleared to NULL during
-         * instantiation. */
-        if (sub->tree_data.subprogram_data.generic_type_params != NULL)
+         * See codegen_collect_available_subprogram_labels for the full
+         * rationale.  Two checks: (1) generic_type_params != NULL, or
+         * (2) num_generic_type_params > 0 with '$' in mangled name. */
+        if (sub->tree_data.subprogram_data.generic_type_params != NULL ||
+            (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
+             mangled_id != NULL && strchr(mangled_id, '$') != NULL))
         {
             sub_list = sub_list->next;
             continue;
