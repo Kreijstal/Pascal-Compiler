@@ -4170,7 +4170,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                             sub->tree_data.subprogram_data.subprograms != NULL) {
                             ListNode_t *wl = CreateListNode(
                                 (void *)sub->tree_data.subprogram_data.subprograms,
-                                LIST_DATA);
+                                LIST_UNSPECIFIED);
                             if (wl != NULL) { wl->next = worklist; worklist = wl; }
                         }
                     }
@@ -4192,7 +4192,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                         sub->tree_data.subprogram_data.subprograms != NULL) {
                         ListNode_t *wl = CreateListNode(
                             (void *)sub->tree_data.subprogram_data.subprograms,
-                            LIST_DATA);
+                            LIST_UNSPECIFIED);
                         if (wl != NULL) { wl->next = worklist; worklist = wl; }
                     }
                 }
@@ -4218,7 +4218,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                         sub->tree_data.subprogram_data.subprograms != NULL) {
                         ListNode_t *wl = CreateListNode(
                             (void *)sub->tree_data.subprogram_data.subprograms,
-                            LIST_DATA);
+                            LIST_UNSPECIFIED);
                         if (wl != NULL) { wl->next = worklist; worklist = wl; }
                     }
                 }
@@ -5373,8 +5373,12 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             continue;
         }
 
-        /* Skip unspecialized generic subprogram templates. */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0)
+        /* Skip unspecialized generic subprogram templates.
+         * Specializations may still have num_generic_type_params > 0 if the
+         * semcheck didn't clear the count, but their mangled names won't
+         * contain '$' (the unspecialized type-param marker).  Allow those. */
+        if (sub->tree_data.subprogram_data.num_generic_type_params > 0 &&
+            mangled_id != NULL && strchr(mangled_id, '$') != NULL)
         {
             sub_list = sub_list->next;
             continue;
