@@ -326,7 +326,7 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
         return 0;
     }
 
-    if (record->has_cached_size && !record_type_is_class(record))
+    if (record->has_cached_size)
     {
         *size_out = record->cached_size;
         return 0;
@@ -343,7 +343,7 @@ int sizeof_from_record(SymTab_t *symtab, struct RecordType *record,
      * fields of its own type).  If we re-enter for the same record, the cached
      * size (0) will be returned, preventing infinite recursion. */
     int was_cached = record->has_cached_size;
-    if (!was_cached && !record_type_is_class(record))
+    if (!was_cached)
     {
         record->has_cached_size = 1;
         record->cached_size = 0;
@@ -456,6 +456,9 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     if (field == NULL)
         return 1;  /* Minimum alignment */
 
+    if (field->has_cached_layout)
+        return field->cached_alignment;
+
     /* Prevent infinite recursion */
     if (depth > SIZEOF_RECURSION_LIMIT)
         return 1;
@@ -508,7 +511,7 @@ static int get_field_alignment(SymTab_t *symtab, struct RecordField *field, int 
     }
 }
 
-static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
+static int compute_field_size_uncached(SymTab_t *symtab, struct RecordField *field,
     long long *size_out, int depth, int line_num)
 {
     if (size_out == NULL)
@@ -610,6 +613,25 @@ static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
     }
 
     return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);
+}
+
+static int compute_field_size(SymTab_t *symtab, struct RecordField *field,
+    long long *size_out, int depth, int line_num)
+{
+    if (field != NULL && field->has_cached_layout)
+    {
+        if (size_out != NULL)
+            *size_out = field->cached_size;
+        return 0;
+    }
+    int result = compute_field_size_uncached(symtab, field, size_out, depth, line_num);
+    if (result == 0 && field != NULL && !field->has_cached_layout)
+    {
+        field->cached_size = (size_out != NULL) ? *size_out : 0;
+        field->cached_alignment = get_field_alignment(symtab, field, depth, line_num);
+        field->has_cached_layout = 1;
+    }
+    return result;
 }
 
 static int sizeof_from_record_members(SymTab_t *symtab, ListNode_t *members,

@@ -113,6 +113,9 @@ struct RecordField
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;
     ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
+    long long cached_size;     /* Cached field size (valid when has_cached_layout=1) */
+    int cached_alignment;      /* Cached field alignment (valid when has_cached_layout=1) */
+    int has_cached_layout;     /* 1 if cached_size and cached_alignment are valid */
 };
 
 struct ClassProperty

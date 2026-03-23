@@ -9,7 +9,7 @@
 
 #ifndef HASH_TABLE_H
 #define HASH_TABLE_H
-#define TABLE_SIZE	211
+#define TABLE_SIZE	4099
 
 #include <stdio.h>
 #include <assert.h>
