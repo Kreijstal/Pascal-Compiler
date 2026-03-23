@@ -2159,7 +2159,32 @@ static int resolve_unit_error_location(int source_index, int line_num,
         }
         else
         {
-            assert(0 && "resolve_unit_error_location: unit path not found");
+            /* source_index unavailable — find unit path by matching unit name
+             * against registered source buffer filenames. */
+            const char *uname = g_semcheck_error_unit_name;
+            if (uname != NULL)
+            {
+                size_t ulen = strlen(uname);
+                for (int i = 0; i < g_source_buffer_count; i++)
+                {
+                    const char *p = g_source_buffer_registry[i].path;
+                    if (p == NULL) continue;
+                    const char *slash = strrchr(p, '/');
+                    const char *base = slash ? slash + 1 : p;
+                    if (strlen(base) > ulen && base[ulen] == '.' &&
+                        strncasecmp(base, uname, ulen) == 0)
+                    {
+                        strncpy(directive_file_out, p, dir_size - 1);
+                        directive_file_out[dir_size - 1] = '\0';
+                        break;
+                    }
+                }
+                if (directive_file_out[0] == '\0')
+                {
+                    strncpy(directive_file_out, uname, dir_size - 1);
+                    directive_file_out[dir_size - 1] = '\0';
+                }
+            }
         }
     }
 
