@@ -860,8 +860,29 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                 pointee_type = create_primitive_type(pointer_type_tag);
             }
         } else if (pointer_type_tag != UNKNOWN_TYPE) {
-            /* Direct primitive type tag */
-            pointee_type = create_primitive_type(pointer_type_tag);
+            /* Direct primitive type tag.  When a type reference is available,
+             * prefer looking it up from the symbol table so that sized types
+             * (e.g. WideChar = CHAR_TYPE with storage_size 2) keep their
+             * correct size instead of collapsing to the default 1-byte
+             * create_primitive_type(CHAR_TYPE). */
+            if (symtab != NULL &&
+                (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL))
+            {
+                HashNode_t *pointee_node = NULL;
+                if (alias->pointer_type_ref != NULL)
+                    pointee_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+                        alias->pointer_type_ref, defined_in_unit);
+                if (pointee_node == NULL && alias->pointer_type_id != NULL)
+                    pointee_node = kgpc_find_type_node_with_unit_flag(symtab,
+                        alias->pointer_type_id, defined_in_unit);
+                if (pointee_node != NULL && pointee_node->type != NULL)
+                {
+                    pointee_type = pointee_node->type;
+                    kgpc_type_retain(pointee_type);
+                }
+            }
+            if (pointee_type == NULL)
+                pointee_type = create_primitive_type(pointer_type_tag);
         } else if ((alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL) &&
             symtab != NULL) {
             /* Type reference - try to resolve it */
@@ -1822,6 +1843,18 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             int rhs_tag = rhs_points_to->info.primitive_type_tag;
             if ((lhs_tag == CHAR_TYPE || lhs_tag == STRING_TYPE || lhs_tag == SHORTSTRING_TYPE) &&
                 (rhs_tag == CHAR_TYPE || rhs_tag == STRING_TYPE || rhs_tag == SHORTSTRING_TYPE))
+                return 1;
+            /* Allow ^WideChar/^UnicodeChar <-> ^Word assignment.
+             * WideChar is CHAR_TYPE with 2-byte storage; Word is WORD_TYPE
+             * with 2-byte storage.  FPC treats these as interchangeable
+             * pointer targets because WideChar = Word at the type level.
+             * More generally, pointers to same-sized primitive types where
+             * one is a char type and the other an integer type are compatible. */
+            long long lhs_sz = kgpc_type_sizeof(lhs_points_to);
+            long long rhs_sz = kgpc_type_sizeof(rhs_points_to);
+            if (lhs_sz > 0 && lhs_sz == rhs_sz &&
+                ((lhs_tag == CHAR_TYPE && is_integer_type(rhs_tag)) ||
+                 (rhs_tag == CHAR_TYPE && is_integer_type(lhs_tag))))
                 return 1;
         }
         if (lhs_points_to != NULL && rhs_points_to != NULL &&
