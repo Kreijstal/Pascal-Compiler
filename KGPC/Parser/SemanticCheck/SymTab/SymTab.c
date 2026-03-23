@@ -592,11 +592,8 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index)
     return scope;
 }
 
-void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
+static void ScopeAddDependencyDirect(ScopeNode *scope, ScopeNode *dep_scope)
 {
-    assert(scope != NULL);
-    assert(dep_scope != NULL);
-
     /* Don't add duplicates */
     for (int i = 0; i < scope->num_deps; i++)
     {
@@ -615,6 +612,35 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
     }
 
     scope->dep_scopes[scope->num_deps++] = dep_scope;
+}
+
+static void ScopeCollectTransitiveDeps(ScopeNode *scope, ScopeNode *dep,
+    ScopeNode **visited, int *visited_count, int max_visited)
+{
+    for (int i = 0; i < *visited_count; i++)
+        if (visited[i] == dep) return;
+    if (*visited_count >= max_visited) return;
+    visited[(*visited_count)++] = dep;
+
+    ScopeAddDependencyDirect(scope, dep);
+    for (int i = 0; i < dep->num_deps; i++)
+    {
+        if (dep->dep_scopes[i] != scope)
+            ScopeCollectTransitiveDeps(scope, dep->dep_scopes[i],
+                                        visited, visited_count, max_visited);
+    }
+}
+
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
+{
+    assert(scope != NULL);
+    assert(dep_scope != NULL);
+
+    /* Add dep_scope and all its transitive deps to scope.
+     * The visited array prevents infinite loops from circular deps. */
+    ScopeNode *visited[1024];
+    int visited_count = 0;
+    ScopeCollectTransitiveDeps(scope, dep_scope, visited, &visited_count, 1024);
 }
 
 void EnterScope(SymTab_t *symtab, int unit_index)
