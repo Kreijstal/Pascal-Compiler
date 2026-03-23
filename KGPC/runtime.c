@@ -5562,7 +5562,7 @@ int64_t kgpc_bsfdword_li(uint32_t value)
     return (int64_t)__builtin_ctz(value);
 }
 
-int64_t popcnt_i64(uint64_t value)
+int64_t fpc_in_popcnt_x(uint64_t value)
 {
     return (int64_t)__builtin_popcountll(value);
 }

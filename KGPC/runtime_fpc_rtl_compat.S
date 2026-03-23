@@ -5,7 +5,7 @@
 
 .globl PopCnt
 PopCnt:
-    jmp popcnt_i64
+    jmp fpc_in_popcnt_x
 
 
 /* FindComponentClass / ReadDeltaStream: FPC TReader/TComponent class methods that
