@@ -2502,6 +2502,30 @@ int semcheck_varid(int *type_return,
             id, scope_return, (void *)hash_return,
             hash_return != NULL ? hash_return->hash_type : -1);
     }
+    /* When inside a class method, class fields take precedence over
+     * outer-scope constants/types with the same name. If FindSymbol found
+     * a non-variable symbol, check if Self has a field and prefer it. */
+    if (scope_return && hash_return != NULL && id != NULL &&
+        hash_return->hash_type != HASHTYPE_VAR &&
+        hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
+        hash_return->hash_type != HASHTYPE_ARRAY)
+    {
+        HashNode_t *self_node = NULL;
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record == NULL)
+                self_record = semcheck_resolve_helper_self_record(symtab,
+                    self_node, self_record);
+            if (self_record != NULL)
+            {
+                int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+                    max_scope_lev, mutating, self_node, self_record, id);
+                if (field_result >= 0)
+                    return field_result;
+            }
+        }
+    }
     if (!scope_return && id != NULL)
     {
         const char *owner = semcheck_get_current_method_owner();
