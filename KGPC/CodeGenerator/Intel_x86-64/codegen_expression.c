@@ -1843,24 +1843,43 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
     const char *target_label = NULL;
     Register_t *target_typeinfo_reg = NULL;
 
-    /* Support dynamic class-reference variables on RHS (Obj is ObjType). */
+    /* Support dynamic class-reference variables on RHS (Obj is ObjType).
+     * This also handles bare field names in FPC RTL method bodies that
+     * bypass semcheck — codegen_get_nonlocal resolves them as Self.field. */
     if (ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.is_data.target_record_type == NULL &&
         expr->expr_data.is_data.target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindSymbol(&target_node, ctx->symtab, expr->expr_data.is_data.target_type_id) != 0 &&
-            target_node != NULL && target_node->hash_type == HASHTYPE_VAR)
+        int found = FindSymbol(&target_node, ctx->symtab,
+                               expr->expr_data.is_data.target_type_id);
+        int is_dynamic_ref = (found != 0 && target_node != NULL &&
+                              target_node->hash_type == HASHTYPE_VAR);
+        /* Also treat as dynamic if the name is not in the symtab at all
+         * but we're inside a class method (bare field name). */
+        if (!is_dynamic_ref && (found == 0 || target_node == NULL) &&
+            ctx->current_subprogram_owner_class != NULL &&
+            find_label("Self") != NULL)
+            is_dynamic_ref = 1;
+        if (is_dynamic_ref)
         {
+            Register_t *class_ref_reg = NULL;
             struct Expression target_expr;
             memset(&target_expr, 0, sizeof(target_expr));
             target_expr.line_num = expr->line_num;
             target_expr.col_num = expr->col_num;
             target_expr.type = EXPR_VAR_ID;
             target_expr.expr_data.id = expr->expr_data.is_data.target_type_id;
-            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &target_typeinfo_reg);
-            if (target_typeinfo_reg == NULL)
+            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &class_ref_reg);
+            if (class_ref_reg == NULL)
                 return inst_list;
+            /* The field value is a class reference (VMT pointer).
+             * Extract TYPEINFO from VMT offset 56 (vTypeInfo slot). */
+            char ti_buf[128];
+            snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t56(%s), %s\n",
+                     class_ref_reg->bit_64, class_ref_reg->bit_64);
+            inst_list = add_inst(inst_list, ti_buf);
+            target_typeinfo_reg = class_ref_reg;
         }
     }
 
