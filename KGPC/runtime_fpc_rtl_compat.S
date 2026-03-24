@@ -25,6 +25,9 @@ ReadDeltaStream:
  * GUID arguments (e.g. Supports(Obj, IObserver, I)), so no bare interface
  * labels (IObserver, IInterface, etc.) are needed. */
 
+.data
+.align 8
+
 .globl FAction
 FAction:
     .quad 0
@@ -46,3 +49,7 @@ PPropInfo:
 .globl SetStatus
 SetStatus:
     .quad 0
+
+#if defined(__linux__) && defined(__ELF__)
+.section .note.GNU-stack,"",@progbits
+#endif

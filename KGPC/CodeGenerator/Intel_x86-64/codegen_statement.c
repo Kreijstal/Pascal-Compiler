@@ -4877,7 +4877,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
                  * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
                  * "qword ptr" would be rejected by the assembler.  Skip the body entirely
-                 * and let the runtime library's strong symbol override the .weak stub. */
+                 * and let the runtime library's stub override the empty function body. */
                 if (pascal_strcasestr(src, "dword ptr") != NULL ||
                     pascal_strcasestr(src, "qword ptr") != NULL ||
                     pascal_strcasestr(src, "byte ptr")  != NULL ||

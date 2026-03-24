@@ -4051,8 +4051,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                         int is_internal_alias = (strncmp(alias, "FPC_", 4) == 0 ||
                                                  strncmp(alias, "KGPC_", 5) == 0);
 
-                        /* If this node has a body AND was emitted, emit alias directly.
-                           Use .weak so we don't override C library symbols. */
+                        /* If this node has a body AND was emitted, emit alias directly. */
                         if (is_internal_alias &&
                             sub->tree_data.subprogram_data.statement_list != NULL &&
                             label != NULL && strcmp(alias, label) != 0 &&
