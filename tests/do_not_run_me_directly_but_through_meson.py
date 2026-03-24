@@ -1,6 +1,7 @@
 # THIS PROGRAM WILL NOT WORK IF YOU DO NOT COMPILE SOURCES FIRST WITH MESON
 import argparse
 import concurrent.futures
+import hashlib
 import json
 import locale
 import os
@@ -238,6 +239,73 @@ FPC_RTL_FLAGS = [
 ]
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
+# ---------------------------------------------------------------------------
+# Test result cache — skip compile/link/run when nothing changed.
+# Cache key = hash of: compiler binary, test .p file, .expected file,
+# flags, runtime library.  Stored as empty files named by the key hash
+# in _TEST_RESULT_CACHE_DIR.
+# ---------------------------------------------------------------------------
+_TEST_RESULT_CACHE_DIR = os.path.join(
+    os.environ.get("MESON_BUILD_ROOT", "build"), "test_result_cache"
+)
+os.makedirs(_TEST_RESULT_CACHE_DIR, exist_ok=True)
+
+# Pre-compute compiler identity once (mtime + size — fast, changes on every rebuild).
+_COMPILER_HASH = ""
+if os.path.exists(KGPC_PATH):
+    _st = os.stat(KGPC_PATH)
+    _COMPILER_HASH = f"{_st.st_mtime_ns}:{_st.st_size}"
+
+# Pre-compute runtime library identity once.
+_RUNTIME_LIB_PATH = os.environ.get("KGPC_RUNTIME_LIB", "")
+_RUNTIME_HASH = ""
+if _RUNTIME_LIB_PATH and os.path.exists(_RUNTIME_LIB_PATH):
+    _st = os.stat(_RUNTIME_LIB_PATH)
+    _RUNTIME_HASH = f"{_st.st_mtime_ns}:{_st.st_size}"
+
+
+def _file_hash(path):
+    """Return mtime:size identity string for a file, or empty string if missing."""
+    if not path or not os.path.exists(path):
+        return ""
+    st = os.stat(path)
+    return f"{st.st_mtime_ns}:{st.st_size}"
+
+
+def _test_cache_key(input_file, expected_file, flags):
+    """Compute a cache key for a test case."""
+    h = hashlib.sha256()
+    h.update(_COMPILER_HASH.encode())
+    h.update(_RUNTIME_HASH.encode())
+    h.update(_file_hash(input_file).encode())
+    h.update(_file_hash(expected_file).encode())
+    # Include hashes of any auxiliary unit files (e.g. cross_unit_inherit_base.p)
+    base_name = os.path.splitext(os.path.basename(input_file))[0]
+    test_dir = os.path.dirname(input_file)
+    for f in sorted(os.listdir(test_dir)):
+        if f.startswith(base_name + "_") and f.endswith(".p"):
+            h.update(_file_hash(os.path.join(test_dir, f)).encode())
+    # Include .input file if present
+    input_data = os.path.join(test_dir, base_name + ".input")
+    h.update(_file_hash(input_data).encode())
+    h.update(repr(sorted(flags)).encode() if flags else b"")
+    return h.hexdigest()
+
+
+def _test_cache_check(input_file, expected_file, flags):
+    """Return True if this test has a cached passing result."""
+    key = _test_cache_key(input_file, expected_file, flags)
+    return os.path.exists(os.path.join(_TEST_RESULT_CACHE_DIR, key))
+
+
+def _test_cache_store(input_file, expected_file, flags):
+    """Record a passing result for this test."""
+    key = _test_cache_key(input_file, expected_file, flags)
+    path = os.path.join(_TEST_RESULT_CACHE_DIR, key)
+    with open(path, "w") as f:
+        f.write("")
+
 
 UNIT_ONLY_TESTS = {
     "directives_and_properties_unit",
@@ -1078,6 +1146,20 @@ class TAPParallelTestRunner:
         for raw_line in str(text).rstrip().splitlines():
             self._emit(f"# {raw_line}")
 
+    def _emit_tap_result(self, tap_index, test_obj, result_type, err_info, result):
+        result.add_result(test_obj, result_type, err_info, 0.0)
+        test_name = test_obj.id()
+        if result_type == "success":
+            self._emit(f"ok {tap_index} - {test_name}")
+        elif result_type == "skipped":
+            self._emit(f"ok {tap_index} - {test_name} # SKIP {err_info}")
+        else:
+            self._emit(f"not ok {tap_index} - {test_name}")
+            label = "Failure" if result_type == "failure" else "Error"
+            self._emit_diagnostic(f"{label}:")
+            if err_info is not None:
+                self._emit_diagnostic(err_info)
+
     def run(self, test):
         tests = list(_flatten_tests(test))
         result = TAPParallelTestResult()
@@ -1086,9 +1168,16 @@ class TAPParallelTestRunner:
         effective_workers = max(1, min(self.workers, TAP_MAX_WORKERS))
 
         completed = {}
+        next_to_emit = 0  # next index to emit in order
         setup_ok_classes = []
         try:
             class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests)
+
+            # Pre-populate class errors
+            for idx, t in enumerate(tests):
+                if t.__class__ in class_errors:
+                    completed[idx] = (t, "error", class_errors[t.__class__], 0.0)
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
                 future_to_index = {
                     executor.submit(_run_single_test_with_timeout, t, self.timeout): idx
@@ -1107,36 +1196,23 @@ class TAPParallelTestRunner:
                             traceback.format_exc(),
                             0.0,
                         )
-            for idx, t in enumerate(tests):
-                if t.__class__ in class_errors and idx not in completed:
-                    completed[idx] = (
-                        t,
-                        "error",
-                        class_errors[t.__class__],
-                        0.0,
-                    )
+                    # Stream TAP lines for all consecutive completed tests
+                    while next_to_emit in completed:
+                        test_obj, result_type, err_info, elapsed = completed[next_to_emit]
+                        self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                        del completed[next_to_emit]
+                        next_to_emit += 1
 
-            for idx, test_case in enumerate(tests):
-                if idx in completed:
-                    test_obj, result_type, err_info, elapsed = completed[idx]
+            # Emit any remaining results (class errors that were never submitted)
+            while next_to_emit < len(tests):
+                if next_to_emit in completed:
+                    test_obj, result_type, err_info, elapsed = completed[next_to_emit]
                 else:
-                    test_obj = test_case
+                    test_obj = tests[next_to_emit]
                     result_type = "error"
                     err_info = "Internal error: missing parallel test result"
-                    elapsed = 0.0
-                result.add_result(test_obj, result_type, err_info, elapsed)
-                test_name = test_obj.id()
-                tap_index = idx + 1
-                if result_type == "success":
-                    self._emit(f"ok {tap_index} - {test_name}")
-                elif result_type == "skipped":
-                    self._emit(f"ok {tap_index} - {test_name} # SKIP {err_info}")
-                else:
-                    self._emit(f"not ok {tap_index} - {test_name}")
-                    label = "Failure" if result_type == "failure" else "Error"
-                    self._emit_diagnostic(f"{label}:")
-                    if err_info is not None:
-                        self._emit_diagnostic(err_info)
+                self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                next_to_emit += 1
         finally:
             _cleanup_parallel_class_fixtures(setup_ok_classes)
             result.stopTestRun()
@@ -3259,6 +3335,10 @@ def _discover_and_add_auto_tests():
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
+                # Check test result cache
+                if _test_cache_check(input_file, expected_output_file, []):
+                    return  # cached pass — skip
+
                 compiler_output = None
                 actual_output = None
                 raw_stdout = None
@@ -3322,6 +3402,7 @@ def _discover_and_add_auto_tests():
 
                     self.assertEqual(actual_output, expected_output)
                     self.assertEqual(process_returncode, 0)
+                    _test_cache_store(input_file, expected_output_file, [])
                 except subprocess.TimeoutExpired:
                     self.record_failure_context(
                         base_name=test_base_name,
@@ -3642,6 +3723,10 @@ def _discover_and_add_fpc_rtl_tests():
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
+                # Check test result cache
+                if _test_cache_check(input_file, expected_output_file, FPC_RTL_FLAGS):
+                    return  # cached pass — skip
+
                 try:
                     compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
                 except subprocess.CalledProcessError:
@@ -3683,6 +3768,7 @@ def _discover_and_add_fpc_rtl_tests():
 
                 self.assertEqual(actual_output, expected_output)
                 self.assertEqual(process.returncode, 0)
+                _test_cache_store(input_file, expected_output_file, FPC_RTL_FLAGS)
 
             test_method.__name__ = method_name
             test_method.__doc__ = f"FPC RTL test for {test_base_name}.p"

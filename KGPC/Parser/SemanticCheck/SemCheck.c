@@ -2162,7 +2162,32 @@ static int resolve_unit_error_location(int source_index, int line_num,
         }
         else
         {
-            assert(0 && "resolve_unit_error_location: unit path not found");
+            /* source_index unavailable — find unit path by matching unit name
+             * against registered source buffer filenames. */
+            const char *uname = g_semcheck_error_unit_name;
+            if (uname != NULL)
+            {
+                size_t ulen = strlen(uname);
+                for (int i = 0; i < g_source_buffer_count; i++)
+                {
+                    const char *p = g_source_buffer_registry[i].path;
+                    if (p == NULL) continue;
+                    const char *slash = strrchr(p, '/');
+                    const char *base = slash ? slash + 1 : p;
+                    if (strlen(base) > ulen && base[ulen] == '.' &&
+                        strncasecmp(base, uname, ulen) == 0)
+                    {
+                        strncpy(directive_file_out, p, dir_size - 1);
+                        directive_file_out[dir_size - 1] = '\0';
+                        break;
+                    }
+                }
+                if (directive_file_out[0] == '\0')
+                {
+                    strncpy(directive_file_out, uname, dir_size - 1);
+                    directive_file_out[dir_size - 1] = '\0';
+                }
+            }
         }
     }
 
@@ -9468,11 +9493,19 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         return 1;
     }
 
-    /* Ensure parent has its own parent fields merged before we clone from it */
+    /* Ensure parent has its own parent fields merged before we clone from it.
+     * Switch to the parent's unit scope so that the grandparent lookup
+     * searches the parent unit's dependencies (e.g. if A uses B uses C,
+     * and B's class inherits from C's class, we need C's scope visible). */
     if (parent_record->parent_class_name != NULL && !parent_record->parent_fields_merged)
     {
+        ScopeNode *saved_scope_for_parent = NULL;
+        if (parent_node->source_unit_index > 0)
+            saved_scope_for_parent = semcheck_switch_to_unit_scope(symtab, parent_node->source_unit_index);
         int parent_merge_result = merge_parent_class_fields(symtab, parent_record,
             record_info->parent_class_name, line_num);
+        if (saved_scope_for_parent != NULL)
+            semcheck_restore_scope(symtab, saved_scope_for_parent);
         if (parent_merge_result > 0)
             return parent_merge_result;
     }

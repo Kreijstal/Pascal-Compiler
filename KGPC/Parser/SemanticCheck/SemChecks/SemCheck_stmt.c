@@ -6777,14 +6777,18 @@ skip_type_receiver_rewrite:
 
             if (method_node != NULL) {
                 /* Keep class-prefixed id for static/class calls (e.g. ClassName.Create),
-                 * but canonicalize instance calls to the resolved owner id. */
+                 * but canonicalize instance calls to the resolved owner id.
+                 * Use the actual method owner's class name so inherited methods
+                 * resolve to the defining class (e.g. TObject__Free, not TChild__Free). */
                 if (static_method_receiver || is_nonstatic_class_method)
                 {
-                    size_t class_len = strlen(record_info->type_id);
+                    const char *owner_id = (actual_method_owner != NULL && actual_method_owner->type_id != NULL)
+                        ? actual_method_owner->type_id : record_info->type_id;
+                    size_t class_len = strlen(owner_id);
                     size_t method_len = strlen(method_name);
                     char *new_proc_id = (char *)malloc(class_len + 2 + method_len + 1);
                     if (new_proc_id != NULL) {
-                        sprintf(new_proc_id, "%s__%s", record_info->type_id, method_name);
+                        sprintf(new_proc_id, "%s__%s", owner_id, method_name);
                         free(proc_id);
                         proc_id = new_proc_id;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
