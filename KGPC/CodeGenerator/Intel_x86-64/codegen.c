@@ -3314,32 +3314,49 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, ".globl %s_CLASSVAR\n", class_label);
         fprintf(ctx->output_file, "%s_CLASSVAR:\n", class_label);
 
-        /* Emit per-field labels for class var fields */
-        {
-            long long offset = 0;
-            ListNode_t *fn = record_info->fields;
-            while (fn != NULL) {
-                if (fn->type == LIST_RECORD_FIELD && fn->cur != NULL) {
-                    struct RecordField *f = (struct RecordField *)fn->cur;
-                    if (f != NULL && (include_all_fields || f->is_class_var == 1)) {
-                        int fsz = codegen_class_var_field_size(symtab, f);
-                        int align = (fsz >= 8) ? 8 : ((fsz >= 4) ? 4 : 1);
-                        long long aligned_off = (offset + align - 1) & ~(align - 1);
-                        long long pad = aligned_off - offset;
-                        if (pad > 0)
-                            fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
-                        if (f->name != NULL && f->is_class_var == 1) {
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
-                            fprintf(ctx->output_file, "%s:\n", f->name);
+        /* For interfaces with GUIDs, store the 16-byte GUID as the class var
+         * data.  The codegen references this via ClassName_CLASSVAR when passing
+         * an interface type where a TGUID is expected. */
+        if (record_info->is_interface && record_info->has_guid) {
+            fprintf(ctx->output_file, "\t.long\t0x%08lX\n",
+                (unsigned long)record_info->guid_d1);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n",
+                (unsigned int)record_info->guid_d2);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n",
+                (unsigned int)record_info->guid_d3);
+            fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                record_info->guid_d4[0], record_info->guid_d4[1],
+                record_info->guid_d4[2], record_info->guid_d4[3],
+                record_info->guid_d4[4], record_info->guid_d4[5],
+                record_info->guid_d4[6], record_info->guid_d4[7]);
+        } else {
+            /* Emit per-field labels for class var fields */
+            {
+                long long offset = 0;
+                ListNode_t *fn = record_info->fields;
+                while (fn != NULL) {
+                    if (fn->type == LIST_RECORD_FIELD && fn->cur != NULL) {
+                        struct RecordField *f = (struct RecordField *)fn->cur;
+                        if (f != NULL && (include_all_fields || f->is_class_var == 1)) {
+                            int fsz = codegen_class_var_field_size(symtab, f);
+                            int align = (fsz >= 8) ? 8 : ((fsz >= 4) ? 4 : 1);
+                            long long aligned_off = (offset + align - 1) & ~(align - 1);
+                            long long pad = aligned_off - offset;
+                            if (pad > 0)
+                                fprintf(ctx->output_file, "\t.zero\t%lld\n", pad);
+                            if (f->name != NULL && f->is_class_var == 1) {
+                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), f->name);
+                                fprintf(ctx->output_file, "%s:\n", f->name);
+                            }
+                            fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
+                            offset = aligned_off + fsz;
                         }
-                        fprintf(ctx->output_file, "\t.zero\t%d\n", fsz);
-                        offset = aligned_off + fsz;
                     }
+                    fn = fn->next;
                 }
-                fn = fn->next;
+                if (offset < class_var_size)
+                    fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size - offset);
             }
-            if (offset < class_var_size)
-                fprintf(ctx->output_file, "\t.zero\t%lld\n", class_var_size - offset);
         }
 
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());

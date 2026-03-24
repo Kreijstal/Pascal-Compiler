@@ -9467,6 +9467,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (record_size == 0)
                     record_size = 1;
 
+                /* FPC allows passing an interface type identifier where a
+                 * TGUID record is expected (e.g. Supports(Obj, IObserver, I)).
+                 * The codegen emits a 16-byte GUID constant at the bare
+                 * interface label, but kgpc_type_sizeof returns 8 (pointer
+                 * size) for the interface type.  Correct the copy size to 16
+                 * so the full GUID is passed to the callee. */
+                if (record_size == 8 && arg_expr->type == EXPR_VAR_ID &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    HashNode_t *iface_node = NULL;
+                    if (FindSymbol(&iface_node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
+                        iface_node != NULL)
+                    {
+                        struct RecordType *iface_rec = codegen_get_record_type_from_node(iface_node);
+                        if (iface_rec == NULL && iface_node->type != NULL &&
+                            iface_node->type->kind == TYPE_KIND_POINTER &&
+                            iface_node->type->info.points_to != NULL &&
+                            iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            iface_rec = iface_node->type->info.points_to->info.record_info;
+                        if (iface_rec != NULL && iface_rec->is_interface && iface_rec->has_guid)
+                            record_size = 16;
+                    }
+                }
+
                 if (record_size > INT_MAX)
                 {
                     codegen_report_error(ctx,
@@ -9488,6 +9512,30 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
                     if (codegen_had_error(ctx) || src_reg == NULL)
                         return inst_list;
+                    /* If this is an interface type identifier used as a GUID
+                     * argument, redirect the source address to the _CLASSVAR
+                     * label where the actual GUID data lives.  The bare
+                     * interface name may point to RTTI (runtime compat). */
+                    if (record_size == 16 && arg_expr->type == EXPR_VAR_ID &&
+                        ctx != NULL && ctx->symtab != NULL) {
+                        HashNode_t *id_node = NULL;
+                        if (FindSymbol(&id_node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
+                            id_node != NULL && id_node->hash_type == HASHTYPE_TYPE) {
+                            struct RecordType *id_rec = codegen_get_record_type_from_node(id_node);
+                            if (id_rec == NULL && id_node->type != NULL &&
+                                id_node->type->kind == TYPE_KIND_POINTER &&
+                                id_node->type->info.points_to != NULL &&
+                                id_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                id_rec = id_node->type->info.points_to->info.record_info;
+                            if (id_rec != NULL && id_rec->is_interface && id_rec->has_guid) {
+                                char classvar_buf[512];
+                                snprintf(classvar_buf, sizeof(classvar_buf),
+                                    "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
+                                    arg_expr->expr_data.id, src_reg->bit_64);
+                                inst_list = add_inst(inst_list, classvar_buf);
+                            }
+                        }
+                    }
                 }
                 else
                 {

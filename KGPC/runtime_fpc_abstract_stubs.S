@@ -21,7 +21,7 @@ ieditlinkobserver__getisreadonly_p:
 ifpobserver__fpoobservedchanged_p_u_tobject_e_p:
     jmp __kgpc_abstract_method_error
 
-.globl iobserver__getactive_p
+.weak iobserver__getactive_p
 iobserver__getactive_p:
     jmp __kgpc_abstract_method_error
 
