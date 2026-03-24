@@ -13,6 +13,7 @@ type
     function GetOnObserverToggle: TObserverToggleEvent;
     procedure SetOnObserverToggle(aEvent: TObserverToggleEvent);
     property Active: Boolean read GetActive write SetActive;
+    property OnObserverToggle: TObserverToggleEvent read GetOnObserverToggle write SetOnObserverToggle;
   end;
 
 function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;

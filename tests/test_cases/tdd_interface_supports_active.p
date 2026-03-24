@@ -2,7 +2,7 @@ program tdd_interface_supports_active;
 
 {$mode objfpc}
 
-uses Classes;
+uses Classes, SysUtils;
 
 type
   TObserverImpl = class(TInterfacedObject, IObserver)
