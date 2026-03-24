@@ -11254,6 +11254,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                     pushed_node->method_name = strdup(tmpl->name);
                                                 if (pushed_node->owner_class == NULL)
                                                     pushed_node->owner_class = strdup(tree->tree_data.type_decl_data.id);
+                                                if (tree->tree_data.type_decl_data.defined_in_unit)
+                                                {
+                                                    pushed_node->defined_in_unit = 1;
+                                                    pushed_node->unit_is_public =
+                                                        tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                                    mark_hashnode_source_unit(pushed_node,
+                                                        tree->tree_data.type_decl_data.source_unit_index);
+                                                }
                                             }
                                         }
 
