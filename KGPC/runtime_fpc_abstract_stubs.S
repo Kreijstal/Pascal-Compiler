@@ -21,9 +21,9 @@ ieditlinkobserver__getisreadonly_p:
 ifpobserver__fpoobservedchanged_p_u_tobject_e_p:
     jmp __kgpc_abstract_method_error
 
-.weak iobserver__getactive_p
-iobserver__getactive_p:
-    jmp __kgpc_abstract_method_error
+/* iobserver__getactive_p — no longer needed here.  The semcheck forward-
+ * declaration merging now properly handles interface method templates,
+ * so the compiler emits the correct implementation alias for this method. */
 
 .globl isequentialstream__read_p_p_li_p
 isequentialstream__read_p_p_li_p:
