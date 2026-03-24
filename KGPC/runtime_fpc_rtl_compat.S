@@ -1,7 +1,7 @@
-/* All stubs and field variables previously in this file have been moved:
- * - FindComponentClass, ReadDeltaStream → runtime.c
- * - FAction, FCount, FData, FRootAncestor, FitemClass_TYPEINFO,
- *   PPropInfo, SetStatus → runtime.c
+/* FindComponentClass and ReadDeltaStream stubs moved to runtime.c.
+ * FAction, FCount, FData, FRootAncestor, FitemClass_TYPEINFO,
+ * PPropInfo, SetStatus removed — these are class instance fields
+ * that should be accessed via Self+offset, not shared globals.
  */
 
 #if defined(__linux__) && defined(__ELF__)

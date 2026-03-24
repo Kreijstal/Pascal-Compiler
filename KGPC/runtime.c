@@ -1522,7 +1522,7 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
                 if (entry->iid_ref != NULL) {
                     const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
                     if (iid != NULL && memcmp(iid, guid, 16) == 0) {
-                        *out_intf = (void *)self;
+                        *out_intf = (void *)((const char *)self + entry->ioffset);
                         return 1;
                     }
                 }
@@ -8584,14 +8584,3 @@ void FindComponentClass(void) { __kgpc_abstract_method_error(); }
  * exercised in test programs. Raises abstract method error if called. */
 void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
 
-/* FPC RTL global variables referenced as bare symbols.
- * These are class fields or type-related symbols that the compiler
- * doesn't yet emit because the owning class types aren't fully
- * processed during codegen. */
-long long FAction = 0;
-long long FCount = 0;
-long long FData = 0;
-long long FRootAncestor = 0;
-long long FitemClass_TYPEINFO = 0;
-long long PPropInfo = 0;
-long long SetStatus = 0;

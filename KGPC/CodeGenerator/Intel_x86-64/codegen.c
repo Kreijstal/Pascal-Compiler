@@ -3374,27 +3374,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
                             fprintf(ctx->output_file, ".set %s, %s\n",
                                 iface_func->mangled_id, impl_func->mangled_id);
-                        } else {
-                            /* No concrete implementation — emit abstract method stub
-                             * so that direct calls to this interface method link
-                             * (they will crash at runtime with an abstract error). */
-                            if (!emitted_class_set_contains(emitted_classes, stub_dedup)) {
-                                char *stub_key = strdup(stub_dedup);
-                                if (stub_key != NULL)
-                                    emitted_class_set_add(emitted_classes, stub_key);
-                                fprintf(ctx->output_file,
-                                        "\n# Abstract interface stub: %s.%s\n",
-                                        iface_name, imethod->name);
-                                fprintf(ctx->output_file, ".text\n");
-                                fprintf(ctx->output_file, ".globl %s\n",
-                                        iface_func->mangled_id);
-                                fprintf(ctx->output_file, "%s:\n",
-                                        iface_func->mangled_id);
-                                fprintf(ctx->output_file,
-                                        "\tjmp\t__kgpc_abstract_method_error\n");
-                                fprintf(ctx->output_file, "%s\n",
-                                        codegen_readonly_section_directive());
-                            }
                         }
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);
@@ -3674,113 +3653,6 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
     }
 }
 
-/* Helper: emit abstract method stubs for unresolved interface and object methods.
- * Iterates over type declarations, finds interface types and old-style object
- * types with method_templates, looks up each method in the symbol table, and
- * emits a stub that jumps to __kgpc_abstract_method_error if no concrete
- * implementation was found.
- * This handles interface methods referenced from generated code (e.g. the FPC
- * RTL TObservers class calling IObserver.GetActive) when no class in the
- * current program provides a concrete implementation.
- * It also handles old-style Pascal objects with virtual;abstract methods where
- * the compiler generates direct calls instead of VMT dispatch. */
-static void codegen_emit_abstract_iface_stubs_from_type_list(
-    CodeGenContext *ctx, SymTab_t *symtab,
-    ListNode_t *type_decls, EmittedClassSet *emitted_classes)
-{
-    ListNode_t *cur = type_decls;
-    while (cur != NULL) {
-        Tree_t *type_tree = (Tree_t *)cur->cur;
-        if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
-            struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
-            if (record_info != NULL && record_info->method_templates != NULL &&
-                (record_info->is_interface || !record_type_is_class(record_info)))
-            {
-                const char *iface_name = record_info->type_id;
-                if (iface_name == NULL)
-                    iface_name = type_tree->tree_data.type_decl_data.id;
-                if (iface_name == NULL) { cur = cur->next; continue; }
-
-                int is_old_style_object = !record_info->is_interface &&
-                    !record_type_is_class(record_info);
-                ListNode_t *mt = record_info->method_templates;
-                while (mt != NULL) {
-                    struct MethodTemplate *imethod = (struct MethodTemplate *)mt->cur;
-                    if (imethod != NULL && imethod->name != NULL) {
-                        /* For old-style objects, only emit stubs for virtual
-                         * methods (which may be abstract).  Skip non-virtual
-                         * methods and operators. */
-                        if (is_old_style_object && !imethod->is_virtual) {
-                            mt = mt->next;
-                            continue;
-                        }
-                        char iface_base[512];
-                        snprintf(iface_base, sizeof(iface_base),
-                                 "%s__%s", iface_name, imethod->name);
-                        /* FindAllIdents searches dep_scopes (unit scopes) too,
-                         * so it finds interface method symbols even when they
-                         * are not in the program's main scope chain. */
-                        ListNode_t *iface_candidates =
-                            FindAllIdents(symtab, iface_base);
-                        for (ListNode_t *ic = iface_candidates;
-                             ic != NULL; ic = ic->next)
-                        {
-                            HashNode_t *cand = (HashNode_t *)ic->cur;
-                            if (cand != NULL && cand->mangled_id != NULL &&
-                                (cand->hash_type == HASHTYPE_FUNCTION ||
-                                 cand->hash_type == HASHTYPE_PROCEDURE))
-                            {
-                                char stub_dedup[640];
-                                snprintf(stub_dedup, sizeof(stub_dedup),
-                                         "__kgpc_abstub_%s",
-                                         cand->mangled_id);
-                                if (!emitted_class_set_contains(
-                                        emitted_classes, stub_dedup))
-                                {
-                                    /* Check if a concrete implementation
-                                     * exists in available subprograms. */
-                                    int has_impl = 0;
-                                    if (g_codegen_available_subprograms &&
-                                        codegen_list_contains_string(
-                                            g_codegen_available_subprograms,
-                                            cand->mangled_id))
-                                        has_impl = 1;
-                                    if (!has_impl) {
-                                        char *stub_key = strdup(stub_dedup);
-                                        if (stub_key != NULL)
-                                            emitted_class_set_add(
-                                                emitted_classes, stub_key);
-                                        fprintf(ctx->output_file,
-                                            "\n# Abstract method stub:"
-                                            " %s.%s\n",
-                                            iface_name, imethod->name);
-                                        fprintf(ctx->output_file,
-                                            ".text\n");
-                                        fprintf(ctx->output_file,
-                                            ".globl %s\n",
-                                            cand->mangled_id);
-                                        fprintf(ctx->output_file,
-                                            "%s:\n", cand->mangled_id);
-                                        fprintf(ctx->output_file,
-                                            "\tjmp\t"
-                                            "__kgpc_abstract_method_error"
-                                            "\n");
-                                    }
-                                }
-                                break;  /* First matching candidate */
-                            }
-                        }
-                        if (iface_candidates != NULL)
-                            DestroyList(iface_candidates);
-                    }
-                    mt = mt->next;
-                }
-            }
-        }
-        cur = cur->next;
-    }
-}
-
 /* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
 static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
                                                 ListNode_t *type_decls,
@@ -4008,21 +3880,6 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     }
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_aliases_from_type_list(ctx,
-            tree->tree_data.program_data.type_declaration, &emitted_classes);
-
-    /* Emit abstract method stubs for interface and old-style object methods
-     * that were not resolved to a concrete implementation. */
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
-                codegen_emit_abstract_iface_stubs_from_type_list(ctx, symtab,
-                    unit->tree_data.unit_data.interface_type_decls,
-                    &emitted_classes);
-        }
-    }
-    if (tree->type == TREE_PROGRAM_TYPE)
-        codegen_emit_abstract_iface_stubs_from_type_list(ctx, symtab,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
     emitted_class_set_destroy(&emitted_classes);
