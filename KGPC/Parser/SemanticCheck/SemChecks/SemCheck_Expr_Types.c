@@ -3082,34 +3082,6 @@ SKIP_SELF_FIELD_REWRITE:
             if (target_node != NULL)
                 record_info = get_record_type_from_node(target_node);
         }
-        /* Fallback: search all unit scopes for the pointer subtype.
-         * When a field type comes from a cross-unit dependency not
-         * directly in scope (e.g. impl-uses → iface-uses chain),
-         * the normal scope lookup fails. Search every unit scope. */
-        if (record_info == NULL)
-        {
-            const char *sub_id = record_expr->pointer_subtype_id;
-            if (sub_id == NULL)
-                sub_id = get_expr_type_name(record_expr, symtab);
-            if (sub_id == NULL) goto skip_unit_scope_search;
-            int num_units = unit_registry_count();
-            for (int u = 1; u <= num_units && record_info == NULL; u++)
-            {
-                ScopeNode *uscope = symtab->unit_scopes[u];
-                if (uscope == NULL) continue;
-                ListNode_t *matches = FindAllIdentsInTable(uscope->table, sub_id);
-                for (ListNode_t *m = matches; m != NULL && record_info == NULL; m = m->next)
-                {
-                    HashNode_t *cand = (HashNode_t *)m->cur;
-                    if (cand != NULL && cand->hash_type == HASHTYPE_TYPE)
-                        record_info = get_record_type_from_node(cand);
-                }
-            }
-            if (record_info != NULL)
-                record_type = RECORD_TYPE;
-        }
-        skip_unit_scope_search:
-
         if (record_info == NULL)
         {
             /* Check for type helpers on Pointer type before giving up.
