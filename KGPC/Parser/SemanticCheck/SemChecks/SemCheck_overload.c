@@ -2093,6 +2093,27 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
             if (given_count >= adj_required && given_count <= adj_total)
                 arity_matches = 1;
         }
+        /* When the first formal is Self and we have exactly one fewer arg than
+         * params, Self was likely consumed by a ClassName.Method() rewrite.
+         * Skip Self in both arity and matching. */
+        if (!arity_matches && !allow_implicit_leading_self &&
+            candidate_args != NULL && total_params > 0 &&
+            given_count == total_params - 1)
+        {
+            Tree_t *first_formal_check = (Tree_t *)candidate_args->cur;
+            const char *ff_name = NULL;
+            if (first_formal_check != NULL && first_formal_check->type == TREE_VAR_DECL &&
+                first_formal_check->tree_data.var_decl_data.ids != NULL)
+                ff_name = (const char *)first_formal_check->tree_data.var_decl_data.ids->cur;
+            if (ff_name != NULL && pascal_identifier_equals(ff_name, "Self"))
+            {
+                allow_implicit_leading_self = 1;
+                int adj_total = total_params - 1;
+                int adj_required = required_params > 0 ? required_params - 1 : 0;
+                if (given_count >= adj_required && given_count <= adj_total)
+                    arity_matches = 1;
+            }
+        }
         if (!arity_matches && allow_implicit_leading_type_qualifier)
         {
             int adj_total = total_params;

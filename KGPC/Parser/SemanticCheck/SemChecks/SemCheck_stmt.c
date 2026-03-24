@@ -8283,6 +8283,24 @@ proccall_parent_resolve_done:
         cur_arg = 0;
         /* Get formal arguments from KgpcType instead of deprecated args field */
         true_args = kgpc_type_get_procedure_params(sym_return->type);
+        /* Skip implicit Self parameter when args don't include it
+         * (e.g., ClassName.Create(args) where the type qualifier was stripped) */
+        if (true_args != NULL && true_args->cur != NULL)
+        {
+            Tree_t *first_formal = (Tree_t *)true_args->cur;
+            if (first_formal->type == TREE_VAR_DECL &&
+                first_formal->tree_data.var_decl_data.ids != NULL)
+            {
+                const char *ff_id = (const char *)first_formal->tree_data.var_decl_data.ids->cur;
+                if (ff_id != NULL && pascal_identifier_equals(ff_id, "Self"))
+                {
+                    int n_args = ListLength(args_given);
+                    int n_params = ListLength(true_args);
+                    if (n_args == n_params - 1)
+                        true_args = true_args->next;
+                }
+            }
+        }
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;
