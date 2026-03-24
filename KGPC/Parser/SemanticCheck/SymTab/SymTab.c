@@ -635,13 +635,16 @@ void ScopeAddDependencyTransitive(ScopeNode *scope, ScopeNode *dep_scope, int is
     /* If this is an interface dep, propagate dep_scope's own interface deps.
      * One level is sufficient because units are wired in topological order:
      * each dep already has its own transitive deps flattened. */
-    if (is_interface)
+    /* Propagate dep_scope's own interface deps regardless of whether this
+     * direct dep is interface or implementation.  When unit A impl-uses B,
+     * and B interface-uses C, A needs C's types to resolve field chains
+     * through B's exported types (e.g. b_var.field_of_type_from_C.x).
+     * One level suffices: units are wired in topological order so each
+     * dep already has its own transitive deps flattened. */
+    for (int i = 0; i < dep_scope->num_deps; i++)
     {
-        for (int i = 0; i < dep_scope->num_deps; i++)
-        {
-            if (dep_scope->dep_is_iface[i])
-                ScopeAddDependency(scope, dep_scope->dep_scopes[i], 1);
-        }
+        if (dep_scope->dep_is_iface[i])
+            ScopeAddDependency(scope, dep_scope->dep_scopes[i], 1);
     }
 }
 

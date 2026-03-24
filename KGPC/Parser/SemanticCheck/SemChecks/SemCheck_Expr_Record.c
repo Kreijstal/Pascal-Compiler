@@ -50,6 +50,19 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
 
     HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
 
+    /* Fallback: if dep_scope filtering hid the parent type, use FindSymbol
+     * which walks the full scope tree. Parent classes must always be
+     * reachable since the child class itself was accessible. */
+    if (parent_node == NULL)
+    {
+        HashNode_t *fallback = NULL;
+        if (FindSymbol(&fallback, symtab, record_info->parent_class_name) != 0 &&
+            fallback != NULL && fallback->hash_type == HASHTYPE_TYPE)
+        {
+            parent_node = fallback;
+        }
+    }
+
     if (parent_node == NULL)
         return NULL;
 
@@ -331,6 +344,29 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
 
+            /* Class methods (including private getters/setters) must be
+             * reachable when we already have access to the class type.
+             * Search all unit scopes directly — the method may live in
+             * a unit that is not a direct/transitive dependency but
+             * whose class type was exposed through re-exports. */
+            if (method_node == NULL)
+            {
+                for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+                {
+                    if (symtab->unit_scopes[u] == NULL)
+                        continue;
+                    HashNode_t *found = FindIdentInTable(
+                        symtab->unit_scopes[u]->table, mangled_name);
+                    if (found != NULL &&
+                        (found->hash_type == HASHTYPE_FUNCTION ||
+                         found->hash_type == HASHTYPE_PROCEDURE))
+                    {
+                        method_node = found;
+                        break;
+                    }
+                }
+            }
+
             if (method_node != NULL)
             {
                 if (method_node->hash_type == HASHTYPE_FUNCTION_RETURN)
@@ -391,7 +427,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
         }
-        
+
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;

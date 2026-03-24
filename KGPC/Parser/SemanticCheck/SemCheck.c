@@ -7346,10 +7346,32 @@ void wire_all_unit_scope_deps(SymTab_t *symtab)
             {
                 ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
                 if (dep_scope != NULL)
-                    ScopeAddDependency(unit_scope, dep_scope, 0);
+                    ScopeAddDependencyTransitive(unit_scope, dep_scope, 0);
             }
         }
     }
+
+    /* Second pass: propagate transitive interface deps that were missed
+     * because a dependency hadn't been fully wired yet in the first pass.
+     * Units are numbered in load order, but uses-chains can reference
+     * higher-numbered units.  After pass 1 every unit has its direct
+     * deps; pass 2 copies any newly-visible transitive deps. */
+    for (int u = 1; u <= num_units; u++)
+    {
+        ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+        if (unit_scope == NULL) continue;
+        for (int d = 1; d <= num_units; d++)
+        {
+            if (d == u) continue;
+            if (unit_registry_is_iface_dep(u, d))
+            {
+                ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                if (dep_scope != NULL)
+                    ScopeAddDependencyTransitive(unit_scope, dep_scope, 1);
+            }
+        }
+    }
+
     /* NOTE: We do NOT add unit deps to current_scope (the global pre-program
      * BLOCK scope) here. The program-level scope gets its deps wired separately
      * in semcheck_program / semcheck_unit via the EnterScope(0) call.
@@ -14537,7 +14559,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 const char *name = (const char *)cur->cur;
                 int idx = unit_registry_add(name);
                 if (idx > 0)
-                    ScopeAddDependency(symtab->current_scope,
+                    ScopeAddDependencyTransitive(symtab->current_scope,
                                        GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
@@ -14579,7 +14601,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                         const char *dep_name = (const char *)dep_cur->cur;
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
-                            ScopeAddDependency(own_unit_scope,
+                            ScopeAddDependencyTransitive(own_unit_scope,
                                                GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
@@ -14893,7 +14915,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                 const char *name = (const char *)cur->cur;
                 int idx = unit_registry_add(name);
                 if (idx > 0)
-                    ScopeAddDependency(symtab->current_scope,
+                    ScopeAddDependencyTransitive(symtab->current_scope,
                                        GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
@@ -14951,7 +14973,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                         const char *dep_name = (const char *)dep_cur->cur;
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
-                            ScopeAddDependency(own_unit_scope,
+                            ScopeAddDependencyTransitive(own_unit_scope,
                                                GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
@@ -16632,7 +16654,10 @@ next_identifier:
 
         cur = cur->next;
         if (skip_initializer)
+        {
+            semcheck_restore_scope(symtab, saved_scope_for_var);
             continue;
+        }
 
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
         {
