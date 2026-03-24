@@ -288,20 +288,16 @@ static int codegen_is_unresolved_generic_template(const Tree_t *sub)
     if (sub == NULL || sub->type != TREE_SUBPROGRAM)
         return 0;
 
-    const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-    int has_generic_metadata =
-        sub->tree_data.subprogram_data.generic_type_params != NULL ||
-        sub->tree_data.subprogram_data.num_generic_type_params > 0 ||
-        sub->tree_data.subprogram_data.generic_template_ast != NULL;
-
-    /* A remaining '$' in the mangled symbol marks an unresolved generic
-     * placeholder only when this subprogram still carries generic metadata.
-     * Plain lexical nested routines also use '$' in their mangled names and
-     * must still be emitted normally.  Concrete-ABI generic methods in FPC
-     * RTL can carry generic bookkeeping, but if their mangled symbol contains
-     * no unresolved placeholder they are the real implementation we must emit. */
-    if (has_generic_metadata &&
-        mangled_id != NULL && strchr(mangled_id, '$') != NULL)
+    /* The definitive check: generic_type_params is the array of type-parameter
+     * names (e.g. ["T"]).  instantiate_generic_subprogram() explicitly clears
+     * this to NULL after creating a specialization.  Other metadata fields
+     * (num_generic_type_params, generic_template_ast) may remain set on
+     * resolved specializations and must NOT be used as indicators.
+     *
+     * The '$' character in mangled names is NOT a reliable indicator either:
+     * FPC nested functions use '$' in their names, and resolved specializations
+     * like swap$longint_li_li also contain '$'. */
+    if (sub->tree_data.subprogram_data.generic_type_params != NULL)
         return 1;
 
     return 0;
