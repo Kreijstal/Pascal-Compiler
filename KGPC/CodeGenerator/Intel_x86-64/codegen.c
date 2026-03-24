@@ -5305,12 +5305,10 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
 
-    /* For constructors (methods with __Create in name), return Self in %rax.
+    /* For constructors, return Self in %rax.
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
-    int is_constructor = 0;
-    if (sub_id != NULL && pascal_strcasestr(sub_id, "__create") != NULL)
-        is_constructor = 1;
+    int is_constructor = proc->is_constructor;
 
     if (is_constructor && num_args > 0)
     {

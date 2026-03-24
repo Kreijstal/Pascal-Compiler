@@ -3598,17 +3598,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             if (!call_returns_sret && call_returns_record && record_size > 8)
                 call_returns_sret = 1;
 
-            /* Detect constructors even if the static type isn't a record (e.g., pointer return). */
-            int is_constructor = 0;
-            if (func_mangled_name != NULL)
-            {
-                /* Use case-insensitive search since mangled names are now lowercased */
-                const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
-                if (create_pos != NULL)
-                    is_constructor = 1;
-                else if (pascal_identifier_equals(func_mangled_name, "Create"))
-                    is_constructor = 1;
-            }
+            /* Detect constructors from semantic checker flag. */
+            int is_constructor = src_expr->expr_data.function_call_data.is_constructor_call;
 
             /* Constructor chaining: when a constructor calls another constructor
              * on Self (e.g., Create(name, mode, 438) inside TFileStream.Create),

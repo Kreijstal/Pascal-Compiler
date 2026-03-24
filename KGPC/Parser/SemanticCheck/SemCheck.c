@@ -578,6 +578,20 @@ int semcheck_is_unit_name(const char *name)
     return 0;
 }
 
+/* Build a method lookup key in the form "ClassName__MethodName".
+ * Centralises the __ convention so it lives in one place.
+ * Caller must free() the returned string. */
+static char *make_method_lookup_key(const char *class_name, const char *method_name)
+{
+    if (class_name == NULL || method_name == NULL)
+        return NULL;
+    size_t len = strlen(class_name) + 2 + strlen(method_name) + 1;
+    char *key = (char *)malloc(len);
+    if (key != NULL)
+        snprintf(key, len, "%s__%s", class_name, method_name);
+    return key;
+}
+
 /* Helper declared in SemCheck_expr.c */
 static const char *semcheck_base_type_name(const char *id)
 {
@@ -3076,13 +3090,9 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 cur_method = cur_method->next;
                 continue;
             }
-            /* Build the mangled name: ClassName__MethodName */
-            size_t mangled_len = strlen(class_name) + 2 + strlen(binding->method_name) + 1;
-            char *mangled_name = (char *)malloc(mangled_len);
+            char *mangled_name = make_method_lookup_key(class_name, binding->method_name);
             if (mangled_name != NULL)
             {
-                snprintf(mangled_name, mangled_len, "%s__%s", class_name, binding->method_name);
-                
                 /* Look up the mangled method in the symbol table */
                 HashNode_t *method_node = NULL;
                 if (FindSymbol(&method_node, symtab, mangled_name) != 0 && method_node != NULL)
@@ -9798,13 +9808,7 @@ if (record_info->parent_class_name != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
         if (binding != NULL && binding->method_name != NULL) {
             /* Resolve the full mangled name for this method overload when possible. */
-            size_t class_len = strlen(class_name);
-            size_t method_len = strlen(binding->method_name);
-            char *base_name = (char *)malloc(class_len + 2 + method_len + 1);
-            if (base_name != NULL) {
-                snprintf(base_name, class_len + 2 + method_len + 1, "%s__%s",
-                         class_name, binding->method_name);
-            }
+            char *base_name = make_method_lookup_key(class_name, binding->method_name);
             char *mangled = NULL;
             if (base_name != NULL && symtab != NULL)
             {
@@ -9998,11 +10002,9 @@ if (record_info->parent_class_name != NULL) {
         /* Fallback: search by class_name + method_name with param matching */
         if (mi->name == NULL)
             continue;
-        size_t base_len = strlen(class_name) + 2 + strlen(mi->name) + 1;
-        char *base_name = (char *)malloc(base_len);
+        char *base_name = make_method_lookup_key(class_name, mi->name);
         if (base_name == NULL)
             continue;
-        snprintf(base_name, base_len, "%s__%s", class_name, mi->name);
         ListNode_t *matches = FindAllIdents(symtab, base_name);
 
         /* Priority 0: exact mangled_id match — only for defined (non-abstract) functions
@@ -10212,11 +10214,9 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
             if (tmpl->name == NULL || (!tmpl->is_virtual && !tmpl->is_override))
                 continue;
 
-            size_t base_len = strlen(class_name) + 2 + strlen(tmpl->name) + 1;
-            char *base_name = (char *)malloc(base_len);
+            char *base_name = make_method_lookup_key(class_name, tmpl->name);
             if (base_name == NULL)
                 continue;
-            snprintf(base_name, base_len, "%s__%s", class_name, tmpl->name);
 
             const char *resolved_id = NULL;
             int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
@@ -11032,14 +11032,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                             struct MethodTemplate *tmpl = (struct MethodTemplate *)template_cur->cur;
                             if (tmpl != NULL && tmpl->name != NULL)
                             {
-                                /* Build mangled name: ClassName__MethodName */
-                                size_t class_len = strlen(tree->tree_data.type_decl_data.id);
-                                size_t method_len = strlen(tmpl->name);
-                                char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+                                char *mangled = make_method_lookup_key(
+                                    tree->tree_data.type_decl_data.id, tmpl->name);
                                 if (mangled != NULL)
                                 {
-                                    snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s",
-                                             tree->tree_data.type_decl_data.id, tmpl->name);
 
                                     /* Check if already registered in class_method_bindings */
                                     ListNode_t *bindings = NULL;
@@ -17352,21 +17348,20 @@ next_identifier:
 
 /* For nested type methods like "Outer.Inner__Method", register the short alias
  * "Inner__Method" so that code using just the inner type name can find it. */
-static void register_nested_type_short_alias(SymTab_t *symtab, const char *id_to_use_for_lookup,
+/* For nested type methods like "Outer.Inner__Method", register the short alias
+ * "Inner__Method" so code using just the inner type name can find the method.
+ * Uses structural owner_class/method_name from the subprogram node instead of
+ * parsing the qualified identifier string. */
+static void register_nested_type_short_alias(SymTab_t *symtab,
+    const char *owner_class_full, const char *owner_class, const char *method_name,
     const char *mangled_id, KgpcType *type, int is_function)
 {
-    if (id_to_use_for_lookup == NULL)
+    if (owner_class_full == NULL || owner_class == NULL || method_name == NULL)
         return;
-    const char *dunder = strstr(id_to_use_for_lookup, "__");
-    if (dunder == NULL || dunder <= id_to_use_for_lookup)
+    /* Only register alias when the method belongs to a nested type (has dot in full path). */
+    if (strchr(owner_class_full, '.') == NULL)
         return;
-    const char *last_dot = NULL;
-    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
-        if (*p == '.')
-            last_dot = p;
-    if (last_dot == NULL || last_dot + 1 >= dunder)
-        return;
-    char *short_name = strdup(last_dot + 1);
+    char *short_name = make_method_lookup_key(owner_class, method_name);
     if (short_name == NULL)
         return;
     HashNode_t *existing_short = NULL;
@@ -17695,7 +17690,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
             }
             /* For nested type methods, also register the short alias. */
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
             /* Still set existing_decl for subsequent code that needs it */
             FindSymbol(&existing_decl, symtab, id_to_use_for_lookup);
@@ -17870,7 +17868,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             /* For nested type methods like "Outer.Inner__Method", also register
              * the short alias "Inner__Method" so that generic method bodies using
              * just the inner type name can find the method. */
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, func_type, 1);
         }
         else
@@ -18621,7 +18622,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 
         /* For nested type methods, also register the short alias during predeclaration. */
         if (func_return == 0)
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
 
         /* Propagate flags and method identity to the hash node.
@@ -18696,7 +18700,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
          * the short alias "Inner__Method" during predeclaration so that
          * generic method clones can find them. */
         if (func_return == 0)
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, func_type, 1);
 
         /* Propagate flags — search only the target table (see proc case above). */

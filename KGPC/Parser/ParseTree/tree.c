@@ -1666,6 +1666,8 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.function_call_data.placeholder_method_name);
           if (expr->expr_data.function_call_data.call_qualifier != NULL)
               free(expr->expr_data.function_call_data.call_qualifier);
+          free(expr->expr_data.function_call_data.cached_owner_class);
+          free(expr->expr_data.function_call_data.cached_method_name);
           break;
 
         case EXPR_INUM:
@@ -3177,6 +3179,8 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_inherited_call = 0;
     new_expr->expr_data.function_call_data.is_bare_inherited = 0;
     new_expr->expr_data.function_call_data.is_operator_call = 0;
+    new_expr->expr_data.function_call_data.cached_owner_class = NULL;
+    new_expr->expr_data.function_call_data.cached_method_name = NULL;
 
     return new_expr;
 }

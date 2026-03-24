@@ -411,6 +411,10 @@ void semcheck_reset_function_call_cache(struct Expression *expr)
     semcheck_expr_set_call_kgpc_type(expr, NULL, had_call_info);
     expr->expr_data.function_call_data.is_call_info_valid = 0;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    free(expr->expr_data.function_call_data.cached_owner_class);
+    expr->expr_data.function_call_data.cached_owner_class = NULL;
+    free(expr->expr_data.function_call_data.cached_method_name);
+    expr->expr_data.function_call_data.cached_method_name = NULL;
 }
 
 char *semcheck_dup_function_call_target_symbol(HashNode_t *target)
@@ -486,6 +490,13 @@ void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *targ
         expr->expr_data.function_call_data.mangled_id = target_symbol;
     }
     semcheck_expr_set_call_kgpc_type(expr, target->type, had_call_info);
+    /* Cache method identity so codegen doesn't need to parse mangled names. */
+    free(expr->expr_data.function_call_data.cached_owner_class);
+    expr->expr_data.function_call_data.cached_owner_class =
+        target->owner_class ? strdup(target->owner_class) : NULL;
+    free(expr->expr_data.function_call_data.cached_method_name);
+    expr->expr_data.function_call_data.cached_method_name =
+        target->method_name ? strdup(target->method_name) : NULL;
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 

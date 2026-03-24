@@ -524,6 +524,8 @@ struct Expression
             int call_hash_type;              /* HashType enum value */
             struct KgpcType *call_kgpc_type;   /* Procedure/function signature */
             int is_call_info_valid;          /* 1 if cached info is usable */
+            char *cached_owner_class;        /* Cached owner class from resolved func (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved func (NULL if not a method) */
             
             /* Support for calling through procedural variables */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable */

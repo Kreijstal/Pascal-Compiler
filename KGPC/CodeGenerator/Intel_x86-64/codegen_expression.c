@@ -286,15 +286,8 @@ static int codegen_expr_needs_class_method_vmt_self(const struct Expression *exp
 static int codegen_call_requires_class_method_vmt_self(const struct Expression *call_expr,
     CodeGenContext *ctx)
 {
-    HashNode_t *resolved = NULL;
-    const char *lookup_name = NULL;
-    const char *method_name = NULL;
-    const char *sep = NULL;
     const char *owner_class_name = NULL;
-    char parsed_class[128];
-    char parsed_method[128];
-    size_t class_len = 0;
-    size_t method_len = 0;
+    const char *method_name = NULL;
     struct RecordType *owner_record = NULL;
     struct RecordType *check_record = NULL;
     const char *check_class = NULL;
@@ -302,46 +295,18 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
     if (call_expr == NULL || call_expr->type != EXPR_FUNCTION_CALL)
         return 0;
 
-    resolved = call_expr->expr_data.function_call_data.resolved_func;
-    if (resolved != NULL && resolved->owner_class != NULL && resolved->method_name != NULL)
-    {
-        owner_class_name = resolved->owner_class;
-        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
-        if (owner_record == NULL || !record_type_is_class(owner_record))
-            return 0;
-        return from_cparser_is_method_nonstatic_class_method(
-            resolved->owner_class, resolved->method_name);
-    }
+    /* Use cached method identity from semantic checker (preferred). */
+    owner_class_name = call_expr->expr_data.function_call_data.cached_owner_class;
+    method_name = call_expr->expr_data.function_call_data.cached_method_name;
 
-    lookup_name = call_expr->expr_data.function_call_data.mangled_id;
-    if (lookup_name == NULL)
-        lookup_name = call_expr->expr_data.function_call_data.id;
-    method_name = call_expr->expr_data.function_call_data.id;
-    if (lookup_name == NULL)
-        lookup_name = method_name;
-
-    if (lookup_name != NULL)
+    /* Fallback: try deprecated resolved_func if cached fields not set. */
+    if (owner_class_name == NULL || method_name == NULL)
     {
-        sep = strstr(lookup_name, "__");
-        if (sep != NULL && sep != lookup_name)
+        HashNode_t *resolved = call_expr->expr_data.function_call_data.resolved_func;
+        if (resolved != NULL)
         {
-            class_len = (size_t)(sep - lookup_name);
-            if (class_len >= sizeof(parsed_class))
-                class_len = sizeof(parsed_class) - 1;
-            memcpy(parsed_class, lookup_name, class_len);
-            parsed_class[class_len] = '\0';
-            owner_class_name = parsed_class;
-
-            sep += 2;
-            while (sep[method_len] != '\0' && sep[method_len] != '_' &&
-                   method_len + 1 < sizeof(parsed_method))
-            {
-                parsed_method[method_len] = sep[method_len];
-                method_len++;
-            }
-            parsed_method[method_len] = '\0';
-            if (parsed_method[0] != '\0')
-                method_name = parsed_method;
+            owner_class_name = resolved->owner_class;
+            method_name = resolved->method_name;
         }
     }
 
@@ -353,6 +318,8 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
             return 1;
     }
 
+    /* Fall back to self_class_name for inherited/virtual calls. */
+    method_name = call_expr->expr_data.function_call_data.id;
     check_class = call_expr->expr_data.function_call_data.self_class_name;
     check_record = codegen_lookup_named_record_type(ctx, check_class);
     while (check_class != NULL && method_name != NULL)
