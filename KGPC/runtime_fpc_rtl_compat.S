@@ -18,11 +18,26 @@ ReadDeltaStream:
 /* Interface TYPEINFO indirection table.
  * These globals are referenced by FPC RTL compiled code for interface IS/AS checks.
  * The ClassName_TYPEINFO symbols are emitted by the KGPC compiler when it compiles
- * the FPC RTL interfaces.  This object is only pulled into the link when FPC RTL
- * compiled code references PopCnt or filecreate_rbs_i — which only happens in
- * FPC RTL builds where all ClassName_TYPEINFO symbols are available. */
+ * the FPC RTL interfaces.  Provide weak fallback zero values for TYPEINFO symbols
+ * that may not be compiled if only a subset of interfaces are used. */
 .data
 .align 8
+
+/* Weak fallback TYPEINFO symbols — overridden by compiler-emitted versions when
+ * the corresponding interface is actually compiled in the program. */
+.weak IInterface_TYPEINFO
+.weak IUnknown_TYPEINFO
+.weak IObserver_TYPEINFO
+.weak ISingleCastObserver_TYPEINFO
+.weak IMultiCastObserver_TYPEINFO
+.weak IEditLinkObserver_TYPEINFO
+.weak IInterfaceComponentReference_TYPEINFO
+ISingleCastObserver_TYPEINFO:
+IMultiCastObserver_TYPEINFO:
+IEditLinkObserver_TYPEINFO:
+IInterfaceComponentReference_TYPEINFO:
+    .quad 0
+
 .globl IInterface
 IInterface:
     .quad IInterface_TYPEINFO

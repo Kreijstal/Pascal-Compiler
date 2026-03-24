@@ -3,6 +3,21 @@ unit Classes;
 interface
 
 type
+  TObserverToggleEvent = procedure(AObserver: TObject; AValue: Boolean) of object;
+
+  IObserver = interface
+    ['{20B140DC-B16A-4B9F-A530-E1E1A2B3A570}']
+    procedure Removed;
+    function GetActive: Boolean;
+    procedure SetActive(Value: Boolean);
+    function GetOnObserverToggle: TObserverToggleEvent;
+    procedure SetOnObserverToggle(aEvent: TObserverToggleEvent);
+    property Active: Boolean read GetActive write SetActive;
+  end;
+
+function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
+
+type
   TStrings = class(TObject)
   public
     FDelimiter: Char;
@@ -30,6 +45,14 @@ type
   end;
 
 implementation
+
+function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
+begin
+    if Instance = nil then
+        Supports := False
+    else
+        Supports := Instance.GetInterface(IID, Intf);
+end;
 
 procedure TStrings_AddDelimitedText_Helper(List: TStrings; const S: string; ADelimiter: Char; AStrictDelimiter: Boolean);
 var
