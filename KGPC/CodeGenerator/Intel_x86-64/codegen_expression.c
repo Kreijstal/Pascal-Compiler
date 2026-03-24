@@ -30,6 +30,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
@@ -4842,7 +4843,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
             }
 
             int offset = 0;
-            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset, ctx);
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), target_reg->bit_64);
             return add_inst(inst_list, buffer);
         }
@@ -8235,7 +8236,8 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
 }
 
 /* Code generation for non-local variable access */
-ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
+ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset,
+    CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -8245,10 +8247,148 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     assert(var_id != NULL);
     assert(offset != NULL);
 
-    char buffer[100];
+    char buffer[128];
     StackNode_t *var = find_label(var_id);
 
     if(var == NULL) {
+        /* If we're inside a nonstatic class method, the bare name may be a field
+         * of the owning class that semcheck didn't rewrite to Self.field (e.g.
+         * because the method body came from an AST cache and bypassed semcheck).
+         * Resolve it as Self + field_offset. */
+        if (ctx != NULL && ctx->current_subprogram_owner_class != NULL &&
+            ctx->symtab != NULL)
+        {
+            StackNode_t *self_slot = find_label("Self");
+            if (self_slot != NULL)
+            {
+                struct RecordType *class_record = NULL;
+                HashNode_t *class_node = NULL;
+                if (FindSymbol(&class_node, ctx->symtab,
+                        (char *)ctx->current_subprogram_owner_class) != 0 &&
+                    class_node != NULL)
+                {
+                    class_record = get_record_type_from_node(class_node);
+                }
+                /* If short name lookup fails, try the full dotted class path
+                 * (e.g. "HeapInc.ThreadState" for nested class types). */
+                if (class_record == NULL &&
+                    ctx->current_subprogram_owner_class_full != NULL)
+                {
+                    class_node = NULL;
+                    if (FindSymbol(&class_node, ctx->symtab,
+                            (char *)ctx->current_subprogram_owner_class_full) != 0 &&
+                        class_node != NULL)
+                    {
+                        class_record = get_record_type_from_node(class_node);
+                    }
+                }
+                if (class_record != NULL)
+                {
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (resolve_record_field(ctx->symtab, class_record, var_id,
+                            &field_desc, &field_offset, 0, 1) == 0 &&
+                        field_desc != NULL)
+                    {
+                        /* Load Self pointer, then add field offset. */
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tmovq\t-%d(%%rbp), %s\n",
+                            self_slot->offset, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        if (field_offset != 0)
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\taddq\t$%lld, %s\n",
+                                field_offset, current_non_local_reg64());
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        return inst_list;
+                    }
+
+                    /* Check if the bare name is a method of the owning class.
+                     * This handles @MethodName references in cached method bodies. */
+                    const char *method_label = NULL;
+                    for (ListNode_t *mn = class_record->methods; mn != NULL; mn = mn->next)
+                    {
+                        if (mn->cur == NULL)
+                            continue;
+                        struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                        if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                        {
+                            if (mi->resolved_mangled_id != NULL)
+                                method_label = mi->resolved_mangled_id;
+                            else if (mi->mangled_name != NULL)
+                                method_label = mi->mangled_name;
+                            break;
+                        }
+                    }
+                    /* Also search parent classes for inherited methods. */
+                    if (method_label == NULL)
+                    {
+                        struct RecordType *search_record = class_record;
+                        while (method_label == NULL && search_record != NULL &&
+                               search_record->parent_class_name != NULL)
+                        {
+                            HashNode_t *parent_node = NULL;
+                            if (FindSymbol(&parent_node, ctx->symtab,
+                                    search_record->parent_class_name) != 0 &&
+                                parent_node != NULL)
+                            {
+                                search_record = get_record_type_from_node(parent_node);
+                            }
+                            else
+                                break;
+                            if (search_record == NULL)
+                                break;
+                            for (ListNode_t *mn = search_record->methods; mn != NULL; mn = mn->next)
+                            {
+                                if (mn->cur == NULL)
+                                    continue;
+                                struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                                if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                                {
+                                    if (mi->resolved_mangled_id != NULL)
+                                        method_label = mi->resolved_mangled_id;
+                                    else if (mi->mangled_name != NULL)
+                                        method_label = mi->mangled_name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    /* If not found in MethodInfo lists, try the symbol table.
+                     * Methods may be registered under "ClassName.MethodName". */
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s.%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        HashNode_t *method_node = NULL;
+                        if (FindSymbol(&method_node, ctx->symtab, qualified) != 0 &&
+                            method_node != NULL &&
+                            (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                             method_node->hash_type == HASHTYPE_FUNCTION))
+                        {
+                            if (method_node->mangled_id != NULL)
+                                method_label = method_node->mangled_id;
+                            else
+                                method_label = qualified;
+                        }
+                    }
+                    if (method_label != NULL)
+                    {
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tleaq\t%s(%%rip), %s\n",
+                            method_label, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        return inst_list;
+                    }
+                }
+            }
+        }
+
         /* Fallback for unit/global symbols that are not represented as stack labels. */
         *offset = 0;
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", var_id,

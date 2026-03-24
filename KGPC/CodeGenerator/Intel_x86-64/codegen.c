@@ -3573,6 +3573,71 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
     }
 }
 
+/* Helper: emit abstract method stubs for old-style Pascal objects from type lists.
+ * Old-style objects (not class, not interface) use direct calls, so virtual;abstract
+ * methods need stubs jumping to __kgpc_abstract_method_error.
+ * Uses the MethodInfo entries in record_info->methods to get the exact mangled names. */
+static void codegen_emit_old_object_abstract_stubs_from_type_list(
+    CodeGenContext *ctx, ListNode_t *type_decls, EmittedClassSet *emitted_classes)
+{
+    ListNode_t *cur = type_decls;
+    while (cur != NULL) {
+        Tree_t *type_tree = (Tree_t *)cur->cur;
+        if (type_tree == NULL || type_tree->type != TREE_TYPE_DECL ||
+            codegen_type_decl_suppressed(type_tree)) {
+            cur = cur->next;
+            continue;
+        }
+
+        struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
+        if (record_info == NULL || record_info->is_interface ||
+            record_type_is_class(record_info) || record_info->methods == NULL) {
+            cur = cur->next;
+            continue;
+        }
+
+        for (ListNode_t *method_node = record_info->methods;
+             method_node != NULL; method_node = method_node->next) {
+            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+            if (method == NULL || method->mangled_name == NULL)
+                continue;
+
+            const char *mangled_id = method->mangled_name;
+
+            /* Skip if a concrete implementation exists */
+            if (g_codegen_available_subprograms != NULL &&
+                codegen_list_contains_string(g_codegen_available_subprograms, mangled_id))
+                continue;
+
+            if (method->resolved_mangled_id != NULL &&
+                g_codegen_available_subprograms != NULL &&
+                codegen_list_contains_string(g_codegen_available_subprograms,
+                                             method->resolved_mangled_id))
+                continue;
+
+            /* Deduplicate */
+            char dedup_buf[1024];
+            snprintf(dedup_buf, sizeof(dedup_buf), "__abstract_stub_%s", mangled_id);
+            if (emitted_class_set_contains(emitted_classes, dedup_buf))
+                continue;
+            char *dedup_key = strdup(dedup_buf);
+            if (dedup_key != NULL)
+                emitted_class_set_add(emitted_classes, dedup_key);
+
+            /* Emit abstract method stub — this is the correct implementation
+             * for virtual;abstract methods in old-style objects.  The dedup
+             * check above ensures we don't emit when a concrete impl exists. */
+            fprintf(ctx->output_file,
+                    "\n# Abstract method stub: %s\n", mangled_id);
+            fprintf(ctx->output_file, "\t.text\n");
+            fprintf(ctx->output_file, ".globl %s\n", mangled_id);
+            fprintf(ctx->output_file, "%s:\n", mangled_id);
+            fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
+        }
+        cur = cur->next;
+    }
+}
+
 /* Helper: emit GUID data for all interfaces with GUIDs in a type declaration list.
  * Used to emit GUIDs from loaded units whose interfaces are not in the local scope. */
 static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
@@ -3880,6 +3945,20 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     }
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_aliases_from_type_list(ctx,
+            tree->tree_data.program_data.type_declaration, &emitted_classes);
+
+    /* Emit abstract method stubs for old-style Pascal objects */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
+                    unit->tree_data.unit_data.interface_type_decls,
+                    &emitted_classes);
+        }
+    }
+    if (tree->type == TREE_PROGRAM_TYPE)
+        codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
     emitted_class_set_destroy(&emitted_classes);

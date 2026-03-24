@@ -3970,7 +3970,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else
                     {
-                        inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                        inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
                         snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
                     }
                 }

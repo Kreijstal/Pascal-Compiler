@@ -1569,7 +1569,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;
-                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
                 Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (addr_reg == NULL)
                 {
@@ -7225,7 +7225,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         else
         {
             int offset = 0;
-            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset, ctx);
             if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, offset, current_non_local_reg64());
             else
@@ -9408,7 +9408,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else
         {
 
-            inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset, ctx);
             int use_qword = codegen_type_uses_qword(var_type);
             /* Override for Single type (4-byte float): check resolved type storage */
             long long resolved_size = (var_expr->resolved_kgpc_type != NULL) ?
