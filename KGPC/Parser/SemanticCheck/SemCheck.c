@@ -2410,10 +2410,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 {
     int effective_line = line_num;
     int effective_col = col_num;
+    int effective_source_index = source_index;
 
-    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    /* Fall back to last known good line/col for synthetic nodes with line 0.
+     * Also discard source_index — synthetic nodes often carry stale offsets
+     * from a different source buffer, leading to wrong file/line display. */
     if (effective_line <= 0 && g_semcheck_error_line > 0)
+    {
         effective_line = g_semcheck_error_line;
+        effective_source_index = g_semcheck_error_source_index;
+    }
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
@@ -2424,16 +2430,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
-            source_index, effective_line,
+            effective_source_index, effective_line,
             directive_file, sizeof(directive_file),
             unit_chain, sizeof(unit_chain));
         if (resolved_line > 0)
             effective_line = resolved_line;
     }
-    else if (source_index >= 0)
+    else if (effective_source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
-            source_index, directive_file, sizeof(directive_file), 1);
+            effective_source_index, directive_file, sizeof(directive_file), 1);
         if (resolved_line > 0)
             effective_line = resolved_line;
         if (directive_file[0] != '\0')
@@ -2449,7 +2455,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     va_list args;
     va_start(args, format);
     v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
-        source_index, format, args);
+        effective_source_index, format, args);
     if (unit_chain[0] != '\0')
         fprintf(stderr, "  %s\n", unit_chain);
     va_end(args);
