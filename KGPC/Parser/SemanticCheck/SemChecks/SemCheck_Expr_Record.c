@@ -344,6 +344,29 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
 
+            /* Class methods (including private getters/setters) must be
+             * reachable when we already have access to the class type.
+             * Search all unit scopes directly — the method may live in
+             * a unit that is not a direct/transitive dependency but
+             * whose class type was exposed through re-exports. */
+            if (method_node == NULL)
+            {
+                for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+                {
+                    if (symtab->unit_scopes[u] == NULL)
+                        continue;
+                    HashNode_t *found = FindIdentInTable(
+                        symtab->unit_scopes[u]->table, mangled_name);
+                    if (found != NULL &&
+                        (found->hash_type == HASHTYPE_FUNCTION ||
+                         found->hash_type == HASHTYPE_PROCEDURE))
+                    {
+                        method_node = found;
+                        break;
+                    }
+                }
+            }
+
             if (method_node != NULL)
             {
                 if (method_node->hash_type == HASHTYPE_FUNCTION_RETURN)
