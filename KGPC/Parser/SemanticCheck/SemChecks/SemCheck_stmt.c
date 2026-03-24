@@ -7566,6 +7566,86 @@ proccall_parent_resolve_done:
         }
     }
 
+    /* If no overloads found and proc_id looks like ClassName__MethodName,
+     * try walking the class hierarchy to find the method in a parent class.
+     * This handles cases like TElfVersionDef.Create where the constructor
+     * is inherited from TFPHashObject but not redeclared in the child. */
+    if (resolved_proc == NULL && overload_candidates == NULL && proc_id != NULL)
+    {
+        const char *dunder = strstr(proc_id, "__");
+        if (dunder != NULL && dunder > proc_id)
+        {
+            char *class_name = strndup(proc_id, (size_t)(dunder - proc_id));
+            const char *method_name = dunder + 2;
+            if (class_name != NULL && method_name[0] != '\0')
+            {
+                HashNode_t *class_node = semcheck_find_preferred_type_node(symtab, class_name);
+                if (class_node == NULL)
+                    FindSymbol(&class_node, symtab, class_name);
+                struct RecordType *record_info = (class_node != NULL)
+                    ? semcheck_stmt_get_record_type_from_node(class_node) : NULL;
+                const char *parent_class_name = (record_info != NULL)
+                    ? record_info->parent_class_name : NULL;
+                while (parent_class_name != NULL && resolved_proc == NULL)
+                {
+                    size_t plen = strlen(parent_class_name);
+                    size_t mlen = strlen(method_name);
+                    char *parent_proc_id = (char *)malloc(plen + 2 + mlen + 1);
+                    if (parent_proc_id == NULL)
+                        break;
+                    sprintf(parent_proc_id, "%s__%s", parent_class_name, method_name);
+
+                    char *parent_mangled = MangleFunctionNameFromCallSite(
+                        parent_proc_id, args_given, symtab, INT_MAX);
+                    ListNode_t *parent_candidates = FindAllIdents(symtab, parent_proc_id);
+                    if (parent_candidates != NULL)
+                    {
+                        for (ListNode_t *pc = parent_candidates; pc != NULL; pc = pc->next)
+                        {
+                            HashNode_t *cand = (HashNode_t *)pc->cur;
+                            if (cand->mangled_id != NULL && parent_mangled != NULL &&
+                                strcmp(cand->mangled_id, parent_mangled) == 0)
+                            {
+                                resolved_proc = cand;
+                                match_count = 1;
+                                if (cand->id != NULL)
+                                {
+                                    free(stmt->stmt_data.procedure_call_data.id);
+                                    stmt->stmt_data.procedure_call_data.id = strdup(cand->id);
+                                    proc_id = stmt->stmt_data.procedure_call_data.id;
+                                }
+                                break;
+                            }
+                        }
+                        if (resolved_proc == NULL)
+                        {
+                            /* No mangled match — try overload resolution on parent candidates */
+                            overload_candidates = parent_candidates;
+                            parent_candidates = NULL;
+                            free(stmt->stmt_data.procedure_call_data.id);
+                            stmt->stmt_data.procedure_call_data.id = strdup(parent_proc_id);
+                            proc_id = stmt->stmt_data.procedure_call_data.id;
+                            free(mangled_name);
+                            mangled_name = parent_mangled;
+                            parent_mangled = NULL;
+                        }
+                        DestroyList(parent_candidates);
+                    }
+                    free(parent_mangled);
+                    free(parent_proc_id);
+                    if (resolved_proc != NULL || overload_candidates != NULL)
+                        break;
+                    /* Move to next parent */
+                    HashNode_t *pnode = semcheck_find_preferred_type_node(symtab, parent_class_name);
+                    struct RecordType *prec = (pnode != NULL)
+                        ? semcheck_stmt_get_record_type_from_node(pnode) : NULL;
+                    parent_class_name = (prec != NULL) ? prec->parent_class_name : NULL;
+                }
+            }
+            free(class_name);
+        }
+    }
+
     /* If we found multiple matches but they all have the same mangled name,
      * treat it as a single match (they're duplicates from different scopes) */
     int force_best_match = 0;
