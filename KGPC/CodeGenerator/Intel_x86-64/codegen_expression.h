@@ -39,6 +39,8 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg);
 
 int codegen_expr_is_addressable(const struct Expression *expr);
+int codegen_expr_is_interface_guid_type_ref(const struct Expression *expr,
+    SymTab_t *symtab, struct RecordType **iface_record_out);
 
 int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr, long long *size_out);
 int codegen_sizeof_record_type(CodeGenContext *ctx, struct RecordType *record,

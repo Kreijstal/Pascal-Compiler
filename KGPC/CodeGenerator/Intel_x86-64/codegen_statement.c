@@ -254,6 +254,105 @@ static struct ClassProperty *codegen_find_class_property(const struct RecordType
     return NULL;
 }
 
+static int codegen_parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2,
+    uint16_t *d3, uint8_t d4[8])
+{
+    unsigned int dd1 = 0, dd2 = 0, dd3 = 0;
+    unsigned int b[8];
+
+    if (guid == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
+        return 0;
+    if (sscanf(guid,
+            "{%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x}",
+            &dd1, &dd2, &dd3,
+            &b[0], &b[1], &b[2], &b[3], &b[4], &b[5], &b[6], &b[7]) != 11)
+    {
+        return 0;
+    }
+
+    *d1 = (uint32_t)dd1;
+    *d2 = (uint16_t)dd2;
+    *d3 = (uint16_t)dd3;
+    for (int i = 0; i < 8; ++i)
+        d4[i] = (uint8_t)b[i];
+    return 1;
+}
+
+static int codegen_expr_is_guid_record(const struct Expression *expr)
+{
+    struct RecordType *record = NULL;
+    KgpcType *type = NULL;
+
+    if (expr == NULL)
+        return 0;
+    if (expr->record_type != NULL)
+        record = expr->record_type;
+    if (record == NULL)
+    {
+        type = expr_get_kgpc_type(expr);
+        if (type != NULL)
+        {
+            if (kgpc_type_is_record(type))
+                record = type->info.record_info;
+            else if (kgpc_type_is_pointer(type) && type->info.points_to != NULL &&
+                     kgpc_type_is_record(type->info.points_to))
+                record = type->info.points_to->info.record_info;
+        }
+    }
+    return record != NULL && record->type_id != NULL &&
+        (pascal_identifier_equals(record->type_id, "TGUID") ||
+         pascal_identifier_equals(record->type_id, "TGuid") ||
+         pascal_identifier_equals(record->type_id, "GUID"));
+}
+
+static int codegen_symbol_is_guid_record(SymTab_t *symtab, const char *id)
+{
+    HashNode_t *node = NULL;
+    struct RecordType *record = NULL;
+
+    if (symtab == NULL || id == NULL)
+        return 0;
+    if (FindSymbol(&node, symtab, id) == 0 || node == NULL || node->type == NULL)
+        return 0;
+    if (kgpc_type_is_record(node->type))
+        record = node->type->info.record_info;
+    else if (kgpc_type_is_pointer(node->type) && node->type->info.points_to != NULL &&
+             kgpc_type_is_record(node->type->info.points_to))
+        record = node->type->info.points_to->info.record_info;
+    return record != NULL && record->type_id != NULL &&
+        (pascal_identifier_equals(record->type_id, "TGUID") ||
+         pascal_identifier_equals(record->type_id, "TGuid") ||
+         pascal_identifier_equals(record->type_id, "GUID"));
+}
+
+static int codegen_symbol_is_record_value(SymTab_t *symtab, const char *id)
+{
+    HashNode_t *node = NULL;
+
+    if (symtab == NULL || id == NULL)
+        return 0;
+    if (FindSymbol(&node, symtab, id) == 0 || node == NULL || node->type == NULL)
+        return 0;
+    if (kgpc_type_is_record(node->type))
+        return 1;
+    return 0;
+}
+
+static const char *codegen_expr_guid_literal_text(const struct Expression *expr, SymTab_t *symtab)
+{
+    HashNode_t *node = NULL;
+
+    if (expr == NULL)
+        return NULL;
+    if (expr->type == EXPR_STRING)
+        return expr->expr_data.string;
+    if (expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL || symtab == NULL)
+        return NULL;
+    if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL)
+        return NULL;
+    return node->const_string_value;
+}
+
 static int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordType *enum_record,
     HashNode_t **out_current_node, KgpcType **out_current_type)
 {
@@ -1469,6 +1568,57 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
+        struct RecordType *iface_record = NULL;
+        if (codegen_expr_is_interface_guid_type_ref(expr,
+                ctx != NULL ? ctx->symtab : NULL, &iface_record))
+        {
+            Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            char buffer[160];
+            char rodata[512];
+            char label[32];
+            const char *readonly_section = codegen_readonly_section_directive();
+
+            if (addr_reg == NULL)
+                addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for interface GUID address.");
+                goto cleanup;
+            }
+            if (iface_record == NULL || !iface_record->has_guid)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Interface type %s is missing GUID metadata.",
+                    expr->expr_data.id != NULL ? expr->expr_data.id : "(unknown)");
+                free_reg(get_reg_stack(), addr_reg);
+                goto cleanup;
+            }
+
+            snprintf(label, sizeof(label), ".LCGUID%d", ctx->write_label_counter++);
+            snprintf(rodata, sizeof(rodata),
+                "%s\n%s:\n"
+                "\t.long\t0x%08X\n"
+                "\t.short\t0x%04X\n"
+                "\t.short\t0x%04X\n"
+                "\t.byte\t0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X\n"
+                "\t.text\n",
+                readonly_section, label,
+                (unsigned)iface_record->guid_d1,
+                (unsigned)iface_record->guid_d2,
+                (unsigned)iface_record->guid_d3,
+                iface_record->guid_d4[0], iface_record->guid_d4[1],
+                iface_record->guid_d4[2], iface_record->guid_d4[3],
+                iface_record->guid_d4[4], iface_record->guid_d4[5],
+                iface_record->guid_d4[6], iface_record->guid_d4[7]);
+            inst_list = add_inst(inst_list, rodata);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
@@ -2047,6 +2197,64 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
         inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
         goto cleanup;
+    }
+    else if (expr->type == EXPR_FUNCTION_CALL)
+    {
+        struct RecordType *iface_record = NULL;
+        if (codegen_expr_is_interface_guid_type_ref(expr,
+                ctx != NULL ? ctx->symtab : NULL, &iface_record))
+        {
+            Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            char buffer[160];
+            char rodata[512];
+            char label[32];
+            const char *readonly_section = codegen_readonly_section_directive();
+
+            if (addr_reg == NULL)
+                addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for interface GUID address.");
+                goto cleanup;
+            }
+            if (iface_record == NULL || !iface_record->has_guid)
+            {
+                const char *expr_id = NULL;
+                if (expr->type == EXPR_FUNCTION_CALL)
+                    expr_id = expr->expr_data.function_call_data.id;
+                else if (expr->type == EXPR_VAR_ID)
+                    expr_id = expr->expr_data.id;
+                codegen_report_error(ctx,
+                    "ERROR: Interface type %s is missing GUID metadata.",
+                    expr_id != NULL ? expr_id : "(unknown)");
+                free_reg(get_reg_stack(), addr_reg);
+                goto cleanup;
+            }
+
+            snprintf(label, sizeof(label), ".LCGUID%d", ctx->write_label_counter++);
+            snprintf(rodata, sizeof(rodata),
+                "%s\n%s:\n"
+                "\t.long\t0x%08X\n"
+                "\t.short\t0x%04X\n"
+                "\t.short\t0x%04X\n"
+                "\t.byte\t0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X\n"
+                "\t.text\n",
+                readonly_section, label,
+                (unsigned)iface_record->guid_d1,
+                (unsigned)iface_record->guid_d2,
+                (unsigned)iface_record->guid_d3,
+                iface_record->guid_d4[0], iface_record->guid_d4[1],
+                iface_record->guid_d4[2], iface_record->guid_d4[3],
+                iface_record->guid_d4[4], iface_record->guid_d4[5],
+                iface_record->guid_d4[6], iface_record->guid_d4[7]);
+            inst_list = add_inst(inst_list, rodata);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
     }
     else if (expr->type == EXPR_TYPECAST)
     {
@@ -3564,6 +3772,77 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
         free_reg(get_reg_stack(), dest_reg);
         return inst_list;
+    }
+
+    {
+        int dest_is_guid_record = codegen_expr_is_guid_record(dest_expr);
+        if (!dest_is_guid_record && dest_expr->type == EXPR_VAR_ID)
+        {
+            dest_is_guid_record = codegen_symbol_is_guid_record(
+                ctx != NULL ? ctx->symtab : NULL, dest_expr->expr_data.id);
+        }
+        if (dest_is_guid_record)
+        {
+            const char *guid_text = codegen_expr_guid_literal_text(src_expr,
+                ctx != NULL ? ctx->symtab : NULL);
+            uint32_t guid_d1 = 0;
+            uint16_t guid_d2 = 0;
+            uint16_t guid_d3 = 0;
+            uint8_t guid_d4[8];
+
+            if (guid_text != NULL &&
+                codegen_parse_guid_literal(guid_text, &guid_d1, &guid_d2, &guid_d3, guid_d4))
+            {
+                char buffer[128];
+                char label[32];
+                char rodata[512];
+                const char *readonly_section = codegen_readonly_section_directive();
+
+                inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+                if (codegen_had_error(ctx) || dest_reg == NULL)
+                {
+                    if (dest_reg != NULL)
+                        free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                snprintf(label, sizeof(label), ".LCGUID%d", ctx->write_label_counter++);
+                snprintf(rodata, sizeof(rodata),
+                    "%s\n%s:\n"
+                    "\t.long\t0x%08X\n"
+                    "\t.short\t0x%04X\n"
+                    "\t.short\t0x%04X\n"
+                    "\t.byte\t0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X,0x%02X\n"
+                    "\t.text\n",
+                    readonly_section, label,
+                    (unsigned)guid_d1, (unsigned)guid_d2, (unsigned)guid_d3,
+                    guid_d4[0], guid_d4[1], guid_d4[2], guid_d4[3],
+                    guid_d4[4], guid_d4[5], guid_d4[6], guid_d4[7]);
+                inst_list = add_inst(inst_list, rodata);
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rdx\n", label);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tmovq\t$16, %r8\n");
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %%rsi\n", label);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = add_inst(inst_list, "\tmovq\t$16, %rdx\n");
+                }
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                free_arg_regs();
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+        }
     }
 
     if (!codegen_expr_is_addressable(src_expr))
@@ -8683,12 +8962,14 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
     var_expr = stmt->stmt_data.var_assign_data.var;
     assign_expr = stmt->stmt_data.var_assign_data.expr;
+    struct Expression *lhs_original_expr = var_expr;
 
 
     /* Handle string typecast on LHS: e.g., RawByteString(ptr) := 'value'
      * The typecast means this pointer should be treated as a string variable.
      * Generate a string assignment (kgpc_string_assign) instead of direct store. */
     int lhs_is_string_typecast = 0;
+    int lhs_nonstring_typecast_target_type = UNKNOWN_TYPE;
     if (var_expr != NULL && var_expr->type == EXPR_TYPECAST &&
         var_expr->expr_data.typecast_data.expr != NULL)
     {
@@ -8696,7 +8977,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         if (is_string_type(target_type))
             lhs_is_string_typecast = 1;
         else
+        {
+            lhs_nonstring_typecast_target_type = target_type;
             var_expr = var_expr->expr_data.typecast_data.expr;
+        }
     }
 
     /* Handle string typecast on LHS: e.g., RawByteString(ptr) := ''
@@ -8756,6 +9040,24 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reg);
         return inst_list;
+    }
+
+    /* Preserve Pascal @recordvar semantics even if semantic lowering has
+     * normalized the RHS to the bare record lvalue. Pointer destinations must
+     * store the address, not copy the record payload. */
+    if (var_expr != NULL && assign_expr != NULL &&
+        assign_expr->type != EXPR_ADDR && assign_expr->type != EXPR_ADDR_OF_PROC)
+    {
+        KgpcType *lhs_type = expr_get_kgpc_type(var_expr);
+        KgpcType *rhs_type = expr_get_kgpc_type(assign_expr);
+        int lhs_is_pointer_like = (lhs_type != NULL &&
+            (kgpc_type_is_pointer(lhs_type) || kgpc_type_is_procedure(lhs_type))) ||
+            lhs_nonstring_typecast_target_type == POINTER_TYPE ||
+            lhs_nonstring_typecast_target_type == PROCEDURE;
+        int rhs_is_addressable_record = (rhs_type != NULL && kgpc_type_is_record(rhs_type) &&
+            (assign_expr->type == EXPR_VAR_ID || assign_expr->type == EXPR_RECORD_ACCESS));
+        if (lhs_is_pointer_like && rhs_is_addressable_record)
+            assign_expr = mk_addressof(assign_expr->line_num, assign_expr);
     }
 
     if (codegen_expr_is_mp_integer(var_expr))
@@ -8821,16 +9123,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
 
     if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
-        return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
-
-    int lhs_is_record_value = 0;
-    KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
-    if (lhs_kgpc_type != NULL)
-        lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
-    else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
-        lhs_is_record_value = 1;
-
-    if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
     if (codegen_expr_is_extended_storage(var_expr))
@@ -8915,11 +9207,44 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        int lhs_is_record_value = 0;
+        KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
+        int rhs_is_address_value = (assign_expr != NULL &&
+            (assign_expr->type == EXPR_ADDR || assign_expr->type == EXPR_ADDR_OF_PROC));
+        int lhs_is_pointer_destination = 0;
+        if (lhs_kgpc_type != NULL &&
+            (kgpc_type_is_pointer(lhs_kgpc_type) || kgpc_type_is_procedure(lhs_kgpc_type)))
+        {
+            lhs_is_pointer_destination = 1;
+        }
+        else if (lhs_nonstring_typecast_target_type == POINTER_TYPE ||
+                 lhs_nonstring_typecast_target_type == PROCEDURE)
+        {
+            lhs_is_pointer_destination = 1;
+        }
+        if (lhs_kgpc_type != NULL)
+            lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
+        else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
+            lhs_is_record_value = 1;
+        else if (var_expr->type == EXPR_VAR_ID)
+            lhs_is_record_value = codegen_symbol_is_record_value(ctx->symtab,
+                var_expr->expr_data.id);
+
+        if (rhs_is_address_value && lhs_is_pointer_destination)
+            lhs_is_record_value = 0;
+
+        if (lhs_is_record_value)
+        {
+            free_reg(get_reg_stack(), value_reg);
+            return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
+        }
+
         /* When assigning an extended-returning function call to a Real variable,
          * value_reg holds a pointer to the sret buffer containing the 10-byte
          * extended value.  Convert it to a double via kgpc_load_extended_to_bits
          * so the store below writes the correct IEEE-754 double bits. */
-        int var_type = expr_get_type_tag(var_expr);
+        int var_type = (lhs_nonstring_typecast_target_type != UNKNOWN_TYPE) ?
+            lhs_nonstring_typecast_target_type : expr_get_type_tag(var_expr);
         if (var_type == REAL_TYPE &&
             assign_expr != NULL && assign_expr->type == EXPR_FUNCTION_CALL &&
             expr_returns_sret(assign_expr) &&
@@ -9301,6 +9626,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             /* Override for Single type (4-byte float): check actual storage size
              * Use element_size which stores the unaligned size, not size which may be padded */
             long long unaligned_size = var->element_size > 0 ? var->element_size : var->size;
+            long long lhs_effective_size = expr_effective_size_bytes(lhs_original_expr);
+            if (lhs_effective_size > unaligned_size)
+                unaligned_size = lhs_effective_size;
             if (var_expr != NULL && var_expr->type == EXPR_RECORD_ACCESS)
             {
                 long long field_size = codegen_record_field_effective_size(var_expr, ctx);
@@ -9313,6 +9641,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             if (!var->is_reference && var->size >= 8 &&
                 (var_expr == NULL || var_expr->type != EXPR_RECORD_ACCESS) &&
                 !is_single_target)
+                use_qword = 1;
+            if (!is_single_target && lhs_effective_size >= CODEGEN_POINTER_SIZE_BYTES)
                 use_qword = 1;
             
             /* For Single targets with real source, convert double to single precision.
@@ -9521,6 +9851,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 kgpc_type_sizeof(var_expr->resolved_kgpc_type) : 8;
             if (is_single_float_type(var_type, resolved_size))
                 use_qword = 0;
+            if (expr_effective_size_bytes(lhs_original_expr) >= CODEGEN_POINTER_SIZE_BYTES)
+                use_qword = 1;
             int use_byte = 0;
             const char *value_reg8 = NULL;
             if (!use_qword && var_type == CHAR_TYPE)
@@ -9621,7 +9953,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        int var_type = expr_get_type_tag(var_expr);
+        int var_type = (lhs_nonstring_typecast_target_type != UNKNOWN_TYPE) ?
+            lhs_nonstring_typecast_target_type : expr_get_type_tag(var_expr);
         int coerced_to_real = 0;
         inst_list = codegen_maybe_convert_int_like_to_real(var_type, assign_expr,
             value_reg, inst_list, &coerced_to_real);
@@ -9800,7 +10133,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        int var_type_2 = expr_get_type_tag(var_expr);
+        int var_type_2 = (lhs_nonstring_typecast_target_type != UNKNOWN_TYPE) ?
+            lhs_nonstring_typecast_target_type : expr_get_type_tag(var_expr);
         if (var_type_2 == UNKNOWN_TYPE && var_expr->type == EXPR_RECORD_ACCESS)
         {
             const char *field_id = var_expr->expr_data.record_access_data.field_id;
@@ -10088,17 +10422,21 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n", addr_temp->offset, addr_reload->bit_64);
         inst_list = add_inst(inst_list, buffer);
 
-        int var_type_3 = expr_get_type_tag(var_expr);
+        int var_type_3 = (lhs_nonstring_typecast_target_type != UNKNOWN_TYPE) ?
+            lhs_nonstring_typecast_target_type : expr_get_type_tag(var_expr);
         int coerced_to_real = 0;
         inst_list = codegen_maybe_convert_int_like_to_real(var_type_3, assign_expr,
             value_reg, inst_list, &coerced_to_real);
         long long pointer_target_size = expr_effective_size_bytes(var_expr);
-        int use_word = (!codegen_type_uses_qword(var_type_3) && pointer_target_size == 2);
+        int use_qword = codegen_type_uses_qword(var_type_3);
+        if (!use_qword && pointer_target_size >= CODEGEN_POINTER_SIZE_BYTES)
+            use_qword = 1;
+        int use_word = (!use_qword && pointer_target_size == 2);
         if (var_type_3 == STRING_TYPE)
         {
             inst_list = codegen_call_string_assign(inst_list, ctx, addr_reload, value_reg);
         }
-        else if (codegen_type_uses_qword(var_type_3))
+        else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
             /* Fallback: check expr type tag for pointer arithmetic / 64-bit ops */

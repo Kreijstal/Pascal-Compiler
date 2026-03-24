@@ -3084,10 +3084,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (emitted_class_set_add(emitted_classes, class_label) != 0)
         return;
 
-    /* Emit interface entry table if this class implements interfaces */
+    /* Emit custom KGPC interface metadata used by our interface dispatch path. */
     int actual_iface_count = 0;
     if (record_info->num_interfaces > 0) {
-        fprintf(ctx->output_file, "\n# Interface table for class %s\n", class_label);
+        fprintf(ctx->output_file, "\n# KGPC interface metadata for class %s\n", class_label);
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "%s_INTERFACES:\n", class_label);
         for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
@@ -3177,6 +3177,79 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     }
                 }
             }
+        }
+    }
+
+    /* Emit an FPC-compatible interface table for TObject.GetInterfaceEntry().
+     * Keep this separate from the KGPC metadata above because our own interface
+     * dispatch code scans the custom typeinfo-side table directly. */
+    if (record_info->num_interfaces > 0) {
+        fprintf(ctx->output_file, "\n# FPC interface table for class %s\n", class_label);
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "%s_FPC_INTERFACES:\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%d\n", actual_iface_count);
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL)
+                continue;
+
+            HashNode_t *iface_node = NULL;
+            struct RecordType *iface_record = NULL;
+            if (FindSymbol(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
+                iface_record = get_record_type_from_node(iface_node);
+                if (iface_record == NULL && iface_node->type != NULL &&
+                    iface_node->type->kind == TYPE_KIND_POINTER &&
+                    iface_node->type->info.points_to != NULL &&
+                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    iface_record = iface_node->type->info.points_to->info.record_info;
+            }
+
+            int has_guid = (iface_record != NULL && iface_record->has_guid);
+            int iface_method_count = 0;
+            if (iface_record != NULL && iface_record->method_templates != NULL)
+                iface_method_count = ListLength(iface_record->method_templates);
+
+            fprintf(ctx->output_file, "\t.quad\t__fpc_iface_guidptr_%s_%s\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.quad\t0\n"); /* VTable unused for etStandard */
+            fprintf(ctx->output_file, "\t.quad\t0\n"); /* IOffset = 0 for direct self interface implementation */
+            fprintf(ctx->output_file, "\t.quad\t__fpc_iface_iidstrptr_%s_%s\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.long\t0\n"); /* etStandard */
+            fprintf(ctx->output_file, "\t.long\t0\n");
+
+            if (has_guid) {
+                fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, "__fpc_iface_guid_%s_%s:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.long\t0x%08X\n", (unsigned)iface_record->guid_d1);
+                fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)iface_record->guid_d2);
+                fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)iface_record->guid_d3);
+                fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                    iface_record->guid_d4[0], iface_record->guid_d4[1], iface_record->guid_d4[2], iface_record->guid_d4[3],
+                    iface_record->guid_d4[4], iface_record->guid_d4[5], iface_record->guid_d4[6], iface_record->guid_d4[7]);
+                fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, "__fpc_iface_guidptr_%s_%s:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.quad\t__fpc_iface_guid_%s_%s\n", class_label, iface_name);
+            } else {
+                fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, "__fpc_iface_guidptr_%s_%s:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.quad\t0\n");
+            }
+
+            {
+                char short_buf[512];
+                size_t iface_len = strlen(iface_name);
+                if (iface_len > 255)
+                    iface_len = 255;
+                memset(short_buf, 0, sizeof(short_buf));
+                short_buf[0] = (char)iface_len;
+                memcpy(short_buf + 1, iface_name, iface_len);
+                fprintf(ctx->output_file, "__fpc_iface_iidstr_%s_%s:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.byte\t%d\n", (int)iface_len);
+                fprintf(ctx->output_file, "\t.ascii\t\"%.*s\"\n", (int)iface_len, iface_name);
+                fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, "__fpc_iface_iidstrptr_%s_%s:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.quad\t__fpc_iface_iidstr_%s_%s\n", class_label, iface_name);
+            }
+
         }
     }
 
@@ -3298,7 +3371,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 10: vIntfTable */
     if (actual_iface_count > 0)
-        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_FPC_INTERFACES\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 11: vMsgStrPtr */
