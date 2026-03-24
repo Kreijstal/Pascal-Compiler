@@ -3377,6 +3377,9 @@ static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *sp
                     subprogram_ast->child = node->next;
                 else
                     prev->next = node->next;
+                /* Sever the sibling link before freeing: free_ast() follows
+                 * both child and next pointers, and we must not free the
+                 * remaining AST siblings that follow this node. */
                 node->next = NULL;
                 free_ast(node);
                 break;
@@ -3452,10 +3455,10 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
 
     if (result != NULL)
     {
-        /* Clean up any generic metadata that convert_procedure/convert_function
-         * may have set.  The rewritten AST should not have a TYPE_PARAM_LIST
-         * (stripped by rewrite_generic_subprogram_ast), so these fields should
-         * already be clear.  Assert that invariant and clean up defensively. */
+        /* Verify that the specialization has no generic metadata.
+         * rewrite_generic_subprogram_ast() strips TYPE_PARAM_LIST so
+         * convert_procedure/convert_function should not detect any
+         * generic type parameters on the rewritten AST. */
         assert(result->tree_data.subprogram_data.num_generic_type_params == 0);
         assert(result->tree_data.subprogram_data.generic_type_params == NULL);
         assert(!result->tree_data.subprogram_data.is_generic_template);
