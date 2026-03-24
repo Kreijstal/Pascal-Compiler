@@ -627,6 +627,24 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope, int is_interface
     scope->dep_scopes[scope->num_deps++] = dep_scope;
 }
 
+void ScopeAddDependencyTransitive(ScopeNode *scope, ScopeNode *dep_scope, int is_interface)
+{
+    /* Always add the direct dependency */
+    ScopeAddDependency(scope, dep_scope, is_interface);
+
+    /* If this is an interface dep, propagate dep_scope's own interface deps.
+     * One level is sufficient because units are wired in topological order:
+     * each dep already has its own transitive deps flattened. */
+    if (is_interface)
+    {
+        for (int i = 0; i < dep_scope->num_deps; i++)
+        {
+            if (dep_scope->dep_is_iface[i])
+                ScopeAddDependency(scope, dep_scope->dep_scopes[i], 1);
+        }
+    }
+}
+
 void EnterScope(SymTab_t *symtab, int unit_index)
 {
     assert(symtab != NULL);

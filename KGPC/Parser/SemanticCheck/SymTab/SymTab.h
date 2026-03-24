@@ -166,6 +166,11 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
  * is_interface: 1 = interface (public) dependency, 0 = implementation-only. */
 void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope, int is_interface);
 
+/* Add a dependency edge with transitive propagation for interface deps.
+ * If is_interface is true, also pulls in dep_scope's own interface deps
+ * (one level deep, which is sufficient since units are wired in topological order). */
+void ScopeAddDependencyTransitive(ScopeNode *scope, ScopeNode *dep_scope, int is_interface);
+
 /* Push a new child scope under current_scope and make it current. */
 void EnterScope(SymTab_t *symtab, int unit_index);
 

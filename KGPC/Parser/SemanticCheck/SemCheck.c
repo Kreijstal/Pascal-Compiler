@@ -7324,17 +7324,23 @@ void wire_all_unit_scope_deps(SymTab_t *symtab)
         {
             ScopeNode *sys_scope = GetOrCreateUnitScope(symtab, sys_idx);
             if (sys_scope != NULL)
-                ScopeAddDependency(unit_scope, sys_scope, 1);
+                ScopeAddDependencyTransitive(unit_scope, sys_scope, 1);
         }
         /* Add explicit deps from uses clause */
         for (int d = 1; d <= num_units; d++)
         {
             if (d == u) continue;
-            if (unit_registry_is_dep(u, d))
+            if (unit_registry_is_iface_dep(u, d))
             {
                 ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
                 if (dep_scope != NULL)
-                    ScopeAddDependency(unit_scope, dep_scope, 1);
+                    ScopeAddDependencyTransitive(unit_scope, dep_scope, 1);
+            }
+            else if (unit_registry_is_dep(u, d))
+            {
+                ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                if (dep_scope != NULL)
+                    ScopeAddDependency(unit_scope, dep_scope, 0);
             }
         }
     }
@@ -14239,7 +14245,7 @@ static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses
     /* Every scope implicitly depends on System */
     int sys_idx = unit_registry_add("System");
     if (sys_idx > 0)
-        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, sys_idx), 1);
+        ScopeAddDependencyTransitive(scope, GetOrCreateUnitScope(symtab, sys_idx), 1);
 
     ListNode_t *cur = uses_list;
     while (cur != NULL)
@@ -14249,7 +14255,7 @@ static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses
             const char *name = (const char *)cur->cur;
             int idx = unit_registry_add(name);
             if (idx > 0)
-                ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, idx), 1);
+                ScopeAddDependencyTransitive(scope, GetOrCreateUnitScope(symtab, idx), 1);
         }
         cur = cur->next;
     }
