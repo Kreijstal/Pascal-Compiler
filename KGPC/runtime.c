@@ -1503,23 +1503,38 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
     if (self == NULL || guid == NULL || out_intf == NULL)
         return 0;
 
-    /* Get typeinfo pointer from the object's VMT (vTypeInfo at offset 56) */
+    /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
+     * This reads the FPC-compatible tinterfacetable layout:
+     *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
+     * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
     const void *vmt = *(const void * const *)self;
     if (vmt == NULL)
         return 0;
-    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
 
-    /* Walk the class hierarchy */
-    while (typeinfo != NULL) {
-        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
-            for (int i = 0; i < typeinfo->num_interfaces; i++) {
-                if (memcmp(&typeinfo->interfaces[i], guid, 16) == 0) {
-                    *out_intf = (void *)self;
-                    return 1;
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->iid_ref != NULL) {
+                    const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
+                    if (iid != NULL && memcmp(iid, guid, 16) == 0) {
+                        *out_intf = (void *)self;
+                        return 1;
+                    }
                 }
             }
         }
-        typeinfo = typeinfo->parent;
+        /* Walk to parent via vParentRef (offset 16): PPVmt, deref to get parent VMT */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
     }
     return 0;
 }

@@ -2936,25 +2936,57 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     if (emitted_class_set_add(emitted_classes, class_label) != 0)
         return;
 
-    /* Emit interface entry table if this class implements interfaces */
+    /* Emit FPC-compatible interface table (tinterfacetable) if this class
+     * implements interfaces.  Layout per FPC objpash.inc:
+     *   tinterfacetable: EntryCount (sizeuint=8), then entries (40 bytes each)
+     *   tinterfaceentry: IIDRef(^pguid,8) VTable(8) IOffset(8)|IOffsetAsCodePtr(8)+IIDStrRef(8)+IType(4)+pad(4)
+     * For each interface, emit standalone GUID constant + pointer indirection:
+     *   __kgpc_guid_<Name>     = 16-byte GUID data
+     *   __kgpc_guidref_<Name>  = pointer to __kgpc_guid_<Name>  (pguid)
+     * The entry's IIDRef field points to __kgpc_guidref_<Name>. */
     int actual_iface_count = 0;
     if (record_info->num_interfaces > 0) {
-        fprintf(ctx->output_file, "\n# Interface table for class %s\n", class_label);
-        fprintf(ctx->output_file, "\t.align 8\n");
-        fprintf(ctx->output_file, "%s_INTERFACES:\n", class_label);
+        /* First pass: emit standalone GUID constants for each interface
+         * (deduplicated via emitted_classes set with "__kgpc_guid_" prefix). */
         for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
             const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
-            /* Look up the interface type to get its GUID */
-            HashNode_t *iface_node = NULL;
+            /* Check if we already emitted this interface's GUID */
+            char guid_dedup_buf[512];
+            snprintf(guid_dedup_buf, sizeof(guid_dedup_buf), "__kgpc_guid_%s", iface_name);
+            if (emitted_class_set_contains(emitted_classes, guid_dedup_buf))
+                continue;
+            /* The set stores pointers without copying, so strdup the key
+             * to avoid dangling stack references. */
+            char *guid_dedup_key = strdup(guid_dedup_buf);
+            if (guid_dedup_key == NULL) continue;
+            emitted_class_set_add(emitted_classes, guid_dedup_key);
+            /* Look up the interface type to get its GUID.
+             * Use FindAllIdents to handle forward-declared interfaces where
+             * the forward decl (without GUID) and full decl (with GUID) are
+             * separate symbol table entries.  Prefer the one with has_guid. */
             struct RecordType *iface_record = NULL;
-            if (FindSymbol(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
-                iface_record = get_record_type_from_node(iface_node);
-                if (iface_record == NULL && iface_node->type != NULL &&
-                    iface_node->type->kind == TYPE_KIND_POINTER &&
-                    iface_node->type->info.points_to != NULL &&
-                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    iface_record = iface_node->type->info.points_to->info.record_info;
+            {
+                ListNode_t *all_idents = FindAllIdents(symtab, iface_name);
+                for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
+                    HashNode_t *cand = (HashNode_t *)id_node->cur;
+                    if (cand == NULL) continue;
+                    struct RecordType *cand_rec = get_record_type_from_node(cand);
+                    if (cand_rec == NULL && cand->type != NULL &&
+                        cand->type->kind == TYPE_KIND_POINTER &&
+                        cand->type->info.points_to != NULL &&
+                        cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        cand_rec = cand->type->info.points_to->info.record_info;
+                    if (cand_rec != NULL) {
+                        if (iface_record == NULL)
+                            iface_record = cand_rec;
+                        if (cand_rec->has_guid) {
+                            iface_record = cand_rec;
+                            break;
+                        }
+                    }
+                }
+                if (all_idents != NULL) DestroyList(all_idents);
             }
             unsigned long d1 = 0;
             unsigned int d2 = 0, d3 = 0;
@@ -2965,24 +2997,55 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 d3 = (unsigned int)iface_record->guid_d3;
                 memcpy(d4, iface_record->guid_d4, sizeof(d4));
             }
-            fprintf(ctx->output_file, "\t# Entry for %s\n", iface_name);
+            /* Emit GUID data constant (weak so multiple TUs can define it) */
+            fprintf(ctx->output_file, "\n# GUID constant for interface %s\n", iface_name);
+            fprintf(ctx->output_file, "\t.data\n");
+            fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, ".weak __kgpc_guid_%s\n", iface_name);
+            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
             fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
                 d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
-            /* Padding to align the name pointer to 8 bytes.
-             * GUID is 4+2+2+8 = 16 bytes, already aligned. */
-            fprintf(ctx->output_file, "\t.quad\t__iface_name_%s_%s\n", class_label, iface_name);
-            actual_iface_count++;
+            /* Emit pguid pointer (weak) */
+            fprintf(ctx->output_file, ".weak __kgpc_guidref_%s\n", iface_name);
+            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
+            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", iface_name);
+            fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
         }
-        /* Emit interface name strings */
+
+        /* Count valid interfaces */
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            if (record_info->interface_names[iidx] != NULL)
+                actual_iface_count++;
+        }
+
+        /* Emit FPC-compatible tinterfacetable */
+        fprintf(ctx->output_file, "\n# Interface table (tinterfacetable) for class %s\n", class_label);
+        fprintf(ctx->output_file, "\t.data\n");
+        fprintf(ctx->output_file, "\t.align 8\n");
+        fprintf(ctx->output_file, "%s_INTFTABLE:\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%d\t# EntryCount\n", actual_iface_count);
         for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
             const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
-            fprintf(ctx->output_file, "__iface_name_%s_%s:\n", class_label, iface_name);
-            fprintf(ctx->output_file, "\t.string \"%s\"\n", iface_name);
+            fprintf(ctx->output_file, "\t# Entry for %s (40 bytes = tinterfaceentry)\n", iface_name);
+            /* offset +0: IIDRef (^pguid) — pointer to the pguid indirection cell */
+            fprintf(ctx->output_file, "\t.quad\t__kgpc_guidref_%s\n", iface_name);
+            /* offset +8: VTable — not used yet */
+            fprintf(ctx->output_file, "\t.quad\t0\n");
+            /* offset +16: IOffset (sizeuint) — byte offset from instance to interface pointer.
+             * 0 = the interface IS the object itself (standard COM delegation). */
+            fprintf(ctx->output_file, "\t.quad\t0\n");
+            /* offset +24: IIDStrRef (^pshortstring) — NULL for now */
+            fprintf(ctx->output_file, "\t.quad\t0\n");
+            /* offset +32: IType (tinterfaceentrytype enum, 4 bytes) = etStandard = 0 */
+            fprintf(ctx->output_file, "\t.long\t0\n");
+            /* offset +36: padding to 40 bytes */
+            fprintf(ctx->output_file, "\t.zero\t4\n");
         }
+        fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     }
 
     /* Resolve the canonical label for the parent class (handles case mismatches
@@ -3022,7 +3085,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", class_label);
     /* Interface table pointer and count */
     if (actual_iface_count > 0)
-        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_INTFTABLE\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
     fprintf(ctx->output_file, "\t.quad\t%d\n", actual_iface_count);
@@ -3101,9 +3164,9 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 9: vAutoTable */
     fprintf(ctx->output_file, "\t.quad\t0\n");
-    /* Slot 10: vIntfTable */
+    /* Slot 10: vIntfTable (PInterfaceTable — FPC tinterfacetable) */
     if (actual_iface_count > 0)
-        fprintf(ctx->output_file, "\t.quad\t%s_INTERFACES\n", class_label);
+        fprintf(ctx->output_file, "\t.quad\t%s_INTFTABLE\n", class_label);
     else
         fprintf(ctx->output_file, "\t.quad\t0\n");
     /* Slot 11: vMsgStrPtr */

@@ -9469,26 +9469,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
                 /* FPC allows passing an interface type identifier where a
                  * TGUID record is expected (e.g. Supports(Obj, IObserver, I)).
-                 * The codegen emits a 16-byte GUID constant at the bare
-                 * interface label, but kgpc_type_sizeof returns 8 (pointer
-                 * size) for the interface type.  Correct the copy size to 16
-                 * so the full GUID is passed to the callee. */
+                 * The codegen emits a 16-byte GUID constant at __kgpc_guid_<Name>,
+                 * but kgpc_type_sizeof returns 8 (pointer size) for the interface
+                 * type.  Correct the copy size to 16 so the full GUID is passed.
+                 * Use FindAllIdents to handle forward-declared interfaces where
+                 * the first symbol table hit may lack has_guid. */
                 if (record_size == 8 && arg_expr->type == EXPR_VAR_ID &&
                     ctx != NULL && ctx->symtab != NULL)
                 {
-                    HashNode_t *iface_node = NULL;
-                    if (FindSymbol(&iface_node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
-                        iface_node != NULL)
-                    {
-                        struct RecordType *iface_rec = codegen_get_record_type_from_node(iface_node);
-                        if (iface_rec == NULL && iface_node->type != NULL &&
-                            iface_node->type->kind == TYPE_KIND_POINTER &&
-                            iface_node->type->info.points_to != NULL &&
-                            iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                            iface_rec = iface_node->type->info.points_to->info.record_info;
-                        if (iface_rec != NULL && iface_rec->is_interface && iface_rec->has_guid)
-                            record_size = 16;
+                    struct RecordType *iface_rec = NULL;
+                    ListNode_t *all_idents = FindAllIdents(ctx->symtab, arg_expr->expr_data.id);
+                    for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
+                        HashNode_t *cand = (HashNode_t *)id_node->cur;
+                        if (cand == NULL) continue;
+                        struct RecordType *cand_rec = codegen_get_record_type_from_node(cand);
+                        if (cand_rec == NULL && cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_POINTER &&
+                            cand->type->info.points_to != NULL &&
+                            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            cand_rec = cand->type->info.points_to->info.record_info;
+                        if (cand_rec != NULL && cand_rec->is_interface) {
+                            iface_rec = cand_rec;
+                            if (cand_rec->has_guid) break;
+                        }
                     }
+                    if (all_idents != NULL) DestroyList(all_idents);
+                    if (iface_rec != NULL && iface_rec->is_interface)
+                        record_size = 16;
                 }
 
                 if (record_size > INT_MAX)
@@ -9513,27 +9520,33 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     if (codegen_had_error(ctx) || src_reg == NULL)
                         return inst_list;
                     /* If this is an interface type identifier used as a GUID
-                     * argument, redirect the source address to the _CLASSVAR
-                     * label where the actual GUID data lives.  The bare
-                     * interface name may point to RTTI (runtime compat). */
+                     * argument, redirect the source address to the dedicated
+                     * __kgpc_guid_<Name> constant (16-byte GUID data). */
                     if (record_size == 16 && arg_expr->type == EXPR_VAR_ID &&
                         ctx != NULL && ctx->symtab != NULL) {
-                        HashNode_t *id_node = NULL;
-                        if (FindSymbol(&id_node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
-                            id_node != NULL && id_node->hash_type == HASHTYPE_TYPE) {
-                            struct RecordType *id_rec = codegen_get_record_type_from_node(id_node);
-                            if (id_rec == NULL && id_node->type != NULL &&
-                                id_node->type->kind == TYPE_KIND_POINTER &&
-                                id_node->type->info.points_to != NULL &&
-                                id_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                                id_rec = id_node->type->info.points_to->info.record_info;
-                            if (id_rec != NULL && id_rec->is_interface && id_rec->has_guid) {
-                                char classvar_buf[512];
-                                snprintf(classvar_buf, sizeof(classvar_buf),
-                                    "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
-                                    arg_expr->expr_data.id, src_reg->bit_64);
-                                inst_list = add_inst(inst_list, classvar_buf);
+                        struct RecordType *id_rec = NULL;
+                        ListNode_t *all_idents = FindAllIdents(ctx->symtab, arg_expr->expr_data.id);
+                        for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
+                            HashNode_t *cand = (HashNode_t *)id_node->cur;
+                            if (cand == NULL) continue;
+                            struct RecordType *cand_rec = codegen_get_record_type_from_node(cand);
+                            if (cand_rec == NULL && cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_POINTER &&
+                                cand->type->info.points_to != NULL &&
+                                cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                cand_rec = cand->type->info.points_to->info.record_info;
+                            if (cand_rec != NULL && cand_rec->is_interface) {
+                                id_rec = cand_rec;
+                                break;
                             }
+                        }
+                        if (all_idents != NULL) DestroyList(all_idents);
+                        if (id_rec != NULL && id_rec->is_interface) {
+                            char guid_buf[512];
+                            snprintf(guid_buf, sizeof(guid_buf),
+                                "\tleaq\t__kgpc_guid_%s(%%rip), %s\n",
+                                arg_expr->expr_data.id, src_reg->bit_64);
+                            inst_list = add_inst(inst_list, guid_buf);
                         }
                     }
                 }
