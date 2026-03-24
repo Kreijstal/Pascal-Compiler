@@ -5782,6 +5782,21 @@ skip_type_receiver_rewrite:
             HashNode_t *unit_check = NULL;
             int is_unit_qualifier = semcheck_is_unit_name(potential_unit_name);
 
+            /* Local variables/parameters shadow unit names in Pascal.
+             * If the identifier resolves as a variable, don't treat it
+             * as a unit qualifier (e.g., 'node' parameter vs 'node' unit). */
+            if (is_unit_qualifier)
+            {
+                HashNode_t *var_check = NULL;
+                if (FindSymbol(&var_check, symtab, potential_unit_name) != 0 &&
+                    var_check != NULL &&
+                    (var_check->hash_type == HASHTYPE_VAR ||
+                     var_check->hash_type == HASHTYPE_CONST))
+                {
+                    is_unit_qualifier = 0;
+                }
+            }
+
             /* Prefer explicit unit-name recognition; keep unresolved-name fallback for
              * parser shapes where unit qualifiers are not injected into symbol tables. */
             if (!is_unit_qualifier &&
