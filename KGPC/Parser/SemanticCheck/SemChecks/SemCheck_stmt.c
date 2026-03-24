@@ -5722,6 +5722,77 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 {
                     const char *method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
+
+                    /* Check if method_name is actually a field of procedure type on the class.
+                     * E.g., tmodule.finish_module(hp) where finish_module is a class var
+                     * of procedural type, not a method. Since the receiver is a type name,
+                     * only class vars (or static fields) are valid here. */
+                    {
+                        int is_classvar_proc = 0;
+                        struct RecordType *walk_rec = record_info;
+                        while (walk_rec != NULL && !is_classvar_proc)
+                        {
+                            for (ListNode_t *f = walk_rec->fields; f != NULL; f = f->next)
+                            {
+                                if (f->type != LIST_RECORD_FIELD || f->cur == NULL)
+                                    continue;
+                                struct RecordField *rf = (struct RecordField *)f->cur;
+                                if (rf->name == NULL)
+                                    continue;
+                                if (strcasecmp(rf->name, method_name) != 0)
+                                    continue;
+                                /* Found field — check if it has procedure type */
+                                if (rf->proc_type != NULL)
+                                {
+                                    is_classvar_proc = 1;
+                                    break;
+                                }
+                                if (rf->type_id != NULL)
+                                {
+                                    HashNode_t *ft_node = NULL;
+                                    if (FindSymbol(&ft_node, symtab, rf->type_id) != 0 &&
+                                        ft_node != NULL && ft_node->type != NULL &&
+                                        ft_node->type->kind == TYPE_KIND_PROCEDURE)
+                                    {
+                                        is_classvar_proc = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            /* Walk parent class hierarchy */
+                            const char *parent = walk_rec->parent_class_name;
+                            walk_rec = (parent != NULL) ? semcheck_lookup_record_type(symtab, parent) : NULL;
+                        }
+                        if (is_classvar_proc)
+                        {
+                            /* Convert to a procedural variable call through the class var.
+                             * Build TypeName.field_name as a class-field access expression. */
+                            struct Expression *type_expr = mk_varid(stmt->line_num,
+                                strdup(first_arg->expr_data.id));
+                            struct Expression *field_access = mk_recordaccess(stmt->line_num,
+                                type_expr, strdup(method_name));
+
+                            /* Remove the type receiver from the argument list */
+                            ListNode_t *remaining_args = args_given->next;
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                            stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                            stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+
+                            int field_tag = UNKNOWN_TYPE;
+                            return_val += semcheck_stmt_expr_tag(&field_tag, symtab, field_access,
+                                max_scope_lev, NO_MUTATE);
+
+                            return return_val;
+                        }
+                    }
+
                     int is_static_method = from_cparser_is_method_static(record_info->type_id,
                         method_name);
                     int is_nonstatic_class_method =
