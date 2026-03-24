@@ -16654,7 +16654,10 @@ next_identifier:
 
         cur = cur->next;
         if (skip_initializer)
+        {
+            semcheck_restore_scope(symtab, saved_scope_for_var);
             continue;
+        }
 
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
         {
