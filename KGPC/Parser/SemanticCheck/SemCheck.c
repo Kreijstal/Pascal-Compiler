@@ -14518,7 +14518,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 int idx = unit_registry_add(name);
                 if (idx > 0)
                     ScopeAddDependency(symtab->current_scope,
-                                       GetOrCreateUnitScope(symtab, idx), 1);
+                                       GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
         }
@@ -14560,7 +14560,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
                             ScopeAddDependency(own_unit_scope,
-                                               GetOrCreateUnitScope(symtab, dep_idx), 1);
+                                               GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
                 }
@@ -14874,7 +14874,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                 int idx = unit_registry_add(name);
                 if (idx > 0)
                     ScopeAddDependency(symtab->current_scope,
-                                       GetOrCreateUnitScope(symtab, idx), 1);
+                                       GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
         }
@@ -14932,7 +14932,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
                             ScopeAddDependency(own_unit_scope,
-                                               GetOrCreateUnitScope(symtab, dep_idx), 1);
+                                               GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
                 }
