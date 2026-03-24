@@ -26,7 +26,6 @@ typedef struct {
     int is_override;
     int is_static;         /* 1 if method is static (no Self parameter) */
     int is_class_method;   /* 1 if declared with 'class' keyword (Self = VMT pointer) */
-    int is_operator;       /* 1 if declared with operator keyword */
     int param_count; /* Number of explicit parameters (excludes implicit Self), -1 if unknown */
     char *param_sig; /* Mangled signature of parameter types, or NULL if unknown */
 } ClassMethodBinding;

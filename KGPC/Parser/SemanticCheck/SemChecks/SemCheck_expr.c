@@ -437,19 +437,6 @@ struct Expression *clone_expression(const struct Expression *expr)
                 expr->expr_data.function_call_data.is_class_method_call;
             clone->expr_data.function_call_data.vmt_index =
                 expr->expr_data.function_call_data.vmt_index;
-            clone->expr_data.function_call_data.is_interface_call =
-                expr->expr_data.function_call_data.is_interface_call;
-            clone->expr_data.function_call_data.interface_method_slot =
-                expr->expr_data.function_call_data.interface_method_slot;
-            clone->expr_data.function_call_data.interface_guid_d1 =
-                expr->expr_data.function_call_data.interface_guid_d1;
-            clone->expr_data.function_call_data.interface_guid_d2 =
-                expr->expr_data.function_call_data.interface_guid_d2;
-            clone->expr_data.function_call_data.interface_guid_d3 =
-                expr->expr_data.function_call_data.interface_guid_d3;
-            memcpy(clone->expr_data.function_call_data.interface_guid_d4,
-                expr->expr_data.function_call_data.interface_guid_d4,
-                sizeof(clone->expr_data.function_call_data.interface_guid_d4));
             clone->expr_data.function_call_data.self_class_name =
                 expr->expr_data.function_call_data.self_class_name != NULL ?
                     strdup(expr->expr_data.function_call_data.self_class_name) : NULL;

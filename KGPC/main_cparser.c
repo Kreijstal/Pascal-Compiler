@@ -2143,11 +2143,6 @@ static int compile_single_program(
     from_cparser_resolve_deferred_arrays(user_tree);
     double generic_method_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     append_generic_method_clones(user_tree);
-    for (int i = 0; i < g_comp_ctx.loaded_unit_count; ++i) {
-        Tree_t *unit_tree = g_comp_ctx.loaded_units[i].unit_tree;
-        if (unit_tree != NULL && unit_tree->type == TREE_UNIT)
-            append_generic_method_clones(unit_tree);
-    }
     emit_profile_stage("program: append generic method clones", current_time_seconds() - generic_method_start);
     double generic_sub_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     resolve_pending_generic_subprograms(user_tree);
@@ -2964,11 +2959,6 @@ int main(int argc, char **argv)
     flush_deferred_inline_specializations(user_tree);
     double generic_method_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     append_generic_method_clones(user_tree);
-    for (int i = 0; i < g_comp_ctx.loaded_unit_count; ++i) {
-        Tree_t *unit_tree = g_comp_ctx.loaded_units[i].unit_tree;
-        if (unit_tree != NULL && unit_tree->type == TREE_UNIT)
-            append_generic_method_clones(unit_tree);
-    }
     emit_profile_stage("program: append generic method clones", current_time_seconds() - generic_method_start);
     double generic_sub_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     resolve_pending_generic_subprograms(user_tree);

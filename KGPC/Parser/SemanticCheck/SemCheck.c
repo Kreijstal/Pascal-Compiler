@@ -526,10 +526,7 @@ static int semcheck_record_candidate_is_forward_stub(struct RecordType *record)
     if (record->method_templates != NULL)
         return 0;
     if (record->parent_class_name != NULL &&
-        !pascal_identifier_equals(record->parent_class_name, "TObject") &&
-        !(record->is_interface &&
-          (pascal_identifier_equals(record->parent_class_name, "IInterface") ||
-           pascal_identifier_equals(record->parent_class_name, "IUnknown"))))
+        !pascal_identifier_equals(record->parent_class_name, "TObject"))
         return 0;
 
     return 1;
@@ -8282,22 +8279,6 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                     free(existing_record->parent_class_name);
                                     existing_record->parent_class_name = new_parent_copy;
                                 }
-                                if (new_record->guid_string != NULL &&
-                                    existing_record != new_record)
-                                {
-                                    char *new_guid_copy = strdup(new_record->guid_string);
-                                    free(existing_record->guid_string);
-                                    existing_record->guid_string = new_guid_copy;
-                                }
-                                if (new_record->has_guid)
-                                {
-                                    existing_record->has_guid = 1;
-                                    existing_record->guid_d1 = new_record->guid_d1;
-                                    existing_record->guid_d2 = new_record->guid_d2;
-                                    existing_record->guid_d3 = new_record->guid_d3;
-                                    memcpy(existing_record->guid_d4, new_record->guid_d4,
-                                        sizeof(existing_record->guid_d4));
-                                }
                                 if (new_record->interface_names != NULL &&
                                     existing_record != new_record)
                                 {
@@ -8469,20 +8450,6 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                                 existing_record->properties = record_info->properties;
                                             if (record_info->parent_class_name != NULL && existing_record->parent_class_name == NULL)
                                                 existing_record->parent_class_name = strdup(record_info->parent_class_name);
-                                            if (record_info->guid_string != NULL)
-                                            {
-                                                free(existing_record->guid_string);
-                                                existing_record->guid_string = strdup(record_info->guid_string);
-                                            }
-                                            if (record_info->has_guid)
-                                            {
-                                                existing_record->has_guid = 1;
-                                                existing_record->guid_d1 = record_info->guid_d1;
-                                                existing_record->guid_d2 = record_info->guid_d2;
-                                                existing_record->guid_d3 = record_info->guid_d3;
-                                                memcpy(existing_record->guid_d4, record_info->guid_d4,
-                                                    sizeof(existing_record->guid_d4));
-                                            }
                                             if (record_info->interface_names != NULL)
                                             {
                                                 existing_record->interface_names = record_info->interface_names;
@@ -9754,7 +9721,6 @@ if (record_info->parent_class_name != NULL) {
                             cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
                             cloned->is_virtual = parent_method->is_virtual;
                             cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
-                            cloned->is_operator = parent_method->is_operator;
                             cloned->vmt_index = parent_method->vmt_index;
                             cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
@@ -9932,7 +9898,6 @@ if (record_info->parent_class_name != NULL) {
                     new_method->mangled_name = mangled ? strdup(mangled) : NULL;
                     new_method->is_virtual = 1;
                     new_method->is_override = 0;
-                    new_method->is_operator = binding->is_operator;
                     new_method->param_count = binding->param_count;
                     new_method->param_sig = binding->param_sig ? strdup(binding->param_sig) : NULL;
                     new_method->resolved_mangled_id = NULL;

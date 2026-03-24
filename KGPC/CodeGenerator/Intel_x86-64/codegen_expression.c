@@ -508,82 +508,6 @@ static int codegen_expr_is_char_array_like(const struct Expression *expr)
     return 0;
 }
 
-static struct RecordType *codegen_type_to_record(KgpcType *type)
-{
-    if (type == NULL)
-        return NULL;
-    if (kgpc_type_is_record(type))
-        return kgpc_type_get_record(type);
-    if (kgpc_type_is_pointer(type) && type->info.points_to != NULL &&
-        kgpc_type_is_record(type->info.points_to))
-    {
-        return kgpc_type_get_record(type->info.points_to);
-    }
-    return NULL;
-}
-
-static int codegen_record_is_guid_type(const struct RecordType *record)
-{
-    if (record == NULL || record->type_id == NULL)
-        return 0;
-    return pascal_identifier_equals(record->type_id, "TGUID") ||
-           pascal_identifier_equals(record->type_id, "TGuid") ||
-           pascal_identifier_equals(record->type_id, "GUID");
-}
-
-int codegen_expr_is_interface_guid_type_ref(const struct Expression *expr,
-    SymTab_t *symtab, struct RecordType **iface_record_out)
-{
-    const char *id = NULL;
-    HashNode_t *type_node = NULL;
-    struct RecordType *iface_record = NULL;
-    struct RecordType *resolved_record = NULL;
-
-    if (iface_record_out != NULL)
-        *iface_record_out = NULL;
-    if (expr == NULL || symtab == NULL)
-        return 0;
-
-    if (expr->type == EXPR_FUNCTION_CALL)
-    {
-        if (expr->expr_data.function_call_data.args_expr != NULL)
-            return 0;
-        id = expr->expr_data.function_call_data.id;
-    }
-    else if (expr->type == EXPR_VAR_ID)
-    {
-        id = expr->expr_data.id;
-    }
-    else
-    {
-        return 0;
-    }
-    if (id == NULL)
-        return 0;
-    if (FindSymbol(&type_node, symtab, id) == 0 ||
-        type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
-    {
-        return 0;
-    }
-
-    iface_record = codegen_get_record_type_from_node(type_node);
-    if (iface_record == NULL && type_node->type != NULL)
-        iface_record = codegen_type_to_record(type_node->type);
-    if (iface_record == NULL || !iface_record->is_interface)
-        return 0;
-
-    resolved_record = codegen_type_to_record(expr_get_kgpc_type(expr));
-    if (!codegen_record_is_guid_type(resolved_record) &&
-        expr_get_type_tag(expr) != RECORD_TYPE)
-    {
-        return 0;
-    }
-
-    if (iface_record_out != NULL)
-        *iface_record_out = iface_record;
-    return 1;
-}
-
 static int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (codegen_expr_is_shortstring_value(expr))
@@ -4053,12 +3977,9 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
                 expr->expr_data.record_access_data.field_id);
     }
 
-    if (codegen_expr_is_interface_guid_type_ref(expr,
-            ctx != NULL ? ctx->symtab : NULL, NULL))
-    {
-        *size_out = 16;
-        return 0;
-    }
+    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
+    if (expr_record != NULL)
+        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
 
     KgpcType *expr_type = expr_get_kgpc_type(expr);
     if (expr_type != NULL)
@@ -4069,10 +3990,6 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
             kgpc_type_is_record(expr_type->info.points_to))
             return codegen_sizeof_record(ctx, expr_type->info.points_to->info.record_info, size_out, 0);
     }
-
-    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
-    if (expr_record != NULL)
-        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
 
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
@@ -9566,9 +9483,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 Register_t *src_reg = NULL;
-                if (codegen_expr_is_addressable(arg_expr) ||
-                    codegen_expr_is_interface_guid_type_ref(arg_expr,
-                        ctx != NULL ? ctx->symtab : NULL, NULL))
+                if (codegen_expr_is_addressable(arg_expr))
                 {
                     inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
                     if (codegen_had_error(ctx) || src_reg == NULL)

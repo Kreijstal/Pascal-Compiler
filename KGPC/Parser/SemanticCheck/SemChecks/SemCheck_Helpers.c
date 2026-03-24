@@ -11,55 +11,6 @@
 
 #include "SemCheck_Expr_Internal.h"
 
-static int semcheck_parse_guid_literal(const char *guid,
-    uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
-{
-    unsigned int dd1, dd2, dd3, dd4[8];
-
-    if (guid == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
-        return 0;
-
-    if (sscanf(guid,
-            "{%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x}",
-            &dd1, &dd2, &dd3,
-            &dd4[0], &dd4[1], &dd4[2], &dd4[3],
-            &dd4[4], &dd4[5], &dd4[6], &dd4[7]) != 11)
-        return 0;
-
-    *d1 = (uint32_t)dd1;
-    *d2 = (uint16_t)dd2;
-    *d3 = (uint16_t)dd3;
-    for (int i = 0; i < 8; ++i)
-        d4[i] = (uint8_t)dd4[i];
-    return 1;
-}
-
-static void semcheck_try_resolve_interface_guid(SymTab_t *symtab, struct RecordType *record)
-{
-    HashNode_t *guid_node = NULL;
-    const char *guid_text = NULL;
-
-    if (symtab == NULL || record == NULL || !record->is_interface || record->has_guid)
-        return;
-
-    if (record->guid_string == NULL || record->guid_string[0] == '\0')
-        return;
-
-    guid_text = record->guid_string;
-    if (guid_text[0] != '{')
-    {
-        if (FindSymbol(&guid_node, symtab, guid_text) == 0 ||
-            guid_node == NULL ||
-            (guid_node->hash_type != HASHTYPE_CONST && !guid_node->is_typed_const) ||
-            guid_node->const_string_value == NULL)
-            return;
-        guid_text = guid_node->const_string_value;
-    }
-
-    record->has_guid = semcheck_parse_guid_literal(guid_text,
-        &record->guid_d1, &record->guid_d2, &record->guid_d3, record->guid_d4);
-}
-
 /*===========================================================================
  * Pointer Info Helpers
  *===========================================================================*/
@@ -297,10 +248,7 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
 
     struct RecordType *record = get_record_type_from_node(type_node);
     if (record != NULL)
-    {
-        semcheck_try_resolve_interface_guid(symtab, record);
         return record;
-    }
 
     struct TypeAlias *alias = get_type_alias_from_node(type_node);
     if (alias != NULL && alias->target_type_id != NULL)
@@ -310,11 +258,7 @@ struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *typ
         if (target_node == NULL)
             target_node = semcheck_find_preferred_type_node(symtab, alias->target_type_id);
         if (target_node != NULL)
-        {
-            record = get_record_type_from_node(target_node);
-            semcheck_try_resolve_interface_guid(symtab, record);
-            return record;
-        }
+            return get_record_type_from_node(target_node);
     }
 
     return NULL;

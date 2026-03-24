@@ -45,7 +45,6 @@ struct RecordType *get_record_type_from_node(HashNode_t *node);
 static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     struct Statement *stmt, int max_scope_lev);
 #include "../../ParseTree/generic_types.h"
-#include "../../ParseTree/from_cparser.h"
 #include "../../ParseTree/tree.h"
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/ident_ref.h"
@@ -216,48 +215,6 @@ static int semcheck_collection_is_enumerator_class(SymTab_t *symtab, KgpcType *c
         return 0;
 
     return semcheck_get_enumerator_current_type(symtab, enum_record, out_current_type);
-}
-
-static int semcheck_bind_interface_dispatch_stmt(struct Statement *stmt,
-    SymTab_t *symtab, const char *interface_name, const char *method_name,
-    int param_count)
-{
-    struct RecordType *iface_record;
-    int slot;
-
-    if (stmt == NULL || symtab == NULL || interface_name == NULL || method_name == NULL)
-        return 0;
-
-    iface_record = semcheck_lookup_record_type(symtab, interface_name);
-    if (iface_record == NULL || !iface_record->is_interface ||
-        !iface_record->has_guid || iface_record->method_templates == NULL)
-        return 0;
-
-    slot = 0;
-    for (ListNode_t *cur = iface_record->method_templates; cur != NULL; cur = cur->next, slot++)
-    {
-        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
-        int wanted_params;
-        if (tmpl == NULL || tmpl->name == NULL)
-            continue;
-        if (strcasecmp(tmpl->name, method_name) != 0)
-            continue;
-        wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
-        if (param_count >= 0 && wanted_params >= 0 && wanted_params != param_count)
-            continue;
-
-        stmt->stmt_data.procedure_call_data.is_interface_call = 1;
-        stmt->stmt_data.procedure_call_data.interface_method_slot = slot;
-        stmt->stmt_data.procedure_call_data.interface_guid_d1 = iface_record->guid_d1;
-        stmt->stmt_data.procedure_call_data.interface_guid_d2 = iface_record->guid_d2;
-        stmt->stmt_data.procedure_call_data.interface_guid_d3 = iface_record->guid_d3;
-        memcpy(stmt->stmt_data.procedure_call_data.interface_guid_d4,
-            iface_record->guid_d4,
-            sizeof(stmt->stmt_data.procedure_call_data.interface_guid_d4));
-        return 1;
-    }
-
-    return 0;
 }
 
 static int semcheck_expr_best_line(const struct Expression *expr)
@@ -6156,13 +6113,7 @@ skip_type_receiver_rewrite:
                         actual_arg_count -= 1; /* subtract Self */
                     method_param_count = actual_arg_count;
                 }
-                if (self_record != NULL && self_record->is_interface)
-                {
-                    (void)semcheck_bind_interface_dispatch_stmt(stmt, symtab,
-                        self_record->type_id, bare_method_name, method_param_count);
-                }
                 if (self_record->type_id != NULL && bare_method_name != NULL &&
-                    !stmt->stmt_data.procedure_call_data.is_interface_call &&
                     from_cparser_is_method_virtual_with_signature(
                         self_record->type_id,
                         bare_method_name,
@@ -7858,50 +7809,17 @@ proccall_parent_resolve_done:
                     resolved_param_count = 0;
             }
         }
-        const char *resolved_owner = resolved_proc->owner_class;
-        const char *resolved_method_name = resolved_proc->method_name;
-        if (resolved_method_name == NULL && resolved_proc->id != NULL)
-        {
-            const char *sep = strstr(resolved_proc->id, "__");
-            if (sep != NULL)
-            {
-                resolved_method_name = sep + 2;
-                if (resolved_owner == NULL && sep > resolved_proc->id)
-                {
-                    size_t owner_len = (size_t)(sep - resolved_proc->id);
-                    char *owner_copy = (char *)malloc(owner_len + 1);
-                    if (owner_copy != NULL)
-                    {
-                        memcpy(owner_copy, resolved_proc->id, owner_len);
-                        owner_copy[owner_len] = '\0';
-                        resolved_owner = owner_copy;
-                    }
-                }
-            }
-            else
-            {
-                resolved_method_name = resolved_proc->id;
-            }
-        }
-        if (resolved_owner != NULL && resolved_method_name != NULL &&
-            !stmt->stmt_data.procedure_call_data.is_interface_call)
-        {
-            (void)semcheck_bind_interface_dispatch_stmt(stmt, symtab,
-                resolved_owner, resolved_method_name,
-                resolved_param_count);
-        }
-        if (resolved_owner != NULL && resolved_method_name != NULL &&
+        if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
             !stmt->stmt_data.procedure_call_data.is_virtual_call &&
-            !stmt->stmt_data.procedure_call_data.is_interface_call &&
-            !from_cparser_is_method_static(resolved_owner,
-                resolved_method_name) &&
-            from_cparser_is_method_virtual_with_signature(resolved_owner,
-                resolved_method_name,
+            !from_cparser_is_method_static(resolved_proc->owner_class,
+                resolved_proc->method_name) &&
+            from_cparser_is_method_virtual_with_signature(resolved_proc->owner_class,
+                resolved_proc->method_name,
                 resolved_param_count,
                 NULL))
         {
             struct RecordType *class_record = semcheck_lookup_record_type(symtab,
-                resolved_owner);
+                resolved_proc->owner_class);
             if (class_record != NULL && record_type_is_class(class_record) &&
                 class_record->methods != NULL)
             {
@@ -7910,7 +7828,7 @@ proccall_parent_resolve_done:
                     struct MethodInfo *mi = (struct MethodInfo *)me->cur;
                     if (mi != NULL && mi->name != NULL &&
                         (mi->is_virtual || mi->is_override) &&
-                        strcasecmp(mi->name, resolved_method_name) == 0)
+                        strcasecmp(mi->name, resolved_proc->method_name) == 0)
                     {
                         if (resolved_param_count >= 0 && mi->param_count >= 0 &&
                             resolved_param_count != mi->param_count)
@@ -7921,7 +7839,7 @@ proccall_parent_resolve_done:
                         stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
                         if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                             stmt->stmt_data.procedure_call_data.self_class_name =
-                                strdup(resolved_owner);
+                                strdup(resolved_proc->owner_class);
                         break;
                     }
                 }

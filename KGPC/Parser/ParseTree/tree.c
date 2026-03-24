@@ -1428,8 +1428,6 @@ void destroy_stmt(struct Statement *stmt)
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
               free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
-          if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
-              free(stmt->stmt_data.procedure_call_data.self_class_name);
           if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
               free(stmt->stmt_data.procedure_call_data.call_qualifier);
           break;
@@ -1666,8 +1664,6 @@ void destroy_expr(struct Expression *expr)
           }
           if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
               free(expr->expr_data.function_call_data.placeholder_method_name);
-          if (expr->expr_data.function_call_data.self_class_name != NULL)
-              free(expr->expr_data.function_call_data.self_class_name);
           if (expr->expr_data.function_call_data.call_qualifier != NULL)
               free(expr->expr_data.function_call_data.call_qualifier);
           break;
@@ -2673,14 +2669,6 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
     new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
-    new_stmt->stmt_data.procedure_call_data.self_class_name = NULL;
-    new_stmt->stmt_data.procedure_call_data.is_interface_call = 0;
-    new_stmt->stmt_data.procedure_call_data.interface_method_slot = -1;
-    new_stmt->stmt_data.procedure_call_data.interface_guid_d1 = 0;
-    new_stmt->stmt_data.procedure_call_data.interface_guid_d2 = 0;
-    new_stmt->stmt_data.procedure_call_data.interface_guid_d3 = 0;
-    memset(new_stmt->stmt_data.procedure_call_data.interface_guid_d4, 0,
-        sizeof(new_stmt->stmt_data.procedure_call_data.interface_guid_d4));
 
     return new_stmt;
 }
@@ -2982,13 +2970,6 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_virtual_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
-    expr->expr_data.function_call_data.is_interface_call = 0;
-    expr->expr_data.function_call_data.interface_method_slot = -1;
-    expr->expr_data.function_call_data.interface_guid_d1 = 0;
-    expr->expr_data.function_call_data.interface_guid_d2 = 0;
-    expr->expr_data.function_call_data.interface_guid_d3 = 0;
-    memset(expr->expr_data.function_call_data.interface_guid_d4, 0,
-        sizeof(expr->expr_data.function_call_data.interface_guid_d4));
     expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     expr->expr_data.function_call_data.call_qualifier = NULL;
@@ -3191,13 +3172,6 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_virtual_call = 0;
     new_expr->expr_data.function_call_data.vmt_index = -1;
     new_expr->expr_data.function_call_data.self_class_name = NULL;
-    new_expr->expr_data.function_call_data.is_interface_call = 0;
-    new_expr->expr_data.function_call_data.interface_method_slot = -1;
-    new_expr->expr_data.function_call_data.interface_guid_d1 = 0;
-    new_expr->expr_data.function_call_data.interface_guid_d2 = 0;
-    new_expr->expr_data.function_call_data.interface_guid_d3 = 0;
-    memset(new_expr->expr_data.function_call_data.interface_guid_d4, 0,
-        sizeof(new_expr->expr_data.function_call_data.interface_guid_d4));
     new_expr->expr_data.function_call_data.is_class_method_call = 0;
     new_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
     new_expr->expr_data.function_call_data.is_inherited_call = 0;

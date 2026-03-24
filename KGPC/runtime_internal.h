@@ -18,8 +18,6 @@ typedef struct kgpc_interface_entry {
     uint16_t guid_d3;
     uint8_t  guid_d4[8];
     const char *name;
-    const void *dispatch_table;
-    int num_methods;
 } kgpc_interface_entry;
 
 typedef struct kgpc_class_typeinfo
@@ -57,8 +55,6 @@ int kgpc_directory_remove(const char *path);
 int kgpc_file_rename(const char *old_path, const char *new_path);
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr);
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf);
-const void *kgpc_lookup_interface_method(const void *self, uint32_t guid_d1,
-    uint16_t guid_d2, uint16_t guid_d3, const uint8_t guid_d4[8], int slot);
 
 /* Console / keyboard helpers used by KGPC RTL units (Crt/Keyboard). */
 void kgpc_clrscr(void);

@@ -21,88 +21,6 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
 int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedIdent *type_ref,
     const char *literal_name, long long *out_value);
 
-static int semcheck_bind_interface_dispatch_getter(struct Expression *expr,
-    SymTab_t *symtab, struct RecordType *owner_record, HashNode_t *method_node)
-{
-    struct RecordType *dispatch_owner = owner_record;
-    const char *method_name = NULL;
-    int slot = 0;
-
-    if (expr == NULL || method_node == NULL)
-        return 0;
-
-    if (dispatch_owner == NULL || !dispatch_owner->is_interface)
-    {
-        if (method_node->owner_class != NULL)
-            dispatch_owner = semcheck_lookup_record_type(symtab, method_node->owner_class);
-        if ((dispatch_owner == NULL || !dispatch_owner->is_interface) &&
-            method_node->id != NULL)
-        {
-            const char *sep = strstr(method_node->id, "__");
-            if (sep != NULL && sep > method_node->id)
-            {
-                size_t owner_len = (size_t)(sep - method_node->id);
-                char *owner_name = (char *)malloc(owner_len + 1);
-                if (owner_name != NULL)
-                {
-                    memcpy(owner_name, method_node->id, owner_len);
-                    owner_name[owner_len] = '\0';
-                    dispatch_owner = semcheck_lookup_record_type(symtab, owner_name);
-                    free(owner_name);
-                }
-            }
-        }
-    }
-
-    if (dispatch_owner != NULL && dispatch_owner->is_interface &&
-        (!dispatch_owner->has_guid || dispatch_owner->method_templates == NULL) &&
-        dispatch_owner->type_id != NULL)
-    {
-        HashNode_t *canonical_node = semcheck_find_preferred_type_node(symtab, dispatch_owner->type_id);
-        struct RecordType *canonical_record = get_record_type_from_node(canonical_node);
-        if (canonical_record != NULL && canonical_record->is_interface &&
-            canonical_record->has_guid && canonical_record->method_templates != NULL)
-            dispatch_owner = canonical_record;
-    }
-
-    if (dispatch_owner == NULL || !dispatch_owner->is_interface ||
-        !dispatch_owner->has_guid || dispatch_owner->method_templates == NULL)
-        return 0;
-
-    method_name = method_node->method_name;
-    if (method_name == NULL && method_node->id != NULL)
-    {
-        const char *sep = strstr(method_node->id, "__");
-        method_name = (sep != NULL) ? (sep + 2) : method_node->id;
-    }
-    if (method_name == NULL)
-        return 0;
-
-    for (ListNode_t *cur = dispatch_owner->method_templates; cur != NULL; cur = cur->next, slot++)
-    {
-        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
-        int wanted_params;
-        if (tmpl == NULL || tmpl->name == NULL)
-            continue;
-        if (strcasecmp(tmpl->name, method_name) != 0)
-            continue;
-        wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
-        if (wanted_params != 0)
-            continue;
-        expr->expr_data.function_call_data.is_interface_call = 1;
-        expr->expr_data.function_call_data.interface_method_slot = slot;
-        expr->expr_data.function_call_data.interface_guid_d1 = dispatch_owner->guid_d1;
-        expr->expr_data.function_call_data.interface_guid_d2 = dispatch_owner->guid_d2;
-        expr->expr_data.function_call_data.interface_guid_d3 = dispatch_owner->guid_d3;
-        memcpy(expr->expr_data.function_call_data.interface_guid_d4,
-            dispatch_owner->guid_d4,
-            sizeof(expr->expr_data.function_call_data.interface_guid_d4));
-        return 1;
-    }
-
-    return 0;
-}
-
 static char *semcheck_join_qualified_prefix(const QualifiedIdent *name)
 {
     if (name == NULL || name->segments == NULL || name->count <= 1)
@@ -1958,7 +1876,6 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->expr_data.function_call_data.call_hash_type = method_node->hash_type;
     semcheck_expr_set_call_kgpc_type(expr, method_node->type, 0);
     expr->expr_data.function_call_data.is_call_info_valid = 1;
-    (void)semcheck_bind_interface_dispatch_getter(expr, symtab, owner_record, method_node);
     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
     expr->is_array_expr = 0;
     expr->array_element_type = UNKNOWN_TYPE;
@@ -1966,13 +1883,8 @@ int semcheck_transform_property_getter_call(int *type_return,
     expr->array_element_record_type = NULL;
     expr->array_element_size = 0;
 
-    /* Keep legacy_tag here - expression is rewritten and needs re-checking with int type_return.
-     * Re-assert interface dispatch afterward because the re-check may rewrite the callable
-     * target while preserving the getter semantics. */
-    int result = semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
-    if (result == 0 && expr->type == EXPR_FUNCTION_CALL)
-        (void)semcheck_bind_interface_dispatch_getter(expr, symtab, owner_record, method_node);
-    return result;
+    /* Keep legacy_tag here - expression is rewritten and needs re-checking with int type_return */
+    return semcheck_expr_legacy_tag(type_return, symtab, expr, max_scope_lev, mutating);
 }
 
 int semcheck_recordaccess(int *type_return,

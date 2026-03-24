@@ -1852,7 +1852,7 @@ static char *param_type_signature_from_method_impl(ast_t *method_node) {
 
 static void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
-                                      int is_class_method, int is_operator,
+                                      int is_class_method,
                                       int param_count, char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return;
@@ -1867,7 +1867,6 @@ static void register_class_method_ex(const char *class_name, const char *method_
     binding->is_override = is_override;
     binding->is_static = is_static;
     binding->is_class_method = is_class_method;
-    binding->is_operator = is_operator;
     binding->param_count = param_count;
     binding->param_sig = param_sig;
 
@@ -1901,7 +1900,7 @@ static void register_class_method_ex(const char *class_name, const char *method_
 void from_cparser_register_method_template(const char *class_name, const char *method_name,
     int is_virtual, int is_override, int is_static, int param_count) {
     register_class_method_ex(class_name, method_name, is_virtual, is_override, is_static,
-        0, 0, param_count, NULL);
+        0, param_count, NULL);
 }
 
 
@@ -3126,7 +3125,6 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
         register_class_method_ex(record->type_id, method_template->name,
             method_template->is_virtual, method_template->is_override,
             method_template->is_static, method_template->is_class_method,
-            (method_template->kind == METHOD_TEMPLATE_OPERATOR),
             param_count, param_sig);
     }
 
@@ -3153,17 +3151,6 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     g_source_offset = saved_offset;
 
     free_ast(method_copy);
-
-    if (method_tree != NULL &&
-        method_tree->tree_data.subprogram_data.generic_type_params != NULL)
-    {
-        for (int i = 0; i < method_tree->tree_data.subprogram_data.num_generic_type_params; i++)
-            free(method_tree->tree_data.subprogram_data.generic_type_params[i]);
-        free(method_tree->tree_data.subprogram_data.generic_type_params);
-        method_tree->tree_data.subprogram_data.generic_type_params = NULL;
-        method_tree->tree_data.subprogram_data.num_generic_type_params = 0;
-    }
-
     return method_tree;
 }
 
@@ -3447,6 +3434,29 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     return result;
 }
 
+/* Check if a subprogram ID matches a generic base name.
+ * Handles both exact match ("UnfixArray" == "UnfixArray") and
+ * class-prefixed match ("TMarshal__UnfixArray" ends with "__UnfixArray").
+ * This is needed because specialize calls inside generic record methods
+ * use the short method name (e.g. "UnfixArray$T") while the subprogram
+ * templates carry the class-qualified ID (e.g. "TMarshal__UnfixArray"). */
+static int generic_base_name_matches(const char *subprogram_id, const char *base)
+{
+    if (subprogram_id == NULL || base == NULL)
+        return 0;
+    if (strcasecmp(subprogram_id, base) == 0)
+        return 1;
+    /* Check if subprogram_id ends with "__<base>" */
+    size_t sub_len = strlen(subprogram_id);
+    size_t base_len = strlen(base);
+    if (sub_len > base_len + 2 &&
+        subprogram_id[sub_len - base_len - 2] == '_' &&
+        subprogram_id[sub_len - base_len - 1] == '_' &&
+        strcasecmp(subprogram_id + sub_len - base_len, base) == 0)
+        return 1;
+    return 0;
+}
+
 static void collect_specialize_from_expr(struct Expression *expr, Tree_t *program_tree)
 {
     if (expr == NULL || program_tree == NULL)
@@ -3466,8 +3476,20 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                 if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                     fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
                         target_id, base ? base : "<null>", argc);
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
+                {
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
+                    {
+                        has_unresolved_arg = 1;
+                        break;
+                    }
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
                 {
                     if (cur->type == LIST_TREE && cur->cur != NULL)
                     {
@@ -3475,23 +3497,49 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                         if (sub->type == TREE_SUBPROGRAM &&
                             sub->tree_data.subprogram_data.id != NULL &&
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+                            generic_base_name_matches(sub->tree_data.subprogram_data.id, base))
                         {
                             if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
                                     sub->tree_data.subprogram_data.id);
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
+                            /* Reconstruct proper specialized name with class prefix */
+                            const char *sub_id = sub->tree_data.subprogram_data.id;
+                            const char *spec_name = target_id;
+                            char *constructed_name = NULL;
+                            if (strcasecmp(sub_id, base) != 0)
+                            {
+                                size_t sub_len = strlen(sub_id);
+                                size_t base_len = strlen(base);
+                                size_t prefix_len = sub_len - base_len;
+                                const char *dollar = strchr(target_id, '$');
+                                if (dollar != NULL)
+                                {
+                                    size_t suffix_len = strlen(dollar);
+                                    constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                    if (constructed_name != NULL)
+                                    {
+                                        memcpy(constructed_name, sub_id, prefix_len);
+                                        memcpy(constructed_name + prefix_len, base, base_len);
+                                        memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                        constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                        spec_name = constructed_name;
+                                    }
+                                }
+                            }
+                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
                             {
                                 Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, target_id);
+                                    sub, args, argc, spec_name);
                                 if (specialized != NULL)
                                     append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
                                         specialized);
                             }
+                            free(constructed_name);
                             break;
                         }
                     }
                     cur = cur->next;
+                }
                 }
             }
             if (args != NULL)
@@ -3514,29 +3562,73 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
             if (call_id != NULL &&
                 parse_generic_mangled_id(call_id, &base, &args, &argc))
             {
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter
+                 * (e.g. single uppercase letter "T").  These come from bodies
+                 * of generic record methods that haven't been specialized yet. */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
                 {
-                    if (cur->type == LIST_TREE && cur->cur != NULL)
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
                     {
-                        Tree_t *sub = (Tree_t *)cur->cur;
-                        if (sub->type == TREE_SUBPROGRAM &&
-                            sub->tree_data.subprogram_data.id != NULL &&
-                            sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
-                        {
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, call_id))
-                            {
-                                Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, call_id);
-                                if (specialized != NULL)
-                                    append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
-                                        specialized);
-                            }
-                            break;
-                        }
+                        has_unresolved_arg = 1;
+                        break;
                     }
-                    cur = cur->next;
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
+                    {
+                        if (cur->type == LIST_TREE && cur->cur != NULL)
+                        {
+                            Tree_t *sub = (Tree_t *)cur->cur;
+                            if (sub->type == TREE_SUBPROGRAM &&
+                                sub->tree_data.subprogram_data.id != NULL &&
+                                sub->tree_data.subprogram_data.num_generic_type_params == argc &&
+                                generic_base_name_matches(sub->tree_data.subprogram_data.id, base))
+                            {
+                                /* Build the proper specialized name: if the template has
+                                 * a class prefix (e.g., "TMarshal__UnfixArray") and the
+                                 * call_id is just "UnfixArray$TPtrWrapper", reconstruct
+                                 * to "TMarshal__UnfixArray$TPtrWrapper". */
+                                const char *sub_id = sub->tree_data.subprogram_data.id;
+                                const char *spec_name = call_id;
+                                char *constructed_name = NULL;
+                                if (strcasecmp(sub_id, base) != 0)
+                                {
+                                    /* Template has a prefix: extract it */
+                                    size_t sub_len = strlen(sub_id);
+                                    size_t base_len = strlen(base);
+                                    size_t prefix_len = sub_len - base_len;
+                                    const char *dollar = strchr(call_id, '$');
+                                    if (dollar != NULL)
+                                    {
+                                        size_t suffix_len = strlen(dollar);
+                                        constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                        if (constructed_name != NULL)
+                                        {
+                                            memcpy(constructed_name, sub_id, prefix_len);
+                                            memcpy(constructed_name + prefix_len, base, base_len);
+                                            memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                            constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                            spec_name = constructed_name;
+                                        }
+                                    }
+                                }
+                                if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
+                                {
+                                    Tree_t *specialized = instantiate_generic_subprogram(
+                                        sub, args, argc, spec_name);
+                                    if (specialized != NULL)
+                                        append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
+                                            specialized);
+                                }
+                                free(constructed_name);
+                                break;
+                            }
+                        }
+                        cur = cur->next;
+                    }
                 }
             }
             if (args != NULL)
@@ -3767,7 +3859,12 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
                         sub_tree->tree_data.subprogram_data.id,
                         sub_tree->tree_data.subprogram_data.num_generic_type_params);
                 }
-                collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
+                /* Skip bodies of unresolved generic templates — their expressions
+                 * still contain raw type parameter names (e.g. "T") which would
+                 * produce invalid specializations if matched. */
+                if (sub_tree->tree_data.subprogram_data.generic_type_params == NULL &&
+                    sub_tree->tree_data.subprogram_data.num_generic_type_params == 0)
+                    collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
             }
         }
         sub = sub->next;
@@ -4014,6 +4111,31 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
     }
+
+    /* Skip records whose generic_args are still unresolved type parameters.
+     * E.g. TFoo$T with generic_args=["T"] matching generic_decl params=["T"].
+     * Method clones from these would produce bodies with unresolved type refs. */
+    if (record->generic_decl->type_parameters != NULL)
+    {
+        int all_unresolved = 1;
+        for (int i = 0; i < record->num_generic_args && i < record->generic_decl->num_type_params; ++i)
+        {
+            const char *arg = record->generic_args[i];
+            const char *param = record->generic_decl->type_parameters[i];
+            if (arg == NULL || param == NULL || strcasecmp(arg, param) != 0)
+            {
+                all_unresolved = 0;
+                break;
+            }
+        }
+        if (all_unresolved)
+        {
+            if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
+                record->type_id != NULL)
+                fprintf(stderr, "[KGPC] skipping clone for %s (unresolved type params)\n", record->type_id);
+            return;
+        }
+    }
     if (record->method_clones_emitted)
         return;
 
@@ -4101,28 +4223,17 @@ void flush_deferred_inline_specializations(Tree_t *program_tree)
 
 void append_generic_method_clones(Tree_t *program_tree)
 {
-    ListNode_t *type_cursor = NULL;
-    ListNode_t **subprograms = NULL;
-
-    if (program_tree == NULL)
+    if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
         return;
 
-    if (program_tree->type == TREE_PROGRAM_TYPE) {
-        type_cursor = program_tree->tree_data.program_data.type_declaration;
-        subprograms = &program_tree->tree_data.program_data.subprograms;
-    } else if (program_tree->type == TREE_UNIT) {
-        type_cursor = program_tree->tree_data.unit_data.interface_type_decls;
-        subprograms = &program_tree->tree_data.unit_data.subprograms;
-    } else {
-        return;
-    }
-
+    ListNode_t *type_cursor = program_tree->tree_data.program_data.type_declaration;
     while (type_cursor != NULL)
     {
         if (type_cursor->type == LIST_TREE && type_cursor->cur != NULL)
         {
             Tree_t *decl = (Tree_t *)type_cursor->cur;
-            append_specialized_method_clones(decl, subprograms);
+            append_specialized_method_clones(decl,
+                &program_tree->tree_data.program_data.subprograms);
         }
         type_cursor = type_cursor->next;
     }
@@ -8844,7 +8955,6 @@ static void collect_class_members(ast_t *node, const char *class_name,
                                     register_class_method_ex(class_name, template->name,
                                         template->is_virtual, template->is_override, template->is_static,
                                         template->is_class_method,
-                                        (template->kind == METHOD_TEMPLATE_OPERATOR),
                                         param_count, param_sig);
                                 }
                                 if (method_builder != NULL)
@@ -8937,7 +9047,6 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     register_class_method_ex(class_name, template->name,
                         template->is_virtual, template->is_override, template->is_static,
                         template->is_class_method,
-                        (template->kind == METHOD_TEMPLATE_OPERATOR),
                         param_count, param_sig);
                 }
 
@@ -9179,13 +9288,10 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
         /* Extract GUID string from inside the GUID node if available */
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL) {
-            if ((guid_child->typ == PASCAL_T_STRING ||
-                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
-                guid_child->sym != NULL &&
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
                 guid_child->sym->name != NULL) {
                 guid_string = strdup(guid_child->sym->name);
-                if (guid_child->typ == PASCAL_T_STRING)
-                    has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
             }
             guid_child = guid_child->next;
@@ -9213,14 +9319,11 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL && !has_guid) {
-            if ((guid_child->typ == PASCAL_T_STRING ||
-                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
-                guid_child->sym != NULL &&
+            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
                 guid_child->sym->name != NULL) {
                 free(guid_string);
                 guid_string = strdup(guid_child->sym->name);
-                if (guid_child->typ == PASCAL_T_STRING)
-                    has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
             }
             guid_child = guid_child->next;
@@ -12526,7 +12629,6 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
-                                (template->kind == METHOD_TEMPLATE_OPERATOR),
                                 param_count, param_sig);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
@@ -12557,7 +12659,6 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                             register_class_method_ex(id, template->name,
                                 template->is_virtual, template->is_override, template->is_static,
                                 template->is_class_method,
-                                (template->kind == METHOD_TEMPLATE_OPERATOR),
                                 param_count, param_sig);
                         }
                         if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL)
