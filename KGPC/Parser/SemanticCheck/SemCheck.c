@@ -3560,7 +3560,11 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
 
                     KgpcType *kgpc_type = create_record_type(record);
                     if (record_type_is_class(record))
-                        kgpc_type = create_pointer_type(kgpc_type);
+                    {
+                        KgpcType *ptr = create_pointer_type(kgpc_type);
+                        kgpc_type_release(kgpc_type);
+                        kgpc_type = ptr;
+                    }
                     if (kgpc_type != NULL)
                     {
                         PushTypeOntoScope_Typed(symtab, (char *)lookup_id, kgpc_type);
@@ -7949,7 +7953,11 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                             KgpcType *kgpc_type = create_record_type(record_info);
                             if (record_type_is_class(record_info))
-                                kgpc_type = create_pointer_type(kgpc_type);
+                            {
+                                KgpcType *ptr = create_pointer_type(kgpc_type);
+                                kgpc_type_release(kgpc_type);
+                                kgpc_type = ptr;
+                            }
 
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
@@ -10414,6 +10422,10 @@ int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name
         if (resolved)
             return 1;
     }
+    else if (qualified_ref != NULL)
+    {
+        qualified_ident_free(qualified_ref);
+    }
 
     const char *current_type = type_name;
     char *owned_type = NULL;
@@ -11240,8 +11252,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             if (rec_type != NULL)
                                             {
                                                 return_type = create_pointer_type(rec_type);
-                                                if (return_type == NULL)
-                                                    destroy_kgpc_type(rec_type);
+                                                /* Release local ref; create_pointer_type retained its own */
+                                                kgpc_type_release(rec_type);
                                             }
                                         }
 
@@ -13705,8 +13717,11 @@ void semcheck_add_builtins(SymTab_t *symtab)
     }
     
     {
-        KgpcType *pchar = create_pointer_type(create_primitive_type(CHAR_TYPE));
+        KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+        KgpcType *pchar = create_pointer_type(char_type);
+        kgpc_type_release(char_type);  /* pchar retained its own ref */
         KgpcType *ppchar = create_pointer_type(pchar);
+        kgpc_type_release(pchar);  /* ppchar retained its own ref */
         if (ppchar != NULL)
         {
             char *envp_name = strdup("EnvP");
@@ -13757,13 +13772,22 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_string_type_with_alias(symtab, "WideString", HASHVAR_PCHAR, 1);
     if (!stdlib_loaded_flag())
     {
-        add_builtin_type_owned(symtab, "PAnsiString",
-            create_pointer_type(create_primitive_type(STRING_TYPE)));
-        add_builtin_type_owned(symtab, "PString",
-            create_pointer_type(create_primitive_type(STRING_TYPE)));
+        KgpcType *str_inner = create_primitive_type(STRING_TYPE);
+        KgpcType *pansistring = create_pointer_type(str_inner);
+        kgpc_type_release(str_inner);
+        add_builtin_type_owned(symtab, "PAnsiString", pansistring);
+
+        str_inner = create_primitive_type(STRING_TYPE);
+        KgpcType *pstring = create_pointer_type(str_inner);
+        kgpc_type_release(str_inner);
+        add_builtin_type_owned(symtab, "PString", pstring);
     }
-    add_builtin_type_owned(symtab, "PAnsiChar",
-        create_pointer_type(create_primitive_type(CHAR_TYPE)));
+    {
+        KgpcType *char_inner = create_primitive_type(CHAR_TYPE);
+        KgpcType *pansichar = create_pointer_type(char_inner);
+        kgpc_type_release(char_inner);
+        add_builtin_type_owned(symtab, "PAnsiChar", pansichar);
+    }
 
     /* Primitive pointer type */
     add_builtin_type_owned(symtab, "Pointer", create_primitive_type(POINTER_TYPE));
@@ -16517,7 +16541,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 else
                 {
                     /* CRITICAL: Retain element_type if borrowed from symbol table
-                     * since create_array_type takes ownership. */
+                     * since create_array_type retains internally. */
                     if (element_type_borrowed && element_type != NULL)
                         kgpc_type_retain(element_type);
                     array_type = create_array_type(
@@ -16525,6 +16549,9 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         start_bound,
                         end_bound
                     );
+                    /* Release local ref; create_array_type retained its own */
+                    if (!element_type_borrowed && element_type != NULL)
+                        kgpc_type_release(element_type);
                 }
                 assert(array_type != NULL && "Failed to create array type");
 

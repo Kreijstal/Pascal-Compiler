@@ -656,7 +656,10 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         }
         if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
             pointee_type = create_primitive_type(field->pointer_type);
-        return create_pointer_type(pointee_type);
+        KgpcType *ptr_result = create_pointer_type(pointee_type);
+        if (pointee_type != NULL)
+            kgpc_type_release(pointee_type);
+        return ptr_result;
     }
 
     if (field->nested_record != NULL)

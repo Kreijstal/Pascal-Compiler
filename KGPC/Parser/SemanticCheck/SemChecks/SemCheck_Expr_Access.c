@@ -4489,14 +4489,11 @@ int semcheck_funccall(int *type_return,
                                         if (rec_type != NULL)
                                         {
                                             KgpcType *ctor_ret = create_pointer_type(rec_type);
+                                            kgpc_type_release(rec_type);
                                             if (ctor_ret != NULL)
                                             {
                                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ctor_ret);
                                                 *type_return = POINTER_TYPE;
-                                            }
-                                            else
-                                            {
-                                                destroy_kgpc_type(rec_type);
                                             }
                                         }
                                     }
@@ -4948,13 +4945,10 @@ int semcheck_funccall(int *type_return,
                     if (rec_type != NULL)
                     {
                         KgpcType *ptr_type = create_pointer_type(rec_type);
+                        kgpc_type_release(rec_type);
                         if (ptr_type != NULL)
                         {
                             owner_type = ptr_type;
-                        }
-                        else
-                        {
-                            destroy_kgpc_type(rec_type);
                         }
                     }
                 }
@@ -5171,13 +5165,10 @@ int semcheck_funccall(int *type_return,
                         if (rec_type != NULL)
                         {
                             ctor_return_type = create_pointer_type(rec_type);
+                            kgpc_type_release(rec_type);
                             if (ctor_return_type != NULL)
                             {
                                 return_type_owned = 1;
-                            }
-                            else
-                            {
-                                destroy_kgpc_type(rec_type);
                             }
                         }
                     }
@@ -6554,14 +6545,11 @@ skip_overload_resolution:
                 if (record_kgpc != NULL)
                 {
                     KgpcType *ptr_type = create_pointer_type(record_kgpc);
+                    kgpc_type_release(record_kgpc);
                     if (ptr_type != NULL)
                     {
                         semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
                         destroy_kgpc_type(ptr_type);
-                    }
-                    else
-                    {
-                        destroy_kgpc_type(record_kgpc);
                     }
                 }
             }
