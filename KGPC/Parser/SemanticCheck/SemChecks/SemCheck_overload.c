@@ -784,7 +784,6 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
                     if (FindSymbol(&type_node, symtab, arg_expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
-                        kgpc_type_retain(type_node->type);
                         arg_type = create_pointer_type(type_node->type);
                     }
                 }
@@ -793,7 +792,10 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
                 {
                     KgpcType *points_to = create_primitive_type(arg_expr->pointer_subtype);
                     if (points_to != NULL)
+                    {
                         arg_type = create_pointer_type(points_to);
+                        kgpc_type_release(points_to);
+                    }
                 }
                 if (arg_type == NULL)
                     arg_type = create_pointer_type(NULL);

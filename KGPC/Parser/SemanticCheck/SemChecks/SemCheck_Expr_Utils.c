@@ -83,6 +83,9 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
         if (expr->pointer_subtype != UNKNOWN_TYPE)
             points_to = create_primitive_type(expr->pointer_subtype);
         expr->resolved_kgpc_type = create_pointer_type(points_to);
+        /* Release local ref; create_pointer_type retained its own */
+        if (points_to != NULL)
+            kgpc_type_release(points_to);
         return;
     }
 

@@ -971,6 +971,8 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         if (owns_type != NULL)
                                             *owns_type = 1;
                                         field_type = create_pointer_type(pointee_type);
+                                        if (pointee_type != NULL)
+                                            kgpc_type_release(pointee_type);
                                     }
                                     else if (field->is_array)
                                     {
