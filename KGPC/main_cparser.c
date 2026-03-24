@@ -1608,7 +1608,7 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
         for (dep = unit_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
         {
             if (dep->type == LIST_STRING && dep->cur != NULL)
-                unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
+                unit_registry_add_iface_dep(this_idx, unit_registry_add((const char *)dep->cur));
         }
         for (dep = unit_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
         {
@@ -1616,7 +1616,7 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
                 unit_registry_add_dep(this_idx, unit_registry_add((const char *)dep->cur));
         }
         /* Every unit implicitly depends on System (Input, Output, etc.) */
-        unit_registry_add_dep(this_idx, unit_registry_add("System"));
+        unit_registry_add_iface_dep(this_idx, unit_registry_add("System"));
     }
 
     /* Mark unit declarations BEFORE semcheck so defined_in_unit is set.
@@ -2648,14 +2648,14 @@ int main(int argc, char **argv)
             for (dep = user_tree->tree_data.unit_data.interface_uses; dep != NULL; dep = dep->next)
             {
                 if (dep->type == LIST_STRING && dep->cur != NULL)
-                    unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
+                    unit_registry_add_iface_dep(target_idx, unit_registry_add((const char *)dep->cur));
             }
             for (dep = user_tree->tree_data.unit_data.implementation_uses; dep != NULL; dep = dep->next)
             {
                 if (dep->type == LIST_STRING && dep->cur != NULL)
                     unit_registry_add_dep(target_idx, unit_registry_add((const char *)dep->cur));
             }
-            unit_registry_add_dep(target_idx, unit_registry_add("System"));
+            unit_registry_add_iface_dep(target_idx, unit_registry_add("System"));
         }
 
         debug_check_type_presence(user_tree);

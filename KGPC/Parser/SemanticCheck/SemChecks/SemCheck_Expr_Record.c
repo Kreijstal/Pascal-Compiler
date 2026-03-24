@@ -41,37 +41,6 @@ int node_is_record_type(HashNode_t *node)
     return hashnode_is_record(node);
 }
 
-/* Search for an identifier in a specific unit's scope and its deps. */
-static HashNode_t *find_in_unit_scope(SymTab_t *symtab, int unit_index,
-    const char *id, int require_type)
-{
-    if (unit_index <= 0 || symtab == NULL || id == NULL)
-        return NULL;
-    ScopeNode *scope = symtab->unit_scopes[unit_index];
-    if (scope == NULL)
-        return NULL;
-
-    ListNode_t *matches = FindAllIdentsInTable(scope->table, id);
-    for (int i = 0; i < scope->num_deps && matches == NULL; i++)
-        matches = FindAllIdentsInTable(scope->dep_scopes[i]->table, id);
-    if (matches == NULL)
-        return NULL;
-
-    HashNode_t *result = NULL;
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        HashNode_t *candidate = (HashNode_t *)cur->cur;
-        if (candidate == NULL) continue;
-        if (require_type && candidate->hash_type != HASHTYPE_TYPE) continue;
-        if (!require_type &&
-            candidate->hash_type != HASHTYPE_FUNCTION &&
-            candidate->hash_type != HASHTYPE_PROCEDURE) continue;
-        result = candidate;
-        break;
-    }
-    return result;
-}
-
 struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
     struct RecordType *record_info)
 {
@@ -80,12 +49,6 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
         return NULL;
 
     HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
-
-    /* If not found in current scope, try the unit where this class was defined.
-     * The parent class is guaranteed to be visible there. */
-    if (parent_node == NULL && record_info->source_unit_index > 0)
-        parent_node = find_in_unit_scope(symtab, record_info->source_unit_index,
-            record_info->parent_class_name, 1);
 
     if (parent_node == NULL)
         return NULL;
@@ -367,13 +330,6 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                     DestroyList(all);
                 }
             }
-
-            /* Fallback: search the defining unit's scope. When walking a
-             * cross-unit parent chain (A uses B uses C), methods from C
-             * may not be in A's scope. Search where this class was defined. */
-            if (method_node == NULL && current->source_unit_index > 0)
-                method_node = find_in_unit_scope(symtab, current->source_unit_index,
-                    mangled_name, 0);
 
             if (method_node != NULL)
             {

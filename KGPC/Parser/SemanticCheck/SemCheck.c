@@ -2410,10 +2410,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
 {
     int effective_line = line_num;
     int effective_col = col_num;
+    int effective_source_index = source_index;
 
-    /* Fall back to last known good line/col for synthetic nodes with line 0 */
+    /* Fall back to last known good line/col for synthetic nodes with line 0.
+     * Also discard source_index — synthetic nodes often carry stale offsets
+     * from a different source buffer, leading to wrong file/line display. */
     if (effective_line <= 0 && g_semcheck_error_line > 0)
+    {
         effective_line = g_semcheck_error_line;
+        effective_source_index = g_semcheck_error_source_index;
+    }
     if (effective_col <= 0 && g_semcheck_error_col > 0)
         effective_col = g_semcheck_error_col;
 
@@ -2424,16 +2430,16 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     if (g_semcheck_error_unit_name != NULL)
     {
         int resolved_line = resolve_unit_error_location(
-            source_index, effective_line,
+            effective_source_index, effective_line,
             directive_file, sizeof(directive_file),
             unit_chain, sizeof(unit_chain));
         if (resolved_line > 0)
             effective_line = resolved_line;
     }
-    else if (source_index >= 0)
+    else if (effective_source_index >= 0)
     {
         int resolved_line = resolve_error_source_context(
-            source_index, directive_file, sizeof(directive_file), 1);
+            effective_source_index, directive_file, sizeof(directive_file), 1);
         if (resolved_line > 0)
             effective_line = resolved_line;
         if (directive_file[0] != '\0')
@@ -2449,7 +2455,7 @@ void semcheck_error_with_context_at(int line_num, int col_num, int source_index,
     va_list args;
     va_start(args, format);
     v_semcheck_format_error_with_context(file_path, effective_line, effective_col,
-        source_index, format, args);
+        effective_source_index, format, args);
     if (unit_chain[0] != '\0')
         fprintf(stderr, "  %s\n", unit_chain);
     va_end(args);
@@ -7324,17 +7330,23 @@ void wire_all_unit_scope_deps(SymTab_t *symtab)
         {
             ScopeNode *sys_scope = GetOrCreateUnitScope(symtab, sys_idx);
             if (sys_scope != NULL)
-                ScopeAddDependency(unit_scope, sys_scope);
+                ScopeAddDependencyTransitive(unit_scope, sys_scope, 1);
         }
         /* Add explicit deps from uses clause */
         for (int d = 1; d <= num_units; d++)
         {
             if (d == u) continue;
-            if (unit_registry_is_dep(u, d))
+            if (unit_registry_is_iface_dep(u, d))
             {
                 ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
                 if (dep_scope != NULL)
-                    ScopeAddDependency(unit_scope, dep_scope);
+                    ScopeAddDependencyTransitive(unit_scope, dep_scope, 1);
+            }
+            else if (unit_registry_is_dep(u, d))
+            {
+                ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                if (dep_scope != NULL)
+                    ScopeAddDependency(unit_scope, dep_scope, 0);
             }
         }
     }
@@ -11248,6 +11260,14 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                     pushed_node->method_name = strdup(tmpl->name);
                                                 if (pushed_node->owner_class == NULL)
                                                     pushed_node->owner_class = strdup(tree->tree_data.type_decl_data.id);
+                                                if (tree->tree_data.type_decl_data.defined_in_unit)
+                                                {
+                                                    pushed_node->defined_in_unit = 1;
+                                                    pushed_node->unit_is_public =
+                                                        tree->tree_data.type_decl_data.unit_is_public ? 1 : 0;
+                                                    mark_hashnode_source_unit(pushed_node,
+                                                        tree->tree_data.type_decl_data.source_unit_index);
+                                                }
                                             }
                                         }
 
@@ -14239,7 +14259,7 @@ static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses
     /* Every scope implicitly depends on System */
     int sys_idx = unit_registry_add("System");
     if (sys_idx > 0)
-        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, sys_idx));
+        ScopeAddDependencyTransitive(scope, GetOrCreateUnitScope(symtab, sys_idx), 1);
 
     ListNode_t *cur = uses_list;
     while (cur != NULL)
@@ -14249,7 +14269,7 @@ static void wire_scope_deps(SymTab_t *symtab, ScopeNode *scope, ListNode_t *uses
             const char *name = (const char *)cur->cur;
             int idx = unit_registry_add(name);
             if (idx > 0)
-                ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, idx));
+                ScopeAddDependencyTransitive(scope, GetOrCreateUnitScope(symtab, idx), 1);
         }
         cur = cur->next;
     }
@@ -14264,7 +14284,7 @@ static void wire_program_scope_all_units(SymTab_t *symtab, ScopeNode *scope)
     if (scope == NULL) return;
     int count = unit_registry_count();
     for (int i = 1; i <= count; i++)
-        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, i));
+        ScopeAddDependency(scope, GetOrCreateUnitScope(symtab, i), 1);
 }
 
 int semcheck_program(SymTab_t *symtab, Tree_t *tree)
@@ -14501,7 +14521,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         int sys_idx = unit_registry_add("System");
         if (sys_idx > 0)
             ScopeAddDependency(symtab->current_scope,
-                               GetOrCreateUnitScope(symtab, sys_idx));
+                               GetOrCreateUnitScope(symtab, sys_idx), 1);
     }
 
     /* Wire scope tree deps: unit scope can see interface + implementation uses */
@@ -14518,7 +14538,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                 int idx = unit_registry_add(name);
                 if (idx > 0)
                     ScopeAddDependency(symtab->current_scope,
-                                       GetOrCreateUnitScope(symtab, idx));
+                                       GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
         }
@@ -14540,12 +14560,12 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
         ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
         if (own_unit_scope != NULL && symtab->current_scope != NULL)
         {
-            ScopeAddDependency(symtab->current_scope, own_unit_scope);
+            ScopeAddDependency(symtab->current_scope, own_unit_scope, 1);
             {
                 int sys_idx = unit_registry_add("System");
                 if (sys_idx > 0)
                     ScopeAddDependency(own_unit_scope,
-                                       GetOrCreateUnitScope(symtab, sys_idx));
+                                       GetOrCreateUnitScope(symtab, sys_idx), 1);
             }
             /* Wire the interface + implementation uses as deps of own_unit_scope */
             wire_scope_deps(symtab, own_unit_scope,
@@ -14560,7 +14580,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
                             ScopeAddDependency(own_unit_scope,
-                                               GetOrCreateUnitScope(symtab, dep_idx));
+                                               GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
                 }
@@ -14858,7 +14878,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
         int sys_idx = unit_registry_add("System");
         if (sys_idx > 0)
             ScopeAddDependency(symtab->current_scope,
-                               GetOrCreateUnitScope(symtab, sys_idx));
+                               GetOrCreateUnitScope(symtab, sys_idx), 1);
     }
 
     /* Wire scope tree deps: unit scope can see interface + implementation uses */
@@ -14874,7 +14894,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                 int idx = unit_registry_add(name);
                 if (idx > 0)
                     ScopeAddDependency(symtab->current_scope,
-                                       GetOrCreateUnitScope(symtab, idx));
+                                       GetOrCreateUnitScope(symtab, idx), 0);
             }
             cur = cur->next;
         }
@@ -14912,12 +14932,12 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
         ScopeNode *own_unit_scope = GetOrCreateUnitScope(symtab, g_semcheck_current_unit_index);
         if (own_unit_scope != NULL && symtab->current_scope != NULL)
         {
-            ScopeAddDependency(symtab->current_scope, own_unit_scope);
+            ScopeAddDependency(symtab->current_scope, own_unit_scope, 1);
             {
                 int sys_idx = unit_registry_add("System");
                 if (sys_idx > 0)
                     ScopeAddDependency(own_unit_scope,
-                                       GetOrCreateUnitScope(symtab, sys_idx));
+                                       GetOrCreateUnitScope(symtab, sys_idx), 1);
             }
             /* Wire the interface + implementation uses as deps of own_unit_scope */
             wire_scope_deps(symtab, own_unit_scope,
@@ -14932,7 +14952,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
                         int dep_idx = unit_registry_add(dep_name);
                         if (dep_idx > 0)
                             ScopeAddDependency(own_unit_scope,
-                                               GetOrCreateUnitScope(symtab, dep_idx));
+                                               GetOrCreateUnitScope(symtab, dep_idx), 0);
                     }
                     dep_cur = dep_cur->next;
                 }
