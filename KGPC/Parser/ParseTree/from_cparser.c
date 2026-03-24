@@ -3440,19 +3440,17 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
  * This is needed because specialize calls inside generic record methods
  * use the short method name (e.g. "UnfixArray$T") while the subprogram
  * templates carry the class-qualified ID (e.g. "TMarshal__UnfixArray"). */
-static int generic_base_name_matches(const char *subprogram_id, const char *base)
+static int generic_base_name_matches(Tree_t *sub, const char *base)
 {
-    if (subprogram_id == NULL || base == NULL)
+    if (sub == NULL || base == NULL)
         return 0;
-    if (strcasecmp(subprogram_id, base) == 0)
+    /* For class methods, the bare method_name is the relevant identifier */
+    if (sub->tree_data.subprogram_data.method_name != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.method_name, base) == 0)
         return 1;
-    /* Check if subprogram_id ends with "__<base>" */
-    size_t sub_len = strlen(subprogram_id);
-    size_t base_len = strlen(base);
-    if (sub_len > base_len + 2 &&
-        subprogram_id[sub_len - base_len - 2] == '_' &&
-        subprogram_id[sub_len - base_len - 1] == '_' &&
-        strcasecmp(subprogram_id + sub_len - base_len, base) == 0)
+    /* For standalone subprograms, check the id directly */
+    if (sub->tree_data.subprogram_data.id != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
         return 1;
     return 0;
 }
@@ -3497,7 +3495,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                         if (sub->type == TREE_SUBPROGRAM &&
                             sub->tree_data.subprogram_data.id != NULL &&
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            generic_base_name_matches(sub->tree_data.subprogram_data.id, base))
+                            generic_base_name_matches(sub, base))
                         {
                             if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
@@ -3585,7 +3583,7 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                             if (sub->type == TREE_SUBPROGRAM &&
                                 sub->tree_data.subprogram_data.id != NULL &&
                                 sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                                generic_base_name_matches(sub->tree_data.subprogram_data.id, base))
+                                generic_base_name_matches(sub, base))
                             {
                                 /* Build the proper specialized name: if the template has
                                  * a class prefix (e.g., "TMarshal__UnfixArray") and the
