@@ -2997,19 +2997,31 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 d3 = (unsigned int)iface_record->guid_d3;
                 memcpy(d4, iface_record->guid_d4, sizeof(d4));
             }
-            /* Emit GUID data constant (weak so multiple TUs can define it) */
+            /* Emit GUID data constant (deduplicated within this TU by emitted_classes set).
+             * On ELF use .weak for cross-TU dedup; on COFF use .globl with .linkonce. */
+            int is_win = codegen_target_is_windows();
             fprintf(ctx->output_file, "\n# GUID constant for interface %s\n", iface_name);
-            fprintf(ctx->output_file, "\t.data\n");
+            if (is_win) {
+                fprintf(ctx->output_file, "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n", iface_name);
+                fprintf(ctx->output_file, "\t.linkonce discard\n");
+            } else {
+                fprintf(ctx->output_file, "\t.data\n");
+            }
             fprintf(ctx->output_file, "\t.align 8\n");
-            fprintf(ctx->output_file, ".weak __kgpc_guid_%s\n", iface_name);
+            fprintf(ctx->output_file, "%s __kgpc_guid_%s\n", is_win ? ".globl" : ".weak", iface_name);
             fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
             fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
                 d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
-            /* Emit pguid pointer (weak) */
-            fprintf(ctx->output_file, ".weak __kgpc_guidref_%s\n", iface_name);
+            /* Emit pguid pointer */
+            if (is_win) {
+                fprintf(ctx->output_file, "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n", iface_name);
+                fprintf(ctx->output_file, "\t.linkonce discard\n");
+            }
+            fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, "%s __kgpc_guidref_%s\n", is_win ? ".globl" : ".weak", iface_name);
             fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
             fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", iface_name);
             fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
