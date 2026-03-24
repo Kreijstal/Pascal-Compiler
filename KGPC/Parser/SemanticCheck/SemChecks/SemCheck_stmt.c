@@ -5722,6 +5722,77 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                     stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
                 {
                     const char *method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
+
+                    /* Check if method_name is actually a field of procedure type on the class.
+                     * E.g., tmodule.finish_module(hp) where finish_module is a class var
+                     * of procedural type, not a method. Since the receiver is a type name,
+                     * only class vars (or static fields) are valid here. */
+                    {
+                        int is_classvar_proc = 0;
+                        struct RecordType *walk_rec = record_info;
+                        while (walk_rec != NULL && !is_classvar_proc)
+                        {
+                            for (ListNode_t *f = walk_rec->fields; f != NULL; f = f->next)
+                            {
+                                if (f->type != LIST_RECORD_FIELD || f->cur == NULL)
+                                    continue;
+                                struct RecordField *rf = (struct RecordField *)f->cur;
+                                if (rf->name == NULL)
+                                    continue;
+                                if (strcasecmp(rf->name, method_name) != 0)
+                                    continue;
+                                /* Found field — check if it has procedure type */
+                                if (rf->proc_type != NULL)
+                                {
+                                    is_classvar_proc = 1;
+                                    break;
+                                }
+                                if (rf->type_id != NULL)
+                                {
+                                    HashNode_t *ft_node = NULL;
+                                    if (FindSymbol(&ft_node, symtab, rf->type_id) != 0 &&
+                                        ft_node != NULL && ft_node->type != NULL &&
+                                        ft_node->type->kind == TYPE_KIND_PROCEDURE)
+                                    {
+                                        is_classvar_proc = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            /* Walk parent class hierarchy */
+                            const char *parent = walk_rec->parent_class_name;
+                            walk_rec = (parent != NULL) ? semcheck_lookup_record_type(symtab, parent) : NULL;
+                        }
+                        if (is_classvar_proc)
+                        {
+                            /* Convert to a procedural variable call through the class var.
+                             * Build TypeName.field_name as a class-field access expression. */
+                            struct Expression *type_expr = mk_varid(stmt->line_num,
+                                strdup(first_arg->expr_data.id));
+                            struct Expression *field_access = mk_recordaccess(stmt->line_num,
+                                type_expr, strdup(method_name));
+
+                            /* Remove the type receiver from the argument list */
+                            ListNode_t *remaining_args = args_given->next;
+                            destroy_expr(first_arg);
+                            args_given->cur = NULL;
+                            free(args_given);
+                            stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+                            stmt->stmt_data.procedure_call_data.is_procedural_var_call = 1;
+                            stmt->stmt_data.procedure_call_data.procedural_var_expr = field_access;
+                            stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_VAR;
+                            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+                            stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+
+                            int field_tag = UNKNOWN_TYPE;
+                            return_val += semcheck_stmt_expr_tag(&field_tag, symtab, field_access,
+                                max_scope_lev, NO_MUTATE);
+
+                            return return_val;
+                        }
+                    }
+
                     int is_static_method = from_cparser_is_method_static(record_info->type_id,
                         method_name);
                     int is_nonstatic_class_method =
@@ -5781,6 +5852,21 @@ skip_type_receiver_rewrite:
             char *potential_unit_name = first_arg->expr_data.id;
             HashNode_t *unit_check = NULL;
             int is_unit_qualifier = semcheck_is_unit_name(potential_unit_name);
+
+            /* Local variables/parameters shadow unit names in Pascal.
+             * If the identifier resolves as a variable, don't treat it
+             * as a unit qualifier (e.g., 'node' parameter vs 'node' unit). */
+            if (is_unit_qualifier)
+            {
+                HashNode_t *var_check = NULL;
+                if (FindSymbol(&var_check, symtab, potential_unit_name) != 0 &&
+                    var_check != NULL &&
+                    (var_check->hash_type == HASHTYPE_VAR ||
+                     var_check->hash_type == HASHTYPE_CONST))
+                {
+                    is_unit_qualifier = 0;
+                }
+            }
 
             /* Prefer explicit unit-name recognition; keep unresolved-name fallback for
              * parser shapes where unit qualifiers are not injected into symbol tables. */
@@ -7480,6 +7566,86 @@ proccall_parent_resolve_done:
         }
     }
 
+    /* If no overloads found and proc_id looks like ClassName__MethodName,
+     * try walking the class hierarchy to find the method in a parent class.
+     * This handles cases like TElfVersionDef.Create where the constructor
+     * is inherited from TFPHashObject but not redeclared in the child. */
+    if (resolved_proc == NULL && overload_candidates == NULL && proc_id != NULL)
+    {
+        const char *dunder = strstr(proc_id, "__");
+        if (dunder != NULL && dunder > proc_id)
+        {
+            char *class_name = strndup(proc_id, (size_t)(dunder - proc_id));
+            const char *method_name = dunder + 2;
+            if (class_name != NULL && method_name[0] != '\0')
+            {
+                HashNode_t *class_node = semcheck_find_preferred_type_node(symtab, class_name);
+                if (class_node == NULL)
+                    FindSymbol(&class_node, symtab, class_name);
+                struct RecordType *record_info = (class_node != NULL)
+                    ? semcheck_stmt_get_record_type_from_node(class_node) : NULL;
+                const char *parent_class_name = (record_info != NULL)
+                    ? record_info->parent_class_name : NULL;
+                while (parent_class_name != NULL && resolved_proc == NULL)
+                {
+                    size_t plen = strlen(parent_class_name);
+                    size_t mlen = strlen(method_name);
+                    char *parent_proc_id = (char *)malloc(plen + 2 + mlen + 1);
+                    if (parent_proc_id == NULL)
+                        break;
+                    sprintf(parent_proc_id, "%s__%s", parent_class_name, method_name);
+
+                    char *parent_mangled = MangleFunctionNameFromCallSite(
+                        parent_proc_id, args_given, symtab, INT_MAX);
+                    ListNode_t *parent_candidates = FindAllIdents(symtab, parent_proc_id);
+                    if (parent_candidates != NULL)
+                    {
+                        for (ListNode_t *pc = parent_candidates; pc != NULL; pc = pc->next)
+                        {
+                            HashNode_t *cand = (HashNode_t *)pc->cur;
+                            if (cand->mangled_id != NULL && parent_mangled != NULL &&
+                                strcmp(cand->mangled_id, parent_mangled) == 0)
+                            {
+                                resolved_proc = cand;
+                                match_count = 1;
+                                if (cand->id != NULL)
+                                {
+                                    free(stmt->stmt_data.procedure_call_data.id);
+                                    stmt->stmt_data.procedure_call_data.id = strdup(cand->id);
+                                    proc_id = stmt->stmt_data.procedure_call_data.id;
+                                }
+                                break;
+                            }
+                        }
+                        if (resolved_proc == NULL)
+                        {
+                            /* No mangled match — try overload resolution on parent candidates */
+                            overload_candidates = parent_candidates;
+                            parent_candidates = NULL;
+                            free(stmt->stmt_data.procedure_call_data.id);
+                            stmt->stmt_data.procedure_call_data.id = strdup(parent_proc_id);
+                            proc_id = stmt->stmt_data.procedure_call_data.id;
+                            free(mangled_name);
+                            mangled_name = parent_mangled;
+                            parent_mangled = NULL;
+                        }
+                        DestroyList(parent_candidates);
+                    }
+                    free(parent_mangled);
+                    free(parent_proc_id);
+                    if (resolved_proc != NULL || overload_candidates != NULL)
+                        break;
+                    /* Move to next parent */
+                    HashNode_t *pnode = semcheck_find_preferred_type_node(symtab, parent_class_name);
+                    struct RecordType *prec = (pnode != NULL)
+                        ? semcheck_stmt_get_record_type_from_node(pnode) : NULL;
+                    parent_class_name = (prec != NULL) ? prec->parent_class_name : NULL;
+                }
+            }
+            free(class_name);
+        }
+    }
+
     /* If we found multiple matches but they all have the same mangled name,
      * treat it as a single match (they're duplicates from different scopes) */
     int force_best_match = 0;
@@ -8283,6 +8449,24 @@ proccall_parent_resolve_done:
         cur_arg = 0;
         /* Get formal arguments from KgpcType instead of deprecated args field */
         true_args = kgpc_type_get_procedure_params(sym_return->type);
+        /* Skip implicit Self parameter when args don't include it
+         * (e.g., ClassName.Create(args) where the type qualifier was stripped) */
+        if (true_args != NULL && true_args->cur != NULL)
+        {
+            Tree_t *first_formal = (Tree_t *)true_args->cur;
+            if (first_formal->type == TREE_VAR_DECL &&
+                first_formal->tree_data.var_decl_data.ids != NULL)
+            {
+                const char *ff_id = (const char *)first_formal->tree_data.var_decl_data.ids->cur;
+                if (ff_id != NULL && pascal_identifier_equals(ff_id, "Self"))
+                {
+                    int n_args = ListLength(args_given);
+                    int n_params = ListLength(true_args);
+                    if (n_args == n_params - 1)
+                        true_args = true_args->next;
+                }
+            }
+        }
         while(args_given != NULL && true_args != NULL)
         {
             ++cur_arg;

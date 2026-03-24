@@ -2069,6 +2069,20 @@ int semcheck_funccall(int *type_return,
                 }
             }
             int is_unit_qualifier = semcheck_is_unit_name(first_arg->expr_data.id);
+            /* Local variables/parameters shadow unit names in Pascal.
+             * If the identifier resolves as a variable, don't treat it
+             * as a unit qualifier (e.g., 'node' parameter vs 'node' unit). */
+            if (is_unit_qualifier)
+            {
+                HashNode_t *var_shadow = NULL;
+                if (FindSymbol(&var_shadow, symtab, first_arg->expr_data.id) != 0 &&
+                    var_shadow != NULL &&
+                    (var_shadow->hash_type == HASHTYPE_VAR ||
+                     var_shadow->hash_type == HASHTYPE_CONST))
+                {
+                    is_unit_qualifier = 0;
+                }
+            }
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
             {
                 fprintf(stderr, "[SemCheck] funccall unit-qual check: receiver=%s is_unit=%d\n",
