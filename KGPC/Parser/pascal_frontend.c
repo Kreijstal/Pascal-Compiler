@@ -31,6 +31,10 @@ static char *g_last_parse_path = NULL;
  * are cached to binary files in this directory. */
 static char *g_ast_cache_dir = NULL;
 
+/* Modification time of the compiler binary. When set, cached ASTs older
+ * than the binary are considered stale and re-parsed. */
+static time_t g_compiler_mtime = 0;
+
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
 static bool g_objfpc_mode_detected = false;
@@ -59,7 +63,15 @@ static bool ast_cache_is_fresh(const char *cache_path, const char *source_path)
     if (stat(source_path, &source_st) != 0)
         return false;
 
-    return cache_st.st_mtime >= source_st.st_mtime;
+    /* Cache must be newer than the source file */
+    if (cache_st.st_mtime < source_st.st_mtime)
+        return false;
+
+    /* Cache must be newer than the compiler binary (if known) */
+    if (g_compiler_mtime > 0 && cache_st.st_mtime < g_compiler_mtime)
+        return false;
+
+    return true;
 }
 
 /* Check if source buffer contains {$MODE objfpc} directive */
@@ -222,6 +234,11 @@ void pascal_frontend_set_ast_cache_dir(const char *dir)
     if (g_ast_cache_dir != NULL)
         free(g_ast_cache_dir);
     g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
+}
+
+void pascal_frontend_set_compiler_mtime(time_t mtime)
+{
+    g_compiler_mtime = mtime;
 }
 
 const char * const *pascal_frontend_get_include_paths(int *count)

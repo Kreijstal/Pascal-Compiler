@@ -2272,6 +2272,18 @@ int main(int argc, char **argv)
     if (argc > 1)
         set_flags(argv + 1, argc - 1);
 
+    /* Record compiler binary mtime for AST cache invalidation */
+    {
+        char exe_path[PATH_MAX];
+        ssize_t exe_len = get_executable_path(exe_path, sizeof(exe_path), argv[0]);
+        if (exe_len > 0)
+        {
+            struct stat exe_st;
+            if (stat(exe_path, &exe_st) == 0)
+                pascal_frontend_set_compiler_mtime(exe_st.st_mtime);
+        }
+    }
+
 #ifndef _WIN32
     /* Batch mode: compile multiple files from stdin, sharing pre-loaded units */
     if (g_batch_mode)

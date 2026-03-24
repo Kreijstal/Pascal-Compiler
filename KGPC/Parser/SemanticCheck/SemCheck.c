@@ -7350,6 +7350,28 @@ void wire_all_unit_scope_deps(SymTab_t *symtab)
             }
         }
     }
+
+    /* Second pass: propagate transitive interface deps that were missed
+     * because a dependency hadn't been fully wired yet in the first pass.
+     * Units are numbered in load order, but uses-chains can reference
+     * higher-numbered units.  After pass 1 every unit has its direct
+     * deps; pass 2 copies any newly-visible transitive deps. */
+    for (int u = 1; u <= num_units; u++)
+    {
+        ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, u);
+        if (unit_scope == NULL) continue;
+        for (int d = 1; d <= num_units; d++)
+        {
+            if (d == u) continue;
+            if (unit_registry_is_iface_dep(u, d))
+            {
+                ScopeNode *dep_scope = GetOrCreateUnitScope(symtab, d);
+                if (dep_scope != NULL)
+                    ScopeAddDependencyTransitive(unit_scope, dep_scope, 1);
+            }
+        }
+    }
+
     /* NOTE: We do NOT add unit deps to current_scope (the global pre-program
      * BLOCK scope) here. The program-level scope gets its deps wired separately
      * in semcheck_program / semcheck_unit via the EnterScope(0) call.

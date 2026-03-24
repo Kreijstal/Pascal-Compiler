@@ -50,6 +50,19 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
 
     HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
 
+    /* Fallback: if dep_scope filtering hid the parent type, use FindSymbol
+     * which walks the full scope tree. Parent classes must always be
+     * reachable since the child class itself was accessible. */
+    if (parent_node == NULL)
+    {
+        HashNode_t *fallback = NULL;
+        if (FindSymbol(&fallback, symtab, record_info->parent_class_name) != 0 &&
+            fallback != NULL && fallback->hash_type == HASHTYPE_TYPE)
+        {
+            parent_node = fallback;
+        }
+    }
+
     if (parent_node == NULL)
         return NULL;
 
@@ -391,7 +404,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
         }
-        
+
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;

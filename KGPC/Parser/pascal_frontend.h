@@ -2,6 +2,7 @@
 #define PASCAL_FRONTEND_H
 
 #include <stdbool.h>
+#include <time.h>
 
 #include "parser.h"
 
@@ -20,6 +21,10 @@ void pascal_frontend_clear_user_config(void);
 /* AST cache: when set, parsed unit ASTs are cached to this directory
  * to avoid re-preprocessing and re-parsing on subsequent compilations. */
 void pascal_frontend_set_ast_cache_dir(const char *dir);
+
+/* Set the compiler binary's modification time so cached ASTs older than
+ * the binary are invalidated automatically. */
+void pascal_frontend_set_compiler_mtime(time_t mtime);
 
 /* Get the list of user-defined include paths for unit search */
 const char * const *pascal_frontend_get_include_paths(int *count);
