@@ -31,6 +31,7 @@ typedef struct ScopeNode {
 
     /* Dependency edges from `uses` clause (only on unit/program scopes) */
     struct ScopeNode **dep_scopes;
+    int *dep_is_iface;               /* 1 = interface dep, 0 = implementation-only */
     int num_deps;
     int cap_deps;
 } ScopeNode;
@@ -161,8 +162,9 @@ void DestroyScope(ScopeNode *scope);
  * The scope OWNS its table (freed in DestroyScope). */
 ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);
 
-/* Add a dependency edge: scope can see dep_scope's symbols. */
-void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope);
+/* Add a dependency edge: scope can see dep_scope's symbols.
+ * is_interface: 1 = interface (public) dependency, 0 = implementation-only. */
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope, int is_interface);
 
 /* Push a new child scope under current_scope and make it current. */
 void EnterScope(SymTab_t *symtab, int unit_index);

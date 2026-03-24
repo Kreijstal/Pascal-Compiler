@@ -564,6 +564,7 @@ ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table)
     scope->parent = parent;
     scope->unit_index = unit_index;
     scope->dep_scopes = NULL;
+    scope->dep_is_iface = NULL;
     scope->num_deps = 0;
     scope->cap_deps = 0;
     return scope;
@@ -575,6 +576,7 @@ void DestroyScope(ScopeNode *scope)
     if (scope->table != NULL)
         DestroyHashTable(scope->table);
     free(scope->dep_scopes);
+    free(scope->dep_is_iface);
     free(scope);
 }
 
@@ -592,16 +594,19 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index)
     return scope;
 }
 
-void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
+void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope, int is_interface)
 {
     assert(scope != NULL);
     assert(dep_scope != NULL);
 
-    /* Don't add duplicates */
+    /* Don't add duplicates; upgrade to interface if re-added as interface */
     for (int i = 0; i < scope->num_deps; i++)
     {
         if (scope->dep_scopes[i] == dep_scope)
+        {
+            scope->dep_is_iface[i] |= is_interface;
             return;
+        }
     }
 
     if (scope->num_deps >= scope->cap_deps)
@@ -611,9 +616,14 @@ void ScopeAddDependency(ScopeNode *scope, ScopeNode *dep_scope)
             (size_t)new_cap * sizeof(ScopeNode *));
         assert(new_arr != NULL);
         scope->dep_scopes = new_arr;
+        int *new_iface = (int *)realloc(scope->dep_is_iface,
+            (size_t)new_cap * sizeof(int));
+        assert(new_iface != NULL);
+        scope->dep_is_iface = new_iface;
         scope->cap_deps = new_cap;
     }
 
+    scope->dep_is_iface[scope->num_deps] = is_interface;
     scope->dep_scopes[scope->num_deps++] = dep_scope;
 }
 
