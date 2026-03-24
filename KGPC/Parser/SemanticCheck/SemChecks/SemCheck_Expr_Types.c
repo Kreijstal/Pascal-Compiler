@@ -829,6 +829,7 @@ int semcheck_typecast(int *type_return,
                 if (points_to != NULL)
                 {
                     resolved_ptr = create_pointer_type(points_to);
+                    kgpc_type_release(points_to);
                     semcheck_set_pointer_info(expr, inferred_subtype, NULL);
                 }
                 else
@@ -1387,6 +1388,7 @@ int semcheck_as_expr(int *type_return,
         if (record_kgpc != NULL)
         {
             result_kgpc_type = create_pointer_type(record_kgpc);
+            kgpc_type_release(record_kgpc);
         }
     }
     else
@@ -3877,6 +3879,8 @@ SKIP_SELF_FIELD_REWRITE:
                         if (record_kgpc != NULL)
                         {
                             KgpcType *ptr_type = create_pointer_type(record_kgpc);
+                            /* Release local ref; create_pointer_type retained its own */
+                            kgpc_type_release(record_kgpc);
                             if (ptr_type != NULL)
                             {
                                 semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
@@ -3884,10 +3888,6 @@ SKIP_SELF_FIELD_REWRITE:
                                 if (type_return != NULL)
                                     *type_return = POINTER_TYPE;
                                 destroy_kgpc_type(ptr_type);
-                            }
-                            else
-                            {
-                                destroy_kgpc_type(record_kgpc);
                             }
                         }
                     }
@@ -3981,7 +3981,9 @@ SKIP_SELF_FIELD_REWRITE:
                 
                 /* Create a KgpcType for the class (pointer to record) */
                 KgpcType *class_kgpc = create_pointer_type(record_kgpc);
+                kgpc_type_release(record_kgpc);
                 semcheck_expr_set_resolved_kgpc_type_shared(expr, class_kgpc);
+                destroy_kgpc_type(class_kgpc);
                 
                 *type_return = POINTER_TYPE;
                 
@@ -5200,6 +5202,8 @@ FIELD_RESOLVED:
                     if (points_to == NULL && pointer_subtype != UNKNOWN_TYPE)
                         points_to = create_primitive_type(pointer_subtype);
                     KgpcType *ptr_type = create_pointer_type(points_to);
+                    if (points_to != NULL)
+                        kgpc_type_release(points_to);
                     if (ptr_type != NULL)
                     {
                         semcheck_expr_set_resolved_kgpc_type_shared(expr, ptr_type);
@@ -6051,7 +6055,6 @@ int semcheck_addressof(int *type_return,
         *type_return = POINTER_TYPE;
 
         /* Preserve pointer-to-array KgpcType for overloads like pSigSet. */
-        kgpc_type_retain(array_type);
         KgpcType *ptr_type = create_pointer_type(array_type);
         if (ptr_type != NULL)
         {
