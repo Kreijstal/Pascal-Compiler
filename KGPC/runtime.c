@@ -8566,3 +8566,32 @@ void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
 void kgpc_readbarrier(void) {}
 void kgpc_writebarrier(void) {}
 void kgpc_readwritebarrier(void) {}
+
+/* SysBeep — system procedure that produces a beep.
+ * Not meaningful in a CLI/batch context; no-op. */
+void SysBeep(void) {}
+
+/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
+ * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
+ * TPtrWrapper (a simple record with no managed fields). */
+void tmarshal__unfixarray_u_tptrwrapper(void) {}
+
+/* FindComponentClass — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void FindComponentClass(void) { __kgpc_abstract_method_error(); }
+
+/* ReadDeltaStream — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
+
+/* FPC RTL global variables referenced as bare symbols.
+ * These are class fields or type-related symbols that the compiler
+ * doesn't yet emit because the owning class types aren't fully
+ * processed during codegen. */
+long long FAction = 0;
+long long FCount = 0;
+long long FData = 0;
+long long FRootAncestor = 0;
+long long FitemClass_TYPEINFO = 0;
+long long PPropInfo = 0;
+long long SetStatus = 0;

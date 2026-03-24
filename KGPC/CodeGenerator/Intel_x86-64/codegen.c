@@ -3674,13 +3674,16 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
     }
 }
 
-/* Helper: emit abstract method stubs for unresolved interface methods.
- * Iterates over type declarations, finds interface types with method_templates,
- * looks up each method in the symbol table, and emits a stub that jumps to
- * __kgpc_abstract_method_error if no concrete implementation was found.
+/* Helper: emit abstract method stubs for unresolved interface and object methods.
+ * Iterates over type declarations, finds interface types and old-style object
+ * types with method_templates, looks up each method in the symbol table, and
+ * emits a stub that jumps to __kgpc_abstract_method_error if no concrete
+ * implementation was found.
  * This handles interface methods referenced from generated code (e.g. the FPC
  * RTL TObservers class calling IObserver.GetActive) when no class in the
- * current program provides a concrete implementation. */
+ * current program provides a concrete implementation.
+ * It also handles old-style Pascal objects with virtual;abstract methods where
+ * the compiler generates direct calls instead of VMT dispatch. */
 static void codegen_emit_abstract_iface_stubs_from_type_list(
     CodeGenContext *ctx, SymTab_t *symtab,
     ListNode_t *type_decls, EmittedClassSet *emitted_classes)
@@ -3690,18 +3693,27 @@ static void codegen_emit_abstract_iface_stubs_from_type_list(
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
             struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
-            if (record_info != NULL && record_info->is_interface &&
-                record_info->method_templates != NULL)
+            if (record_info != NULL && record_info->method_templates != NULL &&
+                (record_info->is_interface || !record_type_is_class(record_info)))
             {
                 const char *iface_name = record_info->type_id;
                 if (iface_name == NULL)
                     iface_name = type_tree->tree_data.type_decl_data.id;
                 if (iface_name == NULL) { cur = cur->next; continue; }
 
+                int is_old_style_object = !record_info->is_interface &&
+                    !record_type_is_class(record_info);
                 ListNode_t *mt = record_info->method_templates;
                 while (mt != NULL) {
                     struct MethodTemplate *imethod = (struct MethodTemplate *)mt->cur;
                     if (imethod != NULL && imethod->name != NULL) {
+                        /* For old-style objects, only emit stubs for virtual
+                         * methods (which may be abstract).  Skip non-virtual
+                         * methods and operators. */
+                        if (is_old_style_object && !imethod->is_virtual) {
+                            mt = mt->next;
+                            continue;
+                        }
                         char iface_base[512];
                         snprintf(iface_base, sizeof(iface_base),
                                  "%s__%s", iface_name, imethod->name);
@@ -3739,7 +3751,7 @@ static void codegen_emit_abstract_iface_stubs_from_type_list(
                                             emitted_class_set_add(
                                                 emitted_classes, stub_key);
                                         fprintf(ctx->output_file,
-                                            "\n# Abstract interface stub:"
+                                            "\n# Abstract method stub:"
                                             " %s.%s\n",
                                             iface_name, imethod->name);
                                         fprintf(ctx->output_file,
@@ -3998,8 +4010,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         codegen_vmt_aliases_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
-    /* Emit abstract method stubs for interface methods that were not resolved
-     * to a concrete implementation by the interface dispatch thunk pass. */
+    /* Emit abstract method stubs for interface and old-style object methods
+     * that were not resolved to a concrete implementation. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
