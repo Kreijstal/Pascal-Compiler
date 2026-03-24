@@ -18,12 +18,13 @@ ReadDeltaStream:
 /* Interface GUID/TYPEINFO/GUIDREF symbols and bare interface name labels
  * have been removed from this file.  The compiler (codegen) now emits all
  * these symbols directly:
- *   - __kgpc_guid_<Name>   (16-byte GUID constant, .weak on ELF, .globl .linkonce on COFF)
- *   - __kgpc_guidref_<Name> (pointer to GUID constant)
+ *   - __kgpc_guid_<Name>   (16-byte GUID constant, .globl)
+ *   - __kgpc_guidref_<Name> (pointer to GUID constant, .globl)
  *   - <Name>_TYPEINFO       (RTTI structure)
- * The codegen emits `leaq __kgpc_guid_<Name>(%rip)` directly for interface
- * GUID arguments (e.g. Supports(Obj, IObserver, I)), so no bare interface
- * labels (IObserver, IInterface, etc.) are needed. */
+ * Codegen emits GUID data for all interfaces with GUIDs in the symbol table,
+ * not just those implemented by local classes.  The codegen emits
+ * `leaq __kgpc_guid_<Name>(%rip)` directly for interface GUID arguments
+ * (e.g. Supports(Obj, IObserver, I)), so no bare interface labels are needed. */
 
 .data
 .align 8

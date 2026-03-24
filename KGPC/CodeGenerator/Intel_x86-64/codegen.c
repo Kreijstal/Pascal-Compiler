@@ -2998,7 +2998,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 memcpy(d4, iface_record->guid_d4, sizeof(d4));
             }
             /* Emit GUID data constant (deduplicated within this TU by emitted_classes set).
-             * On ELF use .weak for cross-TU dedup; on COFF use .globl with .linkonce. */
+             * Use .globl everywhere; dedup is handled by the emitted_classes set within
+             * the single TU, and on COFF by .linkonce discard sections. */
             int is_win = codegen_target_is_windows();
             fprintf(ctx->output_file, "\n# GUID constant for interface %s\n", iface_name);
             if (is_win) {
@@ -3008,7 +3009,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 fprintf(ctx->output_file, "\t.data\n");
             }
             fprintf(ctx->output_file, "\t.align 8\n");
-            fprintf(ctx->output_file, "%s __kgpc_guid_%s\n", is_win ? ".globl" : ".weak", iface_name);
+            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n", iface_name);
             fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
@@ -3021,7 +3022,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 fprintf(ctx->output_file, "\t.linkonce discard\n");
             }
             fprintf(ctx->output_file, "\t.align 8\n");
-            fprintf(ctx->output_file, "%s __kgpc_guidref_%s\n", is_win ? ".globl" : ".weak", iface_name);
+            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n", iface_name);
             fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
             fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", iface_name);
             fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
@@ -3661,6 +3662,102 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                         &emitted_classes);
                     codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                         &emitted_classes);
+                }
+                node = node->next;
+            }
+        }
+    }
+
+    /* Emit GUID data for ALL interfaces with GUIDs found in the symbol table.
+     * The previous passes only emit GUIDs when a class implements an interface,
+     * but Supports() calls may reference interface GUIDs without any local class
+     * implementing the interface.  This pass ensures all GUID symbols are defined. */
+    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    {
+        HashTable_t *table = scope->table;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++)
+        {
+            ListNode_t *node = table->table[b];
+            while (node != NULL)
+            {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
+                    hash_node->type != NULL)
+                {
+                    struct RecordType *record_info = NULL;
+                    if (hash_node->type->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.record_info;
+                    else if (hash_node->type->kind == TYPE_KIND_POINTER &&
+                             hash_node->type->info.points_to != NULL &&
+                             hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.points_to->info.record_info;
+
+                    if (record_info != NULL && record_info->is_interface &&
+                        record_info->has_guid)
+                    {
+                        const char *iface_name = record_info->type_id;
+                        if (iface_name == NULL)
+                            iface_name = hash_node->id;
+                        if (iface_name == NULL) { node = node->next; continue; }
+
+                        char guid_dedup_buf[512];
+                        snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
+                                 "__kgpc_guid_%s", iface_name);
+                        if (!emitted_class_set_contains(&emitted_classes, guid_dedup_buf))
+                        {
+                            char *guid_dedup_key = strdup(guid_dedup_buf);
+                            if (guid_dedup_key != NULL)
+                                emitted_class_set_add(&emitted_classes, guid_dedup_key);
+
+                            unsigned long d1 = (unsigned long)record_info->guid_d1;
+                            unsigned int d2 = (unsigned int)record_info->guid_d2;
+                            unsigned int d3 = (unsigned int)record_info->guid_d3;
+                            unsigned char d4[8];
+                            memcpy(d4, record_info->guid_d4, sizeof(d4));
+
+                            int is_win = codegen_target_is_windows();
+                            fprintf(ctx->output_file,
+                                    "\n# GUID constant for interface %s (standalone)\n",
+                                    iface_name);
+                            if (is_win) {
+                                fprintf(ctx->output_file,
+                                        "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n",
+                                        iface_name);
+                                fprintf(ctx->output_file, "\t.linkonce discard\n");
+                            } else {
+                                fprintf(ctx->output_file, "\t.data\n");
+                            }
+                            fprintf(ctx->output_file, "\t.align 8\n");
+                            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
+                            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d2);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d3);
+                            fprintf(ctx->output_file,
+                                    "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
+                                    "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                                    d4[0], d4[1], d4[2], d4[3],
+                                    d4[4], d4[5], d4[6], d4[7]);
+                            /* Emit pguid pointer */
+                            if (is_win) {
+                                fprintf(ctx->output_file,
+                                        "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n",
+                                        iface_name);
+                                fprintf(ctx->output_file, "\t.linkonce discard\n");
+                            }
+                            fprintf(ctx->output_file, "\t.align 8\n");
+                            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
+                            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "%s\n",
+                                    codegen_readonly_section_directive());
+                        }
+                    }
                 }
                 node = node->next;
             }
