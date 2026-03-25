@@ -774,6 +774,22 @@ ast_t* copy_ast(ast_t* orig) {
     return new;
 }
 
+ast_t* copy_ast_detached(ast_t* orig) {
+    if (orig == NULL) return NULL;
+    if (orig == ensure_ast_nil_initialized()) return ensure_ast_nil_initialized();
+    ast_t* node = (ast_t*)safe_malloc(sizeof(ast_t));
+    memset(node, 0, sizeof(ast_t));
+    g_parser_stats.ast_nodes_copied++;
+    node->typ = orig->typ;
+    node->line = orig->line;
+    node->col = orig->col;
+    node->index = orig->index;
+    node->sym = orig->sym ? sym_lookup(orig->sym->name) : NULL;
+    node->child = copy_ast_detached(orig->child);
+    node->next = copy_ast_detached(orig->next);
+    return node;
+}
+
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2) {
     ast_t* ast = new_ast();
     ast->typ = typ; ast->child = a1; a1->next = a2; ast->next = NULL;
@@ -1953,6 +1969,34 @@ void free_ast(ast_t* ast) {
     AstVisitSet visited;
     ast_visit_set_init(&visited, 1024);
     free_ast_internal(ast, &visited);
+    ast_visit_set_destroy(&visited);
+}
+
+static void free_ast_detached_internal(ast_t* ast, AstVisitSet *visited)
+{
+    if (ast == NULL || ast == ensure_ast_nil_initialized()) return;
+    if (ast_visit_set_contains(visited, ast))
+        return;
+    ast_visit_set_insert(visited, ast);
+    ast_t* child = ast->child;
+    ast_t* sibling = ast->next;
+    ast->child = NULL;
+    ast->next = NULL;
+    if (ast->sym) {
+        free(ast->sym->name);
+        free(ast->sym);
+        ast->sym = NULL;
+    }
+    free_ast_detached_internal(child, visited);
+    free_ast_detached_internal(sibling, visited);
+    free(ast);
+}
+
+void free_ast_detached(ast_t* ast) {
+    if (ast == NULL || ast == ast_nil) return;
+    AstVisitSet visited;
+    ast_visit_set_init(&visited, 1024);
+    free_ast_detached_internal(ast, &visited);
     ast_visit_set_destroy(&visited);
 }
 
