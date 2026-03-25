@@ -2543,41 +2543,66 @@ int semcheck_funccall(int *type_return,
                         }
                         if (all_methods != NULL)
                         {
-                            /* Find the best overload that matches our argument count.
-                             * Prefer the candidate with fewest total params (closest
-                             * arity match) to avoid selecting an overload with many
-                             * default params when a tighter match exists. */
-                            ListNode_t *cur = all_methods;
-                            int best_total = INT_MAX;
-                            while (cur != NULL)
+                            /* Use full overload resolution (type-aware) to pick
+                             * the best matching overload. */
+                            HashNode_t *best_candidate = NULL;
+                            int num_best = 0;
+                            struct Expression call_stub;
+                            memset(&call_stub, 0, sizeof(call_stub));
+                            call_stub.line_num = expr->line_num;
+                            call_stub.type = EXPR_FUNCTION_CALL;
+
+                            int overload_status = semcheck_resolve_overload(
+                                &best_candidate, NULL, &num_best,
+                                all_methods, args_given, symtab,
+                                &call_stub, max_scope_lev, 0);
+
+                            if (overload_status == 0 && best_candidate != NULL && num_best >= 1)
                             {
-                                HashNode_t *candidate = (HashNode_t *)cur->cur;
-                                if (candidate != NULL &&
-                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
-                                     candidate->hash_type == HASHTYPE_PROCEDURE) &&
-                                    candidate->type != NULL)
+                                method_node = best_candidate;
+                                method_params = kgpc_type_get_procedure_params(best_candidate->type);
+                                /* Check if the first formal param is Self */
+                                if (method_params != NULL)
                                 {
-                                    ListNode_t *candidate_params = kgpc_type_get_procedure_params(candidate->type);
-                                    int candidate_expects_self = 0;
-                                    int candidate_compatible = semcheck_method_accepts_arg_count(candidate_params,
-                                        args_count, &candidate_expects_self, candidate->is_varargs);
-                                    int candidate_total = semcheck_count_total_params(candidate_params);
-
-                                    if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                                        fprintf(stderr, "[SemCheck] Method overload check: candidate=%s params=%d args=%d compatible=%d\n",
-                                            candidate->mangled_id ? candidate->mangled_id : candidate->id,
-                                            candidate_total, args_count, candidate_compatible);
-                                    }
-
-                                    if (candidate_compatible && candidate_total < best_total)
+                                    Tree_t *first_formal = (Tree_t *)method_params->cur;
+                                    if (first_formal != NULL && first_formal->type == TREE_VAR_DECL &&
+                                        first_formal->tree_data.var_decl_data.ids != NULL)
                                     {
-                                        method_node = candidate;
-                                        method_params = candidate_params;
-                                        expects_self = candidate_expects_self;
-                                        best_total = candidate_total;
+                                        const char *first_id = (const char *)first_formal->tree_data.var_decl_data.ids->cur;
+                                        if (first_id != NULL && pascal_identifier_equals(first_id, "Self"))
+                                            expects_self = 1;
                                     }
                                 }
-                                cur = cur->next;
+                            }
+                            else
+                            {
+                                /* Fallback to arity-only check when type resolution fails */
+                                ListNode_t *cur = all_methods;
+                                int best_total = INT_MAX;
+                                while (cur != NULL)
+                                {
+                                    HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                    if (candidate != NULL &&
+                                        (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                         candidate->hash_type == HASHTYPE_PROCEDURE) &&
+                                        candidate->type != NULL)
+                                    {
+                                        ListNode_t *candidate_params = kgpc_type_get_procedure_params(candidate->type);
+                                        int candidate_expects_self = 0;
+                                        int candidate_compatible = semcheck_method_accepts_arg_count(candidate_params,
+                                            args_count, &candidate_expects_self, candidate->is_varargs);
+                                        int candidate_total = semcheck_count_total_params(candidate_params);
+
+                                        if (candidate_compatible && candidate_total < best_total)
+                                        {
+                                            method_node = candidate;
+                                            method_params = candidate_params;
+                                            expects_self = candidate_expects_self;
+                                            best_total = candidate_total;
+                                        }
+                                    }
+                                    cur = cur->next;
+                                }
                             }
                             DestroyList(all_methods);
                         }
