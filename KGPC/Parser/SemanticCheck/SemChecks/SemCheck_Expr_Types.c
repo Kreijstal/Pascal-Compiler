@@ -5648,6 +5648,61 @@ int semcheck_reinterpret_typecast_as_call(int *type_return, SymTab_t *symtab,
         }
     }
 
+    /* If the bare name wasn't found, check if we're inside a method body
+     * and the identifier could be a method of the current class. */
+    if (!found_func)
+    {
+        const char *method_owner = semcheck_get_current_method_owner();
+        if (method_owner != NULL && expr->expr_data.typecast_data.target_type_id != NULL)
+        {
+            char mangled[512];
+            snprintf(mangled, sizeof(mangled), "%s__%s",
+                method_owner, expr->expr_data.typecast_data.target_type_id);
+            HashNode_t *method_check = NULL;
+            if (FindSymbol(&method_check, symtab, mangled) != 0 && method_check != NULL &&
+                (method_check->hash_type == HASHTYPE_FUNCTION ||
+                 method_check->hash_type == HASHTYPE_PROCEDURE))
+            {
+                found_func = 1;
+                func_node = method_check;
+            }
+            /* Also walk parent classes */
+            if (!found_func)
+            {
+                HashNode_t *owner_node = NULL;
+                if (FindSymbol(&owner_node, symtab, method_owner) != 0 && owner_node != NULL)
+                {
+                    struct RecordType *rec = get_record_type_from_node(owner_node);
+                    const char *parent = rec ? rec->parent_class_name : NULL;
+                    while (parent != NULL && !found_func)
+                    {
+                        snprintf(mangled, sizeof(mangled), "%s__%s",
+                            parent, expr->expr_data.typecast_data.target_type_id);
+                        HashNode_t *parent_method = NULL;
+                        if (FindSymbol(&parent_method, symtab, mangled) != 0 && parent_method != NULL &&
+                            (parent_method->hash_type == HASHTYPE_FUNCTION ||
+                             parent_method->hash_type == HASHTYPE_PROCEDURE))
+                        {
+                            found_func = 1;
+                            func_node = parent_method;
+                        }
+                        else
+                        {
+                            HashNode_t *parent_node = NULL;
+                            if (FindSymbol(&parent_node, symtab, parent) != 0 && parent_node != NULL)
+                            {
+                                struct RecordType *parent_rec = get_record_type_from_node(parent_node);
+                                parent = parent_rec ? parent_rec->parent_class_name : NULL;
+                            }
+                            else
+                                parent = NULL;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if (!found_func)
         return 1;
 
