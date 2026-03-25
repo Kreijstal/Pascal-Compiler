@@ -9484,7 +9484,21 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         if (self_node != NULL) {
             struct RecordType *canonical = get_record_type_from_node(self_node);
             if (canonical != NULL && canonical != record_info && canonical->parent_fields_merged)
+            {
+                /* Canonical instance was already merged — propagate its merged
+                 * state to this instance so codegen (which may use this instance
+                 * via the Tree_t node) sees the correct fields and interfaces. */
+                if (!record_info->parent_fields_merged) {
+                    record_info->fields = canonical->fields;
+                    record_info->num_interfaces = canonical->num_interfaces;
+                    record_info->interface_names = canonical->interface_names;
+                    record_info->properties = canonical->properties;
+                    record_info->cached_size = canonical->cached_size;
+                    record_info->has_cached_size = canonical->has_cached_size;
+                    record_info->parent_fields_merged = 1;
+                }
                 return 0;
+            }
         }
     }
 
