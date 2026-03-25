@@ -6774,7 +6774,7 @@ char *kgpc_float_to_string(double value, int precision)
     return kgpc_string_duplicate(buffer);
 }
 
-uint16_t *extractfilepath_us(const uint16_t *filename)
+__attribute__((weak)) uint16_t *extractfilepath_us(const uint16_t *filename)
 {
     int64_t len = kgpc_unicode_known_length(filename);
     if (filename == NULL || len <= 0)
@@ -8605,34 +8605,34 @@ void kgpc_runerror(int32_t code) {
 }
 
 /* TDoubleRec property getters/setters (IEEE 754 double: sign=bit63, exp=bits52-62, frac=bits0-51) */
-uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
+__attribute__((weak)) uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 52) & 0x7FF;
 }
-void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
+__attribute__((weak)) void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~(0x7FFULL << 52)) | ((e & 0x7FF) << 52);
     memcpy(self, &data, sizeof(data));
 }
-int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
+__attribute__((weak)) int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 63) & 1;
 }
-void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
+__attribute__((weak)) void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     if (s) data |= (1ULL << 63); else data &= ~(1ULL << 63);
     memcpy(self, &data, sizeof(data));
 }
-uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
+__attribute__((weak)) uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return data & 0xFFFFFFFFFFFFFULL;
 }
-void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
+__attribute__((weak)) void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~0xFFFFFFFFFFFFFULL) | (f & 0xFFFFFFFFFFFFFULL);
@@ -8640,34 +8640,34 @@ void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
 }
 
 /* TSingleRec property getters/setters (IEEE 754 single: sign=bit31, exp=bits23-30, frac=bits0-22) */
-uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
+__attribute__((weak)) uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 23) & 0xFF;
 }
-void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
+__attribute__((weak)) void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~(0xFFU << 23)) | (((uint32_t)(e & 0xFF)) << 23);
     memcpy(self, &data, sizeof(data));
 }
-int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
+__attribute__((weak)) int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 31) & 1;
 }
-void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
+__attribute__((weak)) void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     if (s) data |= (1U << 31); else data &= ~(1U << 31);
     memcpy(self, &data, sizeof(data));
 }
-uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
+__attribute__((weak)) uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return data & 0x7FFFFF;
 }
-void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
+__attribute__((weak)) void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~0x7FFFFF) | ((uint32_t)(f & 0x7FFFFF));
@@ -8700,4 +8700,3 @@ void FindComponentClass(void) { __kgpc_abstract_method_error(); }
 /* ReadDeltaStream — FPC TReader class method referenced but not
  * exercised in test programs. Raises abstract method error if called. */
 void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
-

@@ -2041,6 +2041,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+            const char *alias = def->tree_data.subprogram_data.cname_override;
+            if (alias != NULL && alias[0] != '\0')
+                func_mangled_name = alias;
+            else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                     def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                func_mangled_name = def->tree_data.subprogram_data.mangled_id;
+        }
         CODEGEN_DEBUG("DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
             func_mangled_name ? func_mangled_name : "NULL",
             expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
@@ -2836,7 +2848,40 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             const char *call_target = expr->expr_data.function_call_data.mangled_id;
             const char *owner_class_name = expr->expr_data.function_call_data.cached_owner_class;
             const char *method_name = expr->expr_data.function_call_data.cached_method_name;
-            if (call_target == NULL || call_target[0] == '\0')
+            int call_target_needs_resolution = (call_target == NULL || call_target[0] == '\0');
+            if (!call_target_needs_resolution && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindSymbol(&target_node, ctx->symtab, call_target) == 0 || target_node == NULL)
+                {
+                    call_target_needs_resolution = 1;
+                }
+                else if (target_node->type != NULL &&
+                         target_node->type->kind == TYPE_KIND_PROCEDURE &&
+                         target_node->type->info.proc_info.definition == NULL)
+                {
+                    call_target_needs_resolution = 1;
+                }
+            }
+            if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+                const char *alias = def->tree_data.subprogram_data.cname_override;
+                if (alias != NULL && alias[0] != '\0')
+                {
+                    call_target = alias;
+                    call_target_needs_resolution = 0;
+                }
+                else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                         def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                {
+                    call_target = def->tree_data.subprogram_data.mangled_id;
+                    call_target_needs_resolution = 0;
+                }
+            }
+            if (call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution)
             {
                 HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
                 if (resolved != NULL && resolved->mangled_id != NULL &&
@@ -2858,6 +2903,32 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             call_target = def->tree_data.subprogram_data.mangled_id;
                     }
                 }
+            }
+            if ((call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution) &&
+                ctx != NULL && ctx->symtab != NULL &&
+                expr->expr_data.function_call_data.id != NULL &&
+                expr->expr_data.function_call_data.mangled_id != NULL)
+            {
+                const char *stale_target = expr->expr_data.function_call_data.mangled_id;
+                const char *last_sep = strrchr(stale_target, '_');
+                size_t prefix_len = (last_sep != NULL) ? (size_t)(last_sep - stale_target + 1) : strlen(stale_target);
+                ListNode_t *candidates = FindAllIdents(ctx->symtab, expr->expr_data.function_call_data.id);
+                for (ListNode_t *node = candidates; node != NULL; node = node->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)node->cur;
+                    if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
+                        cand->type->kind != TYPE_KIND_PROCEDURE)
+                        continue;
+                    if (strncmp(cand->mangled_id, stale_target, prefix_len) != 0)
+                        continue;
+                    Tree_t *def = cand->type->info.proc_info.definition;
+                    if (def == NULL || def->tree_data.subprogram_data.statement_list == NULL)
+                        continue;
+                    call_target = cand->mangled_id;
+                    break;
+                }
+                if (candidates != NULL)
+                    DestroyList(candidates);
             }
             if ((owner_class_name == NULL || method_name == NULL) &&
                 expr->expr_data.function_call_data.call_kgpc_type != NULL &&
@@ -3158,6 +3229,23 @@ cleanup_constructor:
                 expr->expr_data.addr_of_proc_data.proc_id);
             if (impl_target != NULL)
                 proc_label = impl_target;
+            else
+            {
+                char base_name[512];
+                HashNode_t *prefix_match = NULL;
+                snprintf(base_name, sizeof(base_name), "%s__%s",
+                    ctx->current_subprogram_owner_class,
+                    expr->expr_data.addr_of_proc_data.proc_id);
+                if (FindIdentByPrefix(&prefix_match, ctx->symtab, base_name) != 0 &&
+                    prefix_match != NULL)
+                {
+                    const char *emit_target = codegen_subprogram_emission_symbol(prefix_match);
+                    if (emit_target != NULL && emit_target[0] != '\0')
+                        proc_label = emit_target;
+                    else if (prefix_match->mangled_id != NULL && prefix_match->mangled_id[0] != '\0')
+                        proc_label = prefix_match->mangled_id;
+                }
+            }
         }
         assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
         /* If the proc_label is a bare method name (no mangled_id), try to

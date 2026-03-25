@@ -1440,6 +1440,19 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         if (kgpc != NULL)
         {
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (alias->is_enum && alias->enum_literals != NULL)
+            {
+                int ordinal = 0;
+                for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++ordinal)
+                {
+                    const char *literal_name = (const char *)lit->cur;
+                    HashNode_t *existing = NULL;
+                    if (literal_name == NULL)
+                        continue;
+                    if (FindSymbol(&existing, symtab, literal_name) == 0 || existing == NULL)
+                        PushConstOntoScope_Typed(symtab, strdup(literal_name), ordinal, kgpc);
+                }
+            }
             if (created_kgpc)
                 destroy_kgpc_type(kgpc);
         }
@@ -5221,7 +5234,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
                          * another (e.g. fileexists_rbs_b → fileexists_us_b)
                          * causes infinite recursion when the target calls the
                          * aliased overload. */
-                        ListNode_t *impl_scan = data->subprograms;
+                        ListNode_t *impl_scan = all_subprograms;
                         while (impl_scan != NULL) {
                             if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
                                 Tree_t *impl = (Tree_t *)impl_scan->cur;
@@ -6091,6 +6104,29 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         assert(sub->type == TREE_SUBPROGRAM);
 
         const char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
+        int trace_tfplistenum = getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+            mangled_id != NULL &&
+            strncasecmp(mangled_id, "tfplistenumerator__", 19) == 0;
+        int trace_missing_calls = getenv("KGPC_TRACE_MISSING_CALLS") != NULL &&
+            mangled_id != NULL &&
+            (strcasecmp(mangled_id, "format_us_a") == 0 ||
+             strcasecmp(mangled_id, "format_s_a") == 0 ||
+             strcasecmp(mangled_id, "codepagenametocodepage_s") == 0 ||
+             strcasecmp(mangled_id, "stringofchar_c_li") == 0 ||
+             strcasecmp(mangled_id, "stringofchar_c_i64") == 0);
+
+        if (trace_tfplistenum || trace_missing_calls)
+        {
+            fprintf(stderr,
+                "[codegen] sub=%s id=%s owner=%s method=%s body=%d used=%d template=%d\n",
+                mangled_id,
+                sub->tree_data.subprogram_data.id != NULL ? sub->tree_data.subprogram_data.id : "(null)",
+                sub->tree_data.subprogram_data.owner_class != NULL ? sub->tree_data.subprogram_data.owner_class : "(null)",
+                sub->tree_data.subprogram_data.method_name != NULL ? sub->tree_data.subprogram_data.method_name : "(null)",
+                sub->tree_data.subprogram_data.statement_list != NULL,
+                sub->tree_data.subprogram_data.is_used,
+                sub->tree_data.subprogram_data.is_generic_template);
+        }
 
         if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
         {
@@ -6108,6 +6144,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             }
             if (already_emitted)
             {
+                if (trace_tfplistenum || trace_missing_calls)
+                    fprintf(stderr, "[codegen] skip already emitted %s\n", mangled_id);
                 sub_list = sub_list->next;
                 continue;
             }
@@ -6115,6 +6153,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 
         if (sub->tree_data.subprogram_data.statement_list == NULL)
         {
+            if (trace_tfplistenum || trace_missing_calls)
+                fprintf(stderr, "[codegen] skip no body %s\n", mangled_id != NULL ? mangled_id : "(null)");
             sub_list = sub_list->next;
             continue;
         }
@@ -6172,6 +6212,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             }
             if (has_later_override)
             {
+                if (trace_tfplistenum || trace_missing_calls)
+                    fprintf(stderr, "[codegen] skip later override %s\n", mangled_id);
                 sub_list = sub_list->next;
                 continue;
             }
@@ -6180,6 +6222,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         /* Skip unused functions (dead code elimination / reachability pass). */
         if (!disable_dce_flag() && !sub->tree_data.subprogram_data.is_used)
         {
+            if (trace_tfplistenum || trace_missing_calls)
+                fprintf(stderr, "[codegen] skip dce-unused %s\n", mangled_id != NULL ? mangled_id : "(null)");
             sub_list = sub_list->next;
             continue;
         }
@@ -6187,6 +6231,8 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         /* Skip unspecialized generic subprogram templates. */
         if (sub->tree_data.subprogram_data.is_generic_template)
         {
+            if (trace_tfplistenum || trace_missing_calls)
+                fprintf(stderr, "[codegen] skip generic template %s\n", mangled_id != NULL ? mangled_id : "(null)");
             sub_list = sub_list->next;
             continue;
         }
