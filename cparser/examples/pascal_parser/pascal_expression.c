@@ -1533,10 +1533,14 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
     expr_altern(*p, 3, PASCAL_T_ROR, token(keyword_ci("ror")));
 
     // Precedence 4: Unary operators (highest precedence for regular operators)
+    // Use expr_insert for the first operator and expr_altern for the rest,
+    // so they share a single list entry. Multiple expr_insert calls at the same
+    // prec would push each other backwards, causing later prec levels to be
+    // inserted between them and breaking precedence ordering.
     expr_insert(*p, 4, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
-    expr_insert(*p, 4, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
-    expr_insert(*p, 4, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
-    expr_insert(*p, 4, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
+    expr_altern(*p, 4, PASCAL_T_POS, token(match("+")));
+    expr_altern(*p, 4, PASCAL_T_NOT, token(keyword_ci("not")));
+    expr_altern(*p, 4, PASCAL_T_ADDR, token(match("@")));
 
     // Field width operator for formatted output: expression:width
     // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
@@ -1572,14 +1576,14 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         );
         combinator_t* postfix_call = map(postfix_call_args, wrap_call_suffix);
         expr_insert(*p, 7, PASCAL_T_FUNC_CALL, EXPR_POSTFIX, ASSOC_LEFT, postfix_call);
-        
+
         combinator_t* postfix_index = between(
             token(match("[")),
             token(match("]")),
             sep_by(lazy(p), token(match(",")))
         );
         combinator_t* postfix_array = map(postfix_index, wrap_array_suffix);
-        expr_insert(*p, 7, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, postfix_array);
+        expr_altern(*p, 7, PASCAL_T_ARRAY_ACCESS, postfix_array);
     }
 }
 

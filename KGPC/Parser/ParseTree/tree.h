@@ -119,6 +119,7 @@ typedef struct Tree
             int is_used;
             char **generic_type_params;   /* Generic type parameter names (e.g., ["T"]) */
             int num_generic_type_params;  /* Number of generic type parameters */
+            int is_generic_template;      /* 1 if this is an unspecialized generic template (not emitted by codegen) */
             struct ast_t *generic_template_ast; /* AST template for generic subprogram cloning */
             int generic_template_source_offset; /* source buffer offset active when template was saved */
             char *result_var_name;        /* Named result variable (e.g., "dest" in operator :=(src) dest: Type) */

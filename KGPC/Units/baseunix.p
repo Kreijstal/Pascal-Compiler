@@ -134,6 +134,7 @@ function fpS_ISCHR(m: mode_t): Boolean;
 function fpS_ISFIFO(m: mode_t): Boolean;
 
 function FpRename(oldname, newname: PAnsiChar): cint; external;
+function fpchmod(path: PAnsiChar; mode: mode_t): cint; external;
 function fpGetEnv(name: PAnsiChar): PAnsiChar; cdecl; external name 'getenv';
 
 var
