@@ -15207,8 +15207,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         result = convert_unary_expr(expr_node);
         return set_expr_source_index(result, original_node);
     case PASCAL_T_NOT:
-        result = mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+    {
+        struct Expression *not_operand = convert_expression(expr_node->child);
+        result = mk_relop(expr_node->line, NOT, not_operand, NULL);
         return set_expr_source_index(result, original_node);
+    }
     case PASCAL_T_TUPLE:
     {
         if (tuple_is_record_constructor(expr_node))

@@ -1395,7 +1395,7 @@ static ParseResult expr_fn(input_t * in, void * args, char* parser_name) {
    if (list->fix == EXPR_BASE) return parse(in, list->comb);
    if (list->fix == EXPR_PREFIX) {
        op_t* op = list->op;
-       if (op) {
+       while (op) {
            InputState state; save_input_state(in, &state);
            ParseResult op_res = parse(in, op->comb);
            if (op_res.is_success) {
@@ -1404,8 +1404,9 @@ static ParseResult expr_fn(input_t * in, void * args, char* parser_name) {
                if (!rhs_res.is_success) return rhs_res;
                return make_success(ast1(op->tag, rhs_res.value.ast));
            }
-               free_error(op_res.value.error);
+           free_error(op_res.value.error);
            restore_input_state(in, &state);
+           op = op->next;
        }
    }
    ParseResult res = expr_fn(in, (void *) list->next, parser_name);
