@@ -8010,18 +8010,6 @@ void *kgpc_get_frame_p(void *frame)
     return __builtin_frame_address(0);
 }
 
-/* FPC RTL intrinsic SPtr: expose the current stack position for startup and
- * thread initialization code that computes StackBottom from StackLength. */
-void *sptr(void)
-{
-    return __builtin_frame_address(0);
-}
-
-void *sptr_void(void)
-{
-    return __builtin_frame_address(0);
-}
-
 /* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
  * no Pascal body.  KGPC emits calls to the mangled names below. */
 long atomicincrement_i_i(long *target, long value)

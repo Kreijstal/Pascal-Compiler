@@ -60,6 +60,50 @@ static int semcheck_expr_is_char_typecast_call_for_call_local(const struct Expre
         pascal_identifier_equals(target_id, "UnicodeChar");
 }
 
+static int semcheck_try_rewrite_internconst_call(int *type_return,
+    SymTab_t *symtab, struct Expression *expr)
+{
+    HashNode_t *target = NULL;
+    const char *intrinsic_id;
+
+    if (type_return == NULL || symtab == NULL || expr == NULL ||
+        expr->type != EXPR_FUNCTION_CALL ||
+        expr->expr_data.function_call_data.id == NULL)
+        return 0;
+
+    if (FindSymbol(&target, symtab, expr->expr_data.function_call_data.id) == 0 ||
+        target == NULL || target->internconst_id == NULL ||
+        target->internconst_id[0] == '\0')
+        return 0;
+
+    intrinsic_id = target->internconst_id;
+
+    if (strcasecmp(intrinsic_id, "fpc_in_const_ptr") != 0)
+        return 0;
+
+    /* SPtr is emitted as a bare zero-arg function reference in FPC RTL startup
+     * code. Lower it to the runtime stack-pointer helper before normal overload
+     * resolution so it doesn't fall back to ordinary mangling. */
+    if (expr->expr_data.function_call_data.args_expr != NULL ||
+        !pascal_identifier_equals(target->id, "SPtr"))
+        return 0;
+
+    free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = strdup("sptr_void");
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+        free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = strdup("sptr_void");
+    semcheck_reset_function_call_cache(expr);
+    *type_return = POINTER_TYPE;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+    return 1;
+}
+
 static void semcheck_bind_set_literal_to_expected_type_for_call(
     struct Expression *arg_expr,
     KgpcType *expected_kgpc,
@@ -1376,6 +1420,9 @@ int semcheck_funccall(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
         return return_val;
     }
+
+    if (semcheck_try_rewrite_internconst_call(type_return, symtab, expr))
+        return return_val;
 
     /* Normalize unit-qualified builtins parsed as extra-arg calls:
      * System.Length(x) may be parsed as Length(System, x). Strip the unit

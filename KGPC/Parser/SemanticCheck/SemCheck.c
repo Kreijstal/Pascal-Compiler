@@ -17906,6 +17906,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 free(existing_decl->internproc_id);
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
         }
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internconst_id != NULL)
+        {
+            if (existing_decl->internconst_id != NULL)
+                free(existing_decl->internconst_id);
+            existing_decl->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
+        }
 
         EnterScope(symtab,
             subprogram->tree_data.subprogram_data.source_unit_index);
@@ -18092,6 +18098,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (existing_decl->internproc_id != NULL)
                 free(existing_decl->internproc_id);
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+        }
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internconst_id != NULL)
+        {
+            if (existing_decl->internconst_id != NULL)
+                free(existing_decl->internconst_id);
+            existing_decl->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
         }
 
         EnterScope(symtab,
@@ -18828,6 +18840,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
                 }
+                if (subprogram->tree_data.subprogram_data.internconst_id != NULL) {
+                    if (node->internconst_id != NULL) free(node->internconst_id);
+                    node->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
+                }
                 copy_method_identity_to_node(node, subprogram);
             }
         }
@@ -18902,6 +18918,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+                }
+                if (subprogram->tree_data.subprogram_data.internconst_id != NULL) {
+                    if (node->internconst_id != NULL) free(node->internconst_id);
+                    node->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
                 }
                 copy_method_identity_to_node(node, subprogram);
             }

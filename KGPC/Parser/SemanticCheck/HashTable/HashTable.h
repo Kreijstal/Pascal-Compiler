@@ -102,6 +102,7 @@ typedef struct HashNode
     char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
     char *internproc_id;     /* FPC [INTERNPROC: name] identifier (NULL if not an internproc) */
+    char *internconst_id;    /* FPC [INTERNCONST: name] identifier (NULL if not an internconst) */
 
 } HashNode_t;
 
