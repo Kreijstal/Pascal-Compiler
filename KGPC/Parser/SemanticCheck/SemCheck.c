@@ -14565,10 +14565,14 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
                     g_semcheck_error_unit_name = uname ? uname : "<unit>";
                     g_semcheck_error_suppress_source_index = 0;
                 }
+                /* Switch to the unit's scope so that unit-private variables
+                 * and types are visible in init/finalization sections. */
+                ScopeNode *saved_scope = semcheck_switch_to_unit_scope(symtab, unit_idx);
                 if (unit_tree->tree_data.unit_data.initialization != NULL)
                     return_val += semcheck_stmt(symtab, unit_tree->tree_data.unit_data.initialization, INT_MAX);
                 if (unit_tree->tree_data.unit_data.finalization != NULL)
                     return_val += semcheck_stmt(symtab, unit_tree->tree_data.unit_data.finalization, INT_MAX);
+                semcheck_restore_scope(symtab, saved_scope);
                 g_semcheck_error_suppress_source_index = saved_suppress;
                 g_semcheck_error_unit_name = saved_unit_ctx;
             }
