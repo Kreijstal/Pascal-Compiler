@@ -1515,6 +1515,11 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 case WORD_TYPE:
                 case LONGWORD_TYPE:
                 case QWORD_TYPE:
+                case ENUM_TYPE:
+                case SET_TYPE:
+                case RECORD_TYPE:
+                case EXTENDED_TYPE:
+                case VARIANT_TYPE:
                     if (owns_type != NULL)
                         *owns_type = 1;
                     return create_primitive_type(var_type_tag);
