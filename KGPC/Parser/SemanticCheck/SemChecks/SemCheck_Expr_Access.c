@@ -5664,6 +5664,15 @@ int semcheck_funccall(int *type_return,
     }
     
     if (id == NULL) {
+        /* Default initializers (from Default() lowering) have their id cleared
+         * but are already resolved — return their cached type. */
+        if (expr->is_default_initializer)
+        {
+            *type_return = semcheck_tag_from_kgpc(expr->resolved_kgpc_type);
+            if (overload_candidates != NULL) destroy_list(overload_candidates);
+            if (mangled_name != NULL) free(mangled_name);
+            return 0;
+        }
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d: function call with NULL id\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         if (overload_candidates != NULL) destroy_list(overload_candidates);

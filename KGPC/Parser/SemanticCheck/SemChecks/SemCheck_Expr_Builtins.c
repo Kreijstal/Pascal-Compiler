@@ -2322,6 +2322,41 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         record_type = target_kgpc_type->info.record_info;
     }
 
+    /* Lower to literals for primitives/pointers to avoid dangling call targets.
+     * For records, mark as zero-init and keep record type info.
+     * NOTE: We clean up id/args only after confirming the type is supported,
+     * so that on error the expression is left intact for the caller
+     * (prevents cascading "function call with NULL id" errors). */
+
+    /* Check if the type is supported before mutating the expression */
+    int type_supported = 0;
+    switch (target_type)
+    {
+        case RECORD_TYPE:
+        case INT_TYPE: case LONGINT_TYPE: case INT64_TYPE:
+        case BYTE_TYPE: case WORD_TYPE: case LONGWORD_TYPE: case QWORD_TYPE:
+        case REAL_TYPE: case EXTENDED_TYPE:
+        case BOOL: case CHAR_TYPE:
+        case STRING_TYPE: case SHORTSTRING_TYPE:
+        case POINTER_TYPE: case ENUM_TYPE: case VARIANT_TYPE:
+        case SET_TYPE:
+            type_supported = 1;
+            break;
+        default:
+            break;
+    }
+
+    if (!type_supported)
+    {
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Default for this type is unsupported in this context.\n",
+            expr->line_num);
+        if (target_kgpc_type != NULL)
+            destroy_kgpc_type(target_kgpc_type);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* Type is supported — clean up the call expression before lowering */
     semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
     expr->expr_data.function_call_data.args_expr = NULL;
     if (expr->expr_data.function_call_data.id != NULL)
@@ -2336,8 +2371,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     }
     semcheck_reset_function_call_cache(expr);
 
-    /* Lower to literals for primitives/pointers to avoid dangling call targets.
-     * For records, mark as zero-init and keep record type info. */
     if (target_type == RECORD_TYPE)
     {
         expr->is_default_initializer = 1;
@@ -2368,6 +2401,11 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case INT64_TYPE:
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case QWORD_TYPE:
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
             semcheck_expr_set_resolved_type(expr, target_type);
@@ -2375,11 +2413,12 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = target_type;
             return 0;
         case REAL_TYPE:
+        case EXTENDED_TYPE:
             expr->type = EXPR_RNUM;
             expr->expr_data.r_num = 0.0;
-            semcheck_expr_set_resolved_type(expr, REAL_TYPE);
-            expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
-            *type_return = REAL_TYPE;
+            semcheck_expr_set_resolved_type(expr, target_type);
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+            *type_return = target_type;
             return 0;
         case BOOL:
             expr->type = EXPR_BOOL;
@@ -2396,11 +2435,12 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = CHAR_TYPE;
             return 0;
         case STRING_TYPE:
+        case SHORTSTRING_TYPE:
             expr->type = EXPR_STRING;
             expr->expr_data.string = strdup("");
-            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
-            expr->resolved_kgpc_type = create_primitive_type(STRING_TYPE);
-            *type_return = STRING_TYPE;
+            semcheck_expr_set_resolved_type(expr, target_type);
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+            *type_return = target_type;
             return 0;
         case POINTER_TYPE:
             expr->type = EXPR_NIL;
@@ -2415,10 +2455,16 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             expr->resolved_kgpc_type = create_primitive_type(ENUM_TYPE);
             *type_return = ENUM_TYPE;
             return 0;
+        case SET_TYPE:
+            /* Default set is empty — lower to integer 0 */
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = 0;
+            semcheck_expr_set_resolved_type(expr, SET_TYPE);
+            expr->resolved_kgpc_type = create_primitive_type(SET_TYPE);
+            *type_return = SET_TYPE;
+            return 0;
         case VARIANT_TYPE:
-            /* Variant default is Unassigned (VType=0, all bytes zero).
-             * Lower to integer 0 with Variant resolved type so codegen
-             * emits a zero-filled 16-byte slot. */
+            /* Variant default is Unassigned (VType=0, all bytes zero). */
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
             semcheck_expr_set_resolved_type(expr, VARIANT_TYPE);
@@ -2426,8 +2472,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = VARIANT_TYPE;
             return 0;
         default:
-            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Default for this type is unsupported in this context.\n",
-                expr->line_num);
+            /* Should not reach here — type_supported check above catches this */
             *type_return = UNKNOWN_TYPE;
             return 1;
     }
