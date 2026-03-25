@@ -3770,7 +3770,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char stub_dedup[640];
                         snprintf(stub_dedup, sizeof(stub_dedup),
                                  "__kgpc_abstub_%s", iface_func->mangled_id);
-                        {
+                        int already_emitted = emitted_class_set_contains(emitted_classes, stub_dedup);
+                        if (!already_emitted) {
                             char *stub_key = strdup(stub_dedup);
                             if (stub_key != NULL)
                                 emitted_class_set_add(emitted_classes, stub_key);
@@ -3778,7 +3779,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         codegen_assert_interface_impl_resolved(
                             iface_name, imethod->name, class_label,
                             iface_func->mangled_id, impl_resolved_id);
-                        if (impl_resolved_id != NULL) {
+                        if (impl_resolved_id != NULL && !already_emitted) {
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
                             codegen_emit_global_jump_stub(ctx,
