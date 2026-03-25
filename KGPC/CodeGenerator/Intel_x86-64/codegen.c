@@ -275,59 +275,11 @@ static void codegen_set_destroy(CodeGenStringSet *set)
 /* ---- End string hash set ---- */
 
 /* ---- String constant collection for local const strings ---- */
-typedef struct CodeGenStringConst {
-    const char *label;
-    const char *value;
-    struct CodeGenStringConst *next;
-} CodeGenStringConst;
-
-static CodeGenStringConst *g_codegen_string_consts = NULL;
-
-static void codegen_collect_string_const(const char *label, const char *value)
-{
-    if (label == NULL || value == NULL)
-        return;
-    /* Check for duplicates */
-    for (CodeGenStringConst *c = g_codegen_string_consts; c != NULL; c = c->next) {
-        if (strcmp(c->label, label) == 0)
-            return;
-    }
-    CodeGenStringConst *entry = malloc(sizeof(CodeGenStringConst));
-    entry->label = label;
-    entry->value = value;
-    entry->next = g_codegen_string_consts;
-    g_codegen_string_consts = entry;
-}
-
-static void codegen_emit_string_consts(FILE *out)
-{
-    if (g_codegen_string_consts == NULL)
-        return;
-    fprintf(out, "\n/* Local string constants */\n");
-    fprintf(out, ".section .rodata\n");
-    for (CodeGenStringConst *c = g_codegen_string_consts; c != NULL; c = c->next) {
-        char escaped[1024];
-        escape_string(escaped, c->value, sizeof(escaped));
-        fprintf(out, ".globl\t%s\n", c->label);
-        fprintf(out, "%s:\n", c->label);
-        /* Emit as Pascal-style AnsiString: length-prefixed + null-terminated.
-         * The reference is to a PChar-compatible pointer, so just emit .string. */
-        fprintf(out, "\t.string\t\"%s\"\n", escaped);
-    }
-    fprintf(out, ".text\n");
-}
-
-static void codegen_free_string_consts(void)
-{
-    CodeGenStringConst *c = g_codegen_string_consts;
-    while (c != NULL) {
-        CodeGenStringConst *next = c->next;
-        free(c);
-        c = next;
-    }
-    g_codegen_string_consts = NULL;
-}
-/* ---- End string constant collection ---- */
+/* String constants from local const declarations (e.g. `const S = '...'`
+ * inside function bodies) are registered into the symbol table via
+ * PushStringConstOntoScope so the existing .LC label emission in
+ * gencode_leaf_var handles them correctly with unique, scope-aware labels.
+ * No global collection or separate emission pass is needed. */
 
 static int codegen_list_contains_string(ListNode_t *list, const char *value)
 {
@@ -1566,9 +1518,11 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
             PushConstOntoScope(symtab, (char *)id, const_value);
         else if (value->type == EXPR_STRING && value->expr_data.string != NULL)
         {
-            /* String constant — collect for emission in .rodata section.
-             * Use the identifier as the label name. */
-            codegen_collect_string_const(id, value->expr_data.string);
+            /* String constant — register in the symbol table so the existing
+             * .LC label emission in gencode_leaf_var handles it with a unique,
+             * scope-aware label.  PushStringConstOntoScope is a no-op if the
+             * identifier already exists (e.g. from semcheck). */
+            PushStringConstOntoScope(symtab, (char *)id, value->expr_data.string);
         }
     }
 }
@@ -2672,8 +2626,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_emit_unresolved_method_stubs(ctx->output_file,
         ctx->emitted_subprograms);
 
-    codegen_emit_string_consts(ctx->output_file);
-
     codegen_program_footer(ctx);
 
     if (ctx->emitted_subprograms != NULL)
@@ -2687,7 +2639,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
         g_codegen_available_subprograms = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
-    codegen_free_string_consts();
 
     free_stackmng();
     codegen_reset_loop_stack(ctx);
