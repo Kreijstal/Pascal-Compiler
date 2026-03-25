@@ -7746,6 +7746,11 @@ off_t fplSeek(int fd, off_t offset, int whence)
 {
     return lseek(fd, offset, whence);
 }
+
+int fpchmod(const char *path, mode_t mode)
+{
+    return chmod(path, mode);
+}
 #else
 /* Windows implementations using POSIX-like functions from io.h */
 /* Translate Unix paths to Windows equivalents */
@@ -7832,6 +7837,11 @@ char *fpGetCwd(char *path, size_t len)
 off_t fplSeek(int fd, off_t offset, int whence)
 {
     return (off_t)_lseeki64(fd, (__int64)offset, whence);
+}
+
+int fpchmod(const char *path, int mode)
+{
+    return _chmod(path, mode);
 }
 #endif
 
