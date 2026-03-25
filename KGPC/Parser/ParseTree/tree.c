@@ -18,7 +18,9 @@
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 extern void free_ast(struct ast_t *ast);
+extern void free_ast_detached(struct ast_t *ast);
 extern struct ast_t *copy_ast(struct ast_t *orig);
+extern struct ast_t *copy_ast_detached(struct ast_t *orig);
 
 static void print_record_field(struct RecordField *field, FILE *f, int num_indent);
 static void print_class_property(struct ClassProperty *property, FILE *f, int num_indent);
@@ -210,9 +212,9 @@ static void destroy_method_template(struct MethodTemplate *method)
         return;
     free(method->name);
     if (method->method_ast != NULL)
-        free_ast(method->method_ast);
+        free_ast_detached(method->method_ast);
     if (method->method_impl_ast != NULL)
-        free_ast(method->method_impl_ast);
+        free_ast_detached(method->method_impl_ast);
     if (method->method_tree != NULL)
         destroy_tree(method->method_tree);
     free(method);
@@ -228,7 +230,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
         return NULL;
 
     clone->name = method->name != NULL ? strdup(method->name) : NULL;
-    clone->method_ast = method->method_ast != NULL ? copy_ast(method->method_ast) : NULL;
+    clone->method_ast = method->method_ast != NULL ? copy_ast_detached(method->method_ast) : NULL;
     clone->method_tree = NULL; /* Method trees are rebuilt on demand */
     clone->kind = method->kind;
     clone->is_class_method = method->is_class_method;
@@ -239,7 +241,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->params_ast = NULL;
     clone->return_type_ast = NULL;
     clone->directives_ast = NULL;
-    clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast(method->method_impl_ast) : NULL;
+    clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast_detached(method->method_impl_ast) : NULL;
     clone->source_offset = method->source_offset;
 
     return clone;
@@ -1280,7 +1282,7 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.subprogram_data.generic_type_params);
           }
           if (tree->tree_data.subprogram_data.generic_template_ast != NULL)
-              free_ast(tree->tree_data.subprogram_data.generic_template_ast);
+              free_ast_detached(tree->tree_data.subprogram_data.generic_template_ast);
           if (tree->tree_data.subprogram_data.result_var_name != NULL)
               free(tree->tree_data.subprogram_data.result_var_name);
           /* method_name, owner_class, owner_class_full, owner_class_outer
@@ -1379,7 +1381,7 @@ void destroy_tree(Tree_t *tree)
                 generic->num_type_params = 0;
                 if (generic->original_ast != NULL)
                 {
-                    free_ast(generic->original_ast);
+                    free_ast_detached(generic->original_ast);
                     generic->original_ast = NULL;
                 }
                 if (generic->record_template != NULL)

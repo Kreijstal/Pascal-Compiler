@@ -2993,7 +2993,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
             if (template != NULL && template->method_impl_ast == NULL &&
                 strcasecmp(template->name, method_name) == 0)
             {
-                template->method_impl_ast = copy_ast(method_ast);
+                template->method_impl_ast = copy_ast_detached(method_ast);
                 if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
                     fprintf(stderr, "[KGPC] recorded method implementation for %s.%s\n", class_name, method_name);
                 break;
@@ -3969,7 +3969,7 @@ static void sync_method_impls_from_generic_template(struct RecordType *record)
                 strcasecmp(src_tmpl->name, tmpl->name) == 0 &&
                 src_tmpl->method_impl_ast != NULL)
             {
-                tmpl->method_impl_ast = copy_ast(src_tmpl->method_impl_ast);
+                tmpl->method_impl_ast = copy_ast_detached(src_tmpl->method_impl_ast);
                 break;
             }
         }
@@ -8750,7 +8750,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
         return NULL;
     }
 
-    template->method_ast = copy_ast(method_decl_node);
+    template->method_ast = copy_ast_detached(method_decl_node);
     if (template->method_ast == NULL)
     {
         free(template->name);
@@ -8771,9 +8771,9 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
     if (template->name != NULL)
         free(template->name);
     if (template->method_ast != NULL)
-        free_ast(template->method_ast);
+        free_ast_detached(template->method_ast);
     if (template->method_impl_ast != NULL)
-        free_ast(template->method_impl_ast);
+        free_ast_detached(template->method_impl_ast);
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);
@@ -12860,7 +12860,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.num_type_params = param_count;
     decl->tree_data.type_decl_data.info.generic.original_ast = NULL;
     if (type_spec_node != NULL)
-        decl->tree_data.type_decl_data.info.generic.original_ast = copy_ast(type_spec_node);
+        decl->tree_data.type_decl_data.info.generic.original_ast = copy_ast_detached(type_spec_node);
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
@@ -18175,7 +18175,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
             tree->tree_data.subprogram_data.is_generic_template = 1;
-            tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(method_node);
             tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
             num_generic_type_params = 0;
@@ -18563,7 +18563,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.is_generic_template = 1;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(proc_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
@@ -18936,7 +18936,7 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
         tree->tree_data.subprogram_data.is_generic_template = 1;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(func_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
