@@ -27,6 +27,7 @@
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/NameMangling.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 #include "../../Parser/SemanticCheck/SemCheck.h"
@@ -78,6 +79,239 @@ int codegen_has_available_subprogram_label(const char *label)
     if (label == NULL || g_codegen_available_subprograms == NULL)
         return 0;
     return codegen_list_contains_string(g_codegen_available_subprograms, label);
+}
+
+const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
+    const struct Expression *expr, char **owned_target_out)
+{
+    const char *call_target = NULL;
+    const char *owner_class_name = NULL;
+    const char *method_name = NULL;
+    int call_target_needs_resolution = 1;
+
+    if (owned_target_out != NULL)
+        *owned_target_out = NULL;
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return NULL;
+
+    call_target = expr->expr_data.function_call_data.mangled_id;
+    owner_class_name = expr->expr_data.function_call_data.cached_owner_class;
+    method_name = expr->expr_data.function_call_data.cached_method_name;
+    call_target_needs_resolution = (call_target == NULL || call_target[0] == '\0');
+
+    if (!call_target_needs_resolution && ctx->symtab != NULL)
+    {
+        HashNode_t *target_node = NULL;
+        if (FindSymbol(&target_node, ctx->symtab, call_target) == 0 || target_node == NULL)
+        {
+            call_target_needs_resolution = 1;
+        }
+        else if (target_node->type != NULL &&
+                 target_node->type->kind == TYPE_KIND_PROCEDURE &&
+                 target_node->type->info.proc_info.definition == NULL)
+        {
+            call_target_needs_resolution = 1;
+        }
+    }
+
+    if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+        expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+    {
+        Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+        const char *alias = def->tree_data.subprogram_data.cname_override;
+        if (alias != NULL && alias[0] != '\0')
+        {
+            call_target = alias;
+            call_target_needs_resolution = 0;
+        }
+        else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                 def->tree_data.subprogram_data.mangled_id[0] != '\0')
+        {
+            call_target = def->tree_data.subprogram_data.mangled_id;
+            call_target_needs_resolution = 0;
+        }
+        if (owner_class_name == NULL)
+            owner_class_name = def->tree_data.subprogram_data.owner_class;
+        if (method_name == NULL)
+            method_name = def->tree_data.subprogram_data.method_name;
+    }
+
+    if (call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution)
+    {
+        HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
+        if (resolved != NULL && resolved->mangled_id != NULL &&
+            resolved->mangled_id[0] != '\0')
+        {
+            call_target = resolved->mangled_id;
+        }
+        else if (resolved != NULL && resolved->type != NULL &&
+                 resolved->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            Tree_t *def = resolved->type->info.proc_info.definition;
+            if (def != NULL)
+            {
+                const char *alias = def->tree_data.subprogram_data.cname_override;
+                if (alias != NULL && alias[0] != '\0')
+                    call_target = alias;
+                else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                         def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                    call_target = def->tree_data.subprogram_data.mangled_id;
+            }
+        }
+    }
+
+    if ((call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution) &&
+        ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL &&
+        expr->expr_data.function_call_data.mangled_id != NULL)
+    {
+        const char *stale_target = expr->expr_data.function_call_data.mangled_id;
+        const char *last_sep = strrchr(stale_target, '_');
+        size_t prefix_len = (last_sep != NULL) ?
+            (size_t)(last_sep - stale_target + 1) : strlen(stale_target);
+        ListNode_t *candidates = FindAllIdents(ctx->symtab, expr->expr_data.function_call_data.id);
+        for (ListNode_t *node = candidates; node != NULL; node = node->next)
+        {
+            HashNode_t *cand = (HashNode_t *)node->cur;
+            if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
+                cand->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            if (strncmp(cand->mangled_id, stale_target, prefix_len) != 0)
+                continue;
+            Tree_t *def = cand->type->info.proc_info.definition;
+            if (def == NULL || def->tree_data.subprogram_data.statement_list == NULL)
+                continue;
+            call_target = cand->mangled_id;
+            break;
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+    }
+
+    if (ctx->symtab != NULL && owner_class_name != NULL && method_name != NULL)
+    {
+        const char *impl_target = codegen_find_class_method_impl_id(
+            ctx->symtab, NULL, owner_class_name, NULL, method_name);
+        if (impl_target != NULL &&
+            (call_target == NULL || call_target[0] == '\0' ||
+             strcmp(call_target, method_name) == 0 ||
+             strcmp(call_target, expr->expr_data.function_call_data.id) == 0))
+        {
+            call_target = impl_target;
+        }
+    }
+
+    if ((call_target == NULL || call_target[0] == '\0') &&
+        ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL)
+    {
+        HashNode_t *sym = NULL;
+        if (FindSymbol(&sym, ctx->symtab, expr->expr_data.function_call_data.id) != 0 &&
+            sym != NULL)
+        {
+            if (sym->mangled_id != NULL && sym->mangled_id[0] != '\0')
+            {
+                call_target = sym->mangled_id;
+            }
+            else if (sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *def = sym->type->info.proc_info.definition;
+                if (def != NULL)
+                {
+                    const char *alias = def->tree_data.subprogram_data.cname_override;
+                    if (alias != NULL && alias[0] != '\0')
+                        call_target = alias;
+                    else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                             def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                        call_target = def->tree_data.subprogram_data.mangled_id;
+                }
+            }
+        }
+    }
+
+    if ((call_target == NULL || call_target[0] == '\0') &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type
+            ->info.proc_info.definition;
+        int is_external = 0;
+        if (def != NULL)
+        {
+            is_external = def->tree_data.subprogram_data.cname_flag != 0 ||
+                def->tree_data.subprogram_data.cname_override != NULL;
+        }
+        if (!is_external && expr->expr_data.function_call_data.id != NULL)
+        {
+            char *computed_mangled = MangleFunctionName(
+                expr->expr_data.function_call_data.id,
+                expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.params,
+                ctx->symtab);
+            if (computed_mangled != NULL && computed_mangled[0] != '\0')
+            {
+                call_target = computed_mangled;
+                if (owned_target_out != NULL)
+                    *owned_target_out = computed_mangled;
+            }
+            else if (computed_mangled != NULL)
+            {
+                free(computed_mangled);
+            }
+        }
+    }
+
+    if ((call_target == NULL || call_target[0] == '\0') &&
+        ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL)
+    {
+        int arg_count = ListLength(expr->expr_data.function_call_data.args_expr);
+        ListNode_t *candidates = FindAllIdents(ctx->symtab,
+            expr->expr_data.function_call_data.id);
+        HashNode_t *unique = NULL;
+        int matches = 0;
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *node = (HashNode_t *)cur->cur;
+            if (node == NULL || node->type == NULL ||
+                node->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+            if (ListLength(node->type->info.proc_info.params) != arg_count)
+                continue;
+            unique = node;
+            matches++;
+            if (matches > 1)
+                break;
+        }
+        if (matches == 1 && unique != NULL)
+        {
+            if (unique->mangled_id != NULL && unique->mangled_id[0] != '\0')
+            {
+                call_target = unique->mangled_id;
+            }
+            else
+            {
+                char *computed_mangled = MangleFunctionName(
+                    unique->id, unique->type->info.proc_info.params, ctx->symtab);
+                if (computed_mangled != NULL && computed_mangled[0] != '\0')
+                {
+                    call_target = computed_mangled;
+                    if (owned_target_out != NULL)
+                        *owned_target_out = computed_mangled;
+                }
+                else if (computed_mangled != NULL)
+                {
+                    free(computed_mangled);
+                }
+            }
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+    }
+
+    if (call_target == NULL)
+        call_target = expr->expr_data.function_call_data.id;
+    return call_target;
 }
 
 static int codegen_parse_guid_literal(const char *guid, uint32_t *d1,

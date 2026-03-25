@@ -178,6 +178,8 @@ ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
     int vmt_index, const char *label_prefix, const char *target_slot_label,
     int preserve_indirect_call_regs, CodegenCallArgSpillFn spill_fn,
     CodegenCallArgRestoreFn restore_fn);
+const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
+    const struct Expression *expr, char **owned_target_out);
 
 /*
  * Compiler invariant policy:
