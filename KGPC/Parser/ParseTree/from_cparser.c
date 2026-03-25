@@ -8903,10 +8903,6 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
         return;
     if (template->name != NULL)
         free(template->name);
-    if (template->method_ast != NULL)
-        free_ast_detached(template->method_ast);
-    if (template->method_impl_ast != NULL)
-        free_ast_detached(template->method_impl_ast);
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);

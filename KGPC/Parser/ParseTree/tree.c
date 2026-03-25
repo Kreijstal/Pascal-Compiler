@@ -211,10 +211,11 @@ static void destroy_method_template(struct MethodTemplate *method)
     if (method == NULL)
         return;
     free(method->name);
-    if (method->method_ast != NULL)
-        free_ast_detached(method->method_ast);
-    if (method->method_impl_ast != NULL)
-        free_ast_detached(method->method_impl_ast);
+    /* Method templates keep detached AST copies for later specialization and
+     * semantic queries. Several code paths still share substructure across those
+     * detached copies, so reclaiming them during compiler teardown can trip
+     * double-free/use-after-free bugs. The compiler is a short-lived process, so
+     * let process exit reclaim these detached template ASTs. */
     if (method->method_tree != NULL)
         destroy_tree(method->method_tree);
     free(method);
@@ -1427,7 +1428,12 @@ void destroy_stmt(struct Statement *stmt)
           }
           if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
           {
-              destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
+              KgpcType *call_type = stmt->stmt_data.procedure_call_data.call_kgpc_type;
+              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
+                    call_type->info.proc_info.owns_params))
+              {
+                  destroy_kgpc_type(call_type);
+              }
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
@@ -1665,7 +1671,15 @@ void destroy_expr(struct Expression *expr)
           }
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
-              destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
+              KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+              /* Cached call signatures may reference parameter declaration trees
+               * owned by parse/type metadata. Let the original owner reclaim those
+               * procedure types instead of freeing them from expression teardown. */
+              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
+                    call_type->info.proc_info.owns_params))
+              {
+                  destroy_kgpc_type(call_type);
+              }
               expr->expr_data.function_call_data.call_kgpc_type = NULL;
           }
           if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
