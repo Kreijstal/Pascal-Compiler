@@ -17738,14 +17738,18 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             debug_external = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
         const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
         if (explicit_name != NULL) {
-            char *overload_mangled = MangleFunctionName(
-                subprogram->tree_data.subprogram_data.id,
-                subprogram->tree_data.subprogram_data.args_var,
-                symtab);
-            if (overload_mangled != NULL)
-                subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
-            else
+            if (subprogram->tree_data.subprogram_data.statement_list != NULL) {
                 subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+            } else {
+                char *overload_mangled = MangleFunctionName(
+                    subprogram->tree_data.subprogram_data.id,
+                    subprogram->tree_data.subprogram_data.args_var,
+                    symtab);
+                if (overload_mangled != NULL)
+                    subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
+                else
+                    subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+            }
         } else if (subprogram->tree_data.subprogram_data.cname_flag) {
             const char *export_name = subprogram->tree_data.subprogram_data.id;
             if (debug_external) {

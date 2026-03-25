@@ -596,6 +596,12 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
                         mark_class_methods_by_owner(NULL, owner_buf, method_buf, map);
                 }
             }
+            if (called_sub == NULL) {
+                const char *owner = stmt->stmt_data.procedure_call_data.cached_owner_class;
+                const char *method = stmt->stmt_data.procedure_call_data.cached_method_name;
+                if (owner != NULL && method != NULL)
+                    mark_class_methods_by_owner(NULL, owner, method, map);
+            }
             if (called_sub == NULL &&
                 stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
                 stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {

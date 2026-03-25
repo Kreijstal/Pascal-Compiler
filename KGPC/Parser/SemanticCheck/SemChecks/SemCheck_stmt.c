@@ -1597,6 +1597,29 @@ static void semcheck_stmt_set_call_kgpc_type(struct Statement *stmt, KgpcType *t
     }
 }
 
+static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
+    const char *owner_class, const char *method_name)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return;
+
+    if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+        stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
+    }
+    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.cached_method_name);
+        stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
+    }
+
+    if (owner_class != NULL)
+        stmt->stmt_data.procedure_call_data.cached_owner_class = strdup(owner_class);
+    if (method_name != NULL)
+        stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
+}
+
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
  * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
 static int semcheck_alias_is_widechar(struct TypeAlias *alias)
@@ -8016,6 +8039,8 @@ proccall_parent_resolve_done:
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
         semcheck_stmt_set_call_kgpc_type(stmt, resolved_proc->type,
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
+        semcheck_stmt_set_call_owner_info(stmt,
+            resolved_proc->owner_class, resolved_proc->method_name);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
 

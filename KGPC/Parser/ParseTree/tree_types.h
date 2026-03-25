@@ -287,6 +287,8 @@ struct Statement
             int call_hash_type;              /* HashType enum value (HASHTYPE_VAR, HASHTYPE_PROCEDURE, etc.) */
             struct KgpcType *call_kgpc_type;   /* KgpcType for getting formal parameters */
             int is_call_info_valid;          /* 1 if the above fields are valid, 0 otherwise */
+            char *cached_owner_class;        /* Cached owner class from resolved proc (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved proc (NULL if not a method) */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */

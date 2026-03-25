@@ -1477,6 +1477,10 @@ void destroy_stmt(struct Statement *stmt)
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
               free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+          if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+              free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+          if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+              free(stmt->stmt_data.procedure_call_data.cached_method_name);
           if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
               free(stmt->stmt_data.procedure_call_data.call_qualifier);
           if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
@@ -2728,6 +2732,8 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+    new_stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
+    new_stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
     new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
 
