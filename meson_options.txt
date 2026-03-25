@@ -4,3 +4,4 @@ option('run_valgrind_tests', type : 'boolean', value : false, description : 'Run
 option('with_gmp', type : 'feature', value : 'auto', description : 'Enable GMP runtime support')
 option('use_graph_coloring_allocator', type : 'boolean', value : false, description : 'Use graph coloring register allocator (Chaitin\'s algorithm) instead of simple LRU spilling')
 option('run_fpc_rtl_tests', type : 'boolean', value : false, description : 'Run test cases compiled against the FPC RTL (requires FPCSource/ directory)')
+option('fpc_rtl_dir', type : 'string', value : 'FPCSource', description : 'Path to the FPC source tree (contains rtl/ subdirectory)')
