@@ -691,6 +691,13 @@ static int semcheck_resolve_arg_kgpc_type(struct Expression *arg_expr,
         {
             if (arg_type->kind == TYPE_KIND_POINTER)
                 keep = 1;
+            /* Also keep TYPE_KIND_PRIMITIVE with is_pointer type_alias —
+             * these carry named class type info that would be lost if we
+             * fell through to the generic fallback. */
+            else if (arg_type->kind == TYPE_KIND_PRIMITIVE &&
+                     arg_type->type_alias != NULL &&
+                     arg_type->type_alias->is_pointer)
+                keep = 1;
         }
         else if (arg_type->kind == TYPE_KIND_PRIMITIVE &&
             arg_type->info.primitive_type_tag == arg_tag)
@@ -1355,6 +1362,43 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                         }
                         return semcheck_make_quality(MATCH_INCOMPATIBLE);
                     }
+                    /* One or both inner types are degraded (TYPE_KIND_PRIMITIVE
+                     * with RECORD_TYPE tag from cross-unit resolution).  Try to
+                     * match via type_alias names on the outer pointer types
+                     * before falling through to the default EXACT.
+                     * Only apply this when at least one inner type is actually
+                     * in degraded form (TYPE_KIND_PRIMITIVE with RECORD_TYPE tag). */
+                    int actual_degraded = (actual_inner != NULL &&
+                        actual_inner->kind == TYPE_KIND_PRIMITIVE &&
+                        actual_inner->info.primitive_type_tag == RECORD_TYPE);
+                    int formal_degraded = (formal_inner != NULL &&
+                        formal_inner->kind == TYPE_KIND_PRIMITIVE &&
+                        formal_inner->info.primitive_type_tag == RECORD_TYPE);
+                    if (actual_inner != NULL && formal_inner != NULL &&
+                        (actual_degraded || formal_degraded))
+                    {
+                        const char *actual_name = NULL;
+                        const char *formal_name = NULL;
+                        if (actual_kgpc->type_alias != NULL && actual_kgpc->type_alias->pointer_type_id != NULL)
+                            actual_name = actual_kgpc->type_alias->pointer_type_id;
+                        else if (actual_kgpc->type_alias != NULL && actual_kgpc->type_alias->alias_name != NULL)
+                            actual_name = actual_kgpc->type_alias->alias_name;
+                        if (formal_kgpc->type_alias != NULL && formal_kgpc->type_alias->pointer_type_id != NULL)
+                            formal_name = formal_kgpc->type_alias->pointer_type_id;
+                        else if (formal_kgpc->type_alias != NULL && formal_kgpc->type_alias->alias_name != NULL)
+                            formal_name = formal_kgpc->type_alias->alias_name;
+                        if (actual_name != NULL && formal_name != NULL)
+                        {
+                            if (pascal_identifier_equals(actual_name, formal_name))
+                            {
+                                MatchQuality q = semcheck_make_quality(MATCH_EXACT);
+                                q.exact_type_id = 1;
+                                return q;
+                            }
+                        }
+                        /* Fall through to default EXACT — both point to
+                         * RECORD_TYPE but can't distinguish; allow match. */
+                    }
                 }
                 MatchQuality q = semcheck_make_quality(MATCH_EXACT);
                 q.exact_type_id = 1;
@@ -1577,6 +1621,23 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         if (formal_points_to_class)
             return semcheck_make_quality(MATCH_CONVERSION);
     }
+
+    /* Same-tag fallback: when both tags match but the KgpcType comparison
+     * couldn't be done (one or both NULL, or kind mismatch due to degraded
+     * types from cross-unit resolution), treat as MATCH_CONVERSION rather
+     * than INCOMPATIBLE.  This prevents false overload rejections when types
+     * from imported units degrade to generic forms (e.g. ^record, Enum).
+     *
+     * Only apply this when:
+     * 1. At least one side has a NULL or degraded KgpcType, AND
+     * 2. The tag is one known to degrade across unit boundaries. */
+    if (actual_tag == formal_tag &&
+        (actual_kgpc == NULL || formal_kgpc == NULL ||
+         actual_kgpc->kind != formal_kgpc->kind) &&
+        (actual_tag == RECORD_TYPE || actual_tag == ENUM_TYPE ||
+         actual_tag == SET_TYPE || actual_tag == POINTER_TYPE ||
+         actual_tag == EXTENDED_TYPE || actual_tag == VARIANT_TYPE))
+        return semcheck_make_quality(MATCH_CONVERSION);
 
     return semcheck_make_quality(MATCH_INCOMPATIBLE);
 }

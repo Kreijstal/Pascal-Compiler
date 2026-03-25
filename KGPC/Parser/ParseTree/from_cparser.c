@@ -17692,12 +17692,24 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                         first_param_tree->type == TREE_VAR_DECL &&
                         first_param_tree->tree_data.var_decl_data.type_id != NULL) {
                         const char *param_type_id = first_param_tree->tree_data.var_decl_data.type_id;
+                        /* Get second param type for binary operator disambiguation */
+                        const char *second_param_type_id = NULL;
+                        if (params->next != NULL) {
+                            Tree_t *second_param_tree = (Tree_t *)params->next->cur;
+                            if (second_param_tree != NULL && second_param_tree->type == TREE_VAR_DECL &&
+                                second_param_tree->tree_data.var_decl_data.type_id != NULL)
+                                second_param_type_id = second_param_tree->tree_data.var_decl_data.type_id;
+                        }
 
-                        /* Build mangled name: TypeName__op_suffix */
-                        size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3;
+                        /* Build mangled name: TypeName__op_suffix[_SecondParamType] */
+                        size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3
+                            + (second_param_type_id != NULL ? strlen(second_param_type_id) + 1 : 0);
                         char *mangled_name = (char *)malloc(name_len);
                         if (mangled_name != NULL) {
-                            snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
+                            if (second_param_type_id != NULL)
+                                snprintf(mangled_name, name_len, "%s__%s_%s", param_type_id, encoded_op, second_param_type_id);
+                            else
+                                snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
 
                             if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
@@ -18796,6 +18808,7 @@ static Tree_t *convert_function(ast_t *func_node) {
      * vs variant__op_assign_real. */
     char *deferred_encoded_op = NULL;
     const char *deferred_param_type_id = NULL;
+    const char *deferred_second_param_type_id = NULL;
     if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
         /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
         Tree_t *first_param = (Tree_t *)params->cur;
@@ -18806,6 +18819,13 @@ static Tree_t *convert_function(ast_t *func_node) {
         if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
             first_param->tree_data.var_decl_data.type_id != NULL) {
             deferred_encoded_op = encode_operator_name(operator_symbol);
+            /* Capture second param type for binary operator disambiguation */
+            if (params->next != NULL) {
+                Tree_t *second_param = (Tree_t *)params->next->cur;
+                if (second_param != NULL && second_param->type == TREE_VAR_DECL &&
+                    second_param->tree_data.var_decl_data.type_id != NULL)
+                    deferred_second_param_type_id = second_param->tree_data.var_decl_data.type_id;
+            }
             deferred_param_type_id = first_param->tree_data.var_decl_data.type_id;
         }
         free(operator_symbol);
@@ -18845,13 +18865,24 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (deferred_encoded_op != NULL && deferred_param_type_id != NULL) {
         const char *ret_suffix = return_type_id;
         if (ret_suffix == NULL) ret_suffix = result_var_name;
+        /* For binary operators, include second param type to disambiguate from
+         * unary operators with the same name (e.g. binary - vs unary -). */
         size_t name_len = strlen(deferred_param_type_id) + strlen(deferred_encoded_op) + 3
-            + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0);
+            + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0)
+            + (deferred_second_param_type_id != NULL ? strlen(deferred_second_param_type_id) + 1 : 0);
         char *mangled_name = (char *)malloc(name_len);
         if (mangled_name != NULL) {
-            if (ret_suffix != NULL) {
+            if (ret_suffix != NULL && deferred_second_param_type_id != NULL) {
+                snprintf(mangled_name, name_len, "%s__%s_%s_%s",
+                    deferred_param_type_id, deferred_encoded_op,
+                    deferred_second_param_type_id, ret_suffix);
+            } else if (ret_suffix != NULL) {
                 snprintf(mangled_name, name_len, "%s__%s_%s",
                     deferred_param_type_id, deferred_encoded_op, ret_suffix);
+            } else if (deferred_second_param_type_id != NULL) {
+                snprintf(mangled_name, name_len, "%s__%s_%s",
+                    deferred_param_type_id, deferred_encoded_op,
+                    deferred_second_param_type_id);
             } else {
                 snprintf(mangled_name, name_len, "%s__%s",
                     deferred_param_type_id, deferred_encoded_op);

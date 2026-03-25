@@ -6894,10 +6894,18 @@ skip_type_receiver_rewrite:
                 }
 
                 if (method_node->mangled_id != NULL) {
-                    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
-                        stmt->stmt_data.procedure_call_data.mangled_id != method_node->mangled_id)
-                        free(stmt->stmt_data.procedure_call_data.mangled_id);
-                    stmt->stmt_data.procedure_call_data.mangled_id = strdup(method_node->mangled_id);
+                    /* Only pre-set mangled_id when there is a single overload.
+                     * For overloaded methods, let downstream overload resolution
+                     * pick the correct candidate based on actual argument types. */
+                    ListNode_t *all_overloads = FindAllIdents(symtab, proc_id);
+                    int num_overloads = ListLength(all_overloads);
+                    DestroyList(all_overloads);
+                    if (num_overloads <= 1) {
+                        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
+                            stmt->stmt_data.procedure_call_data.mangled_id != method_node->mangled_id)
+                            free(stmt->stmt_data.procedure_call_data.mangled_id);
+                        stmt->stmt_data.procedure_call_data.mangled_id = strdup(method_node->mangled_id);
+                    }
                 }
 
                 int receiver_is_type_ident = 0;

@@ -2,9 +2,16 @@ unit Math;
 
 interface
 
+type
+    TFPUException = (exInvalidOp, exDenormalized, exZeroDivide, exOverflow, exUnderflow, exPrecision);
+    TFPUExceptionMask = set of TFPUException;
+
 const
     Pi = 3.14159265358979323846;
     MaxDouble = 1.7976931348623157e308;
+
+function SetExceptionMask(const Mask: TFPUExceptionMask): TFPUExceptionMask;
+function GetExceptionMask: TFPUExceptionMask;
 
 function Sqrt(Value: Real): Real; cdecl; external name 'fpc_in_sqrt_real';
 function Sin(Value: Real): Real; cdecl; external name 'fpc_in_sin_real';
@@ -66,6 +73,8 @@ function Sign(Value: Real): Longint;
 function Log10(Value: Real): Real;
 function Log2(Value: Real): Real;
 procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
+function IsNan(const d: Real): Boolean;
+function IsInfinite(const d: Real): Boolean;
 
 implementation
 
@@ -224,6 +233,26 @@ procedure SinCos(Angle: Real; var SinValue, CosValue: Real);
 begin
     SinValue := Sin(Angle);
     CosValue := Cos(Angle);
+end;
+
+function SetExceptionMask(const Mask: TFPUExceptionMask): TFPUExceptionMask;
+begin
+    SetExceptionMask := [];
+end;
+
+function GetExceptionMask: TFPUExceptionMask;
+begin
+    GetExceptionMask := [];
+end;
+
+function IsNan(const d: Real): Boolean;
+begin
+    IsNan := d <> d;
+end;
+
+function IsInfinite(const d: Real): Boolean;
+begin
+    IsInfinite := (d = 1.0/0.0) or (d = -1.0/0.0);
 end;
 
 end.
