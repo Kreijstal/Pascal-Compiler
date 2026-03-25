@@ -9148,12 +9148,24 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     char *parent_class_name = NULL;
     ast_t *body_start = class_node->child;
 
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
+    }
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         // First child is parent class name, extract it
         if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_class_name = strdup(body_start->sym->name);
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
+    }
+
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
     }
 
     /* Collect additional IDENTIFIER siblings as interface names */
@@ -9182,6 +9194,22 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         } else {
             fprintf(stderr, "[KGPC]   body_start is NULL\n");
         }
+        if (class_name != NULL &&
+            (strcasecmp(class_name, "TList") == 0 ||
+             strcasecmp(class_name, "TStringList") == 0 ||
+             strcasecmp(class_name, "TComponent") == 0 ||
+             strcasecmp(class_name, "TInterfaceList") == 0)) {
+            ast_t *raw = class_node->child;
+            int idx = 0;
+            while (raw != NULL && idx < 12) {
+                fprintf(stderr, "[KGPC]   raw[%d] typ=%d name=%s child=%p next=%p\n",
+                    idx, raw->typ,
+                    (raw->sym && raw->sym->name) ? raw->sym->name : "<null>",
+                    (void *)raw->child, (void *)raw->next);
+                raw = raw->next;
+                idx++;
+            }
+        }
         /* Debug: show additional parent identifiers (interfaces) */
         ast_t *dbg = body_start;
         while (dbg != NULL && dbg->typ == PASCAL_T_IDENTIFIER) {
@@ -9189,12 +9217,6 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
                 (dbg->sym && dbg->sym->name) ? dbg->sym->name : "<null>", dbg->typ);
             dbg = dbg->next;
         }
-    }
-
-    if (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
-        body_start->child != NULL && body_start->next == NULL)
-    {
-        body_start = body_start->child;
     }
 
     collect_class_members(body_start, class_name, &field_builder, &property_builder,

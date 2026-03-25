@@ -8747,12 +8747,44 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
-    int lhs_is_record_value = 0;
     KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
+    KgpcType *rhs_kgpc_type = expr_get_kgpc_type(assign_expr);
+    int lhs_is_pointer_destination = 0;
+    int rhs_is_address_value = 0;
+    int rhs_is_addressable_record = 0;
+
+    if (lhs_kgpc_type != NULL &&
+        (kgpc_type_is_pointer(lhs_kgpc_type) || kgpc_type_is_procedure(lhs_kgpc_type)))
+    {
+        lhs_is_pointer_destination = 1;
+    }
+    else
+    {
+        int lhs_tag = expr_get_type_tag(var_expr);
+        lhs_is_pointer_destination = (lhs_tag == POINTER_TYPE || lhs_tag == PROCEDURE);
+    }
+
+    rhs_is_address_value = (assign_expr != NULL &&
+        (assign_expr->type == EXPR_ADDR || assign_expr->type == EXPR_ADDR_OF_PROC));
+    rhs_is_addressable_record = (assign_expr != NULL &&
+        rhs_kgpc_type != NULL &&
+        kgpc_type_is_record(rhs_kgpc_type) &&
+        (assign_expr->type == EXPR_VAR_ID || assign_expr->type == EXPR_RECORD_ACCESS));
+
+    if (lhs_is_pointer_destination && rhs_is_addressable_record && !rhs_is_address_value)
+    {
+        assign_expr = mk_addressof(assign_expr->line_num, assign_expr);
+        rhs_is_address_value = 1;
+    }
+
+    int lhs_is_record_value = 0;
     if (lhs_kgpc_type != NULL)
         lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
     else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
         lhs_is_record_value = 1;
+
+    if (lhs_is_pointer_destination && rhs_is_address_value)
+        lhs_is_record_value = 0;
 
     if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);

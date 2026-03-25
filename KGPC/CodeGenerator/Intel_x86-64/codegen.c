@@ -28,6 +28,7 @@
 #include "../../Parser/ParseTree/from_cparser.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 #include "../../Parser/SemanticCheck/SemCheck.h"
 
 #include "../../identifier_utils.h"
@@ -36,6 +37,12 @@
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
+static const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
+    const struct RecordType *record, const char *fallback_class_label,
+    const char *method_name);
+static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
+    const struct RecordType *record, const char *class_label,
+    const char ***out_names, int *out_count);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 static int codegen_template_matches_methodinfo(const struct MethodTemplate *tmpl,
@@ -166,6 +173,21 @@ static int codegen_list_contains_string(ListNode_t *list, const char *value)
             return 1;
     }
     return 0;
+}
+
+static void codegen_keep_subprogram_label(const char *label)
+{
+    if (label == NULL)
+        return;
+    if (g_codegen_available_subprograms != NULL &&
+        codegen_list_contains_string(g_codegen_available_subprograms, label))
+        return;
+
+    ListNode_t *node = CreateListNode((void *)label, LIST_STRING);
+    if (g_codegen_available_subprograms == NULL)
+        g_codegen_available_subprograms = node;
+    else
+        g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
 }
 
 static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
@@ -2944,12 +2966,36 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
      *   __kgpc_guidref_<Name>  = pointer to __kgpc_guid_<Name>  (pguid)
      * The entry's IIDRef field points to __kgpc_guidref_<Name>. */
     int actual_iface_count = 0;
+    const char **effective_iface_names = (const char **)record_info->interface_names;
+    int effective_iface_count = record_info->num_interfaces;
+    const char *dbg = getenv("KGPC_DEBUG_EMIT_INTERFACES");
+    if (dbg != NULL && class_label != NULL &&
+        (strcasecmp(class_label, "TList") == 0 ||
+         strcasecmp(class_label, "TStringList") == 0 ||
+         strcasecmp(class_label, "TComponent") == 0 ||
+         strcasecmp(class_label, "TInterfaceList") == 0)) {
+        fprintf(stderr,
+            "[KGPC] emit class vmt %s rec=%p direct_ifaces=%d parent=%s methods=%d props=%d\n",
+            class_label, (void *)record_info, record_info->num_interfaces,
+            record_info->parent_class_name != NULL ? record_info->parent_class_name : "(null)",
+            ListLength(record_info->method_templates), ListLength(record_info->properties));
+        for (int i = 0; i < record_info->num_interfaces; i++) {
+            fprintf(stderr, "[KGPC]   direct iface %s\n",
+                record_info->interface_names[i] != NULL ? record_info->interface_names[i] : "(null)");
+        }
+    }
+    int free_effective_iface_names = 0;
+    if (effective_iface_count == 0 && record_type_is_class(record_info)) {
+        codegen_collect_inferred_interfaces(symtab, record_info, class_label,
+            &effective_iface_names, &effective_iface_count);
+        free_effective_iface_names = (effective_iface_names != NULL);
+    }
     long long base_instance_size = 0;
-    if (record_info->num_interfaces > 0) {
+    if (effective_iface_count > 0) {
         /* First pass: emit standalone GUID constants for each interface
          * (deduplicated via emitted_classes set with "__kgpc_guid_" prefix). */
-        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-            const char *iface_name = record_info->interface_names[iidx];
+        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
+            const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
             /* Check if we already emitted this interface's GUID */
             char guid_dedup_buf[512];
@@ -3029,8 +3075,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
 
         /* Count valid interfaces */
-        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-            if (record_info->interface_names[iidx] != NULL)
+        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
+            if (effective_iface_names[iidx] != NULL)
                 actual_iface_count++;
         }
 
@@ -3047,8 +3093,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s_INTFTABLE:\n", class_label);
         fprintf(ctx->output_file, "\t.quad\t%d\t# EntryCount\n", actual_iface_count);
         int iface_slot_idx = 0;
-        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-            const char *iface_name = record_info->interface_names[iidx];
+        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
+            const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
             long long ioffset = base_instance_size + iface_slot_idx * 8;
             fprintf(ctx->output_file, "\t# Entry for %s (40 bytes = tinterfaceentry)\n", iface_name);
@@ -3074,8 +3120,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
          * the interface pointer to the raw object pointer before jumping to the
          * implementing class method. */
         int vtbl_iface_slot_idx = 0;
-        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-            const char *iface_name = record_info->interface_names[iidx];
+        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
+            const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
             long long ioffset_for_this_iface = base_instance_size + vtbl_iface_slot_idx * 8;
             vtbl_iface_slot_idx++;
@@ -3107,37 +3153,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             while (vtbl_iface_method != NULL) {
                 struct MethodTemplate *vtbl_imethod = (struct MethodTemplate *)vtbl_iface_method->cur;
                 if (vtbl_imethod != NULL && vtbl_imethod->name != NULL) {
-                    /* Find the implementing class method */
-                    char vtbl_impl_base[512];
-                    snprintf(vtbl_impl_base, sizeof(vtbl_impl_base), "%s__%s", class_label, vtbl_imethod->name);
-                    ListNode_t *vtbl_impl_candidates = FindAllIdents(symtab, vtbl_impl_base);
-                    const char *vtbl_resolved_id = NULL;
-                    for (ListNode_t *ic = vtbl_impl_candidates; ic != NULL; ic = ic->next) {
-                        HashNode_t *cand = (HashNode_t *)ic->cur;
-                        if (cand != NULL && cand->mangled_id != NULL &&
-                            cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
-                            cand->type->info.proc_info.definition != NULL) {
-                            /* Check if this method has an actually emitted code body */
-                            if (g_codegen_available_subprograms != NULL &&
-                                codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
-                                vtbl_resolved_id = cand->mangled_id;
-                                break;
-                            }
-                            /* Fallback: check statement_list for cross-unit methods */
-                            if (cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
-                                /* Verify via symtab lookup that the mangled name has a real body */
-                                HashNode_t *vtbl_sym = NULL;
-                                if (FindSymbol(&vtbl_sym, symtab, cand->mangled_id) != 0 &&
-                                    vtbl_sym != NULL && vtbl_sym->type != NULL &&
-                                    vtbl_sym->type->kind == TYPE_KIND_PROCEDURE &&
-                                    vtbl_sym->type->info.proc_info.definition != NULL &&
-                                    vtbl_sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
-                                    vtbl_resolved_id = cand->mangled_id;
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                    const char *vtbl_resolved_id = codegen_find_class_method_impl_id(
+                        symtab, record_info, class_label, vtbl_imethod->name);
                     if (vtbl_resolved_id != NULL) {
                         /* Emit thunk in .text that adjusts Self back from interface
                          * pointer to raw object pointer, then jumps to the real method.
@@ -3173,7 +3190,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     } else {
                         fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\t# %s (not implemented)\n", vtbl_imethod->name);
                     }
-                    if (vtbl_impl_candidates != NULL) DestroyList(vtbl_impl_candidates);
                 }
                 vtbl_iface_method = vtbl_iface_method->next;
             }
@@ -3429,11 +3445,18 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
      * interface method names that forward to the implementing class methods.
      * This enables interface method calls (e.g., FStream.Read(...)) to link
      * when emitted as direct calls to the interface method mangled name.
+     *
+     * Do not emit a fallback alias to __kgpc_abstract_method_error when no
+     * implementation exists. GNU as/binutils may accept ".set" aliases here,
+     * but CLANG64 uses lld/COFF semantics and exposes that these aliases are
+     * not a real implementation path. Missing interface lowering should fail
+     * consistently across toolchains until proper dispatch is emitted.
+     *
      * TODO: Replace with proper vtable-based interface dispatch for cases
      * where multiple classes implement the same interface. */
-    if (record_info->num_interfaces > 0 && !record_info->is_interface) {
-        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
-            const char *iface_name = record_info->interface_names[iidx];
+    if (effective_iface_count > 0 && !record_info->is_interface) {
+        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
+            const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
             /* Look up the interface to get its method list */
             HashNode_t *iface_node = NULL;
@@ -3455,21 +3478,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             while (iface_method != NULL) {
                 struct MethodTemplate *imethod = (struct MethodTemplate *)iface_method->cur;
                 if (imethod != NULL && imethod->name != NULL) {
-                    /* Build the class's implementation mangled name: ClassName__MethodName */
-                    char impl_base[512];
-                    snprintf(impl_base, sizeof(impl_base), "%s__%s", class_label, imethod->name);
-                    /* Find the implementing method in the symbol table to get its full mangled name */
-                    ListNode_t *impl_candidates = FindAllIdents(symtab, impl_base);
-                    HashNode_t *impl_func = NULL;
-                    for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
-                        HashNode_t *cand = (HashNode_t *)ic->cur;
-                        if (cand != NULL && cand->mangled_id != NULL &&
-                            cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
-                            cand->type->info.proc_info.definition != NULL) {
-                            impl_func = cand;
-                            break;
-                        }
-                    }
+                    const char *impl_resolved_id = codegen_find_class_method_impl_id(
+                        symtab, record_info, class_label, imethod->name);
                     /* Build the interface method mangled name: InterfaceName__MethodName */
                     char iface_base[512];
                     snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
@@ -3497,22 +3507,15 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             if (stub_key != NULL)
                                 emitted_class_set_add(emitted_classes, stub_key);
                         }
-                        if (impl_func != NULL && impl_func->mangled_id != NULL) {
+                        if (impl_resolved_id != NULL) {
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
                             fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
                             fprintf(ctx->output_file, ".set %s, %s\n",
-                                iface_func->mangled_id, impl_func->mangled_id);
-                        } else {
-                            fprintf(ctx->output_file, "\n# Interface dispatch (no impl): %s.%s -> abstract error\n",
-                                iface_name, imethod->name);
-                            fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
-                            fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
-                                iface_func->mangled_id);
+                                iface_func->mangled_id, impl_resolved_id);
                         }
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);
-                    if (impl_candidates != NULL) DestroyList(impl_candidates);
                 }
                 iface_method = iface_method->next;
             }
@@ -3583,6 +3586,9 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
 
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     }
+
+    if (free_effective_iface_names)
+        free((void *)effective_iface_names);
 }
 
 static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *symtab,
@@ -3667,6 +3673,346 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
+static int codegen_record_visible_field_count(const struct RecordType *record)
+{
+    int count = 0;
+    if (record == NULL)
+        return 0;
+    for (ListNode_t *cur = record->fields; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_RECORD_FIELD || cur->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)cur->cur;
+        if (!record_field_is_hidden(field))
+            count++;
+    }
+    return count;
+}
+
+static int codegen_record_candidate_score(const struct RecordType *record)
+{
+    if (record == NULL)
+        return INT_MIN;
+
+    int score = 0;
+    if (record->parent_fields_merged)
+        score += 10000;
+    if (record->is_class)
+        score += 1000;
+    if (record->is_interface)
+        score += 1000;
+    score += record->num_interfaces * 200;
+    score += codegen_record_visible_field_count(record) * 10;
+    score += ListLength(record->method_templates) * 2;
+    score += ListLength(record->properties);
+    if (record->parent_class_name != NULL)
+        score += 25;
+    return score;
+}
+
+static int codegen_record_is_forward_stub(const struct RecordType *record)
+{
+    if (record == NULL)
+        return 0;
+    if (!record->is_class && !record->is_interface)
+        return 0;
+    if (record->parent_class_name != NULL)
+        return 0;
+    if (record->num_interfaces > 0)
+        return 0;
+    if (record->method_templates != NULL)
+        return 0;
+    if (record->properties != NULL)
+        return 0;
+    return codegen_record_visible_field_count(record) == 0;
+}
+
+static const struct RecordType *codegen_record_parent(const struct RecordType *record,
+    SymTab_t *symtab)
+{
+    if (record == NULL || symtab == NULL || record->parent_class_name == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, record->parent_class_name);
+    if (matches == NULL)
+        return NULL;
+
+    const struct RecordType *best = NULL;
+    int best_score = INT_MIN;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        struct RecordType *cand_record = get_record_type_from_node(cand);
+        if (cand_record == NULL)
+            continue;
+        int score = codegen_record_candidate_score(cand_record);
+        if (best == NULL || score > best_score) {
+            best = cand_record;
+            best_score = score;
+        }
+    }
+    DestroyList(matches);
+    return best;
+}
+
+static const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
+    const struct RecordType *record, const char *fallback_class_label,
+    const char *method_name)
+{
+    const char *dbg_lookup = getenv("KGPC_DEBUG_METHOD_LOOKUP");
+    const struct RecordType *cur_record = record;
+    const char *cur_label = fallback_class_label;
+
+    while (cur_record != NULL || cur_label != NULL) {
+        const char *owner_label = cur_label;
+        if (cur_record != NULL && cur_record->type_id != NULL)
+            owner_label = cur_record->type_id;
+        if (owner_label == NULL)
+            break;
+
+        char base_name[512];
+        snprintf(base_name, sizeof(base_name), "%s__%s", owner_label, method_name);
+        if (dbg_lookup != NULL &&
+            fallback_class_label != NULL &&
+            (strcasecmp(fallback_class_label, "TList") == 0 ||
+             strcasecmp(fallback_class_label, "TComponent") == 0 ||
+             strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
+            fprintf(stderr, "[KGPC] lookup %s method %s via %s\n",
+                fallback_class_label, method_name, base_name);
+        }
+        ListNode_t *impl_candidates = FindAllIdents(symtab, base_name);
+        const char *resolved_id = NULL;
+        for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
+            HashNode_t *cand = (HashNode_t *)ic->cur;
+            if (cand == NULL || cand->mangled_id == NULL ||
+                cand->type == NULL || cand->type->kind != TYPE_KIND_PROCEDURE ||
+                cand->type->info.proc_info.definition == NULL)
+                continue;
+            if (dbg_lookup != NULL &&
+                fallback_class_label != NULL &&
+                (strcasecmp(fallback_class_label, "TList") == 0 ||
+                 strcasecmp(fallback_class_label, "TComponent") == 0 ||
+                 strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
+                fprintf(stderr, "[KGPC]   cand %s stmt=%p\n", cand->mangled_id,
+                    (void *)cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list);
+            }
+            if (g_codegen_available_subprograms != NULL &&
+                codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
+                resolved_id = cand->mangled_id;
+                break;
+            }
+            if (cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
+                resolved_id = cand->mangled_id;
+                break;
+            }
+        }
+        if (impl_candidates != NULL)
+            DestroyList(impl_candidates);
+        if (resolved_id != NULL) {
+            codegen_keep_subprogram_label(resolved_id);
+            return resolved_id;
+        }
+
+        if (cur_record == NULL)
+            break;
+        cur_record = codegen_record_parent(cur_record, symtab);
+        cur_label = NULL;
+    }
+
+    return NULL;
+}
+
+static int codegen_class_implements_interface(SymTab_t *symtab,
+    const struct RecordType *record, const char *class_label,
+    const struct RecordType *iface_record)
+{
+    if (symtab == NULL || record == NULL || iface_record == NULL ||
+        iface_record->method_templates == NULL)
+        return 0;
+
+    for (ListNode_t *cur = iface_record->method_templates; cur != NULL; cur = cur->next) {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl == NULL || tmpl->name == NULL)
+            continue;
+        if (codegen_find_class_method_impl_id(symtab, record, class_label, tmpl->name) == NULL)
+            return 0;
+    }
+    return 1;
+}
+
+static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
+    const struct RecordType *record, const char *class_label,
+    const char ***out_names, int *out_count)
+{
+    *out_names = NULL;
+    *out_count = 0;
+    if (symtab == NULL || record == NULL || !record->is_class)
+        return;
+
+    int cap = 0;
+    const char **names = NULL;
+
+    const struct RecordType *parent = codegen_record_parent(record, symtab);
+    if (parent != NULL && parent->num_interfaces > 0) {
+        for (int i = 0; i < parent->num_interfaces; i++) {
+            const char *iface = parent->interface_names[i];
+            if (iface == NULL)
+                continue;
+            if (*out_count == cap) {
+                cap = cap == 0 ? 8 : cap * 2;
+                names = (const char **)realloc((void *)names, sizeof(char *) * cap);
+            }
+            names[*out_count] = iface;
+            (*out_count)++;
+        }
+    }
+
+    for (int unit_idx = 0; unit_idx < SYMTAB_MAX_UNITS; unit_idx++) {
+        ScopeNode *scope = symtab->unit_scopes[unit_idx];
+        HashTable_t *table = scope != NULL ? scope->table : NULL;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++) {
+            for (ListNode_t *node = table->table[b]; node != NULL; node = node->next) {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                struct RecordType *iface_record = get_record_type_from_node(hash_node);
+                if (iface_record == NULL && hash_node != NULL && hash_node->type != NULL &&
+                    hash_node->type->kind == TYPE_KIND_POINTER &&
+                    hash_node->type->info.points_to != NULL &&
+                    hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    iface_record = hash_node->type->info.points_to->info.record_info;
+                if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE ||
+                    iface_record == NULL || !iface_record->is_interface)
+                    continue;
+                const char *iface_name = iface_record->type_id != NULL ? iface_record->type_id : hash_node->id;
+                if (iface_name == NULL)
+                    continue;
+                int already = 0;
+                for (int i = 0; i < *out_count; i++) {
+                    if (pascal_identifier_equals(names[i], iface_name)) {
+                        already = 1;
+                        break;
+                    }
+                }
+                if (already)
+                    continue;
+                if (!codegen_class_implements_interface(symtab, record, class_label, iface_record))
+                    continue;
+                if (*out_count == cap) {
+                    cap = cap == 0 ? 8 : cap * 2;
+                    names = (const char **)realloc((void *)names, sizeof(char *) * cap);
+                }
+                names[*out_count] = iface_name;
+                (*out_count)++;
+            }
+        }
+    }
+
+    *out_names = names;
+
+    const char *dbg = getenv("KGPC_DEBUG_INFERRED_INTERFACES");
+    if (dbg != NULL && class_label != NULL &&
+        (strcasecmp(class_label, "TList") == 0 ||
+         strcasecmp(class_label, "TStringList") == 0 ||
+         strcasecmp(class_label, "TComponent") == 0 ||
+         strcasecmp(class_label, "TInterfaceList") == 0)) {
+        fprintf(stderr, "[KGPC] inferred interfaces for %s: %d\n",
+            class_label, *out_count);
+        for (int i = 0; i < *out_count; i++) {
+            fprintf(stderr, "[KGPC]   %s\n", names[i] != NULL ? names[i] : "(null)");
+        }
+    }
+}
+
+static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
+    const char **class_label, struct RecordType **record_info)
+{
+    if (symtab == NULL || class_label == NULL || *class_label == NULL)
+        return;
+
+    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, *class_label);
+    if (preferred != NULL) {
+        struct RecordType *preferred_record = get_record_type_from_node(preferred);
+        if (preferred_record == NULL && preferred->type != NULL &&
+            preferred->type->kind == TYPE_KIND_POINTER &&
+            preferred->type->info.points_to != NULL &&
+            preferred->type->info.points_to->kind == TYPE_KIND_RECORD)
+            preferred_record = preferred->type->info.points_to->info.record_info;
+        if (preferred_record != NULL) {
+            *record_info = preferred_record;
+            if (preferred_record->type_id != NULL)
+                *class_label = preferred_record->type_id;
+            else if (preferred->id != NULL)
+                *class_label = preferred->id;
+            if (preferred_record->num_interfaces > 0 ||
+                preferred_record->method_templates != NULL ||
+                preferred_record->properties != NULL ||
+                preferred_record->parent_fields_merged)
+                return;
+        }
+    }
+
+    ListNode_t *matches = FindAllIdents(symtab, *class_label);
+    if (matches == NULL)
+        return;
+
+    HashNode_t *best_node = NULL;
+    struct RecordType *best_record = NULL;
+    int best_score = INT_MIN;
+
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        struct RecordType *cand_record = get_record_type_from_node(cand);
+        if (cand_record == NULL)
+            continue;
+        int score = codegen_record_candidate_score(cand_record);
+        const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
+        if (dbg != NULL && *class_label != NULL &&
+            (strcasecmp(*class_label, "TList") == 0 ||
+             strcasecmp(*class_label, "TStringList") == 0 ||
+             strcasecmp(*class_label, "TComponent") == 0 ||
+             strcasecmp(*class_label, "TInterfaceList") == 0)) {
+            fprintf(stderr,
+                "[KGPC] canonical candidate %s: rec=%p score=%d class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
+                *class_label, (void *)cand_record, score, cand_record->is_class,
+                cand_record->is_interface,
+                cand_record->parent_class_name != NULL ? cand_record->parent_class_name : "(null)",
+                cand_record->num_interfaces, ListLength(cand_record->method_templates),
+                ListLength(cand_record->properties), cand_record->parent_fields_merged,
+                cand_record->type_id != NULL ? cand_record->type_id : "(null)");
+        }
+        if (best_node == NULL || score > best_score) {
+            best_node = cand;
+            best_record = cand_record;
+            best_score = score;
+        }
+    }
+
+    DestroyList(matches);
+
+    if (best_record == NULL)
+        return;
+
+    const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
+    if (dbg != NULL && *class_label != NULL &&
+        (strcasecmp(*class_label, "TList") == 0 ||
+         strcasecmp(*class_label, "TStringList") == 0 ||
+         strcasecmp(*class_label, "TComponent") == 0 ||
+         strcasecmp(*class_label, "TInterfaceList") == 0)) {
+        fprintf(stderr,
+            "[KGPC] canonical selected %s: rec=%p score=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
+            *class_label, (void *)best_record, best_score,
+            best_record->parent_class_name != NULL ? best_record->parent_class_name : "(null)",
+            best_record->num_interfaces, ListLength(best_record->method_templates),
+            ListLength(best_record->properties), best_record->parent_fields_merged,
+            best_record->type_id != NULL ? best_record->type_id : "(null)");
+    }
+
+    *record_info = best_record;
+    if (best_record->type_id != NULL)
+        *class_label = best_record->type_id;
+    else if (best_node != NULL && best_node->id != NULL)
+        *class_label = best_node->id;
+}
+
 /* Helper: emit VMTs/RTTI for all type declarations in a list. */
 static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                                         ListNode_t *type_decls,
@@ -3699,12 +4045,66 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                 }
             }
 
+            codegen_canonicalize_record_for_emission(symtab, &class_label, &record_info);
+            if (codegen_record_is_forward_stub(record_info)) {
+                cur = cur->next;
+                continue;
+            }
+
             codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
                 emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                 emitted_classes);
         }
         cur = cur->next;
+    }
+}
+
+static void codegen_emit_vmts_from_hash_table(CodeGenContext *ctx, SymTab_t *symtab,
+    HashTable_t *table, EmittedClassSet *emitted_classes)
+{
+    if (table == NULL)
+        return;
+
+    for (int b = 0; b < TABLE_SIZE; b++)
+    {
+        ListNode_t *node = table->table[b];
+        while (node != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)node->cur;
+            if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
+                hash_node->type != NULL)
+            {
+                struct RecordType *record_info = NULL;
+                const char *class_label = NULL;
+                if (hash_node->type->kind == TYPE_KIND_RECORD)
+                {
+                    record_info = hash_node->type->info.record_info;
+                }
+                else if (hash_node->type->kind == TYPE_KIND_POINTER &&
+                    hash_node->type->info.points_to != NULL &&
+                    hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                {
+                    record_info = hash_node->type->info.points_to->info.record_info;
+                }
+                if (record_info != NULL)
+                    class_label = record_info->type_id;
+                if (class_label == NULL)
+                    class_label = hash_node->id;
+
+                codegen_canonicalize_record_for_emission(symtab, &class_label, &record_info);
+                if (codegen_record_is_forward_stub(record_info)) {
+                    node = node->next;
+                    continue;
+                }
+
+                codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
+                    emitted_classes);
+                codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
+                    emitted_classes);
+            }
+            node = node->next;
+        }
     }
 }
 
@@ -3905,9 +4305,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
+            if (unit != NULL && unit->type == TREE_UNIT) {
                 codegen_vmt_from_type_list(ctx, symtab,
                     unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
+                codegen_vmt_from_type_list(ctx, symtab,
+                    unit->tree_data.unit_data.implementation_type_decls, &emitted_classes);
+            }
         }
     }
 
@@ -3920,43 +4323,15 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
      * (e.g., specializations pulled in from units like FGL). */
     for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
     {
-        HashTable_t *table = scope->table;
-        if (table == NULL)
-            continue;
-        for (int b = 0; b < TABLE_SIZE; b++)
-        {
-            ListNode_t *node = table->table[b];
-            while (node != NULL)
-            {
-                HashNode_t *hash_node = (HashNode_t *)node->cur;
-                if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
-                    hash_node->type != NULL)
-                {
-                    struct RecordType *record_info = NULL;
-                    const char *class_label = NULL;
-                    if (hash_node->type->kind == TYPE_KIND_RECORD)
-                    {
-                        record_info = hash_node->type->info.record_info;
-                    }
-                    else if (hash_node->type->kind == TYPE_KIND_POINTER &&
-                        hash_node->type->info.points_to != NULL &&
-                        hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    {
-                        record_info = hash_node->type->info.points_to->info.record_info;
-                    }
-                    if (record_info != NULL)
-                        class_label = record_info->type_id;
-                    if (class_label == NULL)
-                        class_label = hash_node->id;
+        codegen_emit_vmts_from_hash_table(ctx, symtab, scope->table, &emitted_classes);
+    }
 
-                    codegen_emit_class_vmt(ctx, symtab, record_info, class_label,
-                        &emitted_classes);
-                    codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
-                        &emitted_classes);
-                }
-                node = node->next;
-            }
-        }
+    for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
+    {
+        ScopeNode *unit_scope = symtab->unit_scopes[i];
+        if (unit_scope == NULL)
+            continue;
+        codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
     }
 
     /* Emit GUID data for ALL interfaces with GUIDs found in the symbol table.
@@ -4059,9 +4434,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
+            if (unit != NULL && unit->type == TREE_UNIT) {
                 codegen_emit_guids_from_type_list(ctx,
                     unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
+                codegen_emit_guids_from_type_list(ctx,
+                    unit->tree_data.unit_data.implementation_type_decls, &emitted_classes);
+            }
         }
     }
     /* Also emit GUIDs from program type declarations */
@@ -4073,9 +4451,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
+            if (unit != NULL && unit->type == TREE_UNIT) {
                 codegen_vmt_aliases_from_type_list(ctx,
                     unit->tree_data.unit_data.interface_type_decls, &emitted_classes);
+                codegen_vmt_aliases_from_type_list(ctx,
+                    unit->tree_data.unit_data.implementation_type_decls, &emitted_classes);
+            }
         }
     }
     if (tree->type == TREE_PROGRAM_TYPE)
@@ -4086,10 +4467,14 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
+            if (unit != NULL && unit->type == TREE_UNIT) {
                 codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
                     unit->tree_data.unit_data.interface_type_decls,
                     &emitted_classes);
+                codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
+                    unit->tree_data.unit_data.implementation_type_decls,
+                    &emitted_classes);
+            }
         }
     }
     if (tree->type == TREE_PROGRAM_TYPE)
