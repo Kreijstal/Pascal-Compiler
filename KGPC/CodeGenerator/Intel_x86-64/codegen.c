@@ -2348,6 +2348,133 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     return inst_list;
 }
 
+ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
+    CodeGenContext *ctx, const struct RecordType *class_record,
+    const char *class_type_id, Register_t *instance_reg)
+{
+    if (ctx == NULL || class_record == NULL || class_type_id == NULL || instance_reg == NULL ||
+        class_record->num_interfaces <= 0)
+        return inst_list;
+
+    long long base_size = 0;
+    codegen_sizeof_record_type(ctx, (struct RecordType *)class_record, &base_size);
+
+    int iface_count = 0;
+    for (int ii = 0; ii < class_record->num_interfaces; ++ii)
+    {
+        if (class_record->interface_names[ii] != NULL)
+            iface_count++;
+    }
+    if (iface_count <= 0)
+        return inst_list;
+
+    if (class_record->has_cached_size)
+        base_size = class_record->cached_size - iface_count * 8;
+
+    Register_t *ivtbl_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (ivtbl_reg == NULL)
+        return inst_list;
+
+    char buffer[CODEGEN_MAX_INST_BUF];
+    int slot_idx = 0;
+    for (int ii = 0; ii < class_record->num_interfaces; ++ii)
+    {
+        if (class_record->interface_names[ii] == NULL)
+            continue;
+        long long offset = base_size + slot_idx * 8;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %s\n",
+            class_type_id, class_record->interface_names[ii], ivtbl_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %lld(%s)\n",
+            ivtbl_reg->bit_64, offset, instance_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        slot_idx++;
+    }
+
+    free_reg(get_reg_stack(), ivtbl_reg);
+    return inst_list;
+}
+
+ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
+    CodeGenContext *ctx, const char *self_reg, const char *iface_name,
+    int vmt_index, const char *label_prefix, const char *target_slot_label,
+    int preserve_indirect_call_regs, CodegenCallArgSpillFn spill_fn,
+    CodegenCallArgRestoreFn restore_fn)
+{
+    if (ctx == NULL || self_reg == NULL || label_prefix == NULL || target_slot_label == NULL)
+        return inst_list;
+
+    char buffer[CODEGEN_MAX_INST_BUF];
+    int label_id = ++ctx->label_counter;
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = add_inst(inst_list, "\tmovq\t(%r11), %r11\n");
+    inst_list = add_inst(inst_list, "\tmovq\t(%r11), %rax\n");
+    inst_list = add_inst(inst_list, "\taddq\t8(%r11), %rax\n");
+    snprintf(buffer, sizeof(buffer), "\tjz\t.L%s_direct_%d\n", label_prefix, label_id);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vmt_index * 8);
+    inst_list = add_inst(inst_list, buffer);
+    if (preserve_indirect_call_regs)
+    {
+        CallerSaveState caller_state;
+        regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+        inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
+        regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+    }
+    else
+    {
+        inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
+    }
+    snprintf(buffer, sizeof(buffer), "\tjmp\t.L%s_done_%d\n", label_prefix, label_id);
+    inst_list = add_inst(inst_list, buffer);
+
+    snprintf(buffer, sizeof(buffer), ".L%s_direct_%d:\n", label_prefix, label_id);
+    inst_list = add_inst(inst_list, buffer);
+
+    StackNode_t *target_slot = add_l_t_bytes((char *)target_slot_label, 8);
+    if (iface_name != NULL && iface_name[0] != '\0' && target_slot != NULL &&
+        spill_fn != NULL && restore_fn != NULL)
+    {
+        char guid_label[640];
+        int arg_spills[6] = {0};
+        int xmm_spills[8] = {0};
+        snprintf(guid_label, sizeof(guid_label), "__kgpc_guid_%s", iface_name);
+        inst_list = spill_fn(inst_list, arg_spills, xmm_spills);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", self_reg, current_arg_reg64(0));
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", guid_label, current_arg_reg64(1));
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index, current_arg_reg32(2));
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tcall\t__kgpc_resolve_intf_method\n");
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", target_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = restore_fn(inst_list, arg_spills, xmm_spills);
+        if (preserve_indirect_call_regs)
+        {
+            CallerSaveState caller_state;
+            regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n", target_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
+            regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n", target_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = add_inst(inst_list, "\tcall\t*%r11\n");
+        }
+    }
+
+    snprintf(buffer, sizeof(buffer), ".L%s_done_%d:\n", label_prefix, label_id);
+    inst_list = add_inst(inst_list, buffer);
+    return inst_list;
+}
+
 /* Frees instruction list */
 void free_inst_list(ListNode_t *inst_list)
 {

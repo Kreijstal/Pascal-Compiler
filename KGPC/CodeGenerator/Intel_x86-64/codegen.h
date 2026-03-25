@@ -148,6 +148,8 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
 
+typedef struct CodeGenContext CodeGenContext;
+
 static inline int codegen_align_to(int value, int alignment)
 {
     if (alignment <= 0)
@@ -164,6 +166,18 @@ int codegen_has_available_subprogram_label(const char *label);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *iface_name, const char *method_name);
+typedef ListNode_t *(*CodegenCallArgSpillFn)(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets);
+typedef ListNode_t *(*CodegenCallArgRestoreFn)(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets);
+ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
+    CodeGenContext *ctx, const struct RecordType *class_record,
+    const char *class_type_id, Register_t *instance_reg);
+ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
+    CodeGenContext *ctx, const char *self_reg, const char *iface_name,
+    int vmt_index, const char *label_prefix, const char *target_slot_label,
+    int preserve_indirect_call_regs, CodegenCallArgSpillFn spill_fn,
+    CodegenCallArgRestoreFn restore_fn);
 
 /*
  * Compiler invariant policy:
@@ -209,7 +223,7 @@ typedef struct {
     struct RecordType *record_type;
 } CodeGenWithContext;
 
-typedef struct {
+typedef struct CodeGenContext {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
