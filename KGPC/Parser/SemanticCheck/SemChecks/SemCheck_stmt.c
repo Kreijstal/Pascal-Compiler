@@ -9392,7 +9392,8 @@ int semcheck_for_in(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
             } else if (kgpc_type_is_set(collection_kgpc_type)) {
                 collection_is_set = 1;
             } else if (collection_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
-                       collection_kgpc_type->info.primitive_type_tag == ENUM_TYPE &&
+                       (collection_kgpc_type->info.primitive_type_tag == ENUM_TYPE ||
+                        is_integer_type(collection_kgpc_type->info.primitive_type_tag)) &&
                        collection != NULL &&
                        collection->type == EXPR_VAR_ID &&
                        collection->expr_data.id != NULL) {
