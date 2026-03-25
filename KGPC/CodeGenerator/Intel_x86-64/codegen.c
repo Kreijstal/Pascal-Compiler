@@ -217,9 +217,8 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
         }
 
         /* Skip unspecialized generic subprogram templates — only their
-         * specializations (which have generic_type_params cleared) should
-         * be emitted. */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0) {
+         * concrete specializations should be emitted. */
+        if (sub->tree_data.subprogram_data.is_generic_template) {
             sub_list = sub_list->next;
             continue;
         }
@@ -5020,7 +5019,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         }
 
         /* Skip unspecialized generic subprogram templates. */
-        if (sub->tree_data.subprogram_data.num_generic_type_params > 0)
+        if (sub->tree_data.subprogram_data.is_generic_template)
         {
             sub_list = sub_list->next;
             continue;

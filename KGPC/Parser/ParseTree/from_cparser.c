@@ -3360,6 +3360,35 @@ static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *sp
 
     substitute_generic_identifiers(subprogram_ast, params, args, count);
 
+    /* Strip the generic type parameter list node (PASCAL_T_TYPE_PARAM_LIST)
+     * from the rewritten AST.  The specialization is a concrete subprogram;
+     * leaving the node would cause convert_procedure/convert_function to
+     * re-detect it as a generic template and create a spurious
+     * generic_template_ast (a use-after-free hazard, see issue #478). */
+    {
+        ast_t *prev = NULL;
+        ast_t *node = subprogram_ast->child;
+        while (node != NULL)
+        {
+            if (node->typ == PASCAL_T_TYPE_PARAM_LIST)
+            {
+                /* Unlink the node from the sibling chain. */
+                if (prev == NULL)
+                    subprogram_ast->child = node->next;
+                else
+                    prev->next = node->next;
+                /* Sever the sibling link before freeing: free_ast() follows
+                 * both child and next pointers, and we must not free the
+                 * remaining AST siblings that follow this node. */
+                node->next = NULL;
+                free_ast(node);
+                break;
+            }
+            prev = node;
+            node = node->next;
+        }
+    }
+
     /* Rename local type declarations so each specialization gets unique names.
      * E.g., local type "RawT" in Swap<LongInt> becomes "Swap$LongInt.RawT". */
     char **local_names = NULL;
@@ -3398,6 +3427,8 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
         template->tree_data.subprogram_data.generic_template_ast == NULL)
         return NULL;
 
+    assert(template->tree_data.subprogram_data.is_generic_template);
+
     ast_t *ast_copy = copy_ast(template->tree_data.subprogram_data.generic_template_ast);
     if (ast_copy == NULL)
         return NULL;
@@ -3422,13 +3453,16 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     g_source_offset = saved_offset;
     free_ast(ast_copy);
 
-    if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
+    if (result != NULL)
     {
-        for (int i = 0; i < result->tree_data.subprogram_data.num_generic_type_params; i++)
-            free(result->tree_data.subprogram_data.generic_type_params[i]);
-        free(result->tree_data.subprogram_data.generic_type_params);
-        result->tree_data.subprogram_data.generic_type_params = NULL;
-        result->tree_data.subprogram_data.num_generic_type_params = 0;
+        /* Verify that the specialization has no generic metadata.
+         * rewrite_generic_subprogram_ast() strips TYPE_PARAM_LIST so
+         * convert_procedure/convert_function should not detect any
+         * generic type parameters on the rewritten AST. */
+        assert(result->tree_data.subprogram_data.num_generic_type_params == 0);
+        assert(result->tree_data.subprogram_data.generic_type_params == NULL);
+        assert(!result->tree_data.subprogram_data.is_generic_template);
+        assert(result->tree_data.subprogram_data.generic_template_ast == NULL);
     }
 
     return result;
@@ -18133,6 +18167,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         if (num_generic_type_params > 0) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+            tree->tree_data.subprogram_data.is_generic_template = 1;
             tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
             tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
@@ -18520,6 +18555,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+        tree->tree_data.subprogram_data.is_generic_template = 1;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
@@ -18892,6 +18928,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+        tree->tree_data.subprogram_data.is_generic_template = 1;
         tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
