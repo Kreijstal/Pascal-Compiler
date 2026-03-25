@@ -4546,15 +4546,13 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
     if (impl_symbol != NULL && impl_symbol[0] != '\0')
         return;
 
-    /* Interface method delegation (e.g. function IFoo.GetValue=GetValueImpl)
-       may leave the dispatch symbol unresolved. Emit a warning but don't
-       abort — codegen will emit a stub that calls the abstract handler. */
     fprintf(stderr,
-        "[KGPC] warning: unresolved interface dispatch: %s.%s for class %s (%s)\n",
+        "[KGPC] unresolved interface dispatch: %s.%s for class %s (%s)\n",
         iface_name != NULL ? iface_name : "<interface>",
         method_name != NULL ? method_name : "<method>",
         class_label != NULL ? class_label : "<class>",
         iface_symbol);
+    assert(0 && "unresolved interface dispatch target");
 }
 
 /* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
