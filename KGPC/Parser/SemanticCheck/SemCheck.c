@@ -9701,6 +9701,39 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             record_info->properties = ConcatList(cloned_properties, record_info->properties);
     }
 
+    /* Merge parent's interfaces into child's interface_names.
+     * Only add interfaces the child doesn't already declare. */
+    if (parent_record != NULL && parent_record->num_interfaces > 0)
+    {
+        for (int pi = 0; pi < parent_record->num_interfaces; pi++)
+        {
+            const char *parent_iface = parent_record->interface_names[pi];
+            if (parent_iface == NULL) continue;
+            int already_declared = 0;
+            for (int ci = 0; ci < record_info->num_interfaces; ci++)
+            {
+                if (record_info->interface_names[ci] != NULL &&
+                    strcasecmp(record_info->interface_names[ci], parent_iface) == 0)
+                {
+                    already_declared = 1;
+                    break;
+                }
+            }
+            if (!already_declared)
+            {
+                int new_count = record_info->num_interfaces + 1;
+                char **new_names = (char **)realloc(record_info->interface_names,
+                    new_count * sizeof(char *));
+                if (new_names != NULL)
+                {
+                    new_names[new_count - 1] = strdup(parent_iface);
+                    record_info->interface_names = new_names;
+                    record_info->num_interfaces = new_count;
+                }
+            }
+        }
+    }
+
     /* Detect default indexed property after merging parent fields */
     detect_default_indexed_property(record_info, parent_record);
 
