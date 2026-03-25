@@ -46,6 +46,13 @@ static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const char ***out_names, int *out_count);
 static ListNode_t *codegen_collect_interface_methods(SymTab_t *symtab,
     const struct RecordType *iface_record);
+static const struct RecordType *codegen_record_parent(
+    const struct RecordType *record, SymTab_t *symtab);
+static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
+    const char *exported_symbol, const char *target_symbol);
+static void codegen_assert_interface_impl_resolved(const char *iface_name,
+    const char *method_name, const char *class_label,
+    const char *iface_symbol, const char *impl_symbol);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
@@ -3708,22 +3715,20 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     }
 
     /* Emit interface method dispatch thunks.
-     * For each interface a class implements, generate global symbols for the
-     * interface method names that forward to the implementing class methods.
+     * For each interface a class directly implements, generate global symbols
+     * for the interface method names that forward to the implementing class methods.
      * This enables interface method calls (e.g., FStream.Read(...)) to link
      * when emitted as direct calls to the interface method mangled name.
      *
-     * Do not emit a fallback alias to __kgpc_abstract_method_error when no
-     * implementation exists. GNU as/binutils may accept ".set" aliases here,
-     * but CLANG64 uses lld/COFF semantics and exposes that these aliases are
-     * not a real implementation path. Missing interface lowering should fail
-     * consistently across toolchains until proper dispatch is emitted.
+     * Only direct implementers participate here. Inherited implementers reuse
+     * the ancestor's interface entry points; emitting another global symbol for
+     * the same interface method would not be well-defined.
      *
      * TODO: Replace with proper vtable-based interface dispatch for cases
      * where multiple classes implement the same interface. */
-    if (effective_iface_count > 0 && !record_info->is_interface) {
-        for (int iidx = 0; iidx < effective_iface_count; iidx++) {
-            const char *iface_name = effective_iface_names[iidx];
+    if (record_info->num_interfaces > 0 && !record_info->is_interface) {
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
             /* Look up the interface to get its method list */
             HashNode_t *iface_node = NULL;
@@ -3748,6 +3753,9 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 if (imethod != NULL && imethod->name != NULL) {
                     const char *impl_resolved_id = codegen_find_class_method_impl_id(
                         symtab, record_info, class_label, imethod->name);
+                    if (impl_resolved_id == NULL && record_info->parent_class_name != NULL)
+                        impl_resolved_id = codegen_find_class_method_impl_id(
+                            symtab, NULL, record_info->parent_class_name, imethod->name);
                     /* Build the interface method mangled name: InterfaceName__MethodName */
                     char iface_base[512];
                     snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
@@ -3775,11 +3783,13 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             if (stub_key != NULL)
                                 emitted_class_set_add(emitted_classes, stub_key);
                         }
+                        codegen_assert_interface_impl_resolved(
+                            iface_name, imethod->name, class_label,
+                            iface_func->mangled_id, impl_resolved_id);
                         if (impl_resolved_id != NULL) {
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
-                            fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
-                            fprintf(ctx->output_file, ".set %s, %s\n",
+                            codegen_emit_global_jump_stub(ctx,
                                 iface_func->mangled_id, impl_resolved_id);
                         }
                     }
@@ -4617,54 +4627,36 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
     }
 }
 
-/* Interface methods must be provided by a concrete implementation in the
- * current compilation.  Do not emit fallback aliases here: they hide the real
- * bug on some toolchains and fail only later at link time on others. */
-static void codegen_assert_no_unresolved_interface_methods(
-    ListNode_t *type_decls, SymTab_t *symtab, EmittedClassSet *reported_methods)
+/* Interface dispatch entry points must be emitted as concrete labels rather
+ * than assembler aliases so COFF and ELF toolchains see the same symbols. */
+static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
+    const char *exported_symbol, const char *target_symbol)
 {
-    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next) {
-        Tree_t *type_tree = (Tree_t *)cur->cur;
-        if (type_tree == NULL || type_tree->type != TREE_TYPE_DECL)
-            continue;
-        struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
-        if (record_info == NULL || !record_info->is_interface ||
-            record_info->method_templates == NULL)
-            continue;
-        const char *iface_name = record_info->type_id;
-        if (iface_name == NULL)
-            iface_name = type_tree->tree_data.type_decl_data.id;
-        if (iface_name == NULL) continue;
-        for (ListNode_t *m = record_info->method_templates; m != NULL; m = m->next) {
-            struct MethodTemplate *imethod = (struct MethodTemplate *)m->cur;
-            if (imethod == NULL || imethod->name == NULL) continue;
-            char iface_base[512];
-            snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
-            ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
-            for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
-                HashNode_t *cand = (HashNode_t *)ic->cur;
-                if (cand == NULL || cand->mangled_id == NULL) continue;
-                if (cand->hash_type != HASHTYPE_FUNCTION &&
-                    cand->hash_type != HASHTYPE_PROCEDURE) continue;
-                char method_key[640];
-                snprintf(method_key, sizeof(method_key),
-                         "__kgpc_unresolved_intf_%s", cand->mangled_id);
-                if (emitted_class_set_contains(reported_methods, method_key))
-                    break;
-                char *dup_key = strdup(method_key);
-                if (dup_key != NULL)
-                    emitted_class_set_add(reported_methods, dup_key);
-                fprintf(stderr,
-                    "[KGPC] unresolved interface method requires implementation: "
-                    "%s.%s (%s)\n",
-                    iface_name, imethod->name, cand->mangled_id);
-                assert(0 &&
-                    "unresolved interface method reached code generation");
-                break;
-            }
-            if (iface_candidates != NULL) DestroyList(iface_candidates);
-        }
-    }
+    if (ctx == NULL || exported_symbol == NULL || target_symbol == NULL)
+        return;
+
+    fprintf(ctx->output_file, "\t.text\n");
+    fprintf(ctx->output_file, ".globl %s\n", exported_symbol);
+    fprintf(ctx->output_file, "%s:\n", exported_symbol);
+    fprintf(ctx->output_file, "\tjmp\t%s\n", target_symbol);
+}
+
+static void codegen_assert_interface_impl_resolved(const char *iface_name,
+    const char *method_name, const char *class_label,
+    const char *iface_symbol, const char *impl_symbol)
+{
+    if (iface_symbol == NULL || iface_symbol[0] == '\0')
+        return;
+    if (impl_symbol != NULL && impl_symbol[0] != '\0')
+        return;
+
+    fprintf(stderr,
+        "[KGPC] unresolved interface dispatch: %s.%s for class %s (%s)\n",
+        iface_name != NULL ? iface_name : "<interface>",
+        method_name != NULL ? method_name : "<method>",
+        class_label != NULL ? class_label : "<class>",
+        iface_symbol);
+    assert(0 && "unresolved interface dispatch target");
 }
 
 /* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
@@ -4898,21 +4890,6 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
-
-    /* Interface methods must be resolved before assembly emission. */
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit != NULL && unit->type == TREE_UNIT)
-                codegen_assert_no_unresolved_interface_methods(
-                    unit->tree_data.unit_data.interface_type_decls,
-                    symtab, &emitted_classes);
-        }
-    }
-    if (tree->type == TREE_PROGRAM_TYPE)
-        codegen_assert_no_unresolved_interface_methods(
-            tree->tree_data.program_data.type_declaration,
-            symtab, &emitted_classes);
 
     emitted_class_set_destroy(&emitted_classes);
 

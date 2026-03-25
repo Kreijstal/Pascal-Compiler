@@ -243,13 +243,6 @@ type
   end;
   PMethod = ^TMethod;
   
-  TInterfacedObject = class(TObject)
-  protected
-    FRefCount : LongInt;
-  public
-    property RefCount : LongInt read FRefCount;
-  end;
-
   { GUID type for SysUtils compatibility }
   TGUID = record
     D1: LongWord;
@@ -336,6 +329,16 @@ type
   end;
   PInterface = ^IInterface;
   IUnknown = IInterface;
+
+  TInterfacedObject = class(TObject, IInterface)
+  protected
+    FRefCount : LongInt;
+  public
+    function QueryInterface(const IID: TGUID; out Obj): HRESULT;
+    function _AddRef: LongInt;
+    function _Release: LongInt;
+    property RefCount : LongInt read FRefCount;
+  end;
 
   TCustomAttribute = class
   end;
@@ -1703,6 +1706,44 @@ end;
 function TObject.GetInterface(const IID: TGUID; out Obj): Boolean;
 begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
+end;
+
+function TInterfacedObject.QueryInterface(const IID: TGUID; out Obj): HRESULT;
+begin
+    if Self.GetInterface(IID, Obj) then
+        QueryInterface := 0
+    else
+        QueryInterface := LongInt($80004002);
+end;
+
+function TInterfacedObject._AddRef: LongInt;
+begin
+    if FRefCount = 0 then
+    begin
+        FRefCount := 1;
+        Exit(FRefCount);
+    end;
+
+    if FRefCount > 0 then
+        _AddRef := InterlockedIncrement(FRefCount)
+    else
+        _AddRef := FRefCount;
+end;
+
+function TInterfacedObject._Release: LongInt;
+begin
+    if FRefCount = 1 then
+        _Release := 0
+    else if FRefCount > 0 then
+        _Release := InterlockedDecrement(FRefCount)
+    else
+        Exit(FRefCount);
+
+    if _Release <= 0 then
+    begin
+        FRefCount := -1;
+        Destroy;
+    end;
 end;
 
 function TObject.ClassInfo: Pointer;
