@@ -918,7 +918,7 @@ static HashNode_t *semcheck_find_record_assign_operator_candidate(SymTab_t *symt
     return best_node;
 }
 
-static int semcheck_try_record_conversion_expression(SymTab_t *symtab,
+int semcheck_try_record_conversion_expression(SymTab_t *symtab,
     struct Expression **expr_slot, struct Expression *target_expr,
     KgpcType *target_type, KgpcType **source_type, int *source_owned)
 {
