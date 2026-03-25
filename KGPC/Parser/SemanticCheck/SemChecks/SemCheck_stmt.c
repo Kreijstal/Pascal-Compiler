@@ -7211,8 +7211,13 @@ skip_type_receiver_rewrite:
                 }
             }
 
-            semcheck_stmt_try_set_method_mangled_id(symtab, stmt, proc_id,
-                resolved_method != NULL ? resolved_method->mangled_id : NULL);
+            {
+                const char *overload_check_id =
+                    (resolved_method != NULL && resolved_method->id != NULL)
+                    ? resolved_method->id : proc_id;
+                semcheck_stmt_try_set_method_mangled_id(symtab, stmt, overload_check_id,
+                    resolved_method != NULL ? resolved_method->mangled_id : NULL);
+            }
             if (!static_method_receiver && resolved_method != NULL && resolved_method->id != NULL)
             {
                 char *resolved_proc_id = strdup(resolved_method->id);
