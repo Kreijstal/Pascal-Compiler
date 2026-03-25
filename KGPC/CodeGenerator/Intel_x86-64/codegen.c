@@ -4079,38 +4079,35 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char stub_dedup[640];
                         snprintf(stub_dedup, sizeof(stub_dedup),
                                  "__kgpc_abstub_%s", iface_func->mangled_id);
-                        int already_emitted = emitted_class_set_contains(emitted_classes, stub_dedup);
-                        if (!already_emitted) {
+                        if (emitted_class_set_contains(emitted_classes, stub_dedup)) {
+                            /* Already emitted by a previous class — skip. */
+                        } else {
                             char *stub_key = strdup(stub_dedup);
                             if (stub_key != NULL)
                                 emitted_class_set_add(emitted_classes, stub_key);
-                        }
-                        /* If the class doesn't provide an implementation
-                         * (e.g. TObject-derived class implementing an interface
-                         * without inheriting TInterfacedObject), fall back to
-                         * runtime default helpers for the IInterface trio. */
-                        const char *default_runtime_target = NULL;
-                        if (impl_resolved_id == NULL) {
-                            if (strcasecmp(imethod->name, "QueryInterface") == 0)
-                                default_runtime_target = "kgpc_default_queryinterface";
-                            else if (strcasecmp(imethod->name, "_AddRef") == 0)
-                                default_runtime_target = "kgpc_default_addref";
-                            else if (strcasecmp(imethod->name, "_Release") == 0)
-                                default_runtime_target = "kgpc_default_release";
-                        }
-                        if (impl_resolved_id == NULL && default_runtime_target == NULL) {
-                            codegen_assert_interface_impl_resolved(
-                                iface_name, imethod->name, class_label,
-                                iface_func->mangled_id, impl_resolved_id);
-                        }
-                        const char *final_target = impl_resolved_id != NULL
-                            ? impl_resolved_id : default_runtime_target;
-                        if (final_target != NULL && !already_emitted) {
-                            fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
-                                iface_name, imethod->name, class_label,
-                                impl_resolved_id != NULL ? imethod->name : final_target);
-                            codegen_emit_global_jump_stub(ctx,
-                                iface_func->mangled_id, final_target);
+                            /* If the class doesn't provide an implementation
+                             * (e.g. TObject-derived class implementing an interface
+                             * without inheriting TInterfacedObject), fall back to
+                             * runtime default helpers for the IInterface trio. */
+                            const char *final_target = impl_resolved_id;
+                            if (final_target == NULL) {
+                                if (strcasecmp(imethod->name, "QueryInterface") == 0)
+                                    final_target = "kgpc_default_queryinterface";
+                                else if (strcasecmp(imethod->name, "_AddRef") == 0)
+                                    final_target = "kgpc_default_addref";
+                                else if (strcasecmp(imethod->name, "_Release") == 0)
+                                    final_target = "kgpc_default_release";
+                                else
+                                    codegen_assert_interface_impl_resolved(
+                                        iface_name, imethod->name, class_label,
+                                        iface_func->mangled_id, impl_resolved_id);
+                            }
+                            if (final_target != NULL) {
+                                fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s\n",
+                                    iface_name, imethod->name, final_target);
+                                codegen_emit_global_jump_stub(ctx,
+                                    iface_func->mangled_id, final_target);
+                            }
                         }
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);

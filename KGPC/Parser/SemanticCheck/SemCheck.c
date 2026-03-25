@@ -11152,15 +11152,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     HashNode_t *parent_iface_node = semcheck_find_preferred_type_node(
                         symtab, record_info->parent_class_name);
-                    struct RecordType *parent_iface = NULL;
-                    if (parent_iface_node != NULL) {
-                        parent_iface = get_record_type_from_node(parent_iface_node);
-                        if (parent_iface == NULL && parent_iface_node->type != NULL &&
-                            parent_iface_node->type->kind == TYPE_KIND_POINTER &&
-                            parent_iface_node->type->info.points_to != NULL &&
-                            parent_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                            parent_iface = parent_iface_node->type->info.points_to->info.record_info;
-                    }
+                    struct RecordType *parent_iface = parent_iface_node != NULL
+                        ? get_record_type_from_node(parent_iface_node) : NULL;
                     if (parent_iface != NULL && parent_iface->is_interface &&
                         parent_iface->method_templates != NULL)
                     {
