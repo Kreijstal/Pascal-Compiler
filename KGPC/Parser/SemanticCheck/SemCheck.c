@@ -11142,7 +11142,68 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Advanced records can declare default indexed properties too. */
                     detect_default_indexed_property(record_info, NULL);
                 }
-                
+
+                /* For interfaces with a parent interface, prepend the parent's
+                 * method_templates so that the full list (parent methods first)
+                 * is available for vtable index assignment and codegen.  This
+                 * replaces the recursive collection previously done in codegen. */
+                if (record_info != NULL && record_info->is_interface &&
+                    record_info->parent_class_name != NULL)
+                {
+                    HashNode_t *parent_iface_node = semcheck_find_preferred_type_node(
+                        symtab, record_info->parent_class_name);
+                    struct RecordType *parent_iface = NULL;
+                    if (parent_iface_node != NULL) {
+                        parent_iface = get_record_type_from_node(parent_iface_node);
+                        if (parent_iface == NULL && parent_iface_node->type != NULL &&
+                            parent_iface_node->type->kind == TYPE_KIND_POINTER &&
+                            parent_iface_node->type->info.points_to != NULL &&
+                            parent_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            parent_iface = parent_iface_node->type->info.points_to->info.record_info;
+                    }
+                    if (parent_iface != NULL && parent_iface->is_interface &&
+                        parent_iface->method_templates != NULL)
+                    {
+                        /* Clone parent's method_templates and prepend them.
+                         * Parent's list already includes grandparent methods
+                         * (processed earlier due to top-down declaration order). */
+                        ListNode_t *cloned_head = NULL;
+                        ListNode_t *cloned_tail = NULL;
+                        for (ListNode_t *pm = parent_iface->method_templates; pm != NULL; pm = pm->next)
+                        {
+                            struct MethodTemplate *orig = (struct MethodTemplate *)pm->cur;
+                            if (orig == NULL) continue;
+                            /* Check if this method already exists in the current
+                             * interface's own method_templates (override). */
+                            int already_present = 0;
+                            for (ListNode_t *own = record_info->method_templates; own != NULL; own = own->next)
+                            {
+                                struct MethodTemplate *own_mt = (struct MethodTemplate *)own->cur;
+                                if (own_mt != NULL && own_mt->name != NULL && orig->name != NULL &&
+                                    strcasecmp(own_mt->name, orig->name) == 0)
+                                {
+                                    already_present = 1;
+                                    break;
+                                }
+                            }
+                            if (already_present) continue;
+                            ListNode_t *node = CreateListNode(orig, LIST_METHOD_TEMPLATE);
+                            if (cloned_head == NULL) {
+                                cloned_head = node;
+                                cloned_tail = node;
+                            } else {
+                                cloned_tail->next = node;
+                                cloned_tail = node;
+                            }
+                        }
+                        if (cloned_head != NULL) {
+                            /* Prepend: parent methods first, then own methods */
+                            cloned_tail->next = record_info->method_templates;
+                            record_info->method_templates = cloned_head;
+                        }
+                    }
+                }
+
                 /* Process method templates and register them with class method bindings.
                  * Methods declared in class type sections (e.g., abstract methods)
                  * may not have been registered during parsing if they were only forward
