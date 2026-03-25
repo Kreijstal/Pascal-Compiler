@@ -20,6 +20,26 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
+/* Count the total number of method templates inherited from parent interfaces
+ * (recursively).  This is the offset that must be added to a method's position
+ * in the current interface's own method_templates to get the correct vtable index. */
+static int semcheck_count_inherited_interface_methods(SymTab_t *symtab,
+    const struct RecordType *iface_record)
+{
+    if (iface_record == NULL || iface_record->parent_class_name == NULL)
+        return 0;
+    struct RecordType *parent = semcheck_lookup_record_type(symtab,
+        iface_record->parent_class_name);
+    if (parent == NULL || !parent->is_interface)
+        return 0;
+    /* Count parent's inherited methods plus parent's own methods */
+    int parent_inherited = semcheck_count_inherited_interface_methods(symtab, parent);
+    int parent_own = 0;
+    for (ListNode_t *mt = parent->method_templates; mt != NULL; mt = mt->next)
+        parent_own++;
+    return parent_inherited + parent_own;
+}
+
 static int semcheck_expr_is_explicit_char_typecast_for_call_local(const struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_TYPECAST)
@@ -6239,6 +6259,10 @@ method_call_resolved:
                 }
                 if (self_is_interface)
                 {
+                    /* Account for inherited methods from parent interfaces
+                     * which precede own methods in the vtable layout. */
+                    int inherited_count = semcheck_count_inherited_interface_methods(
+                        symtab, iface_record);
                     int idx = 0;
                     for (ListNode_t *mt = iface_record->method_templates; mt != NULL; mt = mt->next, idx++)
                     {
@@ -6247,7 +6271,7 @@ method_call_resolved:
                             strcasecmp(tmpl->name, best_match->method_name) == 0)
                         {
                             expr->expr_data.function_call_data.is_interface_call = 1;
-                            expr->expr_data.function_call_data.vmt_index = idx;
+                            expr->expr_data.function_call_data.vmt_index = inherited_count + idx;
                             if (expr->expr_data.function_call_data.self_class_name == NULL)
                                 expr->expr_data.function_call_data.self_class_name =
                                     strdup(best_match->owner_class);

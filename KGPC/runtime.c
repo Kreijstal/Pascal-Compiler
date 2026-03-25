@@ -1580,14 +1580,22 @@ kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
 
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
 {
-    if (self == NULL || guid == NULL || out_intf == NULL)
+    fprintf(stderr, "DEBUG kgpc_get_interface: self=%p guid=%p out_intf=%p\n", self, guid, (void*)out_intf);
+    if (self == NULL || guid == NULL || out_intf == NULL) {
+        fprintf(stderr, "DEBUG kgpc_get_interface: NULL arg, returning 0\n");
         return 0;
+    }
+
+    const unsigned char *g = (const unsigned char *)guid;
+    fprintf(stderr, "DEBUG guid bytes: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n",
+        g[0],g[1],g[2],g[3],g[4],g[5],g[6],g[7],g[8],g[9],g[10],g[11],g[12],g[13],g[14],g[15]);
 
     /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
      * This reads the FPC-compatible tinterfacetable layout:
      *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
      * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
     const void *vmt = *(const void * const *)self;
+    fprintf(stderr, "DEBUG vmt=%p\n", vmt);
     if (vmt == NULL)
         return 0;
 
@@ -1596,14 +1604,27 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
         /* vIntfTable at VMT offset 80 */
         const kgpc_interface_table *intf_table =
             *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        fprintf(stderr, "DEBUG cur_vmt=%p intf_table=%p\n", cur_vmt, (void*)intf_table);
         if (intf_table != NULL && intf_table->entry_count > 0) {
+            fprintf(stderr, "DEBUG entry_count=%lu\n", (unsigned long)intf_table->entry_count);
             for (uint64_t i = 0; i < intf_table->entry_count; i++) {
                 const kgpc_interface_entry *entry = &intf_table->entries[i];
+                fprintf(stderr, "DEBUG entry[%lu]: iid_ref=%p ioffset=%lu\n",
+                    (unsigned long)i, (void*)entry->iid_ref, (unsigned long)entry->ioffset);
                 if (entry->iid_ref != NULL) {
                     const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
-                    if (iid != NULL && memcmp(iid, guid, 16) == 0) {
-                        *out_intf = (void *)((const char *)self + entry->ioffset);
-                        return 1;
+                    fprintf(stderr, "DEBUG   iid=%p\n", iid);
+                    if (iid != NULL) {
+                        const unsigned char *ig = (const unsigned char *)iid;
+                        fprintf(stderr, "DEBUG   iid bytes: %02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x\n",
+                            ig[0],ig[1],ig[2],ig[3],ig[4],ig[5],ig[6],ig[7],ig[8],ig[9],ig[10],ig[11],ig[12],ig[13],ig[14],ig[15]);
+                        int cmp = memcmp(iid, guid, 16);
+                        fprintf(stderr, "DEBUG   memcmp=%d\n", cmp);
+                        if (cmp == 0) {
+                            *out_intf = (void *)((const char *)self + entry->ioffset);
+                            fprintf(stderr, "DEBUG MATCH! *out_intf=%p\n", *out_intf);
+                            return 1;
+                        }
                     }
                 }
             }
@@ -1616,6 +1637,7 @@ int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
         else
             cur_vmt = NULL;
     }
+    fprintf(stderr, "DEBUG kgpc_get_interface: no match found, returning 0\n");
     return 0;
 }
 

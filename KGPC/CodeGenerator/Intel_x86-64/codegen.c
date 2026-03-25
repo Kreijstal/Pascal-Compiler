@@ -44,6 +44,8 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const char ***out_names, int *out_count);
+static ListNode_t *codegen_collect_interface_methods(SymTab_t *symtab,
+    const struct RecordType *iface_record);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
@@ -3395,8 +3397,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     vtbl_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                     vtbl_iface_record = vtbl_iface_node->type->info.points_to->info.record_info;
             }
-            if (vtbl_iface_record == NULL || vtbl_iface_record->method_templates == NULL) {
-                /* No methods — emit an empty vtable label */
+            if (vtbl_iface_record == NULL) {
+                /* No interface record — emit an empty vtable label */
                 fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
                 fprintf(ctx->output_file, "\t.data\n");
                 fprintf(ctx->output_file, "\t.align 8\n");
@@ -3408,7 +3410,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             fprintf(ctx->output_file, "\t.data\n");
             fprintf(ctx->output_file, "\t.align 8\n");
             fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
-            ListNode_t *vtbl_iface_method = vtbl_iface_record->method_templates;
+            /* Collect all interface methods including inherited ones from
+             * parent interfaces (parent methods first, matching FPC layout). */
+            ListNode_t *all_iface_methods = codegen_collect_interface_methods(
+                symtab, vtbl_iface_record);
+            ListNode_t *vtbl_iface_method = all_iface_methods;
             while (vtbl_iface_method != NULL) {
                 struct MethodTemplate *vtbl_imethod = (struct MethodTemplate *)vtbl_iface_method->cur;
                 if (vtbl_imethod != NULL && vtbl_imethod->name != NULL) {
@@ -3452,6 +3458,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 }
                 vtbl_iface_method = vtbl_iface_method->next;
             }
+            if (all_iface_methods != NULL)
+                DestroyList(all_iface_methods);
             fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
         }
     }
@@ -3729,11 +3737,12 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                     iface_record = iface_node->type->info.points_to->info.record_info;
             }
             if (iface_record == NULL) continue;
-            /* Interface methods are stored in method_templates (not methods).
-             * Iterate over method_templates to find the method names. */
-            ListNode_t *iface_methods_list = iface_record->method_templates;
-            if (iface_methods_list == NULL) continue;
-            ListNode_t *iface_method = iface_methods_list;
+            /* Collect all interface methods including inherited ones from
+             * parent interfaces for alias emission. */
+            ListNode_t *all_dispatch_methods = codegen_collect_interface_methods(
+                symtab, iface_record);
+            if (all_dispatch_methods == NULL) continue;
+            ListNode_t *iface_method = all_dispatch_methods;
             while (iface_method != NULL) {
                 struct MethodTemplate *imethod = (struct MethodTemplate *)iface_method->cur;
                 if (imethod != NULL && imethod->name != NULL) {
@@ -3778,6 +3787,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 }
                 iface_method = iface_method->next;
             }
+            DestroyList(all_dispatch_methods);
         }
     }
 
@@ -4002,6 +4012,12 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
         struct RecordType *cand_record = get_record_type_from_node(cand);
+        /* Also check pointer-to-record (class types are often stored as pointers) */
+        if (cand_record == NULL && cand->type != NULL &&
+            cand->type->kind == TYPE_KIND_POINTER &&
+            cand->type->info.points_to != NULL &&
+            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+            cand_record = cand->type->info.points_to->info.record_info;
         if (cand_record == NULL)
             continue;
         int score = codegen_record_candidate_score(cand_record);
@@ -4012,6 +4028,71 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     }
     DestroyList(matches);
     return best;
+}
+
+/* Resolve an interface record by name from the symbol table, handling both
+ * direct record types and pointer-to-record types. */
+static struct RecordType *codegen_lookup_interface_record(SymTab_t *symtab,
+    const char *iface_name)
+{
+    if (symtab == NULL || iface_name == NULL)
+        return NULL;
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, iface_name) == 0 || node == NULL)
+        return NULL;
+    struct RecordType *rec = get_record_type_from_node(node);
+    if (rec == NULL && node->type != NULL &&
+        node->type->kind == TYPE_KIND_POINTER &&
+        node->type->info.points_to != NULL &&
+        node->type->info.points_to->kind == TYPE_KIND_RECORD)
+        rec = node->type->info.points_to->info.record_info;
+    return rec;
+}
+
+/* Recursively collect all method templates for an interface, including
+ * inherited methods from parent interfaces.  Parent methods come first
+ * (matching FPC/Delphi vtable layout convention).  The returned list
+ * must be freed by the caller with DestroyList (nodes only, not the
+ * MethodTemplate payloads which are owned by the interface records). */
+static ListNode_t *codegen_collect_interface_methods(SymTab_t *symtab,
+    const struct RecordType *iface_record)
+{
+    if (iface_record == NULL)
+        return NULL;
+
+    ListNode_t *result = NULL;
+    ListNode_t *result_tail = NULL;
+
+    /* Recurse into parent interface first */
+    if (iface_record->parent_class_name != NULL) {
+        struct RecordType *parent_iface = codegen_lookup_interface_record(
+            symtab, iface_record->parent_class_name);
+        if (parent_iface != NULL && parent_iface->is_interface) {
+            ListNode_t *parent_methods = codegen_collect_interface_methods(
+                symtab, parent_iface);
+            if (parent_methods != NULL) {
+                result = parent_methods;
+                /* Find tail */
+                result_tail = result;
+                while (result_tail->next != NULL)
+                    result_tail = result_tail->next;
+            }
+        }
+    }
+
+    /* Append own methods */
+    for (ListNode_t *mt = iface_record->method_templates; mt != NULL; mt = mt->next) {
+        ListNode_t *node = CreateListNode(mt->cur, LIST_UNSPECIFIED);
+        if (result == NULL) {
+            result = node;
+            result_tail = node;
+        } else {
+            result_tail->next = node;
+            result_tail = node;
+        }
+    }
+
+    return result;
 }
 
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
@@ -4095,18 +4176,26 @@ static int codegen_class_implements_interface(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const struct RecordType *iface_record)
 {
-    if (symtab == NULL || record == NULL || iface_record == NULL ||
-        iface_record->method_templates == NULL)
+    if (symtab == NULL || record == NULL || iface_record == NULL)
         return 0;
 
-    for (ListNode_t *cur = iface_record->method_templates; cur != NULL; cur = cur->next) {
+    /* Check all methods including inherited ones from parent interfaces */
+    ListNode_t *all_methods = codegen_collect_interface_methods(symtab, iface_record);
+    if (all_methods == NULL)
+        return 0;
+
+    int result = 1;
+    for (ListNode_t *cur = all_methods; cur != NULL; cur = cur->next) {
         struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
         if (tmpl == NULL || tmpl->name == NULL)
             continue;
-        if (codegen_find_class_method_impl_id(symtab, record, class_label, tmpl->name) == NULL)
-            return 0;
+        if (codegen_find_class_method_impl_id(symtab, record, class_label, tmpl->name) == NULL) {
+            result = 0;
+            break;
+        }
     }
-    return 1;
+    DestroyList(all_methods);
+    return result;
 }
 
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
