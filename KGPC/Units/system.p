@@ -1008,6 +1008,9 @@ procedure kgpc_tfile_filesize(var f: file; var size: int64); cdecl; external nam
 procedure kgpc_tfile_seek(var f: file; index: longint); cdecl; external name 'kgpc_tfile_seek';
 procedure kgpc_tfile_truncate_current(var f: file); cdecl; external name 'kgpc_tfile_truncate_current';
 procedure kgpc_tfile_truncate(var f: file; length: longint); cdecl; external name 'kgpc_tfile_truncate';
+procedure Erase(var f: file); external;
+procedure POpen(var f: text; command: String; mode: Char); external;
+function PClose(var f: text): LongInt; external;
 procedure kgpc_init_args(argc: longint; argv: Pointer); cdecl; external name 'kgpc_init_args';
 function kgpc_param_count: longint; cdecl; external name 'kgpc_param_count';
 function kgpc_param_str(index: longint): AnsiString; cdecl; external name 'kgpc_param_str';
