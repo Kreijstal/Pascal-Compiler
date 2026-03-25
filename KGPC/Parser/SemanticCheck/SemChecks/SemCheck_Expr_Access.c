@@ -9,6 +9,7 @@
 */
 
 #include "SemCheck_Expr_Internal.h"
+#include "SemCheck_stmt.h"
 #include <time.h>
 #include <ctype.h>
 #include <limits.h>
@@ -7371,6 +7372,29 @@ skip_overload_resolution:
                         are_types_compatible_for_assignment(expected_kgpc, arg_kgpc, symtab))
                     {
                         type_compatible = 1;
+                    }
+                    /* Try record→primitive conversion via := operators */
+                    if (!type_compatible && expected_kgpc != NULL && arg_kgpc != NULL &&
+                        current_arg_expr != NULL &&
+                        !(arg_decl->type == TREE_VAR_DECL &&
+                          arg_decl->tree_data.var_decl_data.is_var_param))
+                    {
+                        int conv_owned = 0;
+                        KgpcType *conv_type = arg_kgpc;
+                        struct Expression *conv_expr = current_arg_expr;
+                        if (semcheck_try_record_conversion_expression(symtab, &conv_expr, NULL,
+                                expected_kgpc, &conv_type, &conv_owned))
+                        {
+                            args_to_validate->cur = conv_expr;
+                            current_arg_expr = conv_expr;
+                            if (are_types_compatible_for_assignment(expected_kgpc, conv_type, symtab))
+                            {
+                                type_compatible = 1;
+                                arg_type = semcheck_tag_from_kgpc(conv_type);
+                            }
+                            if (conv_owned && conv_type != NULL)
+                                destroy_kgpc_type(conv_type);
+                        }
                     }
                     /* Integer arguments are assignment-compatible across integer widths. */
                     if (!type_compatible &&

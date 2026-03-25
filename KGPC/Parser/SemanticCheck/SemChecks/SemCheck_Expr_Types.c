@@ -2031,9 +2031,21 @@ int semcheck_recordaccess(int *type_return,
 
     /* Scoped enum support for identifiers that resolve as types (e.g., TEndian.Little).
      * If record_expr is a type name, resolve field_id as enum literal.
+     * Skip if the identifier is a known variable — e.g., a local variable named
+     * "hmodule" should not be confused with the HMODULE type alias.
      */
     if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
     {
+        /* If there's a variable with this name, don't try scoped enum resolution */
+        HashNode_t *var_check = NULL;
+        int var_found = FindSymbol(&var_check, symtab, record_expr->expr_data.id);
+        if (var_found != 0 && var_check != NULL &&
+            (var_check->hash_type == HASHTYPE_VAR ||
+             var_check->hash_type == HASHTYPE_ARRAY ||
+             var_check->hash_type == HASHTYPE_FUNCTION_RETURN))
+        {
+            goto skip_scoped_enum_resolution;
+        }
         long long enum_value = 0;
         HashNode_t *enum_type_node = semcheck_find_visible_enum_type_candidate_with_literal(
             symtab, record_expr->expr_data.id, field_id, &enum_value);
@@ -2162,10 +2174,17 @@ int semcheck_recordaccess(int *type_return,
             }
         }
         if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-            fprintf(stderr, "[SemCheck] enum const expr: T=%s found=%d type_node=%p\n",
+            fprintf(stderr, "[SemCheck] enum const expr: T=%s found=%d type_node=%p",
                 record_expr->expr_data.id, type_node != NULL, (void *)type_node);
+            if (type_node != NULL)
+                fprintf(stderr, " id=%s hash_type=%d unit=%d",
+                    type_node->id ? type_node->id : "NULL",
+                    type_node->hash_type,
+                    type_node->source_unit_index);
+            fprintf(stderr, "\n");
         }
     }
+skip_scoped_enum_resolution:
 
     /* AST TRANSFORMATION FIX: Parser incorrectly parses `-r.x` as `(-r).x` instead of `-(r.x)`.
      * When we detect this pattern (record access on a sign term), we restructure the AST

@@ -3008,6 +3008,37 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 if (low < -2147483648LL || high > 2147483647LL)
                     result_type = INT64_TYPE;
             }
+            /* For set types, Low/High returns bounds of the element type */
+            if (!have_bounds && alias != NULL && alias->is_set &&
+                alias->set_element_type_id != NULL)
+            {
+                HashNode_t *elem_node = NULL;
+                if (FindSymbol(&elem_node, symtab, alias->set_element_type_id) != 0 &&
+                    elem_node != NULL && elem_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                    if (elem_alias != NULL && elem_alias->is_enum &&
+                        elem_alias->enum_literals != NULL &&
+                        !elem_alias->enum_has_explicit_values)
+                    {
+                        int count = ListLength(elem_alias->enum_literals);
+                        if (count > 0)
+                        {
+                            low = 0;
+                            high = count - 1;
+                            have_bounds = 1;
+                        }
+                    }
+                    if (!have_bounds && elem_alias != NULL && elem_alias->range_known)
+                    {
+                        low = elem_alias->range_start;
+                        high = elem_alias->range_end;
+                        have_bounds = 1;
+                        if (low < -2147483648LL || high > 2147483647LL)
+                            result_type = INT64_TYPE;
+                    }
+                }
+            }
 
             if (have_bounds)
             {
@@ -3259,8 +3290,9 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         *type_return = arg_type == ENUM_TYPE ? INT_TYPE : UNKNOWN_TYPE;
         return 0;
     }
-    /* Accept record/pointer types (type helpers) and integer types silently */
-    if (arg_type == RECORD_TYPE || arg_type == POINTER_TYPE || is_integer_type(arg_type))
+    /* Accept record/pointer/set types (type helpers) and integer types silently */
+    if (arg_type == RECORD_TYPE || arg_type == POINTER_TYPE ||
+        arg_type == SET_TYPE || is_integer_type(arg_type))
     {
         *type_return = INT_TYPE;
         return 0;

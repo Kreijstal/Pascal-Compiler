@@ -1541,6 +1541,55 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
         {
             return semcheck_make_quality(MATCH_CONVERSION);
         }
+        /* Reverse direction: actual is a record with := operator to the formal type.
+         * E.g., Tconstexprint has operator := to qword/int64/bestreal, so passing
+         * a Tconstexprint where an integer/real is expected should be allowed. */
+        const char *actual_type_id = semcheck_overload_record_type_id_from_kgpc(actual_kgpc);
+        if (actual_type_id != NULL &&
+            semcheck_overload_type_is_recordish(actual_kgpc) &&
+            (is_integer_type(formal_tag) || is_real_family_type(formal_tag)))
+        {
+            /* Check if the record type has a := operator to an integer or real type.
+             * Operator IDs include the return type suffix, e.g.:
+             *   Tconstexprint__op_assign_qword
+             *   Tconstexprint__op_assign_int64
+             *   Tconstexprint__op_assign_bestreal
+             * Try common integer/real type suffixes. */
+            static const char *int_suffixes[] = {
+                "qword", "int64", "longint", "integer", "smallint",
+                "word", "byte", "shortint", "cardinal", NULL
+            };
+            static const char *real_suffixes[] = {
+                "bestreal", "real", "double", "single", "extended", NULL
+            };
+            const char **suffixes = is_integer_type(formal_tag) ? int_suffixes : real_suffixes;
+            /* Also try both directions if the formal is numeric */
+            if (is_integer_type(formal_tag) || is_real_family_type(formal_tag))
+            {
+                int has_conversion = 0;
+                char assign_id[320];
+                for (int si = 0; suffixes[si] != NULL && !has_conversion; ++si)
+                {
+                    snprintf(assign_id, sizeof(assign_id), "%s__op_assign_%s",
+                        actual_type_id, suffixes[si]);
+                    ListNode_t *cands = FindAllIdents(symtab, assign_id);
+                    if (cands != NULL) { has_conversion = 1; DestroyList(cands); }
+                }
+                /* Also try real suffixes for integer formals (qword->int coercion) */
+                if (!has_conversion && is_integer_type(formal_tag))
+                {
+                    for (int si = 0; real_suffixes[si] != NULL && !has_conversion; ++si)
+                    {
+                        snprintf(assign_id, sizeof(assign_id), "%s__op_assign_%s",
+                            actual_type_id, real_suffixes[si]);
+                        ListNode_t *cands = FindAllIdents(symtab, assign_id);
+                        if (cands != NULL) { has_conversion = 1; DestroyList(cands); }
+                    }
+                }
+                if (has_conversion)
+                    return semcheck_make_quality(MATCH_CONVERSION);
+            }
+        }
     }
     if (semcheck_overload_has_record_assign_conversion(symtab, actual_kgpc, formal_kgpc, actual_tag))
         return semcheck_make_quality(MATCH_CONVERSION);
