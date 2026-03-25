@@ -2349,6 +2349,7 @@ static void v_semcheck_format_error_with_context(
          * showed wrong file contents for errors in imported units. */
         const char *context_buf = NULL;
         size_t context_buf_len = 0;
+        int local_source_offset = source_index; /* offset into context_buf */
         if (source_index >= 0)
         {
             for (int i = 0; i < g_source_buffer_count; i++)
@@ -2359,6 +2360,7 @@ static void v_semcheck_format_error_with_context(
                 {
                     context_buf = g_source_buffer_registry[i].buffer;
                     context_buf_len = g_source_buffer_registry[i].length;
+                    local_source_offset = source_index - gs;
                     break;
                 }
             }
@@ -2387,15 +2389,16 @@ static void v_semcheck_format_error_with_context(
         if (kgpc_getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
-                "[SemCheck] context file=%s buf_len=%zu line=%d col=%d offset=%d\n",
+                "[SemCheck] context file=%s buf_len=%zu line=%d col=%d offset=%d local_offset=%d\n",
                 file_path != NULL ? file_path : "<null>",
                 context_buf_len,
                 effective_line,
                 effective_col,
-                source_index);
+                source_index,
+                local_source_offset);
         }
         int printed = print_source_context_at_offset(context_buf, context_buf_len,
-            source_index, effective_line, effective_col, 2);
+            local_source_offset, effective_line, effective_col, 2);
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
