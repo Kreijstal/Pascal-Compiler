@@ -3388,7 +3388,7 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
     int pointer_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&pointer_type, symtab, target_expr, max_scope_lev, MUTATE);
 
-    if (pointer_type != POINTER_TYPE)
+    if (pointer_type != POINTER_TYPE && pointer_type != UNKNOWN_TYPE)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, Dispose expects a pointer variable argument.\\n", stmt->line_num);
         return ++return_val;
