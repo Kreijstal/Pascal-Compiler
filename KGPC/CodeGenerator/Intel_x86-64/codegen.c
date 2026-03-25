@@ -37,13 +37,115 @@
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
-static const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
+static int codegen_list_contains_string(ListNode_t *list, const char *value);
+const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *method_name);
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const char ***out_names, int *out_count);
 static ListNode_t *g_codegen_available_subprograms = NULL;
+
+const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
+{
+    if (cand == NULL)
+        return NULL;
+    if (cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
+        cand->type->info.proc_info.definition != NULL)
+    {
+        Tree_t *def = cand->type->info.proc_info.definition;
+        const char *alias = def->tree_data.subprogram_data.cname_override;
+        if (alias != NULL && alias[0] != '\0')
+            return alias;
+        if (def->tree_data.subprogram_data.mangled_id != NULL &&
+            def->tree_data.subprogram_data.mangled_id[0] != '\0')
+            return def->tree_data.subprogram_data.mangled_id;
+    }
+    if (cand->mangled_id != NULL && cand->mangled_id[0] != '\0')
+        return cand->mangled_id;
+    return NULL;
+}
+
+int codegen_has_available_subprogram_label(const char *label)
+{
+    if (label == NULL || g_codegen_available_subprograms == NULL)
+        return 0;
+    return codegen_list_contains_string(g_codegen_available_subprograms, label);
+}
+
+static int codegen_parse_guid_literal(const char *guid, uint32_t *d1,
+    uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+{
+    if (guid == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
+        return 0;
+
+    const char *p = guid;
+    if (*p == '\'')
+        p++;
+    if (*p != '{')
+        return 0;
+    p++;
+
+    unsigned int td1 = 0, td2 = 0, td3 = 0;
+    unsigned int td4[8];
+    int matched = sscanf(p,
+        "%8x-%4x-%4x-%2x%2x-%2x%2x%2x%2x%2x%2x",
+        &td1, &td2, &td3,
+        &td4[0], &td4[1], &td4[2], &td4[3],
+        &td4[4], &td4[5], &td4[6], &td4[7]);
+    if (matched != 11)
+        return 0;
+
+    *d1 = (uint32_t)td1;
+    *d2 = (uint16_t)td2;
+    *d3 = (uint16_t)td3;
+    for (int i = 0; i < 8; ++i)
+        d4[i] = (uint8_t)td4[i];
+    return 1;
+}
+
+static int codegen_resolve_record_guid(SymTab_t *symtab, const struct RecordType *record,
+    uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+{
+    if (record == NULL || d1 == NULL || d2 == NULL || d3 == NULL || d4 == NULL)
+        return 0;
+
+    if (record->has_guid)
+    {
+        *d1 = record->guid_d1;
+        *d2 = record->guid_d2;
+        *d3 = record->guid_d3;
+        memcpy(d4, record->guid_d4, 8);
+        return 1;
+    }
+
+    if (record->guid_string == NULL || record->guid_string[0] == '\0')
+        return 0;
+
+    if (codegen_parse_guid_literal(record->guid_string, d1, d2, d3, d4))
+        return 1;
+
+    if (symtab == NULL)
+        return 0;
+
+    ListNode_t *matches = FindAllIdents(symtab, record->guid_string);
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *node = (HashNode_t *)cur->cur;
+        if (node == NULL || node->hash_type != HASHTYPE_CONST ||
+            node->const_string_value == NULL)
+            continue;
+        if (codegen_parse_guid_literal(node->const_string_value, d1, d2, d3, d4))
+        {
+            if (matches != NULL)
+                DestroyList(matches);
+            return 1;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    return 0;
+}
 
 static int codegen_template_matches_methodinfo(const struct MethodTemplate *tmpl,
     const struct MethodInfo *method)
@@ -3065,9 +3167,13 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         cand->type->info.points_to->kind == TYPE_KIND_RECORD)
                         cand_rec = cand->type->info.points_to->info.record_info;
                     if (cand_rec != NULL) {
+                        uint32_t tmp_d1 = 0;
+                        uint16_t tmp_d2 = 0, tmp_d3 = 0;
+                        uint8_t tmp_d4[8] = {0};
                         if (iface_record == NULL)
                             iface_record = cand_rec;
-                        if (cand_rec->has_guid) {
+                        if (codegen_resolve_record_guid(symtab, cand_rec,
+                                &tmp_d1, &tmp_d2, &tmp_d3, tmp_d4)) {
                             iface_record = cand_rec;
                             break;
                         }
@@ -3075,15 +3181,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 }
                 if (all_idents != NULL) DestroyList(all_idents);
             }
-            unsigned long d1 = 0;
-            unsigned int d2 = 0, d3 = 0;
+            uint32_t d1 = 0;
+            uint16_t d2 = 0, d3 = 0;
             unsigned char d4[8] = {0};
-            if (iface_record != NULL && iface_record->has_guid) {
-                d1 = (unsigned long)iface_record->guid_d1;
-                d2 = (unsigned int)iface_record->guid_d2;
-                d3 = (unsigned int)iface_record->guid_d3;
-                memcpy(d4, iface_record->guid_d4, sizeof(d4));
-            }
+            if (iface_record != NULL)
+                codegen_resolve_record_guid(symtab, iface_record, &d1, &d2, &d3, d4);
             /* Emit GUID data constant (deduplicated within this TU by emitted_classes set).
              * Use .globl everywhere; dedup is handled by the emitted_classes set within
              * the single TU, and on COFF by .linkonce discard sections. */
@@ -3622,18 +3724,20 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         /* For interfaces with GUIDs, store the 16-byte GUID as the class var
          * data.  The codegen references this via ClassName_CLASSVAR when passing
          * an interface type where a TGUID is expected. */
-        if (record_info->is_interface && record_info->has_guid) {
+        uint32_t iface_d1 = 0;
+        uint16_t iface_d2 = 0, iface_d3 = 0;
+        uint8_t iface_d4[8] = {0};
+        if (record_info->is_interface &&
+            codegen_resolve_record_guid(symtab, record_info, &iface_d1, &iface_d2, &iface_d3, iface_d4)) {
             fprintf(ctx->output_file, "\t.long\t0x%08lX\n",
-                (unsigned long)record_info->guid_d1);
+                (unsigned long)iface_d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n",
-                (unsigned int)record_info->guid_d2);
+                (unsigned int)iface_d2);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n",
-                (unsigned int)record_info->guid_d3);
+                (unsigned int)iface_d3);
             fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
-                record_info->guid_d4[0], record_info->guid_d4[1],
-                record_info->guid_d4[2], record_info->guid_d4[3],
-                record_info->guid_d4[4], record_info->guid_d4[5],
-                record_info->guid_d4[6], record_info->guid_d4[7]);
+                iface_d4[0], iface_d4[1], iface_d4[2], iface_d4[3],
+                iface_d4[4], iface_d4[5], iface_d4[6], iface_d4[7]);
         } else {
             /* Emit per-field labels for class var fields */
             {
@@ -3833,7 +3937,7 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     return best;
 }
 
-static const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
+const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *method_name)
 {
@@ -3860,33 +3964,43 @@ static const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
         }
         ListNode_t *impl_candidates = FindAllIdents(symtab, base_name);
         const char *resolved_id = NULL;
+        Tree_t *resolved_def = NULL;
         for (ListNode_t *ic = impl_candidates; ic != NULL; ic = ic->next) {
             HashNode_t *cand = (HashNode_t *)ic->cur;
             if (cand == NULL || cand->mangled_id == NULL ||
                 cand->type == NULL || cand->type->kind != TYPE_KIND_PROCEDURE ||
                 cand->type->info.proc_info.definition == NULL)
                 continue;
+            Tree_t *def = cand->type->info.proc_info.definition;
+            const char *emit_target = codegen_subprogram_emission_symbol(cand);
+            if (emit_target == NULL)
+                continue;
             if (dbg_lookup != NULL &&
                 fallback_class_label != NULL &&
                 (strcasecmp(fallback_class_label, "TList") == 0 ||
                  strcasecmp(fallback_class_label, "TComponent") == 0 ||
                  strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
-                fprintf(stderr, "[KGPC]   cand %s stmt=%p\n", cand->mangled_id,
+                fprintf(stderr, "[KGPC]   cand %s emit=%s stmt=%p\n", cand->mangled_id,
+                    emit_target,
                     (void *)cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list);
             }
             if (g_codegen_available_subprograms != NULL &&
-                codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
-                resolved_id = cand->mangled_id;
+                codegen_list_contains_string(g_codegen_available_subprograms, emit_target)) {
+                resolved_id = emit_target;
+                resolved_def = def;
                 break;
             }
-            if (cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
-                resolved_id = cand->mangled_id;
+            if (def->tree_data.subprogram_data.statement_list != NULL) {
+                resolved_id = emit_target;
+                resolved_def = def;
                 break;
             }
         }
         if (impl_candidates != NULL)
             DestroyList(impl_candidates);
         if (resolved_id != NULL) {
+            if (resolved_def != NULL)
+                resolved_def->tree_data.subprogram_data.is_used = 1;
             codegen_keep_subprogram_label(resolved_id);
             return resolved_id;
         }
@@ -4264,8 +4378,12 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
             struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
+            uint32_t guid_d1 = 0;
+            uint16_t guid_d2 = 0, guid_d3 = 0;
+            uint8_t guid_d4[8] = {0};
             if (record_info != NULL && record_info->is_interface &&
-                record_info->has_guid)
+                codegen_resolve_record_guid(ctx->symtab, record_info,
+                    &guid_d1, &guid_d2, &guid_d3, guid_d4))
             {
                 const char *iface_name = record_info->type_id;
                 if (iface_name == NULL)
@@ -4281,11 +4399,11 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
                     if (guid_dedup_key != NULL)
                         emitted_class_set_add(emitted_classes, guid_dedup_key);
 
-                    unsigned long d1 = (unsigned long)record_info->guid_d1;
-                    unsigned int d2 = (unsigned int)record_info->guid_d2;
-                    unsigned int d3 = (unsigned int)record_info->guid_d3;
+                    unsigned long d1 = (unsigned long)guid_d1;
+                    unsigned int d2 = (unsigned int)guid_d2;
+                    unsigned int d3 = (unsigned int)guid_d3;
                     unsigned char d4[8];
-                    memcpy(d4, record_info->guid_d4, sizeof(d4));
+                    memcpy(d4, guid_d4, sizeof(d4));
 
                     int is_win = codegen_target_is_windows();
                     fprintf(ctx->output_file,
@@ -4492,8 +4610,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                              hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                         record_info = hash_node->type->info.points_to->info.record_info;
 
+                    uint32_t guid_d1 = 0;
+                    uint16_t guid_d2 = 0, guid_d3 = 0;
+                    uint8_t guid_d4[8] = {0};
                     if (record_info != NULL && record_info->is_interface &&
-                        record_info->has_guid)
+                        codegen_resolve_record_guid(symtab, record_info,
+                            &guid_d1, &guid_d2, &guid_d3, guid_d4))
                     {
                         const char *iface_name = record_info->type_id;
                         if (iface_name == NULL)
@@ -4509,11 +4631,11 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                             if (guid_dedup_key != NULL)
                                 emitted_class_set_add(&emitted_classes, guid_dedup_key);
 
-                            unsigned long d1 = (unsigned long)record_info->guid_d1;
-                            unsigned int d2 = (unsigned int)record_info->guid_d2;
-                            unsigned int d3 = (unsigned int)record_info->guid_d3;
+                            unsigned long d1 = (unsigned long)guid_d1;
+                            unsigned int d2 = (unsigned int)guid_d2;
+                            unsigned int d3 = (unsigned int)guid_d3;
                             unsigned char d4[8];
-                            memcpy(d4, record_info->guid_d4, sizeof(d4));
+                            memcpy(d4, guid_d4, sizeof(d4));
 
                             int is_win = codegen_target_is_windows();
                             fprintf(ctx->output_file,

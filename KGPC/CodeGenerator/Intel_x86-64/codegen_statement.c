@@ -9,6 +9,60 @@
 #include "codegen_statement.h"
 #include "stackmng/stackmng.h"
 #include "expr_tree/expr_tree.h"
+
+static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_stmt_arg_int", 8);
+        int_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_stmt_arg_xmm", 16);
+        xmm_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
+static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        if (reg != NULL && int_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", int_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        if (reg != NULL && xmm_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t-%d(%%rbp), %s\n", xmm_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
 #include "codegen_expression.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
@@ -10295,6 +10349,26 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(alias);
             proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
         }
+        else if (def->tree_data.subprogram_data.owner_class != NULL &&
+                 def->tree_data.subprogram_data.method_name != NULL)
+        {
+            const char *impl_target = codegen_find_class_method_impl_id(
+                symtab, NULL, def->tree_data.subprogram_data.owner_class,
+                def->tree_data.subprogram_data.method_name);
+            if (impl_target != NULL &&
+                (proc_name == NULL || proc_name[0] == '\0' ||
+                 strcmp(proc_name, def->tree_data.subprogram_data.method_name) == 0 ||
+                 (unmangled_name != NULL && strcmp(proc_name, unmangled_name) == 0)))
+            {
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                {
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                    stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+                }
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(impl_target);
+                proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+            }
+        }
     }
 // removed assert on proc_name
 // removed assert on proc_name
@@ -10621,7 +10695,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
              * (b) Raw object pointer: *(Self) = class VMT (no adjustment done yet)
              * Distinguish by the VMT signature: VMT[0] + VMT[8] == 0.
              * Case (a): dispatch through intf vtable -> thunk adjusts Self.
-             * Case (b): fall back to direct call via .set alias. */
+             * Case (b): resolve the interface method from the object's
+             * interface table, then indirect through the resolved target. */
             int vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
             int self_arg_index = should_pass_static_link ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
@@ -10648,11 +10723,36 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 snprintf(buffer, sizeof(buffer), "\tjmp\t.Lintf_done_%d\n", label_id);
                 inst_list = add_inst(inst_list, buffer);
             }
-            /* Raw pointer path: direct call via .set alias */
+            /* Raw pointer path: resolve and call through the object's interface table. */
             snprintf(buffer, sizeof(buffer), ".Lintf_direct_%d:\n", label_id);
             inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", proc_name);
-            inst_list = add_inst(inst_list, buffer);
+            {
+                const char *iface_name = stmt->stmt_data.procedure_call_data.self_class_name;
+                StackNode_t *target_slot = add_l_t_bytes("__intf_stmt_target", 8);
+                if (iface_name != NULL && iface_name[0] != '\0' && target_slot != NULL)
+                {
+                    char guid_label[640];
+                    int arg_spills[6] = {0};
+                    int xmm_spills[8] = {0};
+                    snprintf(guid_label, sizeof(guid_label), "__kgpc_guid_%s", iface_name);
+                    inst_list = codegen_spill_call_arg_regs_stmt(inst_list, arg_spills, xmm_spills);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", self_reg, current_arg_reg64(0));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", guid_label, current_arg_reg64(1));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index, current_arg_reg32(2));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t__kgpc_resolve_intf_method\n");
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", target_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_restore_call_arg_regs_stmt(inst_list, arg_spills, xmm_spills);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n", target_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
             snprintf(buffer, sizeof(buffer), ".Lintf_done_%d:\n", label_id);
             inst_list = add_inst(inst_list, buffer);
         }

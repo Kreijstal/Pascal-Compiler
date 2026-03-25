@@ -31,6 +31,29 @@ typedef struct {
     SubprogramEntry *id_buckets[SUBPROG_MAP_BUCKETS];
 } SubprogramMap;
 
+static unsigned subprog_hash(const char *s);
+
+static void map_add_secondary(SubprogramEntry **buckets, const char *key, Tree_t *subprogram)
+{
+    if (key == NULL || subprogram == NULL)
+        return;
+
+    char *lower_key = pascal_identifier_lower_dup(key);
+    if (lower_key == NULL)
+        return;
+
+    unsigned idx = subprog_hash(lower_key);
+    SubprogramEntry *entry = malloc(sizeof(SubprogramEntry));
+    if (entry == NULL) {
+        free(lower_key);
+        return;
+    }
+    entry->canonical_id = lower_key;
+    entry->subprogram = subprogram;
+    entry->next = buckets[idx];
+    buckets[idx] = entry;
+}
+
 static unsigned subprog_hash(const char *s) {
     unsigned h = 0;
     for (; *s; s++)
@@ -83,21 +106,15 @@ static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogr
 
     /* Secondary index: by lowered unmangled id */
     const char *id = subprogram->tree_data.subprogram_data.id;
-    if (id != NULL) {
-        char *lower_id = pascal_identifier_lower_dup(id);
-        if (lower_id != NULL) {
-            unsigned id_idx = subprog_hash(lower_id);
-            SubprogramEntry *id_entry = malloc(sizeof(SubprogramEntry));
-            if (id_entry != NULL) {
-                id_entry->canonical_id = lower_id;
-                id_entry->subprogram = subprogram;
-                id_entry->next = map->id_buckets[id_idx];
-                map->id_buckets[id_idx] = id_entry;
-            } else {
-                free(lower_id);
-            }
-        }
-    }
+    if (id != NULL)
+        map_add_secondary(map->id_buckets, id, subprogram);
+
+    /* Methods are frequently referenced later by bare method_name
+     * (e.g. forward decl/body reconciliation or @SetStatus), so index
+     * them there too. */
+    const char *method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (method_name != NULL && (id == NULL || strcasecmp(method_name, id) != 0))
+        map_add_secondary(map->id_buckets, method_name, subprogram);
 }
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
@@ -228,13 +245,16 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             const char *lookup_id = expr->expr_data.function_call_data.mangled_id;
             if (lookup_id == NULL)
                 lookup_id = expr->expr_data.function_call_data.id;
+            Tree_t *called_sub = NULL;
             if (lookup_id != NULL) {
-                Tree_t *called_sub = map_find(map, lookup_id);
+                called_sub = map_find(map, lookup_id);
                 if (called_sub != NULL)
                     mark_subprogram_recursive(called_sub, map);
-            } else if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
-                       expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
-                Tree_t *called_sub = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+            }
+            if (called_sub == NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                called_sub = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
                 if (called_sub != NULL)
                     mark_subprogram_recursive(called_sub, map);
             }
@@ -397,14 +417,17 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
             const char *lookup_id = stmt->stmt_data.procedure_call_data.mangled_id;
             if (lookup_id == NULL)
                 lookup_id = stmt->stmt_data.procedure_call_data.id;
+            Tree_t *called_sub = NULL;
             if (lookup_id != NULL) {
-                Tree_t *called_sub = map_find(map, lookup_id);
+                called_sub = map_find(map, lookup_id);
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
                 }
-            } else if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
-                       stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
-                Tree_t *called_sub = stmt->stmt_data.procedure_call_data.call_kgpc_type->info.proc_info.definition;
+            }
+            if (called_sub == NULL &&
+                stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
+                stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                called_sub = stmt->stmt_data.procedure_call_data.call_kgpc_type->info.proc_info.definition;
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
                 }
@@ -696,14 +719,35 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
     }
 }
 
+static void build_loaded_unit_subprogram_map(CompilationContext *comp_ctx, SubprogramMap *map)
+{
+    if (comp_ctx == NULL || map == NULL)
+        return;
+
+    for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui)
+    {
+        Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+        if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+            continue;
+
+        if (unit_tree->tree_data.unit_data.subprograms != NULL)
+            build_subprogram_map(unit_tree->tree_data.unit_data.subprograms, map);
+    }
+}
+
 void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     if (program == NULL || symtab == NULL || program->type != TREE_PROGRAM_TYPE) return;
     
     SubprogramMap map;
     map_init(&map);
     
-    /* Build map of all subprograms */
+    /* Build map of all program and loaded-unit subprograms. */
     build_subprogram_map(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL)
+            build_loaded_unit_subprogram_map(comp_ctx, &map);
+    }
     
     /* First, traverse bodies of already-used subprograms (e.g., from previous call).
      * This ensures that functions called by specialized methods are discovered. */

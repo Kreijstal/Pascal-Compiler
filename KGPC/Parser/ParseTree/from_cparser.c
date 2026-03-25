@@ -9344,8 +9344,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
         /* Extract GUID string from inside the GUID node if available */
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
@@ -9375,8 +9376,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL && !has_guid) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 free(guid_string);
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);

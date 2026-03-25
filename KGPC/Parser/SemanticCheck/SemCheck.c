@@ -17011,10 +17011,40 @@ next_identifier:
                                  proc_symbol->hash_type == HASHTYPE_FUNCTION))
                             {
                                 init_expr->type = EXPR_ADDR_OF_PROC;
-                                init_expr->expr_data.addr_of_proc_data.proc_mangled_id =
-                                    proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
-                                init_expr->expr_data.addr_of_proc_data.proc_id =
-                                    proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                {
+                                    const char *proc_target = NULL;
+                                    if (proc_symbol->internproc_id != NULL &&
+                                        proc_symbol->internproc_id[0] != '\0')
+                                    {
+                                        proc_target = proc_symbol->internproc_id;
+                                    }
+                                    else if (proc_symbol->type != NULL &&
+                                             proc_symbol->type->kind == TYPE_KIND_PROCEDURE &&
+                                             proc_symbol->type->info.proc_info.definition != NULL)
+                                    {
+                                        Tree_t *def = proc_symbol->type->info.proc_info.definition;
+                                        if (def->tree_data.subprogram_data.cname_override != NULL &&
+                                            def->tree_data.subprogram_data.cname_override[0] != '\0')
+                                        {
+                                            proc_target = def->tree_data.subprogram_data.cname_override;
+                                        }
+                                        else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                                                 def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                                        {
+                                            proc_target = def->tree_data.subprogram_data.mangled_id;
+                                        }
+                                    }
+                                    if (proc_target == NULL &&
+                                        proc_symbol->mangled_id != NULL &&
+                                        proc_symbol->mangled_id[0] != '\0')
+                                    {
+                                        proc_target = proc_symbol->mangled_id;
+                                    }
+                                    init_expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                                        proc_target != NULL ? strdup(proc_target) : NULL;
+                                    init_expr->expr_data.addr_of_proc_data.proc_id =
+                                        proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                }
                                 /* Resolve the type NOW while the symbol is still alive. */
                                 if (expr_type != NULL)
                                     destroy_kgpc_type(expr_type);

@@ -25,6 +25,60 @@
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
 
+static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_expr_arg_int", 8);
+        int_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_expr_arg_xmm", 16);
+        xmm_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
+static ListNode_t *codegen_restore_call_arg_regs_expr(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        if (reg != NULL && int_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", int_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        if (reg != NULL && xmm_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t-%d(%%rbp), %s\n", xmm_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
 static int expr_tree_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
@@ -2704,20 +2758,35 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\tjmp\t.Lintf_expr_done_%d\n", label_id);
                 inst_list = add_inst(inst_list, buffer);
             }
-            /* Raw pointer path: direct call via .set alias */
+            /* Raw pointer path: resolve the interface method from the object's
+             * interface table, then indirect through the resolved target. */
             snprintf(buffer, sizeof(buffer), ".Lintf_expr_direct_%d:\n", label_id);
             inst_list = add_inst(inst_list, buffer);
             {
-                const char *call_target = expr->expr_data.function_call_data.mangled_id;
-                if (call_target == NULL || call_target[0] == '\0') {
-                    HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
-                    if (resolved != NULL && resolved->mangled_id != NULL)
-                        call_target = resolved->mangled_id;
-                }
-                if (call_target != NULL) {
+                const char *iface_name = expr->expr_data.function_call_data.self_class_name;
+                StackNode_t *target_slot = add_l_t_bytes("__intf_expr_target", 8);
+                if (iface_name != NULL && iface_name[0] != '\0' && target_slot != NULL) {
+                    char guid_label[640];
+                    int arg_spills[6] = {0};
+                    int xmm_spills[8] = {0};
+                    snprintf(guid_label, sizeof(guid_label), "__kgpc_guid_%s", iface_name);
+                    inst_list = codegen_spill_call_arg_regs_expr(inst_list, arg_spills, xmm_spills);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", self_reg, current_arg_reg64(0));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", guid_label, current_arg_reg64(1));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index, current_arg_reg32(2));
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t__kgpc_resolve_intf_method\n");
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", target_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_restore_call_arg_regs_expr(inst_list, arg_spills, xmm_spills);
                     CallerSaveState caller_state;
                     regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
-                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%r11\n", target_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
                     inst_list = add_inst(inst_list, buffer);
                     regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
                 }
@@ -2765,6 +2834,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         {
             /* Normal function call */
             const char *call_target = expr->expr_data.function_call_data.mangled_id;
+            const char *owner_class_name = expr->expr_data.function_call_data.cached_owner_class;
+            const char *method_name = expr->expr_data.function_call_data.cached_method_name;
             if (call_target == NULL || call_target[0] == '\0')
             {
                 HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
@@ -2786,6 +2857,30 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                                  def->tree_data.subprogram_data.mangled_id[0] != '\0')
                             call_target = def->tree_data.subprogram_data.mangled_id;
                     }
+                }
+            }
+            if ((owner_class_name == NULL || method_name == NULL) &&
+                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+                expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+                if (owner_class_name == NULL)
+                    owner_class_name = def->tree_data.subprogram_data.owner_class;
+                if (method_name == NULL)
+                    method_name = def->tree_data.subprogram_data.method_name;
+            }
+            if (ctx != NULL && ctx->symtab != NULL &&
+                owner_class_name != NULL && method_name != NULL)
+            {
+                const char *impl_target = codegen_find_class_method_impl_id(
+                    ctx->symtab, NULL, owner_class_name, method_name);
+                if (impl_target != NULL &&
+                    (call_target == NULL || call_target[0] == '\0' ||
+                     strcmp(call_target, method_name) == 0 ||
+                     strcmp(call_target, expr->expr_data.function_call_data.id) == 0))
+                {
+                    call_target = impl_target;
                 }
             }
             if ((call_target == NULL || call_target[0] == '\0') &&
@@ -3053,6 +3148,17 @@ cleanup_constructor:
         const char *proc_label = expr->expr_data.addr_of_proc_data.proc_mangled_id;
         if (proc_label == NULL)
             proc_label = expr->expr_data.addr_of_proc_data.proc_id;
+        if (ctx != NULL && ctx->symtab != NULL &&
+            ctx->current_subprogram_owner_class != NULL &&
+            expr->expr_data.addr_of_proc_data.proc_id != NULL &&
+            proc_label != NULL && strchr(proc_label, '_') == NULL)
+        {
+            const char *impl_target = codegen_find_class_method_impl_id(
+                ctx->symtab, NULL, ctx->current_subprogram_owner_class,
+                expr->expr_data.addr_of_proc_data.proc_id);
+            if (impl_target != NULL)
+                proc_label = impl_target;
+        }
         assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
         /* If the proc_label is a bare method name (no mangled_id), try to
          * resolve it in the current class context via the symbol table.
