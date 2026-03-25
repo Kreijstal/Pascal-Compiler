@@ -16,6 +16,17 @@
 #include <limits.h>
 #include "format_arg.h"
 
+/* On ELF targets, mark runtime fallbacks as weak so the codegen-emitted
+ * strong definitions win at link time.  On Windows COFF, __attribute__((weak))
+ * does not produce a usable definition in static archives — use strong
+ * symbols instead (FPC RTL tests, which would cause duplicates, only run
+ * on Linux).  */
+#if defined(_WIN32) || defined(__COFF__)
+#define KGPC_WEAK_FALLBACK
+#else
+#define KGPC_WEAK_FALLBACK __attribute__((weak))
+#endif
+
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
 
 /* FPC RTL compatibility symbols for float-to-ASCII conversion (flt_core.inc) */
@@ -6774,7 +6785,7 @@ char *kgpc_float_to_string(double value, int precision)
     return kgpc_string_duplicate(buffer);
 }
 
-__attribute__((weak)) uint16_t *extractfilepath_us(const uint16_t *filename)
+KGPC_WEAK_FALLBACK uint16_t *extractfilepath_us(const uint16_t *filename)
 {
     int64_t len = kgpc_unicode_known_length(filename);
     if (filename == NULL || len <= 0)
@@ -8605,34 +8616,34 @@ void kgpc_runerror(int32_t code) {
 }
 
 /* TDoubleRec property getters/setters (IEEE 754 double: sign=bit63, exp=bits52-62, frac=bits0-51) */
-__attribute__((weak)) uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
+KGPC_WEAK_FALLBACK uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 52) & 0x7FF;
 }
-__attribute__((weak)) void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
+KGPC_WEAK_FALLBACK void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~(0x7FFULL << 52)) | ((e & 0x7FF) << 52);
     memcpy(self, &data, sizeof(data));
 }
-__attribute__((weak)) int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
+KGPC_WEAK_FALLBACK int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 63) & 1;
 }
-__attribute__((weak)) void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
+KGPC_WEAK_FALLBACK void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     if (s) data |= (1ULL << 63); else data &= ~(1ULL << 63);
     memcpy(self, &data, sizeof(data));
 }
-__attribute__((weak)) uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
+KGPC_WEAK_FALLBACK uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     return data & 0xFFFFFFFFFFFFFULL;
 }
-__attribute__((weak)) void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
+KGPC_WEAK_FALLBACK void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
     uint64_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~0xFFFFFFFFFFFFFULL) | (f & 0xFFFFFFFFFFFFFULL);
@@ -8640,34 +8651,34 @@ __attribute__((weak)) void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint
 }
 
 /* TSingleRec property getters/setters (IEEE 754 single: sign=bit31, exp=bits23-30, frac=bits0-22) */
-__attribute__((weak)) uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
+KGPC_WEAK_FALLBACK uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 23) & 0xFF;
 }
-__attribute__((weak)) void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
+KGPC_WEAK_FALLBACK void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~(0xFFU << 23)) | (((uint32_t)(e & 0xFF)) << 23);
     memcpy(self, &data, sizeof(data));
 }
-__attribute__((weak)) int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
+KGPC_WEAK_FALLBACK int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return (data >> 31) & 1;
 }
-__attribute__((weak)) void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
+KGPC_WEAK_FALLBACK void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     if (s) data |= (1U << 31); else data &= ~(1U << 31);
     memcpy(self, &data, sizeof(data));
 }
-__attribute__((weak)) uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
+KGPC_WEAK_FALLBACK uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     return data & 0x7FFFFF;
 }
-__attribute__((weak)) void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
+KGPC_WEAK_FALLBACK void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
     uint32_t data;
     memcpy(&data, self, sizeof(data));
     data = (data & ~0x7FFFFF) | ((uint32_t)(f & 0x7FFFFF));
