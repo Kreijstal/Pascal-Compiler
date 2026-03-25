@@ -4528,12 +4528,11 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
     }
 }
 
-/* Helper: emit fallback .set aliases for interface methods that have no
- * implementing class in this compilation unit.  Maps them to
- * __kgpc_abstract_method_error so the linker doesn't fail on the raw-pointer
- * fallback path in interface dispatch code. */
-static void codegen_emit_interface_method_fallbacks(CodeGenContext *ctx,
-    ListNode_t *type_decls, SymTab_t *symtab, EmittedClassSet *emitted_classes)
+/* Interface methods must be provided by a concrete implementation in the
+ * current compilation.  Do not emit fallback aliases here: they hide the real
+ * bug on some toolchains and fail only later at link time on others. */
+static void codegen_assert_no_unresolved_interface_methods(
+    ListNode_t *type_decls, SymTab_t *symtab, EmittedClassSet *reported_methods)
 {
     for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next) {
         Tree_t *type_tree = (Tree_t *)cur->cur;
@@ -4558,21 +4557,20 @@ static void codegen_emit_interface_method_fallbacks(CodeGenContext *ctx,
                 if (cand == NULL || cand->mangled_id == NULL) continue;
                 if (cand->hash_type != HASHTYPE_FUNCTION &&
                     cand->hash_type != HASHTYPE_PROCEDURE) continue;
-                /* Check if already emitted by a per-class .set alias */
-                char stub_key[640];
-                snprintf(stub_key, sizeof(stub_key),
-                         "__kgpc_abstub_%s", cand->mangled_id);
-                if (emitted_class_set_contains(emitted_classes, stub_key))
+                char method_key[640];
+                snprintf(method_key, sizeof(method_key),
+                         "__kgpc_unresolved_intf_%s", cand->mangled_id);
+                if (emitted_class_set_contains(reported_methods, method_key))
                     break;
-                char *dup_key = strdup(stub_key);
+                char *dup_key = strdup(method_key);
                 if (dup_key != NULL)
-                    emitted_class_set_add(emitted_classes, dup_key);
-                fprintf(ctx->output_file,
-                    "\n# Interface method fallback: %s.%s -> abstract error\n",
-                    iface_name, imethod->name);
-                fprintf(ctx->output_file, ".globl %s\n", cand->mangled_id);
-                fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
-                    cand->mangled_id);
+                    emitted_class_set_add(reported_methods, dup_key);
+                fprintf(stderr,
+                    "[KGPC] unresolved interface method requires implementation: "
+                    "%s.%s (%s)\n",
+                    iface_name, imethod->name, cand->mangled_id);
+                assert(0 &&
+                    "unresolved interface method reached code generation");
                 break;
             }
             if (iface_candidates != NULL) DestroyList(iface_candidates);
@@ -4812,21 +4810,18 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
-    /* Emit fallback .set aliases for interface methods that have no
-     * implementing class in this compilation unit.  These map to
-     * __kgpc_abstract_method_error and ensure the linker doesn't fail
-     * on the raw-pointer fallback path in interface dispatch code. */
+    /* Interface methods must be resolved before assembly emission. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit != NULL && unit->type == TREE_UNIT)
-                codegen_emit_interface_method_fallbacks(ctx,
+                codegen_assert_no_unresolved_interface_methods(
                     unit->tree_data.unit_data.interface_type_decls,
                     symtab, &emitted_classes);
         }
     }
     if (tree->type == TREE_PROGRAM_TYPE)
-        codegen_emit_interface_method_fallbacks(ctx,
+        codegen_assert_no_unresolved_interface_methods(
             tree->tree_data.program_data.type_declaration,
             symtab, &emitted_classes);
 
