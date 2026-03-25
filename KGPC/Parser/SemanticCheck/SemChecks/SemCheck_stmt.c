@@ -4715,8 +4715,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             goto assignment_types_ok;
         }
 
-        if (semcheck_type_is_recordish(lhs_kgpctype) &&
-            !semcheck_type_is_recordish(rhs_kgpctype))
+        if ((semcheck_type_is_recordish(lhs_kgpctype) &&
+             !semcheck_type_is_recordish(rhs_kgpctype)) ||
+            (!semcheck_type_is_recordish(lhs_kgpctype) &&
+             semcheck_type_is_recordish(rhs_kgpctype)))
         {
             if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
                     &rhs_kgpctype, &rhs_owned))
