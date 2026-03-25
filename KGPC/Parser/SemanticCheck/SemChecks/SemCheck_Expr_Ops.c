@@ -1667,25 +1667,37 @@ int semcheck_addop(int *type_return,
                         }
                         DestroyList(operator_candidates);
                     }
+                    /* For binary operators, try exact lookup with second param type
+                     * first to distinguish from unary operators with the same name. */
+                    if (operator_node == NULL && right_type_name != NULL)
+                    {
+                        size_t exact_len = strlen(operator_method) + strlen(right_type_name) +
+                            strlen(record_type_name) + 3;
+                        char *operator_exact = (char *)malloc(exact_len);
+                        if (operator_exact != NULL)
+                        {
+                            snprintf(operator_exact, exact_len, "%s_%s_%s",
+                                operator_method, right_type_name, record_type_name);
+                            FindSymbol(&operator_node, symtab, operator_exact);
+                            free(operator_exact);
+                        }
+                    }
                     if (operator_node == NULL &&
                         semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
                         operator_node != NULL)
                     {
-                        /* fallback for return-type-disambiguated names not indexed by base id */
-                        if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
+                        /* Verify the prefix-matched operator has the right arity
+                         * (binary operators need 2 params, not 1). */
+                        if (operator_node->type != NULL)
                         {
-                            fprintf(stderr,
-                                "[SemCheck] addop prefix hit key=%s node=%s mangled=%s\n",
-                                operator_method,
-                                operator_node->id != NULL ? operator_node->id : "<null>",
-                                operator_node->mangled_id != NULL ? operator_node->mangled_id : "<null>");
+                            ListNode_t *check_params = kgpc_type_get_procedure_params(operator_node->type);
+                            int param_count = ListLength(check_params);
+                            if (param_count == 1 && expr2 != NULL)
+                            {
+                                /* Found unary but need binary — reject this match */
+                                operator_node = NULL;
+                            }
                         }
-                    }
-                    else if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
-                    {
-                        fprintf(stderr,
-                            "[SemCheck] addop prefix miss key=%s\n",
-                            operator_method);
                     }
                     if (operator_node == NULL)
                     {
@@ -1695,15 +1707,6 @@ int semcheck_addop(int *type_return,
                         {
                             snprintf(operator_exact, exact_len, "%s_%s", operator_method, record_type_name);
                             FindSymbol(&operator_node, symtab, operator_exact);
-                            if (operator_node != NULL &&
-                                kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
-                            {
-                                fprintf(stderr,
-                                    "[SemCheck] addop exact-return hit key=%s node=%s mangled=%s\n",
-                                    operator_exact,
-                                    operator_node->id != NULL ? operator_node->id : "<null>",
-                                    operator_node->mangled_id != NULL ? operator_node->mangled_id : "<null>");
-                            }
                             free(operator_exact);
                         }
                     }
