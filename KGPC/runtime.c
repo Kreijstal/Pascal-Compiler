@@ -17,11 +17,11 @@
 #include "format_arg.h"
 
 /* On ELF targets, mark runtime fallbacks as weak so the codegen-emitted
- * strong definitions win at link time.  On Windows COFF, __attribute__((weak))
- * does not produce a usable definition in static archives — use strong
- * symbols instead (FPC RTL tests, which would cause duplicates, only run
- * on Linux).  */
-#if defined(_WIN32) || defined(__COFF__)
+ * strong definitions win at link time.  Windows-style static archive linkers
+ * used by COFF and Cygwin do not reliably resolve these weak archive members,
+ * so emit strong symbols there instead.  FPC RTL tests, which can provide
+ * competing strong definitions, only run on Linux. */
+#if defined(_WIN32) || defined(__COFF__) || defined(__CYGWIN__) || defined(__MSYS__)
 #define KGPC_WEAK_FALLBACK
 #else
 #define KGPC_WEAK_FALLBACK __attribute__((weak))
