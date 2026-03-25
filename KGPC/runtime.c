@@ -245,6 +245,46 @@ int threadingalreadyused_void(void)
     return kgpc_threading_already_used();
 }
 
+int32_t kgpc_interlockedincrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int32_t kgpc_interlockeddecrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockedincrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockeddecrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
+}
+
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
 {
 #if defined(__GNUC__) || defined(__clang__)
