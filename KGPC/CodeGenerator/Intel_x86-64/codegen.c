@@ -486,7 +486,7 @@ static int codegen_type_decl_suppressed(const Tree_t *decl)
         decl->tree_data.type_decl_data.suppress_codegen);
 }
 
-static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
+static struct RecordType *codegen_record_from_type_decl_ex(Tree_t *decl, SymTab_t *symtab)
 {
     if (decl == NULL || decl->type != TREE_TYPE_DECL)
         return NULL;
@@ -504,12 +504,47 @@ static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
     }
 
     if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-        return decl->tree_data.type_decl_data.info.record;
+    {
+        struct RecordType *fallback = decl->tree_data.type_decl_data.info.record;
+        /* When a forward-declared class is completed, the full declaration's
+         * RecordType becomes a depleted shell (fields transferred to the
+         * canonical RecordType in the symtab).  Detect this and look up
+         * the canonical record instead. */
+        if (fallback != NULL && fallback->is_class &&
+            fallback->fields == NULL && fallback->parent_fields_merged &&
+            symtab != NULL && decl->tree_data.type_decl_data.id != NULL)
+        {
+            HashNode_t *canon_node = NULL;
+            if (FindSymbol(&canon_node, symtab, decl->tree_data.type_decl_data.id) &&
+                canon_node != NULL && canon_node->type != NULL)
+            {
+                /* Extract record from symtab node, handling both direct
+                 * record types and pointer-to-record (class types). */
+                struct RecordType *canon = NULL;
+                KgpcType *ct = canon_node->type;
+                if (ct->kind == TYPE_KIND_RECORD && ct->info.record_info != NULL)
+                    canon = ct->info.record_info;
+                else if (ct->kind == TYPE_KIND_POINTER &&
+                         ct->info.points_to != NULL &&
+                         ct->info.points_to->kind == TYPE_KIND_RECORD &&
+                         ct->info.points_to->info.record_info != NULL)
+                    canon = ct->info.points_to->info.record_info;
+                if (canon != NULL)
+                    return canon;
+            }
+        }
+        return fallback;
+    }
 
     if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
         return decl->tree_data.type_decl_data.info.alias.inline_record_type;
 
     return NULL;
+}
+
+static struct RecordType *codegen_record_from_type_decl(Tree_t *decl)
+{
+    return codegen_record_from_type_decl_ex(decl, NULL);
 }
 
 /* Get field offset within a record by field name.
@@ -2448,6 +2483,12 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
     codegen_main(prgm_name, ctx);
 
+    /* Emit weak stubs for method labels that were referenced (e.g., via
+     * @MethodName) but whose bodies are not available in this compilation.
+     * Must run AFTER codegen_program so all method refs are collected. */
+    codegen_emit_unresolved_method_stubs(ctx->output_file,
+        ctx->emitted_subprograms);
+
     codegen_program_footer(ctx);
 
     if (ctx->emitted_subprograms != NULL)
@@ -3081,10 +3122,49 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
 
         /* Compute base instance size early — needed for IOffset values in the
-         * interface table and for thunk adjustment.  The VMT emission below
-         * will reuse this value instead of calling codegen_sizeof_record_type
-         * a second time. */
+         * interface table and for thunk adjustment.  codegen_sizeof_record_type
+         * only counts fields in this record's field list; for classes with
+         * parent classes whose fields were NOT merged into this record (common
+         * when the record comes from a cached unit), we must add the parent
+         * class size explicitly. */
         codegen_sizeof_record_type(ctx, record_info, &base_instance_size);
+        if (record_info->parent_class_name != NULL) {
+            /* Check if parent fields are included in the field list by
+             * comparing against the parent's own size.  If the parent has
+             * a larger base size than our field-only size, the parent
+             * fields aren't merged; use parent_size + own_members instead. */
+            HashNode_t *parent_cls_node = NULL;
+            struct RecordType *parent_cls_rec = NULL;
+            if (FindSymbol(&parent_cls_node, symtab, record_info->parent_class_name) != 0 &&
+                parent_cls_node != NULL) {
+                parent_cls_rec = get_record_type_from_node(parent_cls_node);
+                if (parent_cls_rec == NULL && parent_cls_node->type != NULL &&
+                    parent_cls_node->type->kind == TYPE_KIND_POINTER &&
+                    parent_cls_node->type->info.points_to != NULL &&
+                    parent_cls_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    parent_cls_rec = parent_cls_node->type->info.points_to->info.record_info;
+            }
+            if (parent_cls_rec != NULL) {
+                long long parent_base = 0;
+                codegen_sizeof_record_type(ctx, parent_cls_rec, &parent_base);
+                if (parent_base > 8) {
+                    /* Add parent's fields to the child's base size.
+                     * own_members = base_instance_size - 8 (VMT already
+                     * counted in parent_base).  Total = parent_base +
+                     * own_members, but only if the result is larger than
+                     * the current base (to avoid shrinking when parent
+                     * fields WERE already merged). */
+                    long long own_members = base_instance_size - 8;
+                    if (own_members < 0) own_members = 0;
+                    long long own_start = parent_base;
+                    if (own_start % 8 != 0)
+                        own_start = (own_start + 7) & ~7LL;
+                    long long new_base = own_start + own_members;
+                    if (new_base > base_instance_size)
+                        base_instance_size = new_base;
+                }
+            }
+        }
 
         /* Emit FPC-compatible tinterfacetable */
         fprintf(ctx->output_file, "\n# Interface table (tinterfacetable) for class %s\n", class_label);
@@ -4031,13 +4111,13 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
             const char *class_label = NULL;
 
             if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD) {
-                record_info = codegen_record_from_type_decl(type_tree);
+                record_info = codegen_record_from_type_decl_ex(type_tree, symtab);
                 const char *type_name = type_tree->tree_data.type_decl_data.id;
                 class_label = (record_info != NULL && record_info->type_id != NULL) ?
                     record_info->type_id : type_name;
             }
             else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                record_info = codegen_record_from_type_decl(type_tree);
+                record_info = codegen_record_from_type_decl_ex(type_tree, symtab);
                 if (record_info != NULL && record_info->type_id != NULL) {
                     if (record_info->is_generic_specialization) {
                         class_label = record_info->type_id;
@@ -4250,6 +4330,58 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
             }
         }
         cur = cur->next;
+    }
+}
+
+/* Helper: emit fallback .set aliases for interface methods that have no
+ * implementing class in this compilation unit.  Maps them to
+ * __kgpc_abstract_method_error so the linker doesn't fail on the raw-pointer
+ * fallback path in interface dispatch code. */
+static void codegen_emit_interface_method_fallbacks(CodeGenContext *ctx,
+    ListNode_t *type_decls, SymTab_t *symtab, EmittedClassSet *emitted_classes)
+{
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next) {
+        Tree_t *type_tree = (Tree_t *)cur->cur;
+        if (type_tree == NULL || type_tree->type != TREE_TYPE_DECL)
+            continue;
+        struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
+        if (record_info == NULL || !record_info->is_interface ||
+            record_info->method_templates == NULL)
+            continue;
+        const char *iface_name = record_info->type_id;
+        if (iface_name == NULL)
+            iface_name = type_tree->tree_data.type_decl_data.id;
+        if (iface_name == NULL) continue;
+        for (ListNode_t *m = record_info->method_templates; m != NULL; m = m->next) {
+            struct MethodTemplate *imethod = (struct MethodTemplate *)m->cur;
+            if (imethod == NULL || imethod->name == NULL) continue;
+            char iface_base[512];
+            snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
+            ListNode_t *iface_candidates = FindAllIdents(symtab, iface_base);
+            for (ListNode_t *ic = iface_candidates; ic != NULL; ic = ic->next) {
+                HashNode_t *cand = (HashNode_t *)ic->cur;
+                if (cand == NULL || cand->mangled_id == NULL) continue;
+                if (cand->hash_type != HASHTYPE_FUNCTION &&
+                    cand->hash_type != HASHTYPE_PROCEDURE) continue;
+                /* Check if already emitted by a per-class .set alias */
+                char stub_key[640];
+                snprintf(stub_key, sizeof(stub_key),
+                         "__kgpc_abstub_%s", cand->mangled_id);
+                if (emitted_class_set_contains(emitted_classes, stub_key))
+                    break;
+                char *dup_key = strdup(stub_key);
+                if (dup_key != NULL)
+                    emitted_class_set_add(emitted_classes, dup_key);
+                fprintf(ctx->output_file,
+                    "\n# Interface method fallback: %s.%s -> abstract error\n",
+                    iface_name, imethod->name);
+                fprintf(ctx->output_file, ".globl %s\n", cand->mangled_id);
+                fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
+                    cand->mangled_id);
+                break;
+            }
+            if (iface_candidates != NULL) DestroyList(iface_candidates);
+        }
     }
 }
 
@@ -4481,7 +4613,26 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         codegen_emit_old_object_abstract_stubs_from_type_list(ctx,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
 
+    /* Emit fallback .set aliases for interface methods that have no
+     * implementing class in this compilation unit.  These map to
+     * __kgpc_abstract_method_error and ensure the linker doesn't fail
+     * on the raw-pointer fallback path in interface dispatch code. */
+    if (comp_ctx != NULL) {
+        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+            if (unit != NULL && unit->type == TREE_UNIT)
+                codegen_emit_interface_method_fallbacks(ctx,
+                    unit->tree_data.unit_data.interface_type_decls,
+                    symtab, &emitted_classes);
+        }
+    }
+    if (tree->type == TREE_PROGRAM_TYPE)
+        codegen_emit_interface_method_fallbacks(ctx,
+            tree->tree_data.program_data.type_declaration,
+            symtab, &emitted_classes);
+
     emitted_class_set_destroy(&emitted_classes);
+
     fprintf(ctx->output_file, ".text\n");
 
     #ifdef DEBUG_CODEGEN

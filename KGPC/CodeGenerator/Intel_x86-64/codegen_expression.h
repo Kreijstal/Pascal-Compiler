@@ -21,6 +21,9 @@ ListNode_t *codegen_condition_expr(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
 
+void codegen_add_unresolved_method_stub(const char *label);
+void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms);
+
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *, CodeGenContext *ctx, Register_t **out_reg);
 ListNode_t *codegen_materialize_extended_expr(struct Expression *expr, ListNode_t *inst_list,

@@ -14,6 +14,8 @@
 #include <execinfo.h>
 #endif
 
+/* Forward declarations for unresolved method stubs — implementation after includes. */
+
 #include "codegen.h"
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -46,6 +48,62 @@ extern const char *kgpc_getenv(const char *name);
 static inline int codegen_node_is_record_type(HashNode_t *node)
 {
     return hashnode_is_record(node);
+}
+
+/* Collect method labels that need stubs (referenced via @MethodName but
+ * body not available in the compilation unit).  Emitted as .weak stubs
+ * in the final pass so they don't conflict with real definitions. */
+static ListNode_t *g_unresolved_method_stubs = NULL;
+
+void codegen_add_unresolved_method_stub(const char *label)
+{
+    if (label == NULL) return;
+    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next)
+        if (n->cur != NULL && strcmp((const char *)n->cur, label) == 0)
+            return;
+    char *dup = strdup(label);
+    if (dup != NULL) {
+        ListNode_t *node = calloc(1, sizeof(ListNode_t));
+        if (node != NULL) {
+            node->cur = dup;
+            if (g_unresolved_method_stubs == NULL)
+                g_unresolved_method_stubs = node;
+            else
+                PushListNodeBack(g_unresolved_method_stubs, node);
+        } else {
+            free(dup);
+        }
+    }
+}
+
+void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms)
+{
+    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next) {
+        const char *label = (const char *)n->cur;
+        if (label == NULL) continue;
+        /* Skip if a real implementation was emitted */
+        int already_emitted = 0;
+        for (ListNode_t *s = emitted_subprograms; s != NULL; s = s->next) {
+            if (s->cur != NULL && strcmp((const char *)s->cur, label) == 0) {
+                already_emitted = 1;
+                break;
+            }
+        }
+        if (already_emitted) continue;
+        fprintf(out, "\n# Stub for unresolved method reference: %s\n", label);
+        fprintf(out, "\t.text\n");
+        fprintf(out, "\t.weak %s\n", label);
+        fprintf(out, "%s:\n", label);
+        fprintf(out, "\tjmp\t__kgpc_abstract_method_error\n");
+    }
+    ListNode_t *cur = g_unresolved_method_stubs;
+    while (cur != NULL) {
+        ListNode_t *next = cur->next;
+        free(cur->cur);
+        free(cur);
+        cur = next;
+    }
+    g_unresolved_method_stubs = NULL;
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -3777,7 +3835,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     int result = codegen_sizeof_record_members(ctx, record->fields, &members_size, depth);
     if (result != 0)
         return result;
-    
+
     /* For classes, add 8 bytes for the VMT pointer at the beginning */
     if (record_type_is_class(record))
         *size_out = 8 + members_size;
@@ -3785,7 +3843,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         *size_out = members_size;
     record->cached_size = *size_out;
     record->has_cached_size = 1;
-    
+
     return 0;
 }
 
@@ -8377,7 +8435,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                         }
                     }
                     /* If not found in MethodInfo lists, try the symbol table.
-                     * Methods may be registered under "ClassName.MethodName". */
+                     * Methods may be registered under "ClassName.MethodName"
+                     * or "ClassName__MethodName" (mangled form). */
                     if (method_label == NULL)
                     {
                         char qualified[256];
@@ -8395,8 +8454,29 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                                 method_label = qualified;
                         }
                     }
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s__%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, qualified);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                method_label = cand->mangled_id;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                    }
                     if (method_label != NULL)
                     {
+                        /* Record this method label so we can emit a weak
+                         * stub in the final pass if no real definition
+                         * appears in the assembly output. */
+                        codegen_add_unresolved_method_stub(method_label);
                         *offset = 0;
                         snprintf(buffer, sizeof(buffer),
                             "\tleaq\t%s(%%rip), %s\n",

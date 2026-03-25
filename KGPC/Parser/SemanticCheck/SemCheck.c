@@ -462,7 +462,7 @@ static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode
     }
 }
 
-static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
+static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree, SymTab_t *symtab)
 {
     if (tree == NULL || tree->type != TREE_TYPE_DECL)
         return NULL;
@@ -480,7 +480,33 @@ static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
     }
 
     if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-        return tree->tree_data.type_decl_data.info.record;
+    {
+        struct RecordType *record = tree->tree_data.type_decl_data.info.record;
+        /* When a forward-declared class is completed, the full declaration's
+         * RecordType becomes a depleted shell.  Look up the canonical record
+         * from the symbol table instead. */
+        if (record != NULL && record->is_class &&
+            record->fields == NULL && record->parent_fields_merged &&
+            symtab != NULL && tree->tree_data.type_decl_data.id != NULL)
+        {
+            HashNode_t *canon_node = NULL;
+            if (FindSymbol(&canon_node, symtab, tree->tree_data.type_decl_data.id) &&
+                canon_node != NULL && canon_node->type != NULL)
+            {
+                struct RecordType *canon = NULL;
+                KgpcType *ct = canon_node->type;
+                if (ct->kind == TYPE_KIND_RECORD)
+                    canon = ct->info.record_info;
+                else if (ct->kind == TYPE_KIND_POINTER &&
+                         ct->info.points_to != NULL &&
+                         ct->info.points_to->kind == TYPE_KIND_RECORD)
+                    canon = ct->info.points_to->info.record_info;
+                if (canon != NULL)
+                    return canon;
+            }
+        }
+        return record;
+    }
 
     return NULL;
 }
@@ -9182,6 +9208,27 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Skip TYPE_DECL_RECORD, TYPE_DECL_GENERIC, TYPE_DECL_RANGE - 
                  * these have complex dependencies and are handled by semcheck_type_decls */
 predeclare_types_next:
+                /* Ensure every record type_decl tree has kgpc_type set, even
+                 * if the predeclare pass skipped it as a duplicate.  Without
+                 * this, codegen falls back to info.record which may be a
+                 * depleted shell after forward-declaration resolution. */
+                if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
+                    tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    const char *tid = tree->tree_data.type_decl_data.id;
+                    if (tid != NULL)
+                    {
+                        HashNode_t *canon_node = NULL;
+                        if (FindSymbol(&canon_node, symtab, tid) &&
+                            canon_node != NULL &&
+                            canon_node->hash_type == HASHTYPE_TYPE &&
+                            canon_node->type != NULL)
+                        {
+                            tree->tree_data.type_decl_data.kgpc_type = canon_node->type;
+                            kgpc_type_retain(canon_node->type);
+                        }
+                    }
+                }
                 semcheck_restore_scope(symtab, saved_scope_for_type);
             }
         }
@@ -11047,7 +11094,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         {
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
-                record_info = semcheck_record_from_type_decl(tree);
+                record_info = semcheck_record_from_type_decl(tree, symtab);
 
                 /* Set the type_id on the RecordType so operator overloading can find it */
                 if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
@@ -12189,6 +12236,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
+            /* Mark as suppressed so codegen does not try to emit VMTs
+             * from this duplicate tree (its info.record may be depleted
+             * after forward-declaration resolution moved fields away). */
+            tree->tree_data.type_decl_data.suppress_codegen = 1;
             goto semcheck_type_decls_next;
         }
 

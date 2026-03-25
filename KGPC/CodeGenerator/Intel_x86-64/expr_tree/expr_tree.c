@@ -2879,7 +2879,37 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             if (call_target == NULL)
                 call_target = expr->expr_data.function_call_data.id;
-            
+
+            /* If the call target resolves to a type (not a procedure), this is
+             * a typecast that the semcheck didn't rewrite (e.g., from cached
+             * unit ASTs).  Treat it as a no-op: evaluate the argument and use
+             * its value directly. */
+            if (call_target != NULL && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *target_sym = NULL;
+                if (FindSymbol(&target_sym, ctx->symtab, call_target) != 0 &&
+                    target_sym != NULL && target_sym->hash_type == HASHTYPE_TYPE &&
+                    (target_sym->type == NULL ||
+                     target_sym->type->kind != TYPE_KIND_PROCEDURE))
+                {
+                    /* Typecast: just evaluate the single argument */
+                    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+                    if (args != NULL && args->cur != NULL)
+                    {
+                        struct Expression *arg_expr = (struct Expression *)args->cur;
+                        expr_node_t *arg_tree = build_expr_tree(arg_expr);
+                        if (arg_tree != NULL)
+                        {
+                            inst_list = gencode_expr_tree(arg_tree, inst_list, ctx, target_reg);
+                            free_expr_tree(arg_tree);
+                        }
+                    }
+                    if (computed_mangled != NULL)
+                        free(computed_mangled);
+                    return inst_list;
+                }
+            }
+
             if (call_target != NULL)
             {
                 CallerSaveState caller_state;
@@ -3024,8 +3054,62 @@ cleanup_constructor:
         if (proc_label == NULL)
             proc_label = expr->expr_data.addr_of_proc_data.proc_id;
         assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
+        /* If the proc_label is a bare method name (no mangled_id), try to
+         * resolve it in the current class context via the symbol table.
+         * This handles @MethodName inside class methods from cached units. */
+        char *resolved_label = NULL;
+        if (expr->expr_data.addr_of_proc_data.proc_mangled_id == NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            /* Try to find as a standalone function first */
+            HashNode_t *sym = NULL;
+            if (FindSymbol(&sym, ctx->symtab, proc_label) != 0 && sym != NULL &&
+                sym->mangled_id != NULL && sym->type != NULL &&
+                sym->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                proc_label = sym->mangled_id;
+            }
+            else
+            {
+                /* Try class-qualified: look for ClassName__MethodName */
+                const char *owner = ctx->current_subprogram_owner_class;
+                if (owner == NULL)
+                {
+                    HashNode_t *self_node = NULL;
+                    if (FindSymbol(&self_node, ctx->symtab, "Self") != 0 &&
+                        self_node != NULL)
+                        owner = self_node->owner_class;
+                }
+                if (owner != NULL)
+                {
+                    int needed = snprintf(NULL, 0, "%s__%s",
+                        owner, proc_label) + 1;
+                    resolved_label = malloc(needed);
+                    if (resolved_label != NULL)
+                    {
+                        snprintf(resolved_label, needed, "%s__%s",
+                            owner, proc_label);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, resolved_label);
+                        int found = 0;
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                proc_label = cand->mangled_id;
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                        if (!found) { free(resolved_label); resolved_label = NULL; }
+                    }
+                }
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
+        if (resolved_label != NULL) free(resolved_label);
         return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
@@ -3260,6 +3344,32 @@ cleanup_constructor:
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                 symbol_node->mangled_id, target_reg->bit_64);
             return add_inst(inst_list, buffer);
+        }
+        /* Bare method name used as a procedural reference (e.g., @SetStatus
+         * inside a class method).  The symtab might not have a procedure
+         * entry for the bare name; try class-qualified lookup. */
+        if (stack_node == NULL && symbol_node == NULL &&
+            buf_leaf[0] != '$' && ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *owner = ctx->current_subprogram_owner_class;
+            if (owner != NULL)
+            {
+                char qual_name[512];
+                snprintf(qual_name, sizeof(qual_name), "%s__%s", owner, expr->expr_data.id);
+                ListNode_t *candidates = FindAllIdents(ctx->symtab, qual_name);
+                for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                    HashNode_t *cand = (HashNode_t *)c->cur;
+                    if (cand != NULL && cand->mangled_id != NULL &&
+                        cand->type != NULL &&
+                        cand->type->kind == TYPE_KIND_PROCEDURE) {
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                            cand->mangled_id, target_reg->bit_64);
+                        if (candidates != NULL) DestroyList(candidates);
+                        return add_inst(inst_list, buffer);
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
         }
 
         /* Check if this is a procedure address constant - need leaq to get the label address */
@@ -4014,6 +4124,52 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             break;
                         }
                     }
+
+                    /* Bare method name used as a value (e.g. @SetStatus
+                     * inside a class method from a cached unit).  Try
+                     * class-qualified lookup: OwnerClass__MethodName. */
+                    int resolved_as_method = 0;
+                    if (ctx != NULL && ctx->symtab != NULL)
+                    {
+                        const char *method_owner = ctx->current_subprogram_owner_class;
+                        /* If owner_class is not set (cached unit methods), try to
+                         * extract the class name from the mangled subprogram id.
+                         * Mangled names have the form "classname__methodname_params". */
+                        char extracted_owner[256];
+                        if (method_owner == NULL && ctx->current_subprogram_mangled != NULL)
+                        {
+                            const char *dunder = strstr(ctx->current_subprogram_mangled, "__");
+                            if (dunder != NULL)
+                            {
+                                size_t len = (size_t)(dunder - ctx->current_subprogram_mangled);
+                                if (len > 0 && len < sizeof(extracted_owner))
+                                {
+                                    memcpy(extracted_owner, ctx->current_subprogram_mangled, len);
+                                    extracted_owner[len] = '\0';
+                                    method_owner = extracted_owner;
+                                }
+                            }
+                        }
+                        if (method_owner != NULL)
+                        {
+                        char qual_name[512];
+                        snprintf(qual_name, sizeof(qual_name), "%s__%s",
+                            method_owner, expr->expr_data.id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, qual_name);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                snprintf(buffer, buf_len, "%s(%%rip)", cand->mangled_id);
+                                resolved_as_method = 1;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                        }
+                    }
+                    if (resolved_as_method) break;
 
                     const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
                     size_t name_len = var_name != NULL ? strlen(var_name) : 0;
