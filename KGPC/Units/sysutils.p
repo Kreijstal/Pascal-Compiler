@@ -142,6 +142,7 @@ procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
+function BoolToStr(B: Boolean; const TrueS, FalseS: AnsiString): AnsiString;
 function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
 function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
 function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
@@ -250,6 +251,29 @@ procedure FreeAndNil(var Obj: Pointer);
 
 { Interface support }
 function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
+
+{ File handle utilities }
+function GetFileHandle(var f: File): THandle;
+function GetFileHandle(var f: Text): THandle;
+
+{ Path utilities }
+function SetDirSeparators(const FileName: AnsiString): AnsiString;
+function ExtractRelativePath(const BaseName, DestName: AnsiString): AnsiString;
+
+{ String memory management }
+function NewStr(const S: AnsiString): PString;
+procedure DisposeStr(S: PString);
+procedure DisposeStr(S: PShortString);
+
+{ File assignment }
+procedure AssignFile(var f: Text; const FileName: AnsiString);
+
+{ File date functions }
+function FileGetDate(Handle: LongInt): LongInt;
+procedure FileSetDate(Handle: LongInt; Age: LongInt);
+
+{ File name comparison }
+function AnsiCompareFileName(const S1, S2: AnsiString): LongInt;
 
 implementation
 
@@ -829,6 +853,14 @@ begin
         else
             Result := '0';
     end;
+end;
+
+function BoolToStr(B: Boolean; const TrueS, FalseS: AnsiString): AnsiString;
+begin
+    if B then
+        Result := TrueS
+    else
+        Result := FalseS;
 end;
 
 function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
@@ -1863,6 +1895,70 @@ begin
         Supports := False
     else
         Supports := Instance.GetInterface(IID, Intf);
+end;
+
+function GetFileHandle(var f: File): THandle;
+begin
+    GetFileHandle := 0;
+end;
+
+function GetFileHandle(var f: Text): THandle;
+begin
+    GetFileHandle := 0;
+end;
+
+function SetDirSeparators(const FileName: AnsiString): AnsiString;
+var
+    i: Integer;
+begin
+    SetDirSeparators := FileName;
+    for i := 1 to Length(SetDirSeparators) do
+    begin
+        if SetDirSeparators[i] = '\' then
+            SetDirSeparators[i] := '/';
+    end;
+end;
+
+function ExtractRelativePath(const BaseName, DestName: AnsiString): AnsiString;
+begin
+    ExtractRelativePath := DestName;
+end;
+
+function NewStr(const S: AnsiString): PString;
+begin
+    New(NewStr);
+    NewStr^ := S;
+end;
+
+procedure DisposeStr(S: PString);
+begin
+    if S <> nil then
+        Dispose(S);
+end;
+
+procedure DisposeStr(S: PShortString);
+begin
+    if S <> nil then
+        Dispose(S);
+end;
+
+procedure AssignFile(var f: Text; const FileName: AnsiString);
+begin
+    Assign(f, FileName);
+end;
+
+function FileGetDate(Handle: LongInt): LongInt;
+begin
+    FileGetDate := 0;
+end;
+
+procedure FileSetDate(Handle: LongInt; Age: LongInt);
+begin
+end;
+
+function AnsiCompareFileName(const S1, S2: AnsiString): LongInt;
+begin
+    AnsiCompareFileName := CompareText(S1, S2);
 end;
 
 end.
