@@ -1617,10 +1617,10 @@ int semcheck_pointer_deref(int *type_return,
 
     /* Last resort before falling back to LONGINT_TYPE: if the pointer expression
      * carries a subtype id (e.g. "TCGParaLocation" from a typed pointer alias),
-     * try to resolve it as a record type.  This handles cases where the
-     * symbol table lookup via set_type_from_hashtype (above) missed the record
-     * because the type is only registered in semcheck_lookup_record_type (which
-     * also searches cross-unit imported record tables). */
+     * try to resolve it as a record type.  This handles cross-unit pointer types
+     * where the earlier FindSymbol + set_type_from_hashtype (line ~1481) could
+     * not resolve the pointed-to type because it is only registered in the
+     * cross-unit record type tables searched by semcheck_lookup_record_type. */
     if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL)
     {
         struct RecordType *rec = semcheck_lookup_record_type(symtab,
@@ -1630,9 +1630,10 @@ int semcheck_pointer_deref(int *type_return,
     }
 
     /* Fallback for genuinely untyped pointers (e.g. bare `Pointer` type).
-     * When pointer_subtype_id is present but still unresolved, preserve
-     * UNKNOWN_TYPE so downstream record access can attempt recovery using
-     * the subtype id rather than being misled by a fake LONGINT_TYPE. */
+     * The function still returns LONGINT_TYPE for backward compatibility, but
+     * when pointer_subtype_id is present we propagate it to the dereference
+     * expression.  This allows semcheck_recordaccess to recover the actual
+     * record type via the subtype id instead of being misled by LONGINT_TYPE. */
     if (target_type == UNKNOWN_TYPE)
     {
         if (pointer_expr->pointer_subtype_id != NULL)
