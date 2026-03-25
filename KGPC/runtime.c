@@ -8711,3 +8711,27 @@ void FindComponentClass(void) { __kgpc_abstract_method_error(); }
 /* ReadDeltaStream — FPC TReader class method referenced but not
  * exercised in test programs. Raises abstract method error if called. */
 void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
+
+/* Default IInterface implementations for non-reference-counted classes.
+ * Classes that implement interfaces without inheriting from TInterfacedObject
+ * (e.g. TList = class(TObject, IFPObserved)) need default QueryInterface,
+ * _AddRef, and _Release methods. These behave like FPC's defaults:
+ * no reference counting, QueryInterface delegates to GetInterface. */
+int64_t kgpc_default_queryinterface(const void *self, const void *guid, void **out_intf)
+{
+    if (kgpc_get_interface(self, guid, out_intf))
+        return 0;  /* S_OK */
+    return (int64_t)0x80004002u;  /* E_NOINTERFACE */
+}
+
+int64_t kgpc_default_addref(const void *self)
+{
+    (void)self;
+    return -1;
+}
+
+int64_t kgpc_default_release(const void *self)
+{
+    (void)self;
+    return -1;
+}
