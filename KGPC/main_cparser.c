@@ -3071,21 +3071,6 @@ int main(int argc, char **argv)
         exit_code = sem_result;
     }
 
-    if (exit_code == 0)
-    {
-        /* The compiler is a short-lived one-shot process. Several frontend
-         * teardown paths still have ownership bugs for detached AST/type
-         * caches used by the FPC RTL flow, so skip deep cleanup on success and
-         * let process exit reclaim that memory. */
-        clear_dump_ast_path();
-        pascal_frontend_cleanup();
-        unit_search_paths_destroy(&g_unit_paths);
-        unit_registry_reset();
-        arena_destroy(arena);
-        emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
-        return 0;
-    }
-
     DestroySymTab(symtab);
     if (prelude_tree != NULL)
         destroy_tree(prelude_tree);

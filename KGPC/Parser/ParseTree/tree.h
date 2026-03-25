@@ -235,6 +235,7 @@ void destroy_tree(Tree_t *tree);
 void destroy_stmt(struct Statement *stmt);
 void destroy_expr(struct Expression *expr);
 void destroy_record_type(struct RecordType *record_type);
+struct MethodTemplate *clone_method_template_detached(const struct MethodTemplate *method);
 struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */

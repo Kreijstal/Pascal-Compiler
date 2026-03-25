@@ -11187,7 +11187,18 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                 }
                             }
                             if (already_present) continue;
-                            ListNode_t *node = CreateListNode(orig, LIST_METHOD_TEMPLATE);
+                            struct MethodTemplate *cloned = clone_method_template_detached(orig);
+                            if (cloned == NULL)
+                                continue;
+                            ListNode_t *node = CreateListNode(cloned, LIST_METHOD_TEMPLATE);
+                            if (node == NULL)
+                            {
+                                free(cloned->name);
+                                free(cloned->delegated_interface_name);
+                                free(cloned->delegated_target_name);
+                                free(cloned);
+                                continue;
+                            }
                             if (cloned_head == NULL) {
                                 cloned_head = node;
                                 cloned_tail = node;

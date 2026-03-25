@@ -255,6 +255,38 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     return clone;
 }
 
+struct MethodTemplate *clone_method_template_detached(const struct MethodTemplate *method)
+{
+    if (method == NULL)
+        return NULL;
+
+    struct MethodTemplate *clone = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
+    if (clone == NULL)
+        return NULL;
+
+    clone->name = method->name != NULL ? strdup(method->name) : NULL;
+    clone->delegated_interface_name = method->delegated_interface_name != NULL
+        ? strdup(method->delegated_interface_name) : NULL;
+    clone->delegated_target_name = method->delegated_target_name != NULL
+        ? strdup(method->delegated_target_name) : NULL;
+    clone->method_ast = method->method_ast;
+    clone->method_tree = NULL;
+    clone->kind = method->kind;
+    clone->is_interface_delegation = method->is_interface_delegation;
+    clone->is_class_method = method->is_class_method;
+    clone->is_static = method->is_static;
+    clone->is_virtual = method->is_virtual;
+    clone->is_override = method->is_override;
+    clone->has_return_type = method->has_return_type;
+    clone->params_ast = method->params_ast;
+    clone->return_type_ast = method->return_type_ast;
+    clone->directives_ast = method->directives_ast;
+    clone->method_impl_ast = method->method_impl_ast;
+    clone->source_offset = method->source_offset;
+
+    return clone;
+}
+
 static ListNode_t *clone_method_template_list(const ListNode_t *methods)
 {
     if (methods == NULL)
