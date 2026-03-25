@@ -63,6 +63,10 @@ int kgpc_directory_create(const char *path);
 int kgpc_directory_remove(const char *path);
 int kgpc_file_rename(const char *old_path, const char *new_path);
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr);
+void __kgpc_init_interface_vtables(void *instance);
+typedef void (*kgpc_method_ptr)(void);
+kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
+    const void *interface_guid, int method_index);
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf);
 
 /* Console / keyboard helpers used by KGPC RTL units (Crt/Keyboard). */

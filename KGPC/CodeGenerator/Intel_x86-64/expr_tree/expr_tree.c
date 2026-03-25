@@ -2378,15 +2378,46 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             }
                         }
                     }
+
+                    /* Initialize interface vtable pointer slots */
+                    if (class_record->num_interfaces > 0) {
+                        long long ctor_base_size = 0;
+                        codegen_sizeof_record_type(ctx, class_record, &ctor_base_size);
+                        int ctor_iface_count = 0;
+                        for (int ii = 0; ii < class_record->num_interfaces; ii++)
+                            if (class_record->interface_names[ii] != NULL)
+                                ctor_iface_count++;
+                        if (ctor_iface_count > 0 && class_record->has_cached_size)
+                            ctor_base_size = class_record->cached_size - ctor_iface_count * 8;
+
+                        if (ctor_iface_count > 0) {
+                            Register_t *ivtbl_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            int slot_idx = 0;
+                            for (int ii = 0; ii < class_record->num_interfaces; ii++) {
+                                if (class_record->interface_names[ii] == NULL) continue;
+                                const char *iname = class_record->interface_names[ii];
+                                long long ioff = ctor_base_size + slot_idx * 8;
+                                snprintf(buffer, sizeof(buffer), "\tleaq\t%s_INTF_%s_VTABLE(%%rip), %s\n",
+                                    class_record->type_id, iname, ivtbl_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %lld(%s)\n",
+                                    ivtbl_reg->bit_64, ioff, constructor_instance_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                slot_idx++;
+                            }
+                            if (ivtbl_reg) free_reg(get_reg_stack(), ivtbl_reg);
+                        }
+                    }
+
                 }
             }
         }
-        
+
         /* Pass arguments, shifted by hidden return pointer and/or static link */
         int arg_start_index = (has_record_return ? 1 : 0) +
             (should_pass_static_link ? 1 : 0);
         int self_index = -1;
-        
+
         /* For constructors, we need to:
          * 1. Skip the first argument in the list (class type)
          * 2. Shift register allocation by 1 to make room for Self */
@@ -2634,6 +2665,65 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\t# ERROR: procedural call target missing\n");
                 inst_list = add_inst(inst_list, buffer);
             }
+        }
+        else if (expr->expr_data.function_call_data.is_interface_call &&
+                 expr->expr_data.function_call_data.vmt_index >= 0)
+        {
+            /* Interface vtable dispatch.  Self may be either:
+             * (a) Adjusted interface pointer (object + ioffset): *(Self) = intf vtable
+             * (b) Raw object pointer: *(Self) = class VMT
+             * Distinguish by the VMT signature: VMT[0] + VMT[8] == 0.
+             * Case (a): dispatch through intf vtable -> thunk adjusts Self.
+             * Case (b): fall back to direct call via .set alias. */
+            int vmt_index = expr->expr_data.function_call_data.vmt_index;
+            int self_arg_index = has_record_return ? 1 : 0;
+            const char *self_reg = current_arg_reg64(self_arg_index);
+            static int intf_expr_dispatch_counter = 0;
+            int label_id = intf_expr_dispatch_counter++;
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
+            inst_list = add_inst(inst_list, buffer);
+            /* Check if *Self is a VMT: slot0 + slot1 == 0 */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%rax\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\taddq\t8(%%r11), %%rax\n");
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tjz\t.Lintf_expr_direct_%d\n", label_id);
+            inst_list = add_inst(inst_list, buffer);
+            /* Adjusted pointer path: dispatch through interface vtable */
+            {
+                int vtable_offset = vmt_index * 8;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n", vtable_offset);
+                inst_list = add_inst(inst_list, buffer);
+                CallerSaveState caller_state;
+                regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+                snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
+                inst_list = add_inst(inst_list, buffer);
+                regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+                snprintf(buffer, sizeof(buffer), "\tjmp\t.Lintf_expr_done_%d\n", label_id);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* Raw pointer path: direct call via .set alias */
+            snprintf(buffer, sizeof(buffer), ".Lintf_expr_direct_%d:\n", label_id);
+            inst_list = add_inst(inst_list, buffer);
+            {
+                const char *call_target = expr->expr_data.function_call_data.mangled_id;
+                if (call_target == NULL || call_target[0] == '\0') {
+                    HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
+                    if (resolved != NULL && resolved->mangled_id != NULL)
+                        call_target = resolved->mangled_id;
+                }
+                if (call_target != NULL) {
+                    CallerSaveState caller_state;
+                    regstack_caller_save(get_reg_stack(), &inst_list, &caller_state);
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", call_target);
+                    inst_list = add_inst(inst_list, buffer);
+                    regstack_caller_restore(get_reg_stack(), &inst_list, &caller_state);
+                }
+            }
+            snprintf(buffer, sizeof(buffer), ".Lintf_expr_done_%d:\n", label_id);
+            inst_list = add_inst(inst_list, buffer);
         }
         else if (expr->expr_data.function_call_data.is_virtual_call &&
                  expr->expr_data.function_call_data.vmt_index >= 0)

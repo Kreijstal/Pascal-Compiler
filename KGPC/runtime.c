@@ -1498,6 +1498,75 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+/* Resolve an interface method for dispatch.  Handles both raw object pointers
+ * and adjusted interface pointers (from kgpc_get_interface/Supports).
+ * - If self points to an object (first qword is VMT), navigates VMT → interface
+ *   table → vtable → method.
+ * - If self is already adjusted (first qword is an interface vtable), uses it directly.
+ * Returns the method function pointer, or __kgpc_abstract_method_error if not found. */
+typedef void (*kgpc_method_ptr)(void);
+extern void __kgpc_abstract_method_error(void);
+kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
+    const void *interface_guid, int method_index)
+{
+    if (self == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* self could be either:
+     * a) Raw object pointer: *(void**)self = VMT, VMT[10] = interface table
+     * b) Adjusted interface pointer: *(void**)self = interface vtable (flat array)
+     * Distinguish by checking VMT signature: VMT has vInstanceSize at offset 0
+     * (small positive int) and vInstanceSize2 = -vInstanceSize at offset 8. */
+    const void *first_qword = *(const void **)self;
+    if (first_qword == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* Check if first_qword looks like a VMT (vInstanceSize / vInstanceSize2 pattern) */
+    int64_t slot0 = *(const int64_t *)first_qword;
+    int64_t slot1 = *((const int64_t *)first_qword + 1);
+    int is_vmt = (slot0 > 0 && slot0 < 10000000 && slot1 == -slot0);
+
+    if (is_vmt) {
+        /* Case (a): raw object pointer — walk VMT chain looking for matching interface */
+        const void *cur_vmt = first_qword;
+        while (cur_vmt != NULL) {
+            /* vIntfTable at VMT offset 80 */
+            const kgpc_interface_table *intf_table =
+                *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+            if (intf_table != NULL && intf_table->entry_count > 0) {
+                for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                    const kgpc_interface_entry *entry = &intf_table->entries[i];
+                    if (entry->iid_ref != NULL && interface_guid != NULL) {
+                        const void *iid = *(entry->iid_ref);
+                        if (iid != NULL && memcmp(iid, interface_guid, 16) == 0) {
+                            if (entry->vtable != NULL) {
+                                const void **vtable = (const void **)entry->vtable;
+                                if (method_index >= 0)
+                                    return (kgpc_method_ptr)vtable[method_index];
+                            }
+                            return (kgpc_method_ptr)__kgpc_abstract_method_error;
+                        }
+                    }
+                }
+            }
+            /* Walk to parent via vParentRef (offset 16) */
+            const void * const *parent_ref =
+                *(const void * const * const *)((const char *)cur_vmt + 16);
+            if (parent_ref != NULL)
+                cur_vmt = *parent_ref;
+            else
+                cur_vmt = NULL;
+        }
+    } else {
+        /* Case (b): adjusted interface pointer — first_qword is the vtable directly */
+        const void **vtable = (const void **)first_qword;
+        if (method_index >= 0)
+            return (kgpc_method_ptr)vtable[method_index];
+    }
+
+    return (kgpc_method_ptr)__kgpc_abstract_method_error;
+}
+
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
 {
     if (self == NULL || guid == NULL || out_intf == NULL)
@@ -2621,6 +2690,41 @@ void Initialize(void *value)
 }
 
 /* Generic default constructor for classes without explicit constructors */
+/* Initialize interface vtable pointer slots in a class instance.
+ * For each interface the class implements, the instance has a slot at
+ * (instance + ioffset) that must point to the interface vtable.
+ * This is called after the VMT pointer is set at offset 0. */
+void __kgpc_init_interface_vtables(void *instance)
+{
+    if (instance == NULL)
+        return;
+    const void *vmt = *(const void * const *)instance;
+    if (vmt == NULL)
+        return;
+    /* Walk the VMT chain (including parent classes) to init all interface slots */
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->ioffset > 0 && entry->vtable != NULL) {
+                    *(const void **)((char *)instance + entry->ioffset) = entry->vtable;
+                }
+            }
+        }
+        /* Walk to parent via vParentRef (offset 16) */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
+    }
+}
+
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
 {
     /* Allocate and zero-initialize the class instance */
@@ -2630,13 +2734,16 @@ void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
         fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
         exit(EXIT_FAILURE);
     }
-    
+
     /* Set the VMT pointer (first field of the instance) */
     if (vmt_ptr != NULL)
     {
         *(const void **)instance = vmt_ptr;
     }
-    
+
+    /* Initialize interface vtable pointer slots */
+    __kgpc_init_interface_vtables(instance);
+
     return instance;
 }
 

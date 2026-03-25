@@ -6078,6 +6078,55 @@ method_call_resolved:
                 }
             }
         }
+        /* Interface method call check — if the owner class is an interface,
+         * mark this as an interface call so codegen emits indirect vtable dispatch.
+         * The vtable index is the method's position in the interface's method_templates list.
+         * Only mark when Self is actually interface-typed to avoid false positives on
+         * standalone procedures whose name matches an interface method pattern. */
+        if (best_match->owner_class != NULL && best_match->method_name != NULL &&
+            !expr->expr_data.function_call_data.is_interface_call)
+        {
+            struct RecordType *iface_record = semcheck_lookup_record_type(symtab,
+                best_match->owner_class);
+            if (iface_record != NULL && iface_record->is_interface &&
+                iface_record->method_templates != NULL)
+            {
+                /* Verify the first argument (Self) is actually interface-typed */
+                int self_is_interface = 0;
+                ListNode_t *call_args = expr->expr_data.function_call_data.args_expr;
+                if (call_args != NULL)
+                {
+                    struct Expression *self_arg = (struct Expression *)call_args->cur;
+                    if (self_arg != NULL && self_arg->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *self_type = self_arg->resolved_kgpc_type;
+                        if (self_type->kind == TYPE_KIND_POINTER && self_type->info.points_to != NULL)
+                            self_type = self_type->info.points_to;
+                        if (self_type->kind == TYPE_KIND_RECORD && self_type->info.record_info != NULL &&
+                            self_type->info.record_info->is_interface)
+                            self_is_interface = 1;
+                    }
+                }
+                if (self_is_interface)
+                {
+                    int idx = 0;
+                    for (ListNode_t *mt = iface_record->method_templates; mt != NULL; mt = mt->next, idx++)
+                    {
+                        struct MethodTemplate *tmpl = (struct MethodTemplate *)mt->cur;
+                        if (tmpl != NULL && tmpl->name != NULL &&
+                            strcasecmp(tmpl->name, best_match->method_name) == 0)
+                        {
+                            expr->expr_data.function_call_data.is_interface_call = 1;
+                            expr->expr_data.function_call_data.vmt_index = idx;
+                            if (expr->expr_data.function_call_data.self_class_name == NULL)
+                                expr->expr_data.function_call_data.self_class_name =
+                                    strdup(best_match->owner_class);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         /* Centralized class method flag — mark calls to class functions/procedures
          * so codegen passes VMT (not instance) as Self.  Walk the parent chain
          * because the method may be inherited (e.g., TA.ClassName → TObject).

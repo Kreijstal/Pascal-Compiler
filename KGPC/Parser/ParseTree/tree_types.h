@@ -291,6 +291,7 @@ struct Statement
             char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;           /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
@@ -535,6 +536,7 @@ struct Expression
             char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int is_constructor_call;                 /* 1 if this call was resolved as a class constructor */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;                   /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */

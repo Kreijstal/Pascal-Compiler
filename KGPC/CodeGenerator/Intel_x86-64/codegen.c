@@ -2944,6 +2944,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
      *   __kgpc_guidref_<Name>  = pointer to __kgpc_guid_<Name>  (pguid)
      * The entry's IIDRef field points to __kgpc_guidref_<Name>. */
     int actual_iface_count = 0;
+    long long base_instance_size = 0;
     if (record_info->num_interfaces > 0) {
         /* First pass: emit standalone GUID constants for each interface
          * (deduplicated via emitted_classes set with "__kgpc_guid_" prefix). */
@@ -3033,31 +3034,151 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 actual_iface_count++;
         }
 
+        /* Compute base instance size early — needed for IOffset values in the
+         * interface table and for thunk adjustment.  The VMT emission below
+         * will reuse this value instead of calling codegen_sizeof_record_type
+         * a second time. */
+        codegen_sizeof_record_type(ctx, record_info, &base_instance_size);
+
         /* Emit FPC-compatible tinterfacetable */
         fprintf(ctx->output_file, "\n# Interface table (tinterfacetable) for class %s\n", class_label);
         fprintf(ctx->output_file, "\t.data\n");
         fprintf(ctx->output_file, "\t.align 8\n");
         fprintf(ctx->output_file, "%s_INTFTABLE:\n", class_label);
         fprintf(ctx->output_file, "\t.quad\t%d\t# EntryCount\n", actual_iface_count);
+        int iface_slot_idx = 0;
         for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
             const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
+            long long ioffset = base_instance_size + iface_slot_idx * 8;
             fprintf(ctx->output_file, "\t# Entry for %s (40 bytes = tinterfaceentry)\n", iface_name);
             /* offset +0: IIDRef (^pguid) — pointer to the pguid indirection cell */
             fprintf(ctx->output_file, "\t.quad\t__kgpc_guidref_%s\n", iface_name);
-            /* offset +8: VTable — not used yet */
-            fprintf(ctx->output_file, "\t.quad\t0\n");
-            /* offset +16: IOffset (sizeuint) — byte offset from instance to interface pointer.
-             * 0 = the interface IS the object itself (standard COM delegation). */
-            fprintf(ctx->output_file, "\t.quad\t0\n");
+            /* offset +8: VTable — pointer to interface vtable for this class */
+            fprintf(ctx->output_file, "\t.quad\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
+            /* offset +16: IOffset (sizeuint) — byte offset from object start to interface slot */
+            fprintf(ctx->output_file, "\t.quad\t%lld\n", ioffset);
             /* offset +24: IIDStrRef (^pshortstring) — NULL for now */
             fprintf(ctx->output_file, "\t.quad\t0\n");
             /* offset +32: IType (tinterfaceentrytype enum, 4 bytes) = etStandard = 0 */
             fprintf(ctx->output_file, "\t.long\t0\n");
             /* offset +36: padding to 40 bytes */
             fprintf(ctx->output_file, "\t.zero\t4\n");
+            iface_slot_idx++;
         }
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+
+        /* Emit interface vtable arrays — one per interface this class implements.
+         * Each vtable contains a .quad entry per method_template in the interface,
+         * in declaration order, pointing to a thunk that adjusts Self back from
+         * the interface pointer to the raw object pointer before jumping to the
+         * implementing class method. */
+        int vtbl_iface_slot_idx = 0;
+        for (int iidx = 0; iidx < record_info->num_interfaces; iidx++) {
+            const char *iface_name = record_info->interface_names[iidx];
+            if (iface_name == NULL) continue;
+            long long ioffset_for_this_iface = base_instance_size + vtbl_iface_slot_idx * 8;
+            vtbl_iface_slot_idx++;
+            /* Look up the interface record to get its method_templates */
+            HashNode_t *vtbl_iface_node = NULL;
+            struct RecordType *vtbl_iface_record = NULL;
+            if (FindSymbol(&vtbl_iface_node, symtab, iface_name) != 0 && vtbl_iface_node != NULL) {
+                vtbl_iface_record = get_record_type_from_node(vtbl_iface_node);
+                if (vtbl_iface_record == NULL && vtbl_iface_node->type != NULL &&
+                    vtbl_iface_node->type->kind == TYPE_KIND_POINTER &&
+                    vtbl_iface_node->type->info.points_to != NULL &&
+                    vtbl_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                    vtbl_iface_record = vtbl_iface_node->type->info.points_to->info.record_info;
+            }
+            if (vtbl_iface_record == NULL || vtbl_iface_record->method_templates == NULL) {
+                /* No methods — emit an empty vtable label */
+                fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
+                fprintf(ctx->output_file, "\t.data\n");
+                fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
+                fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+                continue;
+            }
+            fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s\n", class_label, iface_name);
+            fprintf(ctx->output_file, "\t.data\n");
+            fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
+            ListNode_t *vtbl_iface_method = vtbl_iface_record->method_templates;
+            while (vtbl_iface_method != NULL) {
+                struct MethodTemplate *vtbl_imethod = (struct MethodTemplate *)vtbl_iface_method->cur;
+                if (vtbl_imethod != NULL && vtbl_imethod->name != NULL) {
+                    /* Find the implementing class method */
+                    char vtbl_impl_base[512];
+                    snprintf(vtbl_impl_base, sizeof(vtbl_impl_base), "%s__%s", class_label, vtbl_imethod->name);
+                    ListNode_t *vtbl_impl_candidates = FindAllIdents(symtab, vtbl_impl_base);
+                    const char *vtbl_resolved_id = NULL;
+                    for (ListNode_t *ic = vtbl_impl_candidates; ic != NULL; ic = ic->next) {
+                        HashNode_t *cand = (HashNode_t *)ic->cur;
+                        if (cand != NULL && cand->mangled_id != NULL &&
+                            cand->type != NULL && cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL) {
+                            /* Check if this method has an actually emitted code body */
+                            if (g_codegen_available_subprograms != NULL &&
+                                codegen_list_contains_string(g_codegen_available_subprograms, cand->mangled_id)) {
+                                vtbl_resolved_id = cand->mangled_id;
+                                break;
+                            }
+                            /* Fallback: check statement_list for cross-unit methods */
+                            if (cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
+                                /* Verify via symtab lookup that the mangled name has a real body */
+                                HashNode_t *vtbl_sym = NULL;
+                                if (FindSymbol(&vtbl_sym, symtab, cand->mangled_id) != 0 &&
+                                    vtbl_sym != NULL && vtbl_sym->type != NULL &&
+                                    vtbl_sym->type->kind == TYPE_KIND_PROCEDURE &&
+                                    vtbl_sym->type->info.proc_info.definition != NULL &&
+                                    vtbl_sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL) {
+                                    vtbl_resolved_id = cand->mangled_id;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (vtbl_resolved_id != NULL) {
+                        /* Emit thunk in .text that adjusts Self back from interface
+                         * pointer to raw object pointer, then jumps to the real method.
+                         * The thunk handles both adjusted interface pointers (Self =
+                         * object + ioffset) and raw object pointers (Self = object)
+                         * by checking if *(Self) is a VMT (vInstanceSize + vInstanceSize2
+                         * == 0) or an interface vtable. */
+                        char thunk_label[768];
+                        snprintf(thunk_label, sizeof(thunk_label), "%s_INTF_%s_THUNK_%s",
+                            class_label, iface_name, vtbl_imethod->name);
+                        fprintf(ctx->output_file, "\t.text\n");
+                        fprintf(ctx->output_file, "%s:\n", thunk_label);
+                        const char *self_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                        /* Check if Self points to a VMT (raw object pointer) or
+                         * an interface vtable (adjusted pointer).
+                         * VMT has vInstanceSize at [0] and -vInstanceSize at [8],
+                         * so their sum is 0.  Interface vtable entries are code
+                         * pointers whose sum is extremely unlikely to be 0. */
+                        fprintf(ctx->output_file, "\tmovq\t(%s), %%r11\n", self_reg);
+                        fprintf(ctx->output_file, "\tmovq\t(%%r11), %%rax\n");
+                        fprintf(ctx->output_file, "\taddq\t8(%%r11), %%rax\n");
+                        fprintf(ctx->output_file, "\tjnz\t.L%s_adj\n", thunk_label);
+                        /* Raw object pointer — no adjustment needed */
+                        fprintf(ctx->output_file, "\tjmp\t%s\n", vtbl_resolved_id);
+                        fprintf(ctx->output_file, ".L%s_adj:\n", thunk_label);
+                        /* Adjusted interface pointer — subtract ioffset */
+                        fprintf(ctx->output_file, "\tsubq\t$%lld, %s\n",
+                            ioffset_for_this_iface, self_reg);
+                        fprintf(ctx->output_file, "\tjmp\t%s\n", vtbl_resolved_id);
+                        /* Switch back to data for the vtable entry */
+                        fprintf(ctx->output_file, "\t.data\n");
+                        fprintf(ctx->output_file, "\t.quad\t%s\t# %s\n", thunk_label, vtbl_imethod->name);
+                    } else {
+                        fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\t# %s (not implemented)\n", vtbl_imethod->name);
+                    }
+                    if (vtbl_impl_candidates != NULL) DestroyList(vtbl_impl_candidates);
+                }
+                vtbl_iface_method = vtbl_iface_method->next;
+            }
+            fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+        }
     }
 
     /* Resolve the canonical label for the parent class (handles case mismatches
@@ -3129,9 +3250,18 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "\t.quad\t%s_VMT\n", parent_vmt_label);
     }
 
-    /* Compute instance size for vInstanceSize */
-    long long instance_size = 0;
-    codegen_sizeof_record_type(ctx, record_info, &instance_size);
+    /* Compute instance size for vInstanceSize.
+     * base_instance_size was computed earlier (before interface table emission)
+     * when the class has interfaces.  For classes without interfaces, compute now. */
+    if (base_instance_size == 0)
+        codegen_sizeof_record_type(ctx, record_info, &base_instance_size);
+    long long instance_size = base_instance_size;
+    if (actual_iface_count > 0) {
+        instance_size += actual_iface_count * 8;
+        /* Update cached_size so constructor allocations use the new size */
+        record_info->cached_size = instance_size;
+        record_info->has_cached_size = 1;
+    }
 
     /* Always emit VMT for classes, even if no virtual methods.
      * FPC VMT layout (TVmt record from objpash.inc):
@@ -3362,17 +3492,23 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char stub_dedup[640];
                         snprintf(stub_dedup, sizeof(stub_dedup),
                                  "__kgpc_abstub_%s", iface_func->mangled_id);
+                        {
+                            char *stub_key = strdup(stub_dedup);
+                            if (stub_key != NULL)
+                                emitted_class_set_add(emitted_classes, stub_key);
+                        }
                         if (impl_func != NULL && impl_func->mangled_id != NULL) {
-                            {
-                                char *stub_key = strdup(stub_dedup);
-                                if (stub_key != NULL)
-                                    emitted_class_set_add(emitted_classes, stub_key);
-                            }
                             fprintf(ctx->output_file, "\n# Interface dispatch: %s.%s -> %s.%s\n",
                                 iface_name, imethod->name, class_label, imethod->name);
                             fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
                             fprintf(ctx->output_file, ".set %s, %s\n",
                                 iface_func->mangled_id, impl_func->mangled_id);
+                        } else {
+                            fprintf(ctx->output_file, "\n# Interface dispatch (no impl): %s.%s -> abstract error\n",
+                                iface_name, imethod->name);
+                            fprintf(ctx->output_file, ".globl %s\n", iface_func->mangled_id);
+                            fprintf(ctx->output_file, ".set %s, __kgpc_abstract_method_error\n",
+                                iface_func->mangled_id);
                         }
                     }
                     if (iface_candidates != NULL) DestroyList(iface_candidates);

@@ -2972,6 +2972,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     expr->expr_data.function_call_data.placeholder_method_name = NULL;
     expr->expr_data.function_call_data.is_virtual_call = 0;
+    expr->expr_data.function_call_data.is_interface_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
     expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
@@ -3174,6 +3175,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
     new_expr->expr_data.function_call_data.call_qualifier = NULL;
     new_expr->expr_data.function_call_data.is_virtual_call = 0;
+    new_expr->expr_data.function_call_data.is_interface_call = 0;
     new_expr->expr_data.function_call_data.vmt_index = -1;
     new_expr->expr_data.function_call_data.self_class_name = NULL;
     new_expr->expr_data.function_call_data.is_class_method_call = 0;
