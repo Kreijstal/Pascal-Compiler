@@ -1867,10 +1867,24 @@ static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt,
     }
     else if (formal_params != NULL && args_given == NULL)
     {
-        semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
-            "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
-            stmt->line_num, stmt->stmt_data.procedure_call_data.id);
-        ++return_val;
+        /* Check if all remaining formal parameters have default values */
+        int all_have_defaults = 1;
+        for (ListNode_t *fp = formal_params; fp != NULL; fp = fp->next)
+        {
+            Tree_t *pd = (Tree_t *)fp->cur;
+            if (pd == NULL || !param_has_default_value(pd))
+            {
+                all_have_defaults = 0;
+                break;
+            }
+        }
+        if (!all_have_defaults)
+        {
+            semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                "Error on line %d, on procedure call %s, not enough arguments given!\n\n",
+                stmt->line_num, stmt->stmt_data.procedure_call_data.id);
+            ++return_val;
+        }
     }
 
     return return_val;
