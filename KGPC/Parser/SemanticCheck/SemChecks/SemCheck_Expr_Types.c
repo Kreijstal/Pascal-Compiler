@@ -1615,8 +1615,37 @@ int semcheck_pointer_deref(int *type_return,
         }
     }
 
+    /* Last resort before falling back to LONGINT_TYPE: if the pointer expression
+     * carries a subtype id (e.g. "TCGParaLocation" from a typed pointer alias),
+     * try to resolve it as a record type.  This handles cross-unit pointer types
+     * where the earlier FindSymbol + set_type_from_hashtype (line ~1481) could
+     * not resolve the pointed-to type because it is only registered in the
+     * cross-unit record type tables searched by semcheck_lookup_record_type. */
+    if (target_type == UNKNOWN_TYPE && pointer_expr->pointer_subtype_id != NULL)
+    {
+        struct RecordType *rec = semcheck_lookup_record_type(symtab,
+            pointer_expr->pointer_subtype_id);
+        if (rec != NULL)
+            target_type = RECORD_TYPE;
+    }
+
+    /* Fallback for genuinely untyped pointers (e.g. bare `Pointer` type).
+     * The function still returns LONGINT_TYPE for backward compatibility, but
+     * when pointer_subtype_id is present we propagate it to the dereference
+     * expression.  This allows semcheck_recordaccess to recover the actual
+     * record type via the subtype id instead of being misled by LONGINT_TYPE. */
     if (target_type == UNKNOWN_TYPE)
+    {
+        if (pointer_expr->pointer_subtype_id != NULL)
+        {
+            /* Propagate the subtype id to the dereference expression so that
+             * semcheck_recordaccess can attempt record type recovery. */
+            if (expr->pointer_subtype_id == NULL)
+                semcheck_set_pointer_info(expr, UNKNOWN_TYPE,
+                    pointer_expr->pointer_subtype_id);
+        }
         target_type = LONGINT_TYPE;
+    }
 
     if (target_type == POINTER_TYPE)
     {
@@ -3141,10 +3170,46 @@ SKIP_SELF_FIELD_REWRITE:
                     record_info = kgpc_type_get_record(pointee);
                 }
             }
+            /* Additional recovery: the dereference expression itself may carry
+             * pointer_subtype_id propagated from Fix 1 in
+             * semcheck_expr_type_pointer_deref, or via the TypeRef chain. */
+            if (record_info == NULL && record_expr->pointer_subtype_id != NULL)
+            {
+                struct RecordType *ptr_rec = semcheck_lookup_record_type(symtab,
+                    record_expr->pointer_subtype_id);
+                if (ptr_rec != NULL)
+                {
+                    record_type = RECORD_TYPE;
+                    record_info = ptr_rec;
+                }
+            }
+            /* Try the dereference expression's resolved_kgpc_type: if it is a
+             * record type, we can use it directly. */
+            if (record_info == NULL && record_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_record(record_expr->resolved_kgpc_type))
+            {
+                record_info = kgpc_type_get_record(record_expr->resolved_kgpc_type);
+                if (record_info != NULL)
+                    record_type = RECORD_TYPE;
+            }
         }
         if (record_type == RECORD_TYPE && record_info != NULL)
         {
             /* Successfully recovered record type from pointer dereference */
+        }
+        else if (record_expr->type == EXPR_POINTER_DEREF)
+        {
+            /* Issue #482: A pointer dereference that resolved to a non-record
+             * primitive type (e.g. LONGINT_TYPE from the LONGINT fallback)
+             * must NOT fall through to type helper lookup.  Type helpers are
+             * for actual primitive values, not for misresolved pointer targets.
+             * Report a specific error instead of silently matching a helper. */
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+                "Error on line %d, pointer dereference does not reference a record type "
+                "(cannot access field '%s').\n\n",
+                expr->line_num, field_id != NULL ? field_id : "?");
+            *type_return = UNKNOWN_TYPE;
+            return error_count + 1;
         }
         else
         {

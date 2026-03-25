@@ -2075,7 +2075,7 @@ static int resolve_error_source_context(int source_index,
         {
             int gs = g_source_buffer_registry[i].global_start;
             int len = (int)g_source_buffer_registry[i].length;
-            if (source_index >= gs && source_index <= gs + len)
+            if (source_index >= gs && source_index < gs + len)
             {
                 int local_offset = source_index - gs;
                 char temp_file[MAX_DIRECTIVE_FILENAME_LEN];
@@ -2153,7 +2153,7 @@ static int resolve_unit_error_location(int source_index, int line_num,
             {
                 int gs = g_source_buffer_registry[i].global_start;
                 int len = (int)g_source_buffer_registry[i].length;
-                if (source_index >= gs && source_index <= gs + len)
+                if (source_index >= gs && source_index < gs + len)
                 {
                     unit_path = g_source_buffer_registry[i].path;
                     break;
@@ -2365,16 +2365,18 @@ static void v_semcheck_format_error_with_context(
          * showed wrong file contents for errors in imported units. */
         const char *context_buf = NULL;
         size_t context_buf_len = 0;
+        int local_source_offset = source_index; /* offset into context_buf */
         if (source_index >= 0)
         {
             for (int i = 0; i < g_source_buffer_count; i++)
             {
                 int gs = g_source_buffer_registry[i].global_start;
                 int len = (int)g_source_buffer_registry[i].length;
-                if (source_index >= gs && source_index <= gs + len)
+                if (source_index >= gs && source_index < gs + len)
                 {
                     context_buf = g_source_buffer_registry[i].buffer;
                     context_buf_len = g_source_buffer_registry[i].length;
+                    local_source_offset = source_index - gs;
                     break;
                 }
             }
@@ -2384,7 +2386,7 @@ static void v_semcheck_format_error_with_context(
             /* Do NOT fall back to the main program's preprocessed buffer
              * when we're inside a unit — it shows wrong source content.
              * Use preprocessed_source only when NOT inside a unit context. */
-            if (g_semcheck_error_unit_name == NULL || source_index < 0)
+            if (g_semcheck_error_unit_name == NULL)
             {
                 context_buf = preprocessed_source;
                 context_buf_len = preprocessed_length;
@@ -2403,15 +2405,30 @@ static void v_semcheck_format_error_with_context(
         if (kgpc_getenv("KGPC_DEBUG_SEM_CONTEXT") != NULL)
         {
             fprintf(stderr,
-                "[SemCheck] context file=%s buf_len=%zu line=%d col=%d offset=%d\n",
+                "[SemCheck] context file=%s buf_len=%zu line=%d col=%d offset=%d local_offset=%d\n",
                 file_path != NULL ? file_path : "<null>",
                 context_buf_len,
                 effective_line,
                 effective_col,
-                source_index);
+                source_index,
+                local_source_offset);
         }
-        int printed = print_source_context_at_offset(context_buf, context_buf_len,
-            source_index, effective_line, effective_col, 2);
+        int printed = 0;
+        /* When the source offset is valid and within the buffer, use
+         * offset-based context — it correctly locates the right position
+         * even in preprocessed buffers that contain multiple files.
+         * When the offset is invalid (out of bounds or -1), go straight
+         * to the file-based fallback because line-number-based search in
+         * a preprocessed buffer can match lines from the wrong include
+         * file (e.g. fpcdefs.inc instead of nutils.pas). */
+        if (local_source_offset >= 0 &&
+            (size_t)local_source_offset < context_buf_len)
+        {
+            printed = print_source_context_at_offset(context_buf, context_buf_len,
+                local_source_offset, effective_line, effective_col, 2);
+        }
+        /* Fall back to reading the original source file from disk — this
+         * avoids the #line-directive ambiguity in preprocessed buffers. */
         if (!printed)
             printed = semcheck_print_context_from_file(file_path, effective_line, effective_col, 2);
         if (!printed && file_path != NULL)
