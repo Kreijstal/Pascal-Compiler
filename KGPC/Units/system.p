@@ -962,6 +962,14 @@ begin
     end
 end;
 
+procedure interlocked_exchange_add_i32_u32_impl(var target: longword; value: longword; var result: longword);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i32
+    end
+end;
+
 procedure interlocked_exchange_add_i64_impl(var target: int64; value: int64; var result: int64);
 begin
     assembler;
@@ -1038,6 +1046,15 @@ begin
     InterlockedExchangeAdd := result;
 end;
 
+function InterlockedExchangeAdd(var target: longword; value: longword): longword; overload;
+var
+    result: longword;
+begin
+    result := 0;
+    interlocked_exchange_add_i32_u32_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
+
 function InterlockedExchangeAdd(var target: int64; value: int64): int64; overload;
 var
     result: int64;
@@ -1054,6 +1071,56 @@ begin
     result := nil;
     interlocked_exchange_add_ptr_impl(target, value, result);
     Exit(result);
+end;
+
+function InterlockedIncrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, 1) + 1;
+end;
+
+function InterlockedIncrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, LongWord(1)) + 1;
+end;
+
+function InterlockedIncrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, Int64(1)) + 1;
+end;
+
+function InterlockedDecrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, -1) - 1;
+end;
+
+function InterlockedDecrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, LongWord(-1)) - 1;
+end;
+
+function InterlockedDecrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, Int64(-1)) - 1;
+end;
+
+function InterlockedExchange(var Target: LongInt; Source: LongInt): LongInt; overload;
+begin
+    InterlockedExchange := Target;
+    Target := Source;
+end;
+
+function InterlockedCompareExchange(var Target: LongInt; NewValue: LongInt; Comperand: LongInt): LongInt; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
+end;
+
+function InterlockedCompareExchange(var Target: Pointer; NewValue: Pointer; Comperand: Pointer): Pointer; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
 end;
 
 
