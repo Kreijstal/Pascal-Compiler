@@ -3,10 +3,13 @@
  * See ast_cache.h for format description.
  */
 #include "ast_cache.h"
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <unistd.h>
 
 static const char MAGIC[] = "KGPC_AST";
 #define MAGIC_LEN 9  /* includes NUL */
@@ -69,9 +72,41 @@ bool ast_cache_save(const char *cache_path, const ast_t *root,
     if (cache_path == NULL || root == NULL)
         return false;
 
-    FILE *f = fopen(cache_path, "wb");
-    if (f == NULL)
+    size_t lock_len = strlen(cache_path) + 6;
+    char *lock_path = (char *)malloc(lock_len);
+    if (lock_path == NULL)
         return false;
+    snprintf(lock_path, lock_len, "%s.lock", cache_path);
+
+    int lock_fd = open(lock_path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    if (lock_fd < 0)
+    {
+        free(lock_path);
+        if (errno == EEXIST)
+            return false;
+        return false;
+    }
+    close(lock_fd);
+
+    size_t tmp_len = strlen(cache_path) + 32;
+    char *tmp_path = (char *)malloc(tmp_len);
+    if (tmp_path == NULL)
+    {
+        unlink(lock_path);
+        free(lock_path);
+        return false;
+    }
+
+    snprintf(tmp_path, tmp_len, "%s.tmp.%ld", cache_path, (long)getpid());
+
+    FILE *f = fopen(tmp_path, "wb");
+    if (f == NULL)
+    {
+        unlink(lock_path);
+        free(lock_path);
+        free(tmp_path);
+        return false;
+    }
 
     /* Header */
     if (fwrite(MAGIC, 1, MAGIC_LEN, f) != MAGIC_LEN) goto fail;
@@ -88,11 +123,25 @@ bool ast_cache_save(const char *cache_path, const ast_t *root,
     /* AST */
     if (!write_node(f, root)) goto fail;
 
+    if (fflush(f) != 0) goto fail;
     fclose(f);
+    f = NULL;
+
+    if (rename(tmp_path, cache_path) != 0)
+        goto fail;
+
+    unlink(lock_path);
+    free(lock_path);
+    free(tmp_path);
     return true;
 
 fail:
-    fclose(f);
+    if (f != NULL)
+        fclose(f);
+    unlink(tmp_path);
+    unlink(lock_path);
+    free(lock_path);
+    free(tmp_path);
     return false;
 }
 
