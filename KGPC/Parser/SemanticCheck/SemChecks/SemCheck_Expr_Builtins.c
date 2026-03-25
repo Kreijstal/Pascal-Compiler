@@ -1975,6 +1975,14 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
         {
             /* FPC UpCase accepts string arguments, returning uppercased string. */
         }
+        else if (arg_kgpc_type != NULL && arg_kgpc_type->kind == TYPE_KIND_ARRAY &&
+                 arg_kgpc_type->info.array_info.element_type != NULL &&
+                 (kgpc_type_is_string(arg_kgpc_type->info.array_info.element_type) ||
+                  kgpc_type_is_shortstring(arg_kgpc_type->info.array_info.element_type) ||
+                  kgpc_type_is_char(arg_kgpc_type->info.array_info.element_type)))
+        {
+            /* Array element access resolved as array type — element is string/char, accept. */
+        }
         else
         {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, UpCase expects a char argument.\n",

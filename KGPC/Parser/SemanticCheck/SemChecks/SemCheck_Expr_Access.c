@@ -1963,6 +1963,37 @@ int semcheck_funccall(int *type_return,
         {
             if (semcheck_is_unit_name(first_arg->expr_data.id))
             {
+                /* In Pascal, local variables and fields shadow unit names.
+                 * If the receiver name also exists as a local symbol (variable,
+                 * field, parameter), do NOT treat it as a unit qualifier — let
+                 * the method resolution handle it as a field access instead. */
+                /* Check if the receiver name is also a local variable, field,
+                 * or parameter — in Pascal, local names shadow unit names.
+                 * Fields are accessible through Self/WITH context, so also
+                 * check if Self has a field with this name. */
+                HashNode_t *local_sym = NULL;
+                int receiver_is_local = (FindSymbol(&local_sym, symtab, first_arg->expr_data.id) != 0 &&
+                    local_sym != NULL &&
+                    local_sym->hash_type != HASHTYPE_TYPE);
+                if (!receiver_is_local)
+                {
+                    /* Check if Self has a field with this name */
+                    HashNode_t *self_node = NULL;
+                    if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+                    {
+                        struct RecordType *self_rec = get_record_type_from_node(self_node);
+                        if (self_rec != NULL)
+                        {
+                            struct RecordField *self_field = semcheck_find_class_field_including_hidden(
+                                symtab, self_rec, first_arg->expr_data.id, NULL);
+                            if (self_field != NULL)
+                                receiver_is_local = 1;
+                        }
+                    }
+                }
+
+                if (!receiver_is_local)
+                {
                 char *real_func_name = (expr->expr_data.function_call_data.placeholder_method_name != NULL)
                     ? strdup(expr->expr_data.function_call_data.placeholder_method_name)
                     : NULL;
@@ -1992,6 +2023,7 @@ int semcheck_funccall(int *type_return,
                     }
                     if (real_func_name != NULL)
                         free(real_func_name);
+                }
                 }
             }
         }
@@ -2081,6 +2113,22 @@ int semcheck_funccall(int *type_return,
                      var_shadow->hash_type == HASHTYPE_CONST))
                 {
                     is_unit_qualifier = 0;
+                }
+                /* Also check if Self has a field with this name — fields shadow
+                 * unit names in method bodies but aren't in the symbol table. */
+                if (is_unit_qualifier)
+                {
+                    HashNode_t *self_node2 = NULL;
+                    if (FindSymbol(&self_node2, symtab, "Self") != 0 && self_node2 != NULL)
+                    {
+                        struct RecordType *self_rec2 = get_record_type_from_node(self_node2);
+                        if (self_rec2 != NULL &&
+                            semcheck_find_class_field_including_hidden(symtab, self_rec2,
+                                first_arg->expr_data.id, NULL) != NULL)
+                        {
+                            is_unit_qualifier = 0;
+                        }
+                    }
                 }
             }
             if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL)
