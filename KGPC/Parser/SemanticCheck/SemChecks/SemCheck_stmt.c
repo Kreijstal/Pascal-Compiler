@@ -1758,7 +1758,35 @@ static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,
 static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
     const char *proc_id, const char *call_mangled);
 static int semcheck_var_decl_is_untyped(Tree_t *decl);
+static int semcheck_stmt_has_single_overload(SymTab_t *symtab, const char *proc_id);
+static int semcheck_stmt_try_set_method_mangled_id(SymTab_t *symtab,
+    struct Statement *stmt, const char *proc_id, const char *mangled_id);
 static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
+
+static int semcheck_stmt_has_single_overload(SymTab_t *symtab, const char *proc_id)
+{
+    if (symtab == NULL || proc_id == NULL)
+        return 0;
+
+    ListNode_t *all_overloads = FindAllIdents(symtab, proc_id);
+    int num_overloads = ListLength(all_overloads);
+    DestroyList(all_overloads);
+    return num_overloads <= 1;
+}
+
+static int semcheck_stmt_try_set_method_mangled_id(SymTab_t *symtab,
+    struct Statement *stmt, const char *proc_id, const char *mangled_id)
+{
+    if (stmt == NULL || mangled_id == NULL ||
+        !semcheck_stmt_has_single_overload(symtab, proc_id))
+        return 0;
+
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
+        stmt->stmt_data.procedure_call_data.mangled_id != mangled_id)
+        free(stmt->stmt_data.procedure_call_data.mangled_id);
+    stmt->stmt_data.procedure_call_data.mangled_id = strdup(mangled_id);
+    return stmt->stmt_data.procedure_call_data.mangled_id != NULL;
+}
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
     int max_scope_lev)
@@ -6871,20 +6899,8 @@ skip_type_receiver_rewrite:
                     }
                 }
 
-                if (method_node->mangled_id != NULL) {
-                    /* Only pre-set mangled_id when there is a single overload.
-                     * For overloaded methods, let downstream overload resolution
-                     * pick the correct candidate based on actual argument types. */
-                    ListNode_t *all_overloads = FindAllIdents(symtab, proc_id);
-                    int num_overloads = ListLength(all_overloads);
-                    DestroyList(all_overloads);
-                    if (num_overloads <= 1) {
-                        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
-                            stmt->stmt_data.procedure_call_data.mangled_id != method_node->mangled_id)
-                            free(stmt->stmt_data.procedure_call_data.mangled_id);
-                        stmt->stmt_data.procedure_call_data.mangled_id = strdup(method_node->mangled_id);
-                    }
-                }
+                semcheck_stmt_try_set_method_mangled_id(symtab, stmt, proc_id,
+                    method_node->mangled_id);
 
                 int receiver_is_type_ident = 0;
                 if (args_given != NULL && args_given->cur != NULL)
@@ -7171,13 +7187,8 @@ skip_type_receiver_rewrite:
                 }
             }
 
-            if (resolved_method != NULL && resolved_method->mangled_id != NULL)
-            {
-                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
-                    stmt->stmt_data.procedure_call_data.mangled_id != resolved_method->mangled_id)
-                    free(stmt->stmt_data.procedure_call_data.mangled_id);
-                stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_method->mangled_id);
-            }
+            semcheck_stmt_try_set_method_mangled_id(symtab, stmt, proc_id,
+                resolved_method != NULL ? resolved_method->mangled_id : NULL);
             if (!static_method_receiver && resolved_method != NULL && resolved_method->id != NULL)
             {
                 char *resolved_proc_id = strdup(resolved_method->id);
