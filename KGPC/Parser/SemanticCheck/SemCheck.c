@@ -17598,19 +17598,14 @@ next_identifier:
 }
 
 /* For nested type methods like "Outer.Inner__Method", register the short alias
- * "Inner__Method" so that code using just the inner type name can find it. */
-/* For nested type methods like "Outer.Inner__Method", register the short alias
  * "Inner__Method" so code using just the inner type name can find the method.
- * Uses structural owner_class/method_name from the subprogram node instead of
- * parsing the qualified identifier string. */
+ * Uses structural owner metadata from the subprogram node instead of parsing
+ * the dotted owner path string. */
 static void register_nested_type_short_alias(SymTab_t *symtab,
-    const char *owner_class_full, const char *owner_class, const char *method_name,
+    const char *owner_class_outer, const char *owner_class, const char *method_name,
     const char *mangled_id, KgpcType *type, int is_function)
 {
-    if (owner_class_full == NULL || owner_class == NULL || method_name == NULL)
-        return;
-    /* Only register alias when the method belongs to a nested type (has dot in full path). */
-    if (strchr(owner_class_full, '.') == NULL)
+    if (owner_class_outer == NULL || owner_class == NULL || method_name == NULL)
         return;
     char *short_name = make_method_lookup_key(owner_class, method_name);
     if (short_name == NULL)
@@ -17942,7 +17937,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             }
             /* For nested type methods, also register the short alias. */
             register_nested_type_short_alias(symtab,
-                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
                 subprogram->tree_data.subprogram_data.owner_class,
                 subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
@@ -18886,7 +18881,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
         /* For nested type methods, also register the short alias during predeclaration. */
         if (func_return == 0)
             register_nested_type_short_alias(symtab,
-                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
                 subprogram->tree_data.subprogram_data.owner_class,
                 subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
@@ -18968,7 +18963,7 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
          * generic method clones can find them. */
         if (func_return == 0)
             register_nested_type_short_alias(symtab,
-                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
                 subprogram->tree_data.subprogram_data.owner_class,
                 subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, func_type, 1);
