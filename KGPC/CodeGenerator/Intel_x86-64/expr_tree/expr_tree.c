@@ -2945,7 +2945,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 owner_class_name != NULL && method_name != NULL)
             {
                 const char *impl_target = codegen_find_class_method_impl_id(
-                    ctx->symtab, NULL, owner_class_name, method_name);
+                    ctx->symtab, NULL, owner_class_name, NULL, method_name);
                 if (impl_target != NULL &&
                     (call_target == NULL || call_target[0] == '\0' ||
                      strcmp(call_target, method_name) == 0 ||
@@ -3225,7 +3225,7 @@ cleanup_constructor:
             proc_label != NULL && strchr(proc_label, '_') == NULL)
         {
             const char *impl_target = codegen_find_class_method_impl_id(
-                ctx->symtab, NULL, ctx->current_subprogram_owner_class,
+                ctx->symtab, NULL, ctx->current_subprogram_owner_class, NULL,
                 expr->expr_data.addr_of_proc_data.proc_id);
             if (impl_target != NULL)
                 proc_label = impl_target;

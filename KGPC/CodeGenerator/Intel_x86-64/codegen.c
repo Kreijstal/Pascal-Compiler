@@ -40,7 +40,7 @@ static int codegen_float_native_distance(Tree_t *sub);
 static int codegen_list_contains_string(ListNode_t *list, const char *value);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
-    const char *method_name);
+    const char *iface_name, const char *method_name);
 static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const char ***out_names, int *out_count);
@@ -3373,7 +3373,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 struct MethodTemplate *vtbl_imethod = (struct MethodTemplate *)vtbl_iface_method->cur;
                 if (vtbl_imethod != NULL && vtbl_imethod->name != NULL) {
                     const char *vtbl_resolved_id = codegen_find_class_method_impl_id(
-                        symtab, record_info, class_label, vtbl_imethod->name);
+                        symtab, record_info, class_label, iface_name, vtbl_imethod->name);
                     if (vtbl_resolved_id != NULL) {
                         /* Emit thunk in .text that adjusts Self back from interface
                          * pointer to raw object pointer, then jumps to the real method.
@@ -3695,10 +3695,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 struct MethodTemplate *imethod = (struct MethodTemplate *)iface_method->cur;
                 if (imethod != NULL && imethod->name != NULL) {
                     const char *impl_resolved_id = codegen_find_class_method_impl_id(
-                        symtab, record_info, class_label, imethod->name);
-                    if (impl_resolved_id == NULL && record_info->parent_class_name != NULL)
-                        impl_resolved_id = codegen_find_class_method_impl_id(
-                            symtab, NULL, record_info->parent_class_name, imethod->name);
+                        symtab, record_info, class_label, iface_name, imethod->name);
                     /* Build the interface method mangled name: InterfaceName__MethodName */
                     char iface_base[512];
                     snprintf(iface_base, sizeof(iface_base), "%s__%s", iface_name, imethod->name);
@@ -4002,9 +3999,33 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
 }
 
 
+static const char *codegen_find_interface_delegate_target_name(
+    const struct RecordType *record, const char *iface_name, const char *method_name)
+{
+    if (record == NULL || iface_name == NULL || method_name == NULL ||
+        record->method_templates == NULL)
+        return NULL;
+
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next) {
+        if (cur->type != LIST_METHOD_TEMPLATE || cur->cur == NULL)
+            continue;
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (!tmpl->is_interface_delegation ||
+            tmpl->delegated_interface_name == NULL ||
+            tmpl->name == NULL ||
+            tmpl->delegated_target_name == NULL)
+            continue;
+        if (strcasecmp(tmpl->delegated_interface_name, iface_name) == 0 &&
+            strcasecmp(tmpl->name, method_name) == 0)
+            return tmpl->delegated_target_name;
+    }
+
+    return NULL;
+}
+
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
-    const char *method_name)
+    const char *iface_name, const char *method_name)
 {
     const char *dbg_lookup = getenv("KGPC_DEBUG_METHOD_LOOKUP");
     const struct RecordType *cur_record = record;
@@ -4017,15 +4038,23 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
         if (owner_label == NULL)
             break;
 
+        const char *lookup_method_name = method_name;
+        if (cur_record != NULL && iface_name != NULL) {
+            const char *delegate_target = codegen_find_interface_delegate_target_name(
+                cur_record, iface_name, method_name);
+            if (delegate_target != NULL)
+                lookup_method_name = delegate_target;
+        }
+
         char base_name[512];
-        snprintf(base_name, sizeof(base_name), "%s__%s", owner_label, method_name);
+        snprintf(base_name, sizeof(base_name), "%s__%s", owner_label, lookup_method_name);
         if (dbg_lookup != NULL &&
             fallback_class_label != NULL &&
             (strcasecmp(fallback_class_label, "TList") == 0 ||
              strcasecmp(fallback_class_label, "TComponent") == 0 ||
              strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
             fprintf(stderr, "[KGPC] lookup %s method %s via %s\n",
-                fallback_class_label, method_name, base_name);
+                fallback_class_label, lookup_method_name, base_name);
         }
         ListNode_t *impl_candidates = FindAllIdents(symtab, base_name);
         const char *resolved_id = NULL;
@@ -4096,7 +4125,8 @@ static int codegen_class_implements_interface(SymTab_t *symtab,
         struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
         if (tmpl == NULL || tmpl->name == NULL)
             continue;
-        if (codegen_find_class_method_impl_id(symtab, record, class_label, tmpl->name) == NULL) {
+        if (codegen_find_class_method_impl_id(symtab, record, class_label,
+                iface_record->type_id, tmpl->name) == NULL) {
             result = 0;
             break;
         }

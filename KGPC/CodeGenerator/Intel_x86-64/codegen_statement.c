@@ -10353,7 +10353,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                  def->tree_data.subprogram_data.method_name != NULL)
         {
             const char *impl_target = codegen_find_class_method_impl_id(
-                symtab, NULL, def->tree_data.subprogram_data.owner_class,
+                symtab, NULL, def->tree_data.subprogram_data.owner_class, NULL,
                 def->tree_data.subprogram_data.method_name);
             if (impl_target != NULL &&
                 (proc_name == NULL || proc_name[0] == '\0' ||

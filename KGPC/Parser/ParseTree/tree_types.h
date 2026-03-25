@@ -157,9 +157,12 @@ enum MethodTemplateKind
 struct MethodTemplate
 {
     char *name;               /* Simple method name */
+    char *delegated_interface_name; /* Interface owner for IFoo.GetValue=Impl */
+    char *delegated_target_name; /* Concrete method target (e.g. GetValueImpl) */
     struct ast_t *method_ast; /* Cloned AST for the original declaration */
     struct Tree *method_tree; /* Converted Tree_t template built on-demand */
     enum MethodTemplateKind kind;  /* Method classification */
+    int is_interface_delegation; /* 1 if declared as IFoo.Method=Impl */
     int is_class_method;      /* 1 if declared with CLASS */
     int is_static;            /* 1 if directive static found (no Self parameter) */
     int is_virtual;           /* 1 if directive virtual found */

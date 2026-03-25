@@ -8848,45 +8848,137 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
     }
 }
 
+static int extract_interface_delegation_info(ast_t *method_decl_node,
+    char **iface_name_out, char **iface_method_out, char **target_name_out)
+{
+    if (iface_name_out != NULL)
+        *iface_name_out = NULL;
+    if (iface_method_out != NULL)
+        *iface_method_out = NULL;
+    if (target_name_out != NULL)
+        *target_name_out = NULL;
+    if (method_decl_node == NULL)
+        return 0;
+
+    ast_t *significant[3] = {0};
+    int count = 0;
+    for (ast_t *cur = method_decl_node->child; cur != NULL; cur = cur->next)
+    {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node == NULL)
+            continue;
+
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM ||
+            node->typ == PASCAL_T_RETURN_TYPE || node->typ == PASCAL_T_METHOD_DIRECTIVE)
+            return 0;
+
+        if (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_QUALIFIED_IDENTIFIER ||
+            (node->typ == PASCAL_T_NONE && node->child != NULL))
+        {
+            if (count >= 3)
+                return 0;
+            significant[count++] = node;
+        }
+    }
+
+    if (count != 3)
+        return 0;
+
+    QualifiedIdent *iface_qid = qualified_ident_from_ast(significant[0]);
+    QualifiedIdent *target_qid = qualified_ident_from_ast(significant[2]);
+    char *iface_name = iface_qid != NULL ? qualified_ident_join(iface_qid, ".") : dup_symbol(significant[0]);
+    char *iface_method = dup_symbol(significant[1]);
+    char *target_name = NULL;
+    if (target_qid != NULL)
+    {
+        const char *last = qualified_ident_last(target_qid);
+        if (last != NULL)
+            target_name = strdup(last);
+    }
+    if (target_name == NULL)
+        target_name = dup_symbol(significant[2]);
+    if (iface_qid != NULL)
+        qualified_ident_free(iface_qid);
+    if (target_qid != NULL)
+        qualified_ident_free(target_qid);
+
+    if (iface_name == NULL || iface_method == NULL || target_name == NULL)
+    {
+        free(iface_name);
+        free(iface_method);
+        free(target_name);
+        return 0;
+    }
+
+    if (iface_name_out != NULL)
+        *iface_name_out = iface_name;
+    else
+        free(iface_name);
+    if (iface_method_out != NULL)
+        *iface_method_out = iface_method;
+    else
+        free(iface_method);
+    if (target_name_out != NULL)
+        *target_name_out = target_name;
+    else
+        free(target_name);
+    return 1;
+}
+
 static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 {
     if (method_decl_node == NULL)
-        return NULL;
-
-    ast_t *name_node = method_decl_node->child;
-    while (name_node != NULL)
-    {
-        if (name_node->typ == PASCAL_T_IDENTIFIER)
-        {
-            const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
-            if (sym_name != NULL &&
-                (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
-            {
-                name_node = name_node->next;
-                continue;
-            }
-            break;
-        }
-        name_node = name_node->next;
-    }
-    if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
         return NULL;
 
     struct MethodTemplate *template = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
     if (template == NULL)
         return NULL;
 
-    template->name = strdup(name_node->sym->name);
-    if (template->name == NULL)
+    if (!extract_interface_delegation_info(method_decl_node,
+            &template->delegated_interface_name, &template->name,
+            &template->delegated_target_name))
     {
-        free(template);
-        return NULL;
+        ast_t *name_node = method_decl_node->child;
+        while (name_node != NULL)
+        {
+            if (name_node->typ == PASCAL_T_IDENTIFIER)
+            {
+                const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
+                if (sym_name != NULL &&
+                    (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
+                {
+                    name_node = name_node->next;
+                    continue;
+                }
+                break;
+            }
+            name_node = name_node->next;
+        }
+        if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+        template->name = strdup(name_node->sym->name);
+        if (template->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+    }
+    else
+    {
+        template->is_interface_delegation = 1;
     }
 
     template->method_ast = copy_ast_detached(method_decl_node);
     if (template->method_ast == NULL)
     {
         free(template->name);
+        free(template->delegated_interface_name);
+        free(template->delegated_target_name);
         free(template);
         return NULL;
     }
@@ -8979,7 +9071,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                             if (template != NULL)
                             {
                                 template->is_class_method = 1;
-                                {
+                                if (!template->is_interface_delegation) {
                                     int param_count = from_cparser_count_params_ast(template->params_ast);
                                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                                     register_class_method_ex(class_name, template->name,
@@ -9071,7 +9163,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                {
+                if (!template->is_interface_delegation) {
                     int param_count = from_cparser_count_params_ast(template->params_ast);
                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                     register_class_method_ex(class_name, template->name,
@@ -12677,7 +12769,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
@@ -12707,7 +12799,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     {
                         if (template->is_class_method)
                             template->is_static = 1;
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,

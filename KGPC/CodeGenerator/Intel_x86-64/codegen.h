@@ -163,7 +163,7 @@ const char *codegen_subprogram_emission_symbol(HashNode_t *cand);
 int codegen_has_available_subprogram_label(const char *label);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
-    const char *method_name);
+    const char *iface_name, const char *method_name);
 
 /*
  * Compiler invariant policy:

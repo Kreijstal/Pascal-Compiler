@@ -10296,7 +10296,7 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
                 continue;
 
             struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
-            if (tmpl->name == NULL)
+            if (tmpl->name == NULL || tmpl->is_interface_delegation)
                 continue;
 
             ListNode_t *bindings = NULL;
@@ -11216,7 +11216,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         if (template_cur->type == LIST_METHOD_TEMPLATE)
                         {
                             struct MethodTemplate *tmpl = (struct MethodTemplate *)template_cur->cur;
-                            if (tmpl != NULL && tmpl->name != NULL)
+                            if (tmpl != NULL && tmpl->name != NULL &&
+                                !tmpl->is_interface_delegation)
                             {
                                 char *mangled = make_method_lookup_key(
                                     tree->tree_data.type_decl_data.id, tmpl->name);

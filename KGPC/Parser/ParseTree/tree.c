@@ -211,6 +211,8 @@ static void destroy_method_template(struct MethodTemplate *method)
     if (method == NULL)
         return;
     free(method->name);
+    free(method->delegated_interface_name);
+    free(method->delegated_target_name);
     /* Method templates keep detached AST copies for later specialization and
      * semantic queries. Several code paths still share substructure across those
      * detached copies, so reclaiming them during compiler teardown can trip
@@ -231,9 +233,14 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
         return NULL;
 
     clone->name = method->name != NULL ? strdup(method->name) : NULL;
+    clone->delegated_interface_name = method->delegated_interface_name != NULL
+        ? strdup(method->delegated_interface_name) : NULL;
+    clone->delegated_target_name = method->delegated_target_name != NULL
+        ? strdup(method->delegated_target_name) : NULL;
     clone->method_ast = method->method_ast != NULL ? copy_ast_detached(method->method_ast) : NULL;
     clone->method_tree = NULL; /* Method trees are rebuilt on demand */
     clone->kind = method->kind;
+    clone->is_interface_delegation = method->is_interface_delegation;
     clone->is_class_method = method->is_class_method;
     clone->is_static = method->is_static;
     clone->is_virtual = method->is_virtual;

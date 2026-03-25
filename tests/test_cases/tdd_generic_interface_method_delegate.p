@@ -1,27 +1,29 @@
 {$mode objfpc}
-program tdd_interface_method_delegate;
+program tdd_generic_interface_method_delegate;
 
 type
   IFoo = interface
     function GetValue: Integer;
   end;
 
-  TFoo = class(TInterfacedObject, IFoo)
+  generic TFoo<T> = class(TInterfacedObject, IFoo)
   public
     function GetValueImpl: Integer;
     function IFoo.GetValue=GetValueImpl;
   end;
 
+  TFooInt = specialize TFoo<Integer>;
+
 function TFoo.GetValueImpl: Integer;
 begin
-  Result := 42;
+  Result := 84;
 end;
 
 var
-  F: TFoo;
+  F: TFooInt;
   I: IFoo;
 begin
-  F := TFoo.Create;
+  F := TFooInt.Create;
   I := F;
   WriteLn(I.GetValue);
 end.

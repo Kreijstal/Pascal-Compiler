@@ -168,9 +168,89 @@ static void mark_class_constructors_from_subprograms(ListNode_t *sub_list, Subpr
 static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
     const char *method_name, SubprogramMap *map);
+static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map);
 static int lookup_id_parse_owner_method(const char *lookup_id, char *owner_buf,
     size_t owner_buf_sz, char *method_buf, size_t method_buf_sz);
 static void scan_used_subprogram_bodies(ListNode_t *sub_list, SubprogramMap *map);
+
+static Tree_t *find_record_type_decl(ListNode_t *type_list, const char *type_id)
+{
+    if (type_list == NULL || type_id == NULL)
+        return NULL;
+
+    for (ListNode_t *node = type_list; node != NULL; node = node->next) {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)node->cur;
+        if (tree->type != TREE_TYPE_DECL || tree->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (strcasecmp(tree->tree_data.type_decl_data.id, type_id) != 0)
+            continue;
+        return tree;
+    }
+
+    return NULL;
+}
+
+static const char *find_interface_delegate_target_name(
+    const struct RecordType *record, const char *iface_name, const char *method_name)
+{
+    if (record == NULL || iface_name == NULL || method_name == NULL ||
+        record->method_templates == NULL)
+        return NULL;
+
+    for (ListNode_t *node = record->method_templates; node != NULL; node = node->next) {
+        if (node->type != LIST_METHOD_TEMPLATE || node->cur == NULL)
+            continue;
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)node->cur;
+        if (!tmpl->is_interface_delegation ||
+            tmpl->delegated_interface_name == NULL ||
+            tmpl->name == NULL ||
+            tmpl->delegated_target_name == NULL)
+            continue;
+        if (strcasecmp(tmpl->delegated_interface_name, iface_name) == 0 &&
+            strcasecmp(tmpl->name, method_name) == 0)
+            return tmpl->delegated_target_name;
+    }
+
+    return NULL;
+}
+
+static void mark_interface_dispatch_target(ListNode_t *type_list,
+    const char *class_id, const struct RecordType *record,
+    const char *iface_name, const char *method_name, SubprogramMap *map)
+{
+    const char *cur_class = class_id;
+    const struct RecordType *cur_record = record;
+
+    while (cur_class != NULL && cur_record != NULL) {
+        const char *lookup_name = method_name;
+        const char *delegate_name = find_interface_delegate_target_name(
+            cur_record, iface_name, method_name);
+        if (delegate_name != NULL)
+            lookup_name = delegate_name;
+
+        char impl_id[512];
+        snprintf(impl_id, sizeof(impl_id), "%s__%s", cur_class, lookup_name);
+        Tree_t *sub = map_find(map, impl_id);
+        if (sub != NULL) {
+            mark_subprogram_recursive(sub, map);
+            mark_subprograms_by_id(map, impl_id);
+            return;
+        }
+
+        if (cur_record->parent_class_name == NULL)
+            break;
+        Tree_t *parent_tree = find_record_type_decl(type_list, cur_record->parent_class_name);
+        if (parent_tree == NULL ||
+            parent_tree->type != TREE_TYPE_DECL ||
+            parent_tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD ||
+            parent_tree->tree_data.type_decl_data.info.record == NULL)
+            break;
+        cur_class = parent_tree->tree_data.type_decl_data.id;
+        cur_record = parent_tree->tree_data.type_decl_data.info.record;
+    }
+}
 
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
@@ -1151,11 +1231,9 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                                         if (mi != NULL) method_name = mi->name;
                                     }
                                     if (method_name != NULL) {
-                                        /* Build: ClassName__MethodName */
-                                        char impl_id[512];
-                                        snprintf(impl_id, sizeof(impl_id), "%s__%s",
-                                            class_id, method_name);
-                                        mark_subprograms_by_id(map, impl_id);
+                                        mark_interface_dispatch_target(
+                                            program->tree_data.program_data.type_declaration,
+                                            class_id, record_info, iface_name, method_name, map);
                                     }
                                     imethod = imethod->next;
                                 }
