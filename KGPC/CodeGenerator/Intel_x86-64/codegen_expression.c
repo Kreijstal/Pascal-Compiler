@@ -4195,6 +4195,17 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     KgpcType *expr_type = expr_get_kgpc_type(expr);
     if (expr_type != NULL)
     {
+        if (kgpc_type_is_shortstring(expr_type))
+        {
+            *size_out = 256;
+            return 0;
+        }
+        if (kgpc_type_is_string(expr_type))
+        {
+            /* AnsiString/UnicodeString are pointer-sized */
+            *size_out = CODEGEN_POINTER_SIZE_BYTES;
+            return 0;
+        }
         if (kgpc_type_is_record(expr_type))
             return codegen_sizeof_record(ctx, expr_type->info.record_info, size_out, 0);
         if (kgpc_type_is_pointer(expr_type) && expr_type->info.points_to != NULL &&
