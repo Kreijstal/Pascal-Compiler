@@ -61,7 +61,9 @@ fpc-source/
 FPCSource/
 build/
 build-debug
+build-fpc/
 builddir/
 builddir-cross/
 FPCSource/
 FPCSource/
+FPCSource

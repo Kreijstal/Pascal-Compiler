@@ -1597,6 +1597,29 @@ static void semcheck_stmt_set_call_kgpc_type(struct Statement *stmt, KgpcType *t
     }
 }
 
+static void semcheck_stmt_set_call_owner_info(struct Statement *stmt,
+    const char *owner_class, const char *method_name)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return;
+
+    if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+        stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
+    }
+    if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+    {
+        free(stmt->stmt_data.procedure_call_data.cached_method_name);
+        stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
+    }
+
+    if (owner_class != NULL)
+        stmt->stmt_data.procedure_call_data.cached_owner_class = strdup(owner_class);
+    if (method_name != NULL)
+        stmt->stmt_data.procedure_call_data.cached_method_name = strdup(method_name);
+}
+
 /* Helper to check if a TypeAlias represents WideChar/UnicodeChar.
  * WideChar = Word (integer type), so we check alias_name, not CHAR_TYPE. */
 static int semcheck_alias_is_widechar(struct TypeAlias *alias)
@@ -4743,8 +4766,10 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             goto assignment_types_ok;
         }
 
-        if (semcheck_type_is_recordish(lhs_kgpctype) &&
-            !semcheck_type_is_recordish(rhs_kgpctype))
+        if ((semcheck_type_is_recordish(lhs_kgpctype) &&
+             !semcheck_type_is_recordish(rhs_kgpctype)) ||
+            (!semcheck_type_is_recordish(lhs_kgpctype) &&
+             semcheck_type_is_recordish(rhs_kgpctype)))
         {
             if (semcheck_try_record_assignment_operator(symtab, stmt, lhs_kgpctype,
                     &rhs_kgpctype, &rhs_owned))
@@ -6277,6 +6302,28 @@ skip_type_receiver_rewrite:
                     stmt->stmt_data.procedure_call_data.self_class_name =
                         strdup(self_record->type_id);
                 }
+                /* Interface method call check */
+                if (self_record != NULL && self_record->is_interface &&
+                    self_record->type_id != NULL && bare_method_name != NULL &&
+                    !stmt->stmt_data.procedure_call_data.is_interface_call &&
+                    self_record->method_templates != NULL)
+                {
+                    int idx = 0;
+                    for (ListNode_t *mt = self_record->method_templates; mt != NULL; mt = mt->next, idx++)
+                    {
+                        struct MethodTemplate *tmpl = (struct MethodTemplate *)mt->cur;
+                        if (tmpl != NULL && tmpl->name != NULL &&
+                            strcasecmp(tmpl->name, bare_method_name) == 0)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_interface_call = 1;
+                            stmt->stmt_data.procedure_call_data.vmt_index = idx;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(self_record->type_id);
+                            break;
+                        }
+                    }
+                }
                 /* Mark class method calls so codegen passes VMT as Self.
                  * Walk the parent class chain since the method may be inherited. */
                 if (self_record->type_id != NULL && bare_method_name != NULL)
@@ -7187,8 +7234,13 @@ skip_type_receiver_rewrite:
                 }
             }
 
-            semcheck_stmt_try_set_method_mangled_id(symtab, stmt, proc_id,
-                resolved_method != NULL ? resolved_method->mangled_id : NULL);
+            {
+                const char *overload_check_id =
+                    (resolved_method != NULL && resolved_method->id != NULL)
+                    ? resolved_method->id : proc_id;
+                semcheck_stmt_try_set_method_mangled_id(symtab, stmt, overload_check_id,
+                    resolved_method != NULL ? resolved_method->mangled_id : NULL);
+            }
             if (!static_method_receiver && resolved_method != NULL && resolved_method->id != NULL)
             {
                 char *resolved_proc_id = strdup(resolved_method->id);
@@ -7987,6 +8039,8 @@ proccall_parent_resolve_done:
         stmt->stmt_data.procedure_call_data.call_hash_type = resolved_proc->hash_type;
         semcheck_stmt_set_call_kgpc_type(stmt, resolved_proc->type,
             stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
+        semcheck_stmt_set_call_owner_info(stmt,
+            resolved_proc->owner_class, resolved_proc->method_name);
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         semcheck_mark_call_requires_static_link(resolved_proc);
 
@@ -8040,6 +8094,59 @@ proccall_parent_resolve_done:
                             stmt->stmt_data.procedure_call_data.self_class_name =
                                 strdup(resolved_proc->owner_class);
                         break;
+                    }
+                }
+            }
+        }
+
+        /* Interface method call check — if the owner class is an interface,
+         * mark this as an interface call so codegen emits indirect vtable dispatch.
+         * Only mark as interface call when Self is actually interface-typed:
+         * check the first argument's resolved type to avoid false positives on
+         * standalone procedures whose name matches an interface method pattern. */
+        if (resolved_proc->owner_class != NULL && resolved_proc->method_name != NULL &&
+            !stmt->stmt_data.procedure_call_data.is_interface_call)
+        {
+            struct RecordType *iface_record = semcheck_lookup_record_type(symtab,
+                resolved_proc->owner_class);
+            if (iface_record != NULL && iface_record->is_interface &&
+                iface_record->method_templates != NULL)
+            {
+                /* Verify the first argument (Self) is actually interface-typed.
+                 * This prevents false positives on direct calls to standalone
+                 * procedures like IMyCounter__DoIncrement(p) where p is Pointer. */
+                int self_is_interface = 0;
+                ListNode_t *call_args = stmt->stmt_data.procedure_call_data.expr_args;
+                if (call_args != NULL)
+                {
+                    struct Expression *self_arg = (struct Expression *)call_args->cur;
+                    if (self_arg != NULL && self_arg->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *self_type = self_arg->resolved_kgpc_type;
+                        /* Dereference pointer to get the underlying record type */
+                        if (self_type->kind == TYPE_KIND_POINTER && self_type->info.points_to != NULL)
+                            self_type = self_type->info.points_to;
+                        if (self_type->kind == TYPE_KIND_RECORD && self_type->info.record_info != NULL &&
+                            self_type->info.record_info->is_interface)
+                            self_is_interface = 1;
+                    }
+                }
+                if (self_is_interface)
+                {
+                    int idx = 0;
+                    for (ListNode_t *mt = iface_record->method_templates; mt != NULL; mt = mt->next, idx++)
+                    {
+                        struct MethodTemplate *tmpl = (struct MethodTemplate *)mt->cur;
+                        if (tmpl != NULL && tmpl->name != NULL &&
+                            strcasecmp(tmpl->name, resolved_proc->method_name) == 0)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_interface_call = 1;
+                            stmt->stmt_data.procedure_call_data.vmt_index = idx;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(resolved_proc->owner_class);
+                            break;
+                        }
                     }
                 }
             }

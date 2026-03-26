@@ -14,6 +14,8 @@
 #include <execinfo.h>
 #endif
 
+/* Forward declarations for unresolved method stubs — implementation after includes. */
+
 #include "codegen.h"
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -30,6 +32,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
@@ -45,6 +48,48 @@ extern const char *kgpc_getenv(const char *name);
 static inline int codegen_node_is_record_type(HashNode_t *node)
 {
     return hashnode_is_record(node);
+}
+
+/* Collect method labels that need stubs (referenced via @MethodName but
+ * body not available in the compilation unit).  Emitted as .weak stubs
+ * in the final pass so they don't conflict with real definitions. */
+static ListNode_t *g_unresolved_method_stubs = NULL;
+
+void codegen_add_unresolved_method_stub(const char *label)
+{
+    if (label == NULL) return;
+    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next)
+        if (n->cur != NULL && strcmp((const char *)n->cur, label) == 0)
+            return;
+    char *dup = strdup(label);
+    if (dup != NULL) {
+        ListNode_t *node = calloc(1, sizeof(ListNode_t));
+        if (node != NULL) {
+            node->cur = dup;
+            if (g_unresolved_method_stubs == NULL)
+                g_unresolved_method_stubs = node;
+            else
+                PushListNodeBack(g_unresolved_method_stubs, node);
+        } else {
+            free(dup);
+        }
+    }
+}
+
+void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms)
+{
+    (void)out;
+    (void)emitted_subprograms;
+    /* Stubs removed: unresolved method references should produce linker
+     * errors so that codegen bugs are caught instead of hidden. */
+    ListNode_t *cur = g_unresolved_method_stubs;
+    while (cur != NULL) {
+        ListNode_t *next = cur->next;
+        free(cur->cur);
+        free(cur);
+        cur = next;
+    }
+    g_unresolved_method_stubs = NULL;
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -286,15 +331,8 @@ static int codegen_expr_needs_class_method_vmt_self(const struct Expression *exp
 static int codegen_call_requires_class_method_vmt_self(const struct Expression *call_expr,
     CodeGenContext *ctx)
 {
-    HashNode_t *resolved = NULL;
-    const char *lookup_name = NULL;
-    const char *method_name = NULL;
-    const char *sep = NULL;
     const char *owner_class_name = NULL;
-    char parsed_class[128];
-    char parsed_method[128];
-    size_t class_len = 0;
-    size_t method_len = 0;
+    const char *method_name = NULL;
     struct RecordType *owner_record = NULL;
     struct RecordType *check_record = NULL;
     const char *check_class = NULL;
@@ -302,46 +340,18 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
     if (call_expr == NULL || call_expr->type != EXPR_FUNCTION_CALL)
         return 0;
 
-    resolved = call_expr->expr_data.function_call_data.resolved_func;
-    if (resolved != NULL && resolved->owner_class != NULL && resolved->method_name != NULL)
-    {
-        owner_class_name = resolved->owner_class;
-        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
-        if (owner_record == NULL || !record_type_is_class(owner_record))
-            return 0;
-        return from_cparser_is_method_nonstatic_class_method(
-            resolved->owner_class, resolved->method_name);
-    }
+    /* Use cached method identity from semantic checker (preferred). */
+    owner_class_name = call_expr->expr_data.function_call_data.cached_owner_class;
+    method_name = call_expr->expr_data.function_call_data.cached_method_name;
 
-    lookup_name = call_expr->expr_data.function_call_data.mangled_id;
-    if (lookup_name == NULL)
-        lookup_name = call_expr->expr_data.function_call_data.id;
-    method_name = call_expr->expr_data.function_call_data.id;
-    if (lookup_name == NULL)
-        lookup_name = method_name;
-
-    if (lookup_name != NULL)
+    /* Fallback: try deprecated resolved_func if cached fields not set. */
+    if (owner_class_name == NULL || method_name == NULL)
     {
-        sep = strstr(lookup_name, "__");
-        if (sep != NULL && sep != lookup_name)
+        HashNode_t *resolved = call_expr->expr_data.function_call_data.resolved_func;
+        if (resolved != NULL)
         {
-            class_len = (size_t)(sep - lookup_name);
-            if (class_len >= sizeof(parsed_class))
-                class_len = sizeof(parsed_class) - 1;
-            memcpy(parsed_class, lookup_name, class_len);
-            parsed_class[class_len] = '\0';
-            owner_class_name = parsed_class;
-
-            sep += 2;
-            while (sep[method_len] != '\0' && sep[method_len] != '_' &&
-                   method_len + 1 < sizeof(parsed_method))
-            {
-                parsed_method[method_len] = sep[method_len];
-                method_len++;
-            }
-            parsed_method[method_len] = '\0';
-            if (parsed_method[0] != '\0')
-                method_name = parsed_method;
+            owner_class_name = resolved->owner_class;
+            method_name = resolved->method_name;
         }
     }
 
@@ -353,6 +363,8 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
             return 1;
     }
 
+    /* Fall back to self_class_name for inherited/virtual calls. */
+    method_name = call_expr->expr_data.function_call_data.id;
     check_class = call_expr->expr_data.function_call_data.self_class_name;
     check_record = codegen_lookup_named_record_type(ctx, check_class);
     while (check_class != NULL && method_name != NULL)
@@ -1875,24 +1887,43 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
     const char *target_label = NULL;
     Register_t *target_typeinfo_reg = NULL;
 
-    /* Support dynamic class-reference variables on RHS (Obj is ObjType). */
+    /* Support dynamic class-reference variables on RHS (Obj is ObjType).
+     * This also handles bare field names in FPC RTL method bodies that
+     * bypass semcheck — codegen_get_nonlocal resolves them as Self.field. */
     if (ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.is_data.target_record_type == NULL &&
         expr->expr_data.is_data.target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindSymbol(&target_node, ctx->symtab, expr->expr_data.is_data.target_type_id) != 0 &&
-            target_node != NULL && target_node->hash_type == HASHTYPE_VAR)
+        int found = FindSymbol(&target_node, ctx->symtab,
+                               expr->expr_data.is_data.target_type_id);
+        int is_dynamic_ref = (found != 0 && target_node != NULL &&
+                              target_node->hash_type == HASHTYPE_VAR);
+        /* Also treat as dynamic if the name is not in the symtab at all
+         * but we're inside a class method (bare field name). */
+        if (!is_dynamic_ref && (found == 0 || target_node == NULL) &&
+            ctx->current_subprogram_owner_class != NULL &&
+            find_label("Self") != NULL)
+            is_dynamic_ref = 1;
+        if (is_dynamic_ref)
         {
+            Register_t *class_ref_reg = NULL;
             struct Expression target_expr;
             memset(&target_expr, 0, sizeof(target_expr));
             target_expr.line_num = expr->line_num;
             target_expr.col_num = expr->col_num;
             target_expr.type = EXPR_VAR_ID;
             target_expr.expr_data.id = expr->expr_data.is_data.target_type_id;
-            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &target_typeinfo_reg);
-            if (target_typeinfo_reg == NULL)
+            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &class_ref_reg);
+            if (class_ref_reg == NULL)
                 return inst_list;
+            /* The field value is a class reference (VMT pointer).
+             * Extract TYPEINFO from VMT offset 56 (vTypeInfo slot). */
+            char ti_buf[128];
+            snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t56(%s), %s\n",
+                     class_ref_reg->bit_64, class_ref_reg->bit_64);
+            inst_list = add_inst(inst_list, ti_buf);
+            target_typeinfo_reg = class_ref_reg;
         }
     }
 
@@ -3790,7 +3821,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     int result = codegen_sizeof_record_members(ctx, record->fields, &members_size, depth);
     if (result != 0)
         return result;
-    
+
     /* For classes, add 8 bytes for the VMT pointer at the beginning */
     if (record_type_is_class(record))
         *size_out = 8 + members_size;
@@ -3798,7 +3829,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         *size_out = members_size;
     record->cached_size = *size_out;
     record->has_cached_size = 1;
-    
+
     return 0;
 }
 
@@ -3977,10 +4008,8 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
                 expr->expr_data.record_access_data.field_id);
     }
 
-    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
-    if (expr_record != NULL)
-        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
-
+    /* Check resolved_kgpc_type first — the semantic checker may have
+     * rewritten the type (e.g. interface identifier → TGUID). */
     KgpcType *expr_type = expr_get_kgpc_type(expr);
     if (expr_type != NULL)
     {
@@ -3990,6 +4019,10 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
             kgpc_type_is_record(expr_type->info.points_to))
             return codegen_sizeof_record(ctx, expr_type->info.points_to->info.record_info, size_out, 0);
     }
+
+    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
+    if (expr_record != NULL)
+        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
 
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
@@ -4873,7 +4906,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
             }
 
             int offset = 0;
-            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset, ctx);
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), target_reg->bit_64);
             return add_inst(inst_list, buffer);
         }
@@ -8266,7 +8299,8 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
 }
 
 /* Code generation for non-local variable access */
-ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
+ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset,
+    CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -8276,10 +8310,170 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     assert(var_id != NULL);
     assert(offset != NULL);
 
-    char buffer[100];
+    char buffer[128];
     StackNode_t *var = find_label(var_id);
 
     if(var == NULL) {
+        /* If we're inside a nonstatic class method, the bare name may be a field
+         * of the owning class that semcheck didn't rewrite to Self.field (e.g.
+         * because the method body came from an AST cache and bypassed semcheck).
+         * Resolve it as Self + field_offset. */
+        if (ctx != NULL && ctx->current_subprogram_owner_class != NULL &&
+            ctx->symtab != NULL)
+        {
+            StackNode_t *self_slot = find_label("Self");
+            if (self_slot != NULL)
+            {
+                struct RecordType *class_record = NULL;
+                HashNode_t *class_node = NULL;
+                if (FindSymbol(&class_node, ctx->symtab,
+                        (char *)ctx->current_subprogram_owner_class) != 0 &&
+                    class_node != NULL)
+                {
+                    class_record = get_record_type_from_node(class_node);
+                }
+                /* If short name lookup fails, try the full dotted class path
+                 * (e.g. "HeapInc.ThreadState" for nested class types). */
+                if (class_record == NULL &&
+                    ctx->current_subprogram_owner_class_full != NULL)
+                {
+                    class_node = NULL;
+                    if (FindSymbol(&class_node, ctx->symtab,
+                            (char *)ctx->current_subprogram_owner_class_full) != 0 &&
+                        class_node != NULL)
+                    {
+                        class_record = get_record_type_from_node(class_node);
+                    }
+                }
+                if (class_record != NULL)
+                {
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (resolve_record_field(ctx->symtab, class_record, var_id,
+                            &field_desc, &field_offset, 0, 1) == 0 &&
+                        field_desc != NULL)
+                    {
+                        /* Load Self pointer, then add field offset. */
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tmovq\t-%d(%%rbp), %s\n",
+                            self_slot->offset, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        if (field_offset != 0)
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\taddq\t$%lld, %s\n",
+                                field_offset, current_non_local_reg64());
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        return inst_list;
+                    }
+
+                    /* Check if the bare name is a method of the owning class.
+                     * This handles @MethodName references in cached method bodies. */
+                    const char *method_label = NULL;
+                    for (ListNode_t *mn = class_record->methods; mn != NULL; mn = mn->next)
+                    {
+                        if (mn->cur == NULL)
+                            continue;
+                        struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                        if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                        {
+                            if (mi->resolved_mangled_id != NULL)
+                                method_label = mi->resolved_mangled_id;
+                            else if (mi->mangled_name != NULL)
+                                method_label = mi->mangled_name;
+                            break;
+                        }
+                    }
+                    /* Also search parent classes for inherited methods. */
+                    if (method_label == NULL)
+                    {
+                        struct RecordType *search_record = class_record;
+                        while (method_label == NULL && search_record != NULL &&
+                               search_record->parent_class_name != NULL)
+                        {
+                            HashNode_t *parent_node = NULL;
+                            if (FindSymbol(&parent_node, ctx->symtab,
+                                    search_record->parent_class_name) != 0 &&
+                                parent_node != NULL)
+                            {
+                                search_record = get_record_type_from_node(parent_node);
+                            }
+                            else
+                                break;
+                            if (search_record == NULL)
+                                break;
+                            for (ListNode_t *mn = search_record->methods; mn != NULL; mn = mn->next)
+                            {
+                                if (mn->cur == NULL)
+                                    continue;
+                                struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                                if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                                {
+                                    if (mi->resolved_mangled_id != NULL)
+                                        method_label = mi->resolved_mangled_id;
+                                    else if (mi->mangled_name != NULL)
+                                        method_label = mi->mangled_name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    /* If not found in MethodInfo lists, try the symbol table.
+                     * Methods may be registered under "ClassName.MethodName"
+                     * or "ClassName__MethodName" (mangled form). */
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s.%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        HashNode_t *method_node = NULL;
+                        if (FindSymbol(&method_node, ctx->symtab, qualified) != 0 &&
+                            method_node != NULL &&
+                            (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                             method_node->hash_type == HASHTYPE_FUNCTION))
+                        {
+                            if (method_node->mangled_id != NULL)
+                                method_label = method_node->mangled_id;
+                            else
+                                method_label = qualified;
+                        }
+                    }
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s__%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, qualified);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                method_label = cand->mangled_id;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                    }
+                    if (method_label != NULL)
+                    {
+                        /* Record this method label so we can emit a weak
+                         * stub in the final pass if no real definition
+                         * appears in the assembly output. */
+                        codegen_add_unresolved_method_stub(method_label);
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tleaq\t%s(%%rip), %s\n",
+                            method_label, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        return inst_list;
+                    }
+                }
+            }
+        }
+
         /* Fallback for unit/global symbols that are not represented as stack labels. */
         *offset = 0;
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", var_id,
@@ -9467,6 +9661,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (record_size == 0)
                     record_size = 1;
 
+
                 if (record_size > INT_MAX)
                 {
                     codegen_report_error(ctx,
@@ -9483,7 +9678,48 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 Register_t *src_reg = NULL;
-                if (codegen_expr_is_addressable(arg_expr))
+
+                /* Check if this is an interface type identifier used as a
+                 * GUID argument (e.g. Supports(Obj, IObserver, I)).
+                 * If so, load __kgpc_guid_<Name> directly instead of going
+                 * through codegen_address_for_expr which would emit a
+                 * reference to the bare interface label. */
+                int is_iface_guid_arg = 0;
+                if (record_size == 16 && arg_expr->type == EXPR_VAR_ID &&
+                    codegen_expr_is_addressable(arg_expr) &&
+                    ctx != NULL && ctx->symtab != NULL) {
+                    ListNode_t *all_idents = FindAllIdents(ctx->symtab, arg_expr->expr_data.id);
+                    for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
+                        HashNode_t *cand = (HashNode_t *)id_node->cur;
+                        if (cand == NULL) continue;
+                        struct RecordType *cand_rec = codegen_get_record_type_from_node(cand);
+                        if (cand_rec == NULL && cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_POINTER &&
+                            cand->type->info.points_to != NULL &&
+                            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            cand_rec = cand->type->info.points_to->info.record_info;
+                        if (cand_rec != NULL && cand_rec->is_interface) {
+                            is_iface_guid_arg = 1;
+                            break;
+                        }
+                    }
+                    if (all_idents != NULL) DestroyList(all_idents);
+                }
+
+                if (is_iface_guid_arg) {
+                    src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (src_reg == NULL) {
+                        codegen_report_error(ctx,
+                            "ERROR: Failed to allocate register for interface GUID argument.");
+                        return inst_list;
+                    }
+                    char guid_buf[512];
+                    snprintf(guid_buf, sizeof(guid_buf),
+                        "\tleaq\t__kgpc_guid_%s(%%rip), %s\n",
+                        arg_expr->expr_data.id, src_reg->bit_64);
+                    inst_list = add_inst(inst_list, guid_buf);
+                }
+                else if (codegen_expr_is_addressable(arg_expr))
                 {
                     inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
                     if (codegen_had_error(ctx) || src_reg == NULL)

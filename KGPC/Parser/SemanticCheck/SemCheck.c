@@ -462,7 +462,7 @@ static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode
     }
 }
 
-static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
+static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree, SymTab_t *symtab)
 {
     if (tree == NULL || tree->type != TREE_TYPE_DECL)
         return NULL;
@@ -480,7 +480,33 @@ static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree)
     }
 
     if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
-        return tree->tree_data.type_decl_data.info.record;
+    {
+        struct RecordType *record = tree->tree_data.type_decl_data.info.record;
+        /* When a forward-declared class is completed, the full declaration's
+         * RecordType becomes a depleted shell.  Look up the canonical record
+         * from the symbol table instead. */
+        if (record != NULL && record->is_class &&
+            record->fields == NULL && record->parent_fields_merged &&
+            symtab != NULL && tree->tree_data.type_decl_data.id != NULL)
+        {
+            HashNode_t *canon_node = NULL;
+            if (FindSymbol(&canon_node, symtab, tree->tree_data.type_decl_data.id) &&
+                canon_node != NULL && canon_node->type != NULL)
+            {
+                struct RecordType *canon = NULL;
+                KgpcType *ct = canon_node->type;
+                if (ct->kind == TYPE_KIND_RECORD)
+                    canon = ct->info.record_info;
+                else if (ct->kind == TYPE_KIND_POINTER &&
+                         ct->info.points_to != NULL &&
+                         ct->info.points_to->kind == TYPE_KIND_RECORD)
+                    canon = ct->info.points_to->info.record_info;
+                if (canon != NULL)
+                    return canon;
+            }
+        }
+        return record;
+    }
 
     return NULL;
 }
@@ -526,7 +552,9 @@ static int semcheck_record_candidate_is_forward_stub(struct RecordType *record)
     if (record->method_templates != NULL)
         return 0;
     if (record->parent_class_name != NULL &&
-        !pascal_identifier_equals(record->parent_class_name, "TObject"))
+        !pascal_identifier_equals(record->parent_class_name, "TObject") &&
+        !pascal_identifier_equals(record->parent_class_name, "IInterface") &&
+        !pascal_identifier_equals(record->parent_class_name, "IUnknown"))
         return 0;
 
     return 1;
@@ -576,6 +604,20 @@ int semcheck_is_unit_name(const char *name)
     if (unit_registry_contains(name))
         return 1;
     return 0;
+}
+
+/* Build a method lookup key in the form "ClassName__MethodName".
+ * Centralises the __ convention so it lives in one place.
+ * Caller must free() the returned string. */
+static char *make_method_lookup_key(const char *class_name, const char *method_name)
+{
+    if (class_name == NULL || method_name == NULL)
+        return NULL;
+    size_t len = strlen(class_name) + 2 + strlen(method_name) + 1;
+    char *key = (char *)malloc(len);
+    if (key != NULL)
+        snprintf(key, len, "%s__%s", class_name, method_name);
+    return key;
 }
 
 /* Helper declared in SemCheck_expr.c */
@@ -3093,13 +3135,9 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                 cur_method = cur_method->next;
                 continue;
             }
-            /* Build the mangled name: ClassName__MethodName */
-            size_t mangled_len = strlen(class_name) + 2 + strlen(binding->method_name) + 1;
-            char *mangled_name = (char *)malloc(mangled_len);
+            char *mangled_name = make_method_lookup_key(class_name, binding->method_name);
             if (mangled_name != NULL)
             {
-                snprintf(mangled_name, mangled_len, "%s__%s", class_name, binding->method_name);
-                
                 /* Look up the mangled method in the symbol table */
                 HashNode_t *method_node = NULL;
                 if (FindSymbol(&method_node, symtab, mangled_name) != 0 && method_node != NULL)
@@ -9170,6 +9208,27 @@ static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                 /* Skip TYPE_DECL_RECORD, TYPE_DECL_GENERIC, TYPE_DECL_RANGE - 
                  * these have complex dependencies and are handled by semcheck_type_decls */
 predeclare_types_next:
+                /* Ensure every record type_decl tree has kgpc_type set, even
+                 * if the predeclare pass skipped it as a duplicate.  Without
+                 * this, codegen falls back to info.record which may be a
+                 * depleted shell after forward-declaration resolution. */
+                if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
+                    tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                {
+                    const char *tid = tree->tree_data.type_decl_data.id;
+                    if (tid != NULL)
+                    {
+                        HashNode_t *canon_node = NULL;
+                        if (FindSymbol(&canon_node, symtab, tid) &&
+                            canon_node != NULL &&
+                            canon_node->hash_type == HASHTYPE_TYPE &&
+                            canon_node->type != NULL)
+                        {
+                            tree->tree_data.type_decl_data.kgpc_type = canon_node->type;
+                            kgpc_type_retain(canon_node->type);
+                        }
+                    }
+                }
                 semcheck_restore_scope(symtab, saved_scope_for_type);
             }
         }
@@ -9489,7 +9548,21 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
         if (self_node != NULL) {
             struct RecordType *canonical = get_record_type_from_node(self_node);
             if (canonical != NULL && canonical != record_info && canonical->parent_fields_merged)
+            {
+                /* Canonical instance was already merged — propagate its merged
+                 * state to this instance so codegen (which may use this instance
+                 * via the Tree_t node) sees the correct fields and interfaces. */
+                if (!record_info->parent_fields_merged) {
+                    record_info->fields = canonical->fields;
+                    record_info->num_interfaces = canonical->num_interfaces;
+                    record_info->interface_names = canonical->interface_names;
+                    record_info->properties = canonical->properties;
+                    record_info->cached_size = canonical->cached_size;
+                    record_info->has_cached_size = canonical->has_cached_size;
+                    record_info->parent_fields_merged = 1;
+                }
                 return 0;
+            }
         }
     }
 
@@ -9706,6 +9779,39 @@ static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record
             record_info->properties = ConcatList(cloned_properties, record_info->properties);
     }
 
+    /* Merge parent's interfaces into child's interface_names.
+     * Only add interfaces the child doesn't already declare. */
+    if (parent_record != NULL && parent_record->num_interfaces > 0)
+    {
+        for (int pi = 0; pi < parent_record->num_interfaces; pi++)
+        {
+            const char *parent_iface = parent_record->interface_names[pi];
+            if (parent_iface == NULL) continue;
+            int already_declared = 0;
+            for (int ci = 0; ci < record_info->num_interfaces; ci++)
+            {
+                if (record_info->interface_names[ci] != NULL &&
+                    strcasecmp(record_info->interface_names[ci], parent_iface) == 0)
+                {
+                    already_declared = 1;
+                    break;
+                }
+            }
+            if (!already_declared)
+            {
+                int new_count = record_info->num_interfaces + 1;
+                char **new_names = (char **)realloc(record_info->interface_names,
+                    new_count * sizeof(char *));
+                if (new_names != NULL)
+                {
+                    new_names[new_count - 1] = strdup(parent_iface);
+                    record_info->interface_names = new_names;
+                    record_info->num_interfaces = new_count;
+                }
+            }
+        }
+    }
+
     /* Detect default indexed property after merging parent fields */
     detect_default_indexed_property(record_info, parent_record);
 
@@ -9823,13 +9929,7 @@ if (record_info->parent_class_name != NULL) {
         ClassMethodBinding *binding = (ClassMethodBinding *)cur_method->cur;
         if (binding != NULL && binding->method_name != NULL) {
             /* Resolve the full mangled name for this method overload when possible. */
-            size_t class_len = strlen(class_name);
-            size_t method_len = strlen(binding->method_name);
-            char *base_name = (char *)malloc(class_len + 2 + method_len + 1);
-            if (base_name != NULL) {
-                snprintf(base_name, class_len + 2 + method_len + 1, "%s__%s",
-                         class_name, binding->method_name);
-            }
+            char *base_name = make_method_lookup_key(class_name, binding->method_name);
             char *mangled = NULL;
             if (base_name != NULL && symtab != NULL)
             {
@@ -10023,11 +10123,9 @@ if (record_info->parent_class_name != NULL) {
         /* Fallback: search by class_name + method_name with param matching */
         if (mi->name == NULL)
             continue;
-        size_t base_len = strlen(class_name) + 2 + strlen(mi->name) + 1;
-        char *base_name = (char *)malloc(base_len);
+        char *base_name = make_method_lookup_key(class_name, mi->name);
         if (base_name == NULL)
             continue;
-        snprintf(base_name, base_len, "%s__%s", class_name, mi->name);
         ListNode_t *matches = FindAllIdents(symtab, base_name);
 
         /* Priority 0: exact mangled_id match — only for defined (non-abstract) functions
@@ -10198,7 +10296,7 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
                 continue;
 
             struct MethodTemplate *tmpl = (struct MethodTemplate *)tmpl_cur->cur;
-            if (tmpl->name == NULL)
+            if (tmpl->name == NULL || tmpl->is_interface_delegation)
                 continue;
 
             ListNode_t *bindings = NULL;
@@ -10237,11 +10335,9 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
             if (tmpl->name == NULL || (!tmpl->is_virtual && !tmpl->is_override))
                 continue;
 
-            size_t base_len = strlen(class_name) + 2 + strlen(tmpl->name) + 1;
-            char *base_name = (char *)malloc(base_len);
+            char *base_name = make_method_lookup_key(class_name, tmpl->name);
             if (base_name == NULL)
                 continue;
-            snprintf(base_name, base_len, "%s__%s", class_name, tmpl->name);
 
             const char *resolved_id = NULL;
             int wanted_params = from_cparser_count_params_ast(tmpl->params_ast);
@@ -10998,7 +11094,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
         {
             case TYPE_DECL_RECORD:
                 var_type = HASHVAR_RECORD;
-                record_info = semcheck_record_from_type_decl(tree);
+                record_info = semcheck_record_from_type_decl(tree, symtab);
 
                 /* Set the type_id on the RecordType so operator overloading can find it */
                 if (record_info != NULL && record_info->type_id == NULL && tree->tree_data.type_decl_data.id != NULL)
@@ -11046,7 +11142,72 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Advanced records can declare default indexed properties too. */
                     detect_default_indexed_property(record_info, NULL);
                 }
-                
+
+                /* For interfaces with a parent interface, prepend the parent's
+                 * method_templates so that the full list (parent methods first)
+                 * is available for vtable index assignment and codegen.  This
+                 * replaces the recursive collection previously done in codegen. */
+                if (record_info != NULL && record_info->is_interface &&
+                    record_info->parent_class_name != NULL)
+                {
+                    HashNode_t *parent_iface_node = semcheck_find_preferred_type_node(
+                        symtab, record_info->parent_class_name);
+                    struct RecordType *parent_iface = parent_iface_node != NULL
+                        ? get_record_type_from_node(parent_iface_node) : NULL;
+                    if (parent_iface != NULL && parent_iface->is_interface &&
+                        parent_iface->method_templates != NULL)
+                    {
+                        /* Clone parent's method_templates and prepend them.
+                         * Parent's list already includes grandparent methods
+                         * (processed earlier due to top-down declaration order). */
+                        ListNode_t *cloned_head = NULL;
+                        ListNode_t *cloned_tail = NULL;
+                        for (ListNode_t *pm = parent_iface->method_templates; pm != NULL; pm = pm->next)
+                        {
+                            struct MethodTemplate *orig = (struct MethodTemplate *)pm->cur;
+                            if (orig == NULL) continue;
+                            /* Check if this method already exists in the current
+                             * interface's own method_templates (override). */
+                            int already_present = 0;
+                            for (ListNode_t *own = record_info->method_templates; own != NULL; own = own->next)
+                            {
+                                struct MethodTemplate *own_mt = (struct MethodTemplate *)own->cur;
+                                if (own_mt != NULL && own_mt->name != NULL && orig->name != NULL &&
+                                    strcasecmp(own_mt->name, orig->name) == 0)
+                                {
+                                    already_present = 1;
+                                    break;
+                                }
+                            }
+                            if (already_present) continue;
+                            struct MethodTemplate *cloned = clone_method_template_detached(orig);
+                            if (cloned == NULL)
+                                continue;
+                            ListNode_t *node = CreateListNode(cloned, LIST_METHOD_TEMPLATE);
+                            if (node == NULL)
+                            {
+                                free(cloned->name);
+                                free(cloned->delegated_interface_name);
+                                free(cloned->delegated_target_name);
+                                free(cloned);
+                                continue;
+                            }
+                            if (cloned_head == NULL) {
+                                cloned_head = node;
+                                cloned_tail = node;
+                            } else {
+                                cloned_tail->next = node;
+                                cloned_tail = node;
+                            }
+                        }
+                        if (cloned_head != NULL) {
+                            /* Prepend: parent methods first, then own methods */
+                            cloned_tail->next = record_info->method_templates;
+                            record_info->method_templates = cloned_head;
+                        }
+                    }
+                }
+
                 /* Process method templates and register them with class method bindings.
                  * Methods declared in class type sections (e.g., abstract methods)
                  * may not have been registered during parsing if they were only forward
@@ -11059,16 +11220,13 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                         if (template_cur->type == LIST_METHOD_TEMPLATE)
                         {
                             struct MethodTemplate *tmpl = (struct MethodTemplate *)template_cur->cur;
-                            if (tmpl != NULL && tmpl->name != NULL)
+                            if (tmpl != NULL && tmpl->name != NULL &&
+                                !tmpl->is_interface_delegation)
                             {
-                                /* Build mangled name: ClassName__MethodName */
-                                size_t class_len = strlen(tree->tree_data.type_decl_data.id);
-                                size_t method_len = strlen(tmpl->name);
-                                char *mangled = (char *)malloc(class_len + 2 + method_len + 1);
+                                char *mangled = make_method_lookup_key(
+                                    tree->tree_data.type_decl_data.id, tmpl->name);
                                 if (mangled != NULL)
                                 {
-                                    snprintf(mangled, class_len + 2 + method_len + 1, "%s__%s",
-                                             tree->tree_data.type_decl_data.id, tmpl->name);
 
                                     /* Check if already registered in class_method_bindings */
                                     ListNode_t *bindings = NULL;
@@ -12144,6 +12302,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
+            /* Mark as suppressed so codegen does not try to emit VMTs
+             * from this duplicate tree (its info.record may be depleted
+             * after forward-declaration resolution moved fields away). */
+            tree->tree_data.type_decl_data.suppress_codegen = 1;
             goto semcheck_type_decls_next;
         }
 
@@ -16915,10 +17077,40 @@ next_identifier:
                                  proc_symbol->hash_type == HASHTYPE_FUNCTION))
                             {
                                 init_expr->type = EXPR_ADDR_OF_PROC;
-                                init_expr->expr_data.addr_of_proc_data.proc_mangled_id =
-                                    proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
-                                init_expr->expr_data.addr_of_proc_data.proc_id =
-                                    proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                {
+                                    const char *proc_target = NULL;
+                                    if (proc_symbol->internproc_id != NULL &&
+                                        proc_symbol->internproc_id[0] != '\0')
+                                    {
+                                        proc_target = proc_symbol->internproc_id;
+                                    }
+                                    else if (proc_symbol->type != NULL &&
+                                             proc_symbol->type->kind == TYPE_KIND_PROCEDURE &&
+                                             proc_symbol->type->info.proc_info.definition != NULL)
+                                    {
+                                        Tree_t *def = proc_symbol->type->info.proc_info.definition;
+                                        if (def->tree_data.subprogram_data.cname_override != NULL &&
+                                            def->tree_data.subprogram_data.cname_override[0] != '\0')
+                                        {
+                                            proc_target = def->tree_data.subprogram_data.cname_override;
+                                        }
+                                        else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                                                 def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                                        {
+                                            proc_target = def->tree_data.subprogram_data.mangled_id;
+                                        }
+                                    }
+                                    if (proc_target == NULL &&
+                                        proc_symbol->mangled_id != NULL &&
+                                        proc_symbol->mangled_id[0] != '\0')
+                                    {
+                                        proc_target = proc_symbol->mangled_id;
+                                    }
+                                    init_expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                                        proc_target != NULL ? strdup(proc_target) : NULL;
+                                    init_expr->expr_data.addr_of_proc_data.proc_id =
+                                        proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                }
                                 /* Resolve the type NOW while the symbol is still alive. */
                                 if (expr_type != NULL)
                                     destroy_kgpc_type(expr_type);
@@ -17399,22 +17591,16 @@ next_identifier:
 }
 
 /* For nested type methods like "Outer.Inner__Method", register the short alias
- * "Inner__Method" so that code using just the inner type name can find it. */
-static void register_nested_type_short_alias(SymTab_t *symtab, const char *id_to_use_for_lookup,
+ * "Inner__Method" so code using just the inner type name can find the method.
+ * Uses structural owner metadata from the subprogram node instead of parsing
+ * the dotted owner path string. */
+static void register_nested_type_short_alias(SymTab_t *symtab,
+    const char *owner_class_outer, const char *owner_class, const char *method_name,
     const char *mangled_id, KgpcType *type, int is_function)
 {
-    if (id_to_use_for_lookup == NULL)
+    if (owner_class_outer == NULL || owner_class == NULL || method_name == NULL)
         return;
-    const char *dunder = strstr(id_to_use_for_lookup, "__");
-    if (dunder == NULL || dunder <= id_to_use_for_lookup)
-        return;
-    const char *last_dot = NULL;
-    for (const char *p = id_to_use_for_lookup; p < dunder; p++)
-        if (*p == '.')
-            last_dot = p;
-    if (last_dot == NULL || last_dot + 1 >= dunder)
-        return;
-    char *short_name = strdup(last_dot + 1);
+    char *short_name = make_method_lookup_key(owner_class, method_name);
     if (short_name == NULL)
         return;
     HashNode_t *existing_short = NULL;
@@ -17545,14 +17731,18 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             debug_external = (kgpc_getenv("KGPC_DEBUG_EXTERNAL") != NULL);
         const char *explicit_name = subprogram->tree_data.subprogram_data.cname_override;
         if (explicit_name != NULL) {
-            char *overload_mangled = MangleFunctionName(
-                subprogram->tree_data.subprogram_data.id,
-                subprogram->tree_data.subprogram_data.args_var,
-                symtab);
-            if (overload_mangled != NULL)
-                subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
-            else
+            if (subprogram->tree_data.subprogram_data.statement_list != NULL) {
                 subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+            } else {
+                char *overload_mangled = MangleFunctionName(
+                    subprogram->tree_data.subprogram_data.id,
+                    subprogram->tree_data.subprogram_data.args_var,
+                    symtab);
+                if (overload_mangled != NULL)
+                    subprogram->tree_data.subprogram_data.mangled_id = overload_mangled;
+                else
+                    subprogram->tree_data.subprogram_data.mangled_id = strdup(explicit_name);
+            }
         } else if (subprogram->tree_data.subprogram_data.cname_flag) {
             const char *export_name = subprogram->tree_data.subprogram_data.id;
             if (debug_external) {
@@ -17743,7 +17933,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
             }
             /* For nested type methods, also register the short alias. */
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
             /* Still set existing_decl for subsequent code that needs it */
             FindSymbol(&existing_decl, symtab, id_to_use_for_lookup);
@@ -17777,6 +17970,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (existing_decl->internproc_id != NULL)
                 free(existing_decl->internproc_id);
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+        }
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internconst_id != NULL)
+        {
+            if (existing_decl->internconst_id != NULL)
+                free(existing_decl->internconst_id);
+            existing_decl->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
         }
 
         EnterScope(symtab,
@@ -17918,7 +18117,10 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             /* For nested type methods like "Outer.Inner__Method", also register
              * the short alias "Inner__Method" so that generic method bodies using
              * just the inner type name can find the method. */
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_full,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, func_type, 1);
         }
         else
@@ -17961,6 +18163,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             if (existing_decl->internproc_id != NULL)
                 free(existing_decl->internproc_id);
             existing_decl->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+        }
+        if (existing_decl != NULL && subprogram->tree_data.subprogram_data.internconst_id != NULL)
+        {
+            if (existing_decl->internconst_id != NULL)
+                free(existing_decl->internconst_id);
+            existing_decl->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
         }
 
         EnterScope(symtab,
@@ -18669,7 +18877,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 
         /* For nested type methods, also register the short alias during predeclaration. */
         if (func_return == 0)
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, proc_type, 0);
 
         /* Propagate flags and method identity to the hash node.
@@ -18693,6 +18904,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+                }
+                if (subprogram->tree_data.subprogram_data.internconst_id != NULL) {
+                    if (node->internconst_id != NULL) free(node->internconst_id);
+                    node->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
                 }
                 copy_method_identity_to_node(node, subprogram);
             }
@@ -18744,7 +18959,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
          * the short alias "Inner__Method" during predeclaration so that
          * generic method clones can find them. */
         if (func_return == 0)
-            register_nested_type_short_alias(symtab, id_to_use_for_lookup,
+            register_nested_type_short_alias(symtab,
+                subprogram->tree_data.subprogram_data.owner_class_outer,
+                subprogram->tree_data.subprogram_data.owner_class,
+                subprogram->tree_data.subprogram_data.method_name,
                 subprogram->tree_data.subprogram_data.mangled_id, func_type, 1);
 
         /* Propagate flags — search only the target table (see proc case above). */
@@ -18765,6 +18983,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
                 if (subprogram->tree_data.subprogram_data.internproc_id != NULL) {
                     if (node->internproc_id != NULL) free(node->internproc_id);
                     node->internproc_id = strdup(subprogram->tree_data.subprogram_data.internproc_id);
+                }
+                if (subprogram->tree_data.subprogram_data.internconst_id != NULL) {
+                    if (node->internconst_id != NULL) free(node->internconst_id);
+                    node->internconst_id = strdup(subprogram->tree_data.subprogram_data.internconst_id);
                 }
                 copy_method_identity_to_node(node, subprogram);
             }

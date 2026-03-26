@@ -133,6 +133,7 @@ typedef struct Tree
             int is_varargs;               /* 1 if declared with varargs directive (C-style variadic) */
             int is_operator;              /* 1 if declared with operator keyword (class operator, global operator) */
             char *internproc_id;          /* FPC [INTERNPROC: name] identifier (e.g. "fpc_in_Rewrite_TypedFile") */
+            char *internconst_id;         /* FPC [INTERNCONST: name] identifier (e.g. "fpc_in_const_ptr") */
             int is_nested_scope;          /* 1 if nested inside another function (mangled as parent$child) */
             struct HashNode *cached_predecl_node; /* Cached predeclaration match for semcheck Pass 2 */
         } subprogram_data;
@@ -234,6 +235,7 @@ void destroy_tree(Tree_t *tree);
 void destroy_stmt(struct Statement *stmt);
 void destroy_expr(struct Expression *expr);
 void destroy_record_type(struct RecordType *record_type);
+struct MethodTemplate *clone_method_template_detached(const struct MethodTemplate *method);
 struct RecordType *clone_record_type(const struct RecordType *record_type);
 
 /* Tree routines */

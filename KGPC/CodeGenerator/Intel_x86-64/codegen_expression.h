@@ -11,7 +11,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
     int arg_start_index, const struct Expression *call_expr);
 ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx);
-ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *);
+ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *, CodeGenContext *);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
@@ -20,6 +20,9 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
 ListNode_t *codegen_condition_expr(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);
 ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_list, CodeGenContext *ctx);
+
+void codegen_add_unresolved_method_stub(const char *label);
+void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms);
 
 ListNode_t *codegen_expr(struct Expression *, ListNode_t *, CodeGenContext *ctx);
 ListNode_t *codegen_expr_with_result(struct Expression *, ListNode_t *, CodeGenContext *ctx, Register_t **out_reg);

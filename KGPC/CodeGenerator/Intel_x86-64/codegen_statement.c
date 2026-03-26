@@ -9,6 +9,60 @@
 #include "codegen_statement.h"
 #include "stackmng/stackmng.h"
 #include "expr_tree/expr_tree.h"
+
+static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_stmt_arg_int", 8);
+        int_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_stmt_arg_xmm", 16);
+        xmm_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
+static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        if (reg != NULL && int_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", int_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        if (reg != NULL && xmm_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t-%d(%%rbp), %s\n", xmm_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
 #include "codegen_expression.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
@@ -1569,7 +1623,7 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             if (nonlocal_flag() == 1)
             {
                 int offset = 0;
-                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
                 Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
                 if (addr_reg == NULL)
                 {
@@ -3598,17 +3652,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             if (!call_returns_sret && call_returns_record && record_size > 8)
                 call_returns_sret = 1;
 
-            /* Detect constructors even if the static type isn't a record (e.g., pointer return). */
-            int is_constructor = 0;
-            if (func_mangled_name != NULL)
-            {
-                /* Use case-insensitive search since mangled names are now lowercased */
-                const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
-                if (create_pos != NULL)
-                    is_constructor = 1;
-                else if (pascal_identifier_equals(func_mangled_name, "Create"))
-                    is_constructor = 1;
-            }
+            /* Detect constructors from semantic checker flag. */
+            int is_constructor = src_expr->expr_data.function_call_data.is_constructor_call;
 
             /* Constructor chaining: when a constructor calls another constructor
              * on Self (e.g., Create(name, mode, 438) inside TFileStream.Create),
@@ -3768,11 +3813,15 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                                     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
                                         vmt_reg->bit_64, constructor_instance_reg->bit_64);
                                     inst_list = add_inst(inst_list, buffer);
-                                    
+
                                     free_reg(get_reg_stack(), vmt_reg);
                                 }
+
+                                inst_list = codegen_emit_interface_vtable_slot_init(
+                                    inst_list, ctx, class_record, class_type_id,
+                                    constructor_instance_reg);
                             }
-                            
+
                             /* Pass remaining arguments starting from index 1 (skip class type argument) */
                             inst_list = codegen_pass_arguments(
                                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
@@ -4886,7 +4935,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
                  * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
                  * "qword ptr" would be rejected by the assembler.  Skip the body entirely
-                 * and let the runtime library's strong symbol override the .weak stub. */
+                 * and let the runtime library's stub override the empty function body. */
                 if (pascal_strcasestr(src, "dword ptr") != NULL ||
                     pascal_strcasestr(src, "qword ptr") != NULL ||
                     pascal_strcasestr(src, "byte ptr")  != NULL ||
@@ -7234,7 +7283,7 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
         else
         {
             int offset = 0;
-            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, target_expr->expr_data.id, &offset, ctx);
             if (target_uses_qword)
                 snprintf(buffer, sizeof(buffer), "\taddq\t%s, -%d(%s)\n", increment_reg->bit_64, offset, current_non_local_reg64());
             else
@@ -8726,12 +8775,44 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (assign_expr != NULL && assign_expr->type == EXPR_RECORD_CONSTRUCTOR)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
 
-    int lhs_is_record_value = 0;
     KgpcType *lhs_kgpc_type = expr_get_kgpc_type(var_expr);
+    KgpcType *rhs_kgpc_type = expr_get_kgpc_type(assign_expr);
+    int lhs_is_pointer_destination = 0;
+    int rhs_is_address_value = 0;
+    int rhs_is_addressable_record = 0;
+
+    if (lhs_kgpc_type != NULL &&
+        (kgpc_type_is_pointer(lhs_kgpc_type) || kgpc_type_is_procedure(lhs_kgpc_type)))
+    {
+        lhs_is_pointer_destination = 1;
+    }
+    else
+    {
+        int lhs_tag = expr_get_type_tag(var_expr);
+        lhs_is_pointer_destination = (lhs_tag == POINTER_TYPE || lhs_tag == PROCEDURE);
+    }
+
+    rhs_is_address_value = (assign_expr != NULL &&
+        (assign_expr->type == EXPR_ADDR || assign_expr->type == EXPR_ADDR_OF_PROC));
+    rhs_is_addressable_record = (assign_expr != NULL &&
+        rhs_kgpc_type != NULL &&
+        kgpc_type_is_record(rhs_kgpc_type) &&
+        (assign_expr->type == EXPR_VAR_ID || assign_expr->type == EXPR_RECORD_ACCESS));
+
+    if (lhs_is_pointer_destination && rhs_is_addressable_record && !rhs_is_address_value)
+    {
+        assign_expr = mk_addressof(assign_expr->line_num, assign_expr);
+        rhs_is_address_value = 1;
+    }
+
+    int lhs_is_record_value = 0;
     if (lhs_kgpc_type != NULL)
         lhs_is_record_value = kgpc_type_is_record(lhs_kgpc_type);
     else if (expr_get_type_tag(var_expr) == RECORD_TYPE && !var_expr->is_array_expr)
         lhs_is_record_value = 1;
+
+    if (lhs_is_pointer_destination && rhs_is_address_value)
+        lhs_is_record_value = 0;
 
     if (lhs_is_record_value)
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
@@ -9417,7 +9498,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         else
         {
 
-            inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, var_expr->expr_data.id, &offset, ctx);
             int use_qword = codegen_type_uses_qword(var_type);
             /* Override for Single type (4-byte float): check resolved type storage */
             long long resolved_size = (var_expr->resolved_kgpc_type != NULL) ?
@@ -10196,6 +10277,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             stmt->stmt_data.procedure_call_data.is_call_info_valid;
         call_expr->expr_data.function_call_data.is_virtual_call =
             stmt->stmt_data.procedure_call_data.is_virtual_call;
+        call_expr->expr_data.function_call_data.is_interface_call =
+            stmt->stmt_data.procedure_call_data.is_interface_call;
         call_expr->expr_data.function_call_data.vmt_index =
             stmt->stmt_data.procedure_call_data.vmt_index;
         if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
@@ -10239,6 +10322,26 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(alias);
             proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+        }
+        else if (def->tree_data.subprogram_data.owner_class != NULL &&
+                 def->tree_data.subprogram_data.method_name != NULL)
+        {
+            const char *impl_target = codegen_find_class_method_impl_id(
+                symtab, NULL, def->tree_data.subprogram_data.owner_class, NULL,
+                def->tree_data.subprogram_data.method_name);
+            if (impl_target != NULL &&
+                (proc_name == NULL || proc_name[0] == '\0' ||
+                 strcmp(proc_name, def->tree_data.subprogram_data.method_name) == 0 ||
+                 (unmangled_name != NULL && strcmp(proc_name, unmangled_name) == 0)))
+            {
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                {
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                    stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+                }
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(impl_target);
+                proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+            }
         }
     }
 // removed assert on proc_name
@@ -10558,7 +10661,19 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
         inst_list = codegen_vect_reg(inst_list, 0);
         CODEGEN_DEBUG("DEBUG PROC_CALL: proc_name=%s\n", proc_name ? proc_name : "NULL");
-        if (stmt->stmt_data.procedure_call_data.is_virtual_call &&
+        if (stmt->stmt_data.procedure_call_data.is_interface_call &&
+            stmt->stmt_data.procedure_call_data.vmt_index >= 0)
+        {
+            int self_arg_index = should_pass_static_link ? 1 : 0;
+            inst_list = codegen_emit_interface_dispatch(
+                inst_list, ctx, current_arg_reg64(self_arg_index),
+                stmt->stmt_data.procedure_call_data.self_class_name,
+                stmt->stmt_data.procedure_call_data.vmt_index,
+                "intf_stmt", "__intf_stmt_target", 0,
+                codegen_spill_call_arg_regs_stmt,
+                codegen_restore_call_arg_regs_stmt);
+        }
+        else if (stmt->stmt_data.procedure_call_data.is_virtual_call &&
             stmt->stmt_data.procedure_call_data.vmt_index >= 0)
         {
             /* Virtual method call through VMT for procedure (void return type).

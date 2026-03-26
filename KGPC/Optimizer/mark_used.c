@@ -31,6 +31,29 @@ typedef struct {
     SubprogramEntry *id_buckets[SUBPROG_MAP_BUCKETS];
 } SubprogramMap;
 
+static unsigned subprog_hash(const char *s);
+
+static void map_add_secondary(SubprogramEntry **buckets, const char *key, Tree_t *subprogram)
+{
+    if (key == NULL || subprogram == NULL)
+        return;
+
+    char *lower_key = pascal_identifier_lower_dup(key);
+    if (lower_key == NULL)
+        return;
+
+    unsigned idx = subprog_hash(lower_key);
+    SubprogramEntry *entry = malloc(sizeof(SubprogramEntry));
+    if (entry == NULL) {
+        free(lower_key);
+        return;
+    }
+    entry->canonical_id = lower_key;
+    entry->subprogram = subprogram;
+    entry->next = buckets[idx];
+    buckets[idx] = entry;
+}
+
 static unsigned subprog_hash(const char *s) {
     unsigned h = 0;
     for (; *s; s++)
@@ -83,21 +106,15 @@ static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogr
 
     /* Secondary index: by lowered unmangled id */
     const char *id = subprogram->tree_data.subprogram_data.id;
-    if (id != NULL) {
-        char *lower_id = pascal_identifier_lower_dup(id);
-        if (lower_id != NULL) {
-            unsigned id_idx = subprog_hash(lower_id);
-            SubprogramEntry *id_entry = malloc(sizeof(SubprogramEntry));
-            if (id_entry != NULL) {
-                id_entry->canonical_id = lower_id;
-                id_entry->subprogram = subprogram;
-                id_entry->next = map->id_buckets[id_idx];
-                map->id_buckets[id_idx] = id_entry;
-            } else {
-                free(lower_id);
-            }
-        }
-    }
+    if (id != NULL)
+        map_add_secondary(map->id_buckets, id, subprogram);
+
+    /* Methods are frequently referenced later by bare method_name
+     * (e.g. forward decl/body reconciliation or @SetStatus), so index
+     * them there too. */
+    const char *method_name = subprogram->tree_data.subprogram_data.method_name;
+    if (method_name != NULL && (id == NULL || strcasecmp(method_name, id) != 0))
+        map_add_secondary(map->id_buckets, method_name, subprogram);
 }
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
@@ -146,9 +163,94 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
 static void mark_expr_calls(struct Expression *expr, SubprogramMap *map);
 static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map);
 static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map);
+static void mark_class_constructors_from_types(ListNode_t *type_list, SubprogramMap *map);
+static void mark_class_constructors_from_subprograms(ListNode_t *sub_list, SubprogramMap *map);
 static void mark_subprograms_by_id(SubprogramMap *map, const char *id);
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
     const char *method_name, SubprogramMap *map);
+static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map);
+static int lookup_id_parse_owner_method(const char *lookup_id, char *owner_buf,
+    size_t owner_buf_sz, char *method_buf, size_t method_buf_sz);
+static void scan_used_subprogram_bodies(ListNode_t *sub_list, SubprogramMap *map);
+
+static Tree_t *find_record_type_decl(ListNode_t *type_list, const char *type_id)
+{
+    if (type_list == NULL || type_id == NULL)
+        return NULL;
+
+    for (ListNode_t *node = type_list; node != NULL; node = node->next) {
+        if (node->type != LIST_TREE || node->cur == NULL)
+            continue;
+        Tree_t *tree = (Tree_t *)node->cur;
+        if (tree->type != TREE_TYPE_DECL || tree->tree_data.type_decl_data.id == NULL)
+            continue;
+        if (strcasecmp(tree->tree_data.type_decl_data.id, type_id) != 0)
+            continue;
+        return tree;
+    }
+
+    return NULL;
+}
+
+static const char *find_interface_delegate_target_name(
+    const struct RecordType *record, const char *iface_name, const char *method_name)
+{
+    if (record == NULL || iface_name == NULL || method_name == NULL ||
+        record->method_templates == NULL)
+        return NULL;
+
+    for (ListNode_t *node = record->method_templates; node != NULL; node = node->next) {
+        if (node->type != LIST_METHOD_TEMPLATE || node->cur == NULL)
+            continue;
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)node->cur;
+        if (!tmpl->is_interface_delegation ||
+            tmpl->delegated_interface_name == NULL ||
+            tmpl->name == NULL ||
+            tmpl->delegated_target_name == NULL)
+            continue;
+        if (strcasecmp(tmpl->delegated_interface_name, iface_name) == 0 &&
+            strcasecmp(tmpl->name, method_name) == 0)
+            return tmpl->delegated_target_name;
+    }
+
+    return NULL;
+}
+
+static void mark_interface_dispatch_target(ListNode_t *type_list,
+    const char *class_id, const struct RecordType *record,
+    const char *iface_name, const char *method_name, SubprogramMap *map)
+{
+    const char *cur_class = class_id;
+    const struct RecordType *cur_record = record;
+
+    while (cur_class != NULL && cur_record != NULL) {
+        const char *lookup_name = method_name;
+        const char *delegate_name = find_interface_delegate_target_name(
+            cur_record, iface_name, method_name);
+        if (delegate_name != NULL)
+            lookup_name = delegate_name;
+
+        char impl_id[512];
+        snprintf(impl_id, sizeof(impl_id), "%s__%s", cur_class, lookup_name);
+        Tree_t *sub = map_find(map, impl_id);
+        if (sub != NULL) {
+            mark_subprogram_recursive(sub, map);
+            mark_subprograms_by_id(map, impl_id);
+            return;
+        }
+
+        if (cur_record->parent_class_name == NULL)
+            break;
+        Tree_t *parent_tree = find_record_type_decl(type_list, cur_record->parent_class_name);
+        if (parent_tree == NULL ||
+            parent_tree->type != TREE_TYPE_DECL ||
+            parent_tree->tree_data.type_decl_data.kind != TYPE_DECL_RECORD ||
+            parent_tree->tree_data.type_decl_data.info.record == NULL)
+            break;
+        cur_class = parent_tree->tree_data.type_decl_data.id;
+        cur_record = parent_tree->tree_data.type_decl_data.info.record;
+    }
+}
 
 /* Mark a subprogram and recursively mark all functions it calls */
 static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
@@ -184,6 +286,16 @@ static void mark_subprogram_recursive(Tree_t *sub, SubprogramMap *map) {
 
     /* Traverse the body to find calls */
     mark_stmt_calls(body, map);
+}
+
+static void mark_related_subprogram_overloads(Tree_t *sub, SubprogramMap *map)
+{
+    if (sub == NULL || sub->type != TREE_SUBPROGRAM || map == NULL)
+        return;
+
+    const char *plain_id = sub->tree_data.subprogram_data.id;
+    if (plain_id != NULL)
+        mark_subprograms_by_id(map, plain_id);
 }
 
 /* Helper to check if a pointer looks valid (not garbage from uninitialized union members) */
@@ -228,15 +340,78 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             const char *lookup_id = expr->expr_data.function_call_data.mangled_id;
             if (lookup_id == NULL)
                 lookup_id = expr->expr_data.function_call_data.id;
+            Tree_t *called_sub = NULL;
+            if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+                expr->expr_data.function_call_data.is_constructor_call) {
+                struct Expression *recv = expr->expr_data.function_call_data.constructor_receiver_expr;
+                fprintf(stderr,
+                    "[mark_used] ctor call lookup=%s id=%s owner=%s method=%s recv_type=%d recv_id=%s procdef=%p\n",
+                    lookup_id != NULL ? lookup_id : "(null)",
+                    expr->expr_data.function_call_data.id != NULL ? expr->expr_data.function_call_data.id : "(null)",
+                    expr->expr_data.function_call_data.cached_owner_class != NULL ? expr->expr_data.function_call_data.cached_owner_class : "(null)",
+                    expr->expr_data.function_call_data.cached_method_name != NULL ? expr->expr_data.function_call_data.cached_method_name : "(null)",
+                    recv != NULL ? recv->type : -1,
+                    (recv != NULL && recv->type == EXPR_VAR_ID && recv->expr_data.id != NULL) ? recv->expr_data.id : "(n/a)",
+                    (void *)(expr->expr_data.function_call_data.call_kgpc_type != NULL ? expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition : NULL));
+            }
             if (lookup_id != NULL) {
-                Tree_t *called_sub = map_find(map, lookup_id);
-                if (called_sub != NULL)
+                int trace_missing_calls = getenv("KGPC_TRACE_MISSING_CALLS") != NULL &&
+                    (strcasecmp(lookup_id, "format_us_a") == 0 ||
+                     strcasecmp(lookup_id, "format_s_a") == 0 ||
+                     strcasecmp(lookup_id, "codepagenametocodepage_s") == 0 ||
+                     strcasecmp(lookup_id, "stringofchar_c_li") == 0 ||
+                     strcasecmp(lookup_id, "stringofchar_c_i64") == 0);
+                if (trace_missing_calls)
+                {
+                    fprintf(stderr,
+                        "[mark_used] funccall lookup=%s id=%s owner=%s method=%s procdef=%p\n",
+                        lookup_id,
+                        expr->expr_data.function_call_data.id != NULL ? expr->expr_data.function_call_data.id : "(null)",
+                        expr->expr_data.function_call_data.cached_owner_class != NULL ? expr->expr_data.function_call_data.cached_owner_class : "(null)",
+                        expr->expr_data.function_call_data.cached_method_name != NULL ? expr->expr_data.function_call_data.cached_method_name : "(null)",
+                        (void *)(expr->expr_data.function_call_data.call_kgpc_type != NULL ? expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition : NULL));
+                }
+                called_sub = map_find(map, lookup_id);
+                if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
-            } else if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
-                       expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
-                Tree_t *called_sub = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
-                if (called_sub != NULL)
+                    mark_related_subprogram_overloads(called_sub, map);
+                }
+                else
+                {
+                    char owner_buf[256];
+                    char method_buf[256];
+                    if (lookup_id_parse_owner_method(lookup_id, owner_buf, sizeof(owner_buf),
+                            method_buf, sizeof(method_buf)))
+                        mark_class_methods_by_owner(NULL, owner_buf, method_buf, map);
+                }
+            }
+            if (called_sub == NULL) {
+                const char *owner = expr->expr_data.function_call_data.cached_owner_class;
+                const char *method = expr->expr_data.function_call_data.cached_method_name;
+                if (owner != NULL && method != NULL)
+                    mark_class_methods_by_owner(NULL, owner, method, map);
+            }
+            if (called_sub == NULL &&
+                expr->expr_data.function_call_data.is_constructor_call &&
+                expr->expr_data.function_call_data.constructor_receiver_expr != NULL) {
+                struct Expression *recv = expr->expr_data.function_call_data.constructor_receiver_expr;
+                if (recv->type == EXPR_VAR_ID && recv->expr_data.id != NULL) {
+                    const char *method = expr->expr_data.function_call_data.cached_method_name;
+                    if (method == NULL)
+                        method = expr->expr_data.function_call_data.id;
+                    if (method == NULL)
+                        method = "create";
+                    mark_class_methods_by_owner(NULL, recv->expr_data.id, method, map);
+                }
+            }
+            if (called_sub == NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                called_sub = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+                if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
+                    mark_related_subprogram_overloads(called_sub, map);
+                }
             }
             /* Also check constructor receiver and procedural var expressions */
             if (is_valid_pointer(expr->expr_data.function_call_data.constructor_receiver_expr) &&
@@ -308,9 +483,33 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_ADDR:
-            if (is_valid_pointer(expr->expr_data.addr_data.expr) && 
+            if (is_valid_pointer(expr->expr_data.addr_data.expr) &&
                 expr->expr_data.addr_data.expr != NULL)
-                mark_expr_calls(expr->expr_data.addr_data.expr, map);
+            {
+                struct Expression *addr_inner = expr->expr_data.addr_data.expr;
+                /* When semcheck doesn't convert @MethodName to EXPR_ADDR_OF_PROC
+                 * (e.g. unit method bodies not fully semchecked), the expression
+                 * stays as EXPR_ADDR(EXPR_VAR_ID("MethodName")).  Try to find the
+                 * named procedure/method in the subprogram map and mark it used. */
+                const char *addr_id = NULL;
+                if (addr_inner->type == EXPR_VAR_ID)
+                    addr_id = addr_inner->expr_data.id;
+                else if (addr_inner->type == EXPR_FUNCTION_CALL &&
+                         addr_inner->expr_data.function_call_data.args_expr == NULL)
+                    addr_id = addr_inner->expr_data.function_call_data.id;
+                if (addr_id != NULL)
+                {
+                    Tree_t *addr_sub = map_find(map, addr_id);
+                    if (addr_sub != NULL)
+                        mark_subprogram_recursive(addr_sub, map);
+                    /* Also mark all overloads with the same bare name in case
+                     * multiple classes define methods with this name (e.g.
+                     * TSimpleStatusThread.SetStatus and
+                     * TSimpleStatusProcThread.SetStatus). */
+                    mark_subprograms_by_id(map, addr_id);
+                }
+                mark_expr_calls(addr_inner, map);
+            }
             break;
             
         case EXPR_TYPECAST:
@@ -339,6 +538,14 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             Tree_t *called_sub = map_find(map, mangled_id);
             if (called_sub != NULL) {
                 mark_subprogram_recursive(called_sub, map);
+            }
+            else
+            {
+                char owner_buf[256];
+                char method_buf[256];
+                if (lookup_id_parse_owner_method(mangled_id, owner_buf, sizeof(owner_buf),
+                        method_buf, sizeof(method_buf)))
+                    mark_class_methods_by_owner(NULL, owner_buf, method_buf, map);
             }
             break;
         }
@@ -397,16 +604,35 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
             const char *lookup_id = stmt->stmt_data.procedure_call_data.mangled_id;
             if (lookup_id == NULL)
                 lookup_id = stmt->stmt_data.procedure_call_data.id;
+            Tree_t *called_sub = NULL;
             if (lookup_id != NULL) {
-                Tree_t *called_sub = map_find(map, lookup_id);
+                called_sub = map_find(map, lookup_id);
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
+                    mark_related_subprogram_overloads(called_sub, map);
                 }
-            } else if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
-                       stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
-                Tree_t *called_sub = stmt->stmt_data.procedure_call_data.call_kgpc_type->info.proc_info.definition;
+                else
+                {
+                    char owner_buf[256];
+                    char method_buf[256];
+                    if (lookup_id_parse_owner_method(lookup_id, owner_buf, sizeof(owner_buf),
+                            method_buf, sizeof(method_buf)))
+                        mark_class_methods_by_owner(NULL, owner_buf, method_buf, map);
+                }
+            }
+            if (called_sub == NULL) {
+                const char *owner = stmt->stmt_data.procedure_call_data.cached_owner_class;
+                const char *method = stmt->stmt_data.procedure_call_data.cached_method_name;
+                if (owner != NULL && method != NULL)
+                    mark_class_methods_by_owner(NULL, owner, method, map);
+            }
+            if (called_sub == NULL &&
+                stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL &&
+                stmt->stmt_data.procedure_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE) {
+                called_sub = stmt->stmt_data.procedure_call_data.call_kgpc_type->info.proc_info.definition;
                 if (called_sub != NULL) {
                     mark_subprogram_recursive(called_sub, map);
+                    mark_related_subprogram_overloads(called_sub, map);
                 }
             }
             /* Also check arguments */
@@ -694,6 +920,90 @@ static void build_subprogram_map(ListNode_t *sub_list, SubprogramMap *map) {
         }
         sub_list = sub_list->next;
     }
+
+}
+
+static void build_loaded_unit_subprogram_map(CompilationContext *comp_ctx, SubprogramMap *map)
+{
+    if (comp_ctx == NULL || map == NULL)
+        return;
+
+    for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui)
+    {
+        Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+        if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+            continue;
+
+        if (unit_tree->tree_data.unit_data.subprograms != NULL)
+            build_subprogram_map(unit_tree->tree_data.unit_data.subprograms, map);
+    }
+}
+
+static void scan_used_subprogram_bodies(ListNode_t *sub_list, SubprogramMap *map)
+{
+    while (sub_list != NULL) {
+        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
+            Tree_t *sub = (Tree_t *)sub_list->cur;
+            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.is_used) {
+                struct Statement *body = sub->tree_data.subprogram_data.statement_list;
+                if (body != NULL)
+                    mark_stmt_calls(body, map);
+            }
+        }
+        sub_list = sub_list->next;
+    }
+}
+
+static void mark_class_constructors_from_types(ListNode_t *type_list, SubprogramMap *map)
+{
+    while (type_list != NULL)
+    {
+        if (type_list->type == LIST_TREE && type_list->cur != NULL)
+        {
+            Tree_t *type_tree = (Tree_t *)type_list->cur;
+            if (type_tree->type == TREE_TYPE_DECL && type_tree->tree_data.type_decl_data.id != NULL)
+            {
+                struct RecordType *record_info = NULL;
+                if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
+                    record_info = type_tree->tree_data.type_decl_data.info.record;
+                else if (type_tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+                    record_info = type_tree->tree_data.type_decl_data.info.alias.inline_record_type;
+
+                if (record_info != NULL && record_type_is_class(record_info))
+                {
+                    if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+                        strcasecmp(type_tree->tree_data.type_decl_data.id, "TFPListEnumerator") == 0)
+                    {
+                        fprintf(stderr, "[mark_used] type-scan hit class %s\n",
+                            type_tree->tree_data.type_decl_data.id);
+                    }
+                    mark_class_methods_by_owner(NULL, type_tree->tree_data.type_decl_data.id, "Create", map);
+                }
+            }
+        }
+        type_list = type_list->next;
+    }
+}
+
+static void mark_class_constructors_from_subprograms(ListNode_t *sub_list, SubprogramMap *map)
+{
+    while (sub_list != NULL)
+    {
+        if (sub_list->type == LIST_TREE && sub_list->cur != NULL)
+        {
+            Tree_t *sub = (Tree_t *)sub_list->cur;
+            if (sub->type == TREE_SUBPROGRAM)
+            {
+                const char *owner = sub->tree_data.subprogram_data.owner_class;
+                const char *method = sub->tree_data.subprogram_data.method_name;
+                if (owner != NULL && method != NULL && strcasecmp(method, "Create") == 0)
+                    mark_subprogram_recursive(sub, map);
+                if (sub->tree_data.subprogram_data.subprograms != NULL)
+                    mark_class_constructors_from_subprograms(sub->tree_data.subprogram_data.subprograms, map);
+            }
+        }
+        sub_list = sub_list->next;
+    }
 }
 
 void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
@@ -702,23 +1012,27 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     SubprogramMap map;
     map_init(&map);
     
-    /* Build map of all subprograms */
+    /* Build map of all program and loaded-unit subprograms. */
     build_subprogram_map(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL)
+            build_loaded_unit_subprogram_map(comp_ctx, &map);
+    }
     
     /* First, traverse bodies of already-used subprograms (e.g., from previous call).
      * This ensures that functions called by specialized methods are discovered. */
-    ListNode_t *pre_pass = program->tree_data.program_data.subprograms;
-    while (pre_pass != NULL) {
-        if (pre_pass->type == LIST_TREE && pre_pass->cur != NULL) {
-            Tree_t *sub = (Tree_t*)pre_pass->cur;
-            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.is_used) {
-                struct Statement *body = sub->tree_data.subprogram_data.statement_list;
-                if (body != NULL) {
-                    mark_stmt_calls(body, &map);
-                }
+    scan_used_subprogram_bodies(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                scan_used_subprogram_bodies(unit_tree->tree_data.unit_data.subprograms, &map);
             }
         }
-        pre_pass = pre_pass->next;
     }
     
     /* Start from the main program body */
@@ -763,6 +1077,37 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
 
     /* Ensure VMT methods are retained even if they are not explicitly called. */
     mark_vmt_methods_used(program, &map);
+    mark_class_constructors_from_types(program->tree_data.program_data.type_declaration, &map);
+    mark_class_constructors_from_subprograms(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                mark_class_constructors_from_types(unit_tree->tree_data.unit_data.interface_type_decls, &map);
+                mark_class_constructors_from_types(unit_tree->tree_data.unit_data.implementation_type_decls, &map);
+                mark_class_constructors_from_subprograms(unit_tree->tree_data.unit_data.subprograms, &map);
+            }
+        }
+    }
+
+    /* VMT/interface rooting can mark additional class methods in loaded units.
+     * Traverse used bodies again so nested calls from those newly-retained
+     * methods are discovered too (e.g. unit GetEnumerator -> constructor). */
+    scan_used_subprogram_bodies(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                scan_used_subprogram_bodies(unit_tree->tree_data.unit_data.subprograms, &map);
+            }
+        }
+    }
     
     /* IMPORTANT: Second pass to sync forward declarations with implementations */
     /* For each subprogram, if it has the same mangled_id as another, sync is_used */
@@ -783,6 +1128,22 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
             }
         }
         sub_list = sub_list->next;
+    }
+
+    /* Forward/body reconciliation can mark additional implementations as used
+     * after the earlier scans. Walk used bodies one last time so nested calls
+     * from those synchronized unit methods are not missed. */
+    scan_used_subprogram_bodies(program->tree_data.program_data.subprograms, &map);
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                scan_used_subprogram_bodies(unit_tree->tree_data.unit_data.subprograms, &map);
+            }
+        }
     }
     
     #ifdef DEBUG_OPTIMIZER
@@ -900,11 +1261,9 @@ static void mark_vmt_methods_used(Tree_t *program, SubprogramMap *map)
                                         if (mi != NULL) method_name = mi->name;
                                     }
                                     if (method_name != NULL) {
-                                        /* Build: ClassName__MethodName */
-                                        char impl_id[512];
-                                        snprintf(impl_id, sizeof(impl_id), "%s__%s",
-                                            class_id, method_name);
-                                        mark_subprograms_by_id(map, impl_id);
+                                        mark_interface_dispatch_target(
+                                            program->tree_data.program_data.type_declaration,
+                                            class_id, record_info, iface_name, method_name, map);
                                     }
                                     imethod = imethod->next;
                                 }
@@ -943,8 +1302,30 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
     const char *method_name, SubprogramMap *map)
 {
-    if (sub_list == NULL || owner_class == NULL || method_name == NULL || map == NULL)
+    if (owner_class == NULL || method_name == NULL || map == NULL)
         return;
+
+    int trace_tfplistenum = getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+        strcasecmp(owner_class, "TFPListEnumerator") == 0;
+    if (trace_tfplistenum && sub_list == NULL)
+        fprintf(stderr, "[mark_used] begin owner-scan %s.%s across loaded units\n", owner_class, method_name);
+
+    if (sub_list == NULL)
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL)
+        {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui)
+            {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree != NULL && unit_tree->type == TREE_UNIT &&
+                    unit_tree->tree_data.unit_data.subprograms != NULL)
+                    mark_class_methods_by_owner(unit_tree->tree_data.unit_data.subprograms,
+                        owner_class, method_name, map);
+            }
+        }
+        return;
+    }
 
     size_t owner_len = strlen(owner_class);
     size_t method_len = strlen(method_name);
@@ -972,14 +1353,31 @@ static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_
                 matches_mangled_prefix = 1;
             }
         }
+        if (trace_tfplistenum)
+        {
+            fprintf(stderr,
+                "[mark_used] scan owner=%s method=%s sub_owner=%s sub_method=%s mangled=%s body=%d used=%d\n",
+                owner_class, method_name,
+                sub_owner != NULL ? sub_owner : "(null)",
+                sub_method != NULL ? sub_method : "(null)",
+                sub_mangled != NULL ? sub_mangled : "(null)",
+                sub->tree_data.subprogram_data.statement_list != NULL,
+                sub->tree_data.subprogram_data.is_used);
+        }
         if (sub_owner != NULL && sub_method != NULL &&
             strcasecmp(sub_owner, owner_class) == 0 &&
             strcasecmp(sub_method, method_name) == 0)
         {
+            if (trace_tfplistenum)
+                fprintf(stderr, "[mark_used] direct match -> %s\n",
+                    sub_mangled != NULL ? sub_mangled : "(null)");
             mark_subprogram_recursive(sub, map);
         }
         else if (matches_mangled_prefix)
         {
+            if (trace_tfplistenum)
+                fprintf(stderr, "[mark_used] prefix match -> %s\n",
+                    sub_mangled != NULL ? sub_mangled : "(null)");
             mark_subprogram_recursive(sub, map);
         }
 
@@ -989,4 +1387,30 @@ static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_
                 owner_class, method_name, map);
         }
     }
+}
+
+static int lookup_id_parse_owner_method(const char *lookup_id, char *owner_buf,
+    size_t owner_buf_sz, char *method_buf, size_t method_buf_sz)
+{
+    if (lookup_id == NULL || owner_buf == NULL || method_buf == NULL ||
+        owner_buf_sz == 0 || method_buf_sz == 0)
+        return 0;
+
+    const char *sep = strstr(lookup_id, "__");
+    if (sep == NULL || sep == lookup_id || sep[2] == '\0')
+        return 0;
+
+    size_t owner_len = (size_t)(sep - lookup_id);
+    size_t method_len = 0;
+    const char *method_start = sep + 2;
+    while (method_start[method_len] != '\0' && method_start[method_len] != '_')
+        method_len++;
+    if (owner_len + 1 > owner_buf_sz || method_len + 1 > method_buf_sz || method_len == 0)
+        return 0;
+
+    memcpy(owner_buf, lookup_id, owner_len);
+    owner_buf[owner_len] = '\0';
+    memcpy(method_buf, method_start, method_len);
+    method_buf[method_len] = '\0';
+    return 1;
 }

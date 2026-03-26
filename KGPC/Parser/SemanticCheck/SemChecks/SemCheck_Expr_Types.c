@@ -5788,6 +5788,114 @@ static HashNode_t *find_implicit_self_method(SymTab_t *symtab, const char *name)
     return NULL;
 }
 
+static char *semcheck_dup_proc_target_symbol(SymTab_t *symtab, HashNode_t *target)
+{
+    if (target == NULL)
+        return NULL;
+
+    const char *target_name = NULL;
+
+    if (target->internproc_id != NULL && target->internproc_id[0] != '\0')
+        target_name = target->internproc_id;
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->type != NULL && target->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        Tree_t *proc_def = target->type->info.proc_info.definition;
+        if (proc_def != NULL)
+        {
+            if (proc_def->tree_data.subprogram_data.cname_override != NULL &&
+                proc_def->tree_data.subprogram_data.cname_override[0] != '\0')
+                target_name = proc_def->tree_data.subprogram_data.cname_override;
+            else if (proc_def->tree_data.subprogram_data.cname_flag &&
+                     proc_def->tree_data.subprogram_data.id != NULL &&
+                     proc_def->tree_data.subprogram_data.id[0] != '\0')
+                target_name = proc_def->tree_data.subprogram_data.id;
+            else if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                     proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                target_name = proc_def->tree_data.subprogram_data.mangled_id;
+        }
+    }
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        symtab != NULL && target->owner_class != NULL && target->method_name != NULL)
+    {
+        HashNode_t *prefix_match = NULL;
+        size_t base_len = strlen(target->owner_class) + 2 + strlen(target->method_name) + 1;
+        char *base_name = (char *)malloc(base_len);
+        if (base_name != NULL)
+        {
+            snprintf(base_name, base_len, "%s__%s", target->owner_class, target->method_name);
+            ListNode_t *matches = FindAllIdents(symtab, base_name);
+            for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+            {
+                HashNode_t *cand = (HashNode_t *)cur->cur;
+                if (cand == NULL || cand->type == NULL ||
+                    cand->type->kind != TYPE_KIND_PROCEDURE)
+                    continue;
+                Tree_t *proc_def = cand->type->info.proc_info.definition;
+                if (proc_def == NULL)
+                    continue;
+                if (proc_def->tree_data.subprogram_data.cname_override != NULL &&
+                    proc_def->tree_data.subprogram_data.cname_override[0] != '\0')
+                {
+                    target_name = proc_def->tree_data.subprogram_data.cname_override;
+                    break;
+                }
+                if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                    proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                {
+                    target_name = proc_def->tree_data.subprogram_data.mangled_id;
+                    break;
+                }
+                if (cand->mangled_id != NULL && cand->mangled_id[0] != '\0')
+                {
+                    target_name = cand->mangled_id;
+                    break;
+                }
+            }
+            if (matches != NULL)
+                DestroyList(matches);
+            if ((target_name == NULL || target_name[0] == '\0') &&
+                FindIdentByPrefix(&prefix_match, symtab, base_name) != 0 &&
+                prefix_match != NULL &&
+                prefix_match->type != NULL &&
+                prefix_match->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                Tree_t *proc_def = prefix_match->type->info.proc_info.definition;
+                if (proc_def != NULL &&
+                    proc_def->tree_data.subprogram_data.cname_override != NULL &&
+                    proc_def->tree_data.subprogram_data.cname_override[0] != '\0')
+                {
+                    target_name = proc_def->tree_data.subprogram_data.cname_override;
+                }
+                else if (proc_def != NULL &&
+                         proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                         proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                {
+                    target_name = proc_def->tree_data.subprogram_data.mangled_id;
+                }
+                else if (prefix_match->mangled_id != NULL &&
+                         prefix_match->mangled_id[0] != '\0')
+                {
+                    target_name = prefix_match->mangled_id;
+                }
+            }
+            free(base_name);
+        }
+    }
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->mangled_id != NULL && target->mangled_id[0] != '\0')
+        target_name = target->mangled_id;
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->id != NULL && target->id[0] != '\0')
+        target_name = target->id;
+
+    return target_name != NULL ? strdup(target_name) : NULL;
+}
+
 
 /* The specialize_bare parser rule (pascal_expression.c) now handles
  * @specialize Type<Args>.Method structurally via PASCAL_T_CONSTRUCTED_TYPE
@@ -6383,16 +6491,26 @@ int semcheck_addressof(int *type_return,
         if (inner->type == EXPR_VAR_ID)
         {
             HashNode_t *proc_symbol = NULL;
+            HashNode_t *implicit_method = NULL;
             if (FindSymbol(&proc_symbol, symtab, inner->expr_data.id) != 0 &&
                 proc_symbol != NULL && 
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
             {
                 /* Found directly */
             }
-            else
+            /* Also try implicit Self method lookup; prefer it when the direct symbol
+             * does not carry a stable emitted target for a class method reference. */
+            implicit_method = find_implicit_self_method(symtab, inner->expr_data.id);
+            if (implicit_method != NULL &&
+                (proc_symbol == NULL ||
+                 proc_symbol->owner_class == NULL ||
+                 proc_symbol->method_name == NULL ||
+                 proc_symbol->mangled_id == NULL ||
+                 proc_symbol->mangled_id[0] == '\0' ||
+                 (proc_symbol->id != NULL &&
+                  strcmp(proc_symbol->mangled_id, proc_symbol->id) == 0)))
             {
-                /* Try implicit Self method lookup */
-                proc_symbol = find_implicit_self_method(symtab, inner->expr_data.id);
+                proc_symbol = implicit_method;
             }
             if (proc_symbol != NULL &&
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
@@ -6400,7 +6518,8 @@ int semcheck_addressof(int *type_return,
                 expr->expr_data.addr_data.expr = NULL;
                 destroy_expr(inner);
                 expr->type = EXPR_ADDR_OF_PROC;
-                expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
+                expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                    semcheck_dup_proc_target_symbol(symtab, proc_symbol);
                 expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                 /* Resolve the type NOW while the symbol is still alive,
                  * instead of relying on procedure_symbol later. */
@@ -6426,16 +6545,24 @@ int semcheck_addressof(int *type_return,
             if (func_id != NULL)
             {
                 HashNode_t *proc_symbol = NULL;
+                HashNode_t *implicit_method = NULL;
                 if (FindSymbol(&proc_symbol, symtab, func_id) != 0 &&
                     proc_symbol != NULL &&
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
                 {
                     /* Found directly */
                 }
-                else
+                implicit_method = find_implicit_self_method(symtab, func_id);
+                if (implicit_method != NULL &&
+                    (proc_symbol == NULL ||
+                     proc_symbol->owner_class == NULL ||
+                     proc_symbol->method_name == NULL ||
+                     proc_symbol->mangled_id == NULL ||
+                     proc_symbol->mangled_id[0] == '\0' ||
+                     (proc_symbol->id != NULL &&
+                      strcmp(proc_symbol->mangled_id, proc_symbol->id) == 0)))
                 {
-                    /* Try implicit Self method lookup */
-                    proc_symbol = find_implicit_self_method(symtab, func_id);
+                    proc_symbol = implicit_method;
                 }
                 if (proc_symbol != NULL &&
                     (proc_symbol->hash_type == HASHTYPE_FUNCTION || proc_symbol->hash_type == HASHTYPE_PROCEDURE))
@@ -6443,7 +6570,8 @@ int semcheck_addressof(int *type_return,
                     expr->expr_data.addr_data.expr = NULL;
                     destroy_expr(inner);
                     expr->type = EXPR_ADDR_OF_PROC;
-                    expr->expr_data.addr_of_proc_data.proc_mangled_id = proc_symbol->mangled_id ? strdup(proc_symbol->mangled_id) : NULL;
+                    expr->expr_data.addr_of_proc_data.proc_mangled_id =
+                        semcheck_dup_proc_target_symbol(symtab, proc_symbol);
                     expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                     /* Resolve the type NOW while the symbol is still alive. */
                     if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
@@ -6493,7 +6621,7 @@ int semcheck_addressof(int *type_return,
                     destroy_expr(inner);
                     expr->type = EXPR_ADDR_OF_PROC;
                     expr->expr_data.addr_of_proc_data.proc_mangled_id =
-                        method_node->mangled_id ? strdup(method_node->mangled_id) : NULL;
+                        semcheck_dup_proc_target_symbol(symtab, method_node);
                     expr->expr_data.addr_of_proc_data.proc_id =
                         method_node->id ? strdup(method_node->id) : NULL;
                     if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
@@ -6520,7 +6648,7 @@ int semcheck_addressof(int *type_return,
             destroy_expr(inner);
             expr->type = EXPR_ADDR_OF_PROC;
             expr->expr_data.addr_of_proc_data.proc_mangled_id =
-                resolved_proc_symbol->mangled_id ? strdup(resolved_proc_symbol->mangled_id) : NULL;
+                semcheck_dup_proc_target_symbol(symtab, resolved_proc_symbol);
             expr->expr_data.addr_of_proc_data.proc_id =
                 resolved_proc_symbol->id ? strdup(resolved_proc_symbol->id) : NULL;
             if (resolved_proc_symbol->type != NULL &&

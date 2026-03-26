@@ -184,6 +184,7 @@ test('Compiler tests', python,
 if get_option('run_fpc_rtl_tests')
   fpc_rtl_env = environment()
   fpc_rtl_env.set('KGPC_FPC_RTL', '1')
+  fpc_rtl_env.set('KGPC_FPC_RTL_DIR', get_option('fpc_rtl_dir'))
   fpc_rtl_env.set('MESON_BUILD_ROOT', meson.project_build_root())
   fpc_rtl_env.set('CC', ' '.join(compiler.cmd_array()))
   fpc_rtl_env.set('KGPC_RUNTIME_LIB', kgpc_runtime_lib.full_path())

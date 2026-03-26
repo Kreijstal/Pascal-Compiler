@@ -20,6 +20,7 @@ static double funccall_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
 
+
 static int semcheck_expr_is_explicit_char_typecast_for_call_local(const struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_TYPECAST)
@@ -58,6 +59,50 @@ static int semcheck_expr_is_char_typecast_call_for_call_local(const struct Expre
         pascal_identifier_equals(target_id, "AnsiChar") ||
         pascal_identifier_equals(target_id, "WideChar") ||
         pascal_identifier_equals(target_id, "UnicodeChar");
+}
+
+static int semcheck_try_rewrite_internconst_call(int *type_return,
+    SymTab_t *symtab, struct Expression *expr)
+{
+    HashNode_t *target = NULL;
+    const char *intrinsic_id;
+
+    if (type_return == NULL || symtab == NULL || expr == NULL ||
+        expr->type != EXPR_FUNCTION_CALL ||
+        expr->expr_data.function_call_data.id == NULL)
+        return 0;
+
+    if (FindSymbol(&target, symtab, expr->expr_data.function_call_data.id) == 0 ||
+        target == NULL || target->internconst_id == NULL ||
+        target->internconst_id[0] == '\0')
+        return 0;
+
+    intrinsic_id = target->internconst_id;
+
+    if (strcasecmp(intrinsic_id, "fpc_in_const_ptr") != 0)
+        return 0;
+
+    /* SPtr is emitted as a bare zero-arg function reference in FPC RTL startup
+     * code. Lower it to the runtime stack-pointer helper before normal overload
+     * resolution so it doesn't fall back to ordinary mangling. */
+    if (expr->expr_data.function_call_data.args_expr != NULL ||
+        !pascal_identifier_equals(target->id, "SPtr"))
+        return 0;
+
+    free(expr->expr_data.function_call_data.id);
+    expr->expr_data.function_call_data.id = strdup("sptr_void");
+    if (expr->expr_data.function_call_data.mangled_id != NULL)
+        free(expr->expr_data.function_call_data.mangled_id);
+    expr->expr_data.function_call_data.mangled_id = strdup("sptr_void");
+    semcheck_reset_function_call_cache(expr);
+    *type_return = POINTER_TYPE;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        destroy_kgpc_type(expr->resolved_kgpc_type);
+        expr->resolved_kgpc_type = NULL;
+    }
+    expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
+    return 1;
 }
 
 static void semcheck_bind_set_literal_to_expected_type_for_call(
@@ -1376,6 +1421,9 @@ int semcheck_funccall(int *type_return,
         expr->resolved_kgpc_type = create_primitive_type(POINTER_TYPE);
         return return_val;
     }
+
+    if (semcheck_try_rewrite_internconst_call(type_return, symtab, expr))
+        return return_val;
 
     /* Normalize unit-qualified builtins parsed as extra-arg calls:
      * System.Length(x) may be parsed as Length(System, x). Strip the unit
@@ -6152,6 +6200,58 @@ method_call_resolved:
                                 continue;
                             expr->expr_data.function_call_data.is_virtual_call = 1;
                             expr->expr_data.function_call_data.vmt_index = mi->vmt_index;
+                            if (expr->expr_data.function_call_data.self_class_name == NULL)
+                                expr->expr_data.function_call_data.self_class_name =
+                                    strdup(best_match->owner_class);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        /* Interface method call check — if the owner class is an interface,
+         * mark this as an interface call so codegen emits indirect vtable dispatch.
+         * The vtable index is the method's position in the interface's method_templates list.
+         * Only mark when Self is actually interface-typed to avoid false positives on
+         * standalone procedures whose name matches an interface method pattern. */
+        if (best_match->owner_class != NULL && best_match->method_name != NULL &&
+            !expr->expr_data.function_call_data.is_interface_call)
+        {
+            struct RecordType *iface_record = semcheck_lookup_record_type(symtab,
+                best_match->owner_class);
+            if (iface_record != NULL && iface_record->is_interface &&
+                iface_record->method_templates != NULL)
+            {
+                /* Verify the first argument (Self) is actually interface-typed */
+                int self_is_interface = 0;
+                ListNode_t *call_args = expr->expr_data.function_call_data.args_expr;
+                if (call_args != NULL)
+                {
+                    struct Expression *self_arg = (struct Expression *)call_args->cur;
+                    if (self_arg != NULL && self_arg->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *self_type = self_arg->resolved_kgpc_type;
+                        if (self_type->kind == TYPE_KIND_POINTER && self_type->info.points_to != NULL)
+                            self_type = self_type->info.points_to;
+                        if (self_type->kind == TYPE_KIND_RECORD && self_type->info.record_info != NULL &&
+                            self_type->info.record_info->is_interface)
+                            self_is_interface = 1;
+                    }
+                }
+                if (self_is_interface)
+                {
+                    /* method_templates already includes inherited parent
+                     * methods (prepended during semcheck), so the vtable
+                     * index is simply the position in the list. */
+                    int idx = 0;
+                    for (ListNode_t *mt = iface_record->method_templates; mt != NULL; mt = mt->next, idx++)
+                    {
+                        struct MethodTemplate *tmpl = (struct MethodTemplate *)mt->cur;
+                        if (tmpl != NULL && tmpl->name != NULL &&
+                            strcasecmp(tmpl->name, best_match->method_name) == 0)
+                        {
+                            expr->expr_data.function_call_data.is_interface_call = 1;
+                            expr->expr_data.function_call_data.vmt_index = idx;
                             if (expr->expr_data.function_call_data.self_class_name == NULL)
                                 expr->expr_data.function_call_data.self_class_name =
                                     strdup(best_match->owner_class);

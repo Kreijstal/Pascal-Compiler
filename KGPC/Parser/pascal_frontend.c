@@ -30,6 +30,7 @@ static char *g_last_parse_path = NULL;
 /* AST cache directory (NULL = disabled). When set, parsed ASTs for units
  * are cached to binary files in this directory. */
 static char *g_ast_cache_dir = NULL;
+static bool g_ast_cache_reads_enabled = true;
 
 /* Modification time of the compiler binary. When set, cached ASTs older
  * than the binary are considered stale and re-parsed. */
@@ -689,6 +690,7 @@ void pascal_frontend_cleanup(void)
         free(g_ast_cache_dir);
         g_ast_cache_dir = NULL;
     }
+    g_ast_cache_reads_enabled = true;
     from_cparser_cleanup();
     string_intern_reset();
 }
@@ -772,7 +774,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     bool cache_units_only = source_path_is_cacheable(path);
 
     /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
-    if (cache_units_only)
+    if (cache_units_only && g_ast_cache_reads_enabled)
     {
         char *cache_path = compute_ast_cache_path(path);
         if (cache_path != NULL)
@@ -819,6 +821,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
                 return success;
             }
+            g_ast_cache_reads_enabled = false;
             free(cache_path);
             /* Cache miss — proceed with normal parsing, save at the end */
         }

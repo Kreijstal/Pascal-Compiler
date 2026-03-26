@@ -243,13 +243,6 @@ type
   end;
   PMethod = ^TMethod;
   
-  TInterfacedObject = class(TObject)
-  protected
-    FRefCount : LongInt;
-  public
-    property RefCount : LongInt read FRefCount;
-  end;
-
   { GUID type for SysUtils compatibility }
   TGUID = record
     D1: LongWord;
@@ -336,6 +329,16 @@ type
   end;
   PInterface = ^IInterface;
   IUnknown = IInterface;
+
+  TInterfacedObject = class(TObject, IInterface)
+  protected
+    FRefCount : LongInt;
+  public
+    function QueryInterface(const IID: TGUID; out Obj): HRESULT;
+    function _AddRef: LongInt;
+    function _Release: LongInt;
+    property RefCount : LongInt read FRefCount;
+  end;
 
   TCustomAttribute = class
   end;
@@ -959,6 +962,14 @@ begin
     end
 end;
 
+procedure interlocked_exchange_add_i32_u32_impl(var target: longword; value: longword; var result: longword);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i32
+    end
+end;
+
 procedure interlocked_exchange_add_i64_impl(var target: int64; value: int64; var result: int64);
 begin
     assembler;
@@ -1035,6 +1046,15 @@ begin
     InterlockedExchangeAdd := result;
 end;
 
+function InterlockedExchangeAdd(var target: longword; value: longword): longword; overload;
+var
+    result: longword;
+begin
+    result := 0;
+    interlocked_exchange_add_i32_u32_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
+
 function InterlockedExchangeAdd(var target: int64; value: int64): int64; overload;
 var
     result: int64;
@@ -1051,6 +1071,56 @@ begin
     result := nil;
     interlocked_exchange_add_ptr_impl(target, value, result);
     Exit(result);
+end;
+
+function InterlockedIncrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, 1) + 1;
+end;
+
+function InterlockedIncrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, LongWord(1)) + 1;
+end;
+
+function InterlockedIncrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, Int64(1)) + 1;
+end;
+
+function InterlockedDecrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, -1) - 1;
+end;
+
+function InterlockedDecrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, LongWord(-1)) - 1;
+end;
+
+function InterlockedDecrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, Int64(-1)) - 1;
+end;
+
+function InterlockedExchange(var Target: LongInt; Source: LongInt): LongInt; overload;
+begin
+    InterlockedExchange := Target;
+    Target := Source;
+end;
+
+function InterlockedCompareExchange(var Target: LongInt; NewValue: LongInt; Comperand: LongInt): LongInt; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
+end;
+
+function InterlockedCompareExchange(var Target: Pointer; NewValue: Pointer; Comperand: Pointer): Pointer; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
 end;
 
 
@@ -1705,6 +1775,44 @@ begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
 end;
 
+function TInterfacedObject.QueryInterface(const IID: TGUID; out Obj): HRESULT;
+begin
+    if Self.GetInterface(IID, Obj) then
+        QueryInterface := 0
+    else
+        QueryInterface := LongInt($80004002);
+end;
+
+function TInterfacedObject._AddRef: LongInt;
+begin
+    if FRefCount = 0 then
+    begin
+        FRefCount := 1;
+        Exit(FRefCount);
+    end;
+
+    if FRefCount > 0 then
+        _AddRef := InterlockedIncrement(FRefCount)
+    else
+        _AddRef := FRefCount;
+end;
+
+function TInterfacedObject._Release: LongInt;
+begin
+    if FRefCount = 1 then
+        _Release := 0
+    else if FRefCount > 0 then
+        _Release := InterlockedDecrement(FRefCount)
+    else
+        Exit(FRefCount);
+
+    if _Release <= 0 then
+    begin
+        FRefCount := -1;
+        Destroy;
+    end;
+end;
+
 function TObject.ClassInfo: Pointer;
 begin
     ClassInfo := Self.ClassType.ClassInfo;
@@ -1734,6 +1842,212 @@ begin
         ToString := ''
     else
         ToString := name_ptr;
+end;
+
+function TDoubleRec.Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+begin
+    Result := Data and $fffffffffffff;
+    if (Result = 0) and (GetExp = 0) then
+        Exit;
+    if IncludeHiddenBit then
+        Result := Result or $10000000000000;
+end;
+
+function TDoubleRec.Fraction : ValReal;
+begin
+    Result := System.Frac(Value);
+end;
+
+function TDoubleRec.Exponent : Longint;
+var
+    E: QWord;
+begin
+    Result := 0;
+    E := GetExp;
+    if (0 < E) and (E < 2 * Bias + 1) then
+        Result := Exp - Bias
+    else if (Exp = 0) and (Frac <> 0) then
+        Result := -(Bias - 1);
+end;
+
+function TDoubleRec.GetExp : QWord;
+begin
+    Result := (Data and $7ff0000000000000) shr 52;
+end;
+
+procedure TDoubleRec.SetExp(e : QWord); public name 'tdoublerec__setexp_u_tdoublerec_u64';
+begin
+    Data := (Data and $800fffffffffffff) or ((e and $7ff) shl 52);
+end;
+
+function TDoubleRec.GetSign : Boolean;
+begin
+    Result := (Data and $8000000000000000) <> 0;
+end;
+
+procedure TDoubleRec.SetSign(s : Boolean);
+begin
+    Data := (Data and $7fffffffffffffff) or (QWord(Ord(s)) shl 63);
+end;
+
+function TDoubleRec.GetFrac : QWord;
+begin
+    Result := Data and $fffffffffffff;
+end;
+
+procedure TDoubleRec.SetFrac(e : QWord); public name 'tdoublerec__setfrac_u_tdoublerec_u64';
+begin
+    Data := (Data and $fff0000000000000) or (e and $fffffffffffff);
+end;
+
+function TDoubleRec.SpecialType : TFloatSpecial;
+const
+    Denormal : array[Boolean] of TFloatSpecial = (fsDenormal, fsNDenormal);
+begin
+    case Exp of
+        0:
+            begin
+                if Mantissa = 0 then
+                begin
+                    if Sign then
+                        Result := fsNZero
+                    else
+                        Result := fsZero;
+                end
+                else
+                    Result := Denormal[Sign];
+            end;
+        $7ff:
+            if Mantissa = 0 then
+            begin
+                if Sign then
+                    Result := fsNInf
+                else
+                    Result := fsInf;
+            end
+            else
+                Result := fsNaN;
+    else
+        begin
+            if Sign then
+                Result := fsNegative
+            else
+                Result := fsPositive;
+        end;
+    end;
+end;
+
+procedure TDoubleRec.BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+begin
+    Value := 0.0;
+    SetSign(_Sign);
+    if (_Mantissa = 0) and (_Exponent = 0) then
+        Exit;
+    SetExp(_Exponent + Bias);
+    SetFrac(_Mantissa and $fffffffffffff);
+end;
+
+function TSingleRec.Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+begin
+    Result := Data and $7fffff;
+    if (Result = 0) and (GetExp = 0) then
+        Exit;
+    if IncludeHiddenBit then
+        Result := Result or $800000;
+end;
+
+function TSingleRec.Fraction : ValReal;
+begin
+    Result := System.Frac(Value);
+end;
+
+function TSingleRec.Exponent : Longint;
+var
+    E: QWord;
+begin
+    Result := 0;
+    E := GetExp;
+    if (0 < E) and (E < 2 * Bias + 1) then
+        Result := Exp - Bias
+    else if (Exp = 0) and (Frac <> 0) then
+        Result := -(Bias - 1);
+end;
+
+function TSingleRec.GetExp : QWord;
+begin
+    Result := (Data and $7f800000) shr 23;
+end;
+
+procedure TSingleRec.SetExp(e : QWord); public name 'tsinglerec__setexp_u_tsinglerec_u64';
+begin
+    Data := (Data and $807fffff) or ((e and $ff) shl 23);
+end;
+
+function TSingleRec.GetSign : Boolean;
+begin
+    Result := (Data and $80000000) <> 0;
+end;
+
+procedure TSingleRec.SetSign(s : Boolean);
+begin
+    Data := (Data and $7fffffff) or (DWord(Ord(s)) shl 31);
+end;
+
+function TSingleRec.GetFrac : QWord;
+begin
+    Result := Data and $7fffff;
+end;
+
+procedure TSingleRec.SetFrac(e : QWord); public name 'tsinglerec__setfrac_u_tsinglerec_u64';
+begin
+    Data := (Data and $ff800000) or (e and $7fffff);
+end;
+
+function TSingleRec.SpecialType : TFloatSpecial;
+const
+    Denormal : array[Boolean] of TFloatSpecial = (fsDenormal, fsNDenormal);
+begin
+    case Exp of
+        0:
+            begin
+                if Mantissa = 0 then
+                begin
+                    if Sign then
+                        Result := fsNZero
+                    else
+                        Result := fsZero;
+                end
+                else
+                    Result := Denormal[Sign];
+            end;
+        $ff:
+            if Mantissa = 0 then
+            begin
+                if Sign then
+                    Result := fsNInf
+                else
+                    Result := fsInf;
+            end
+            else
+                Result := fsNaN;
+    else
+        begin
+            if Sign then
+                Result := fsNegative
+            else
+                Result := fsPositive;
+        end;
+    end;
+end;
+
+procedure TSingleRec.BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+begin
+    Value := 0.0;
+    SetSign(_Sign);
+    if (_Mantissa = 0) and (_Exponent = 0) then
+        Exit;
+    SetExp(_Exponent + Bias);
+    SetFrac(_Mantissa and $7fffff);
 end;
 
 begin

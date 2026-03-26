@@ -3470,6 +3470,27 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     return result;
 }
 
+/* Check if a subprogram ID matches a generic base name.
+ * Handles both exact match ("UnfixArray" == "UnfixArray") and
+ * class-prefixed match ("TMarshal__UnfixArray" ends with "__UnfixArray").
+ * This is needed because specialize calls inside generic record methods
+ * use the short method name (e.g. "UnfixArray$T") while the subprogram
+ * templates carry the class-qualified ID (e.g. "TMarshal__UnfixArray"). */
+static int generic_base_name_matches(Tree_t *sub, const char *base)
+{
+    if (sub == NULL || base == NULL)
+        return 0;
+    /* For class methods, the bare method_name is the relevant identifier */
+    if (sub->tree_data.subprogram_data.method_name != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.method_name, base) == 0)
+        return 1;
+    /* For standalone subprograms, check the id directly */
+    if (sub->tree_data.subprogram_data.id != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+        return 1;
+    return 0;
+}
+
 static void collect_specialize_from_expr(struct Expression *expr, Tree_t *program_tree)
 {
     if (expr == NULL || program_tree == NULL)
@@ -3489,8 +3510,20 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                 if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                     fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
                         target_id, base ? base : "<null>", argc);
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
+                {
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
+                    {
+                        has_unresolved_arg = 1;
+                        break;
+                    }
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
                 {
                     if (cur->type == LIST_TREE && cur->cur != NULL)
                     {
@@ -3498,23 +3531,49 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                         if (sub->type == TREE_SUBPROGRAM &&
                             sub->tree_data.subprogram_data.id != NULL &&
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+                            generic_base_name_matches(sub, base))
                         {
                             if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
                                     sub->tree_data.subprogram_data.id);
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
+                            /* Reconstruct proper specialized name with class prefix */
+                            const char *sub_id = sub->tree_data.subprogram_data.id;
+                            const char *spec_name = target_id;
+                            char *constructed_name = NULL;
+                            if (strcasecmp(sub_id, base) != 0)
+                            {
+                                size_t sub_len = strlen(sub_id);
+                                size_t base_len = strlen(base);
+                                size_t prefix_len = sub_len - base_len;
+                                const char *dollar = strchr(target_id, '$');
+                                if (dollar != NULL)
+                                {
+                                    size_t suffix_len = strlen(dollar);
+                                    constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                    if (constructed_name != NULL)
+                                    {
+                                        memcpy(constructed_name, sub_id, prefix_len);
+                                        memcpy(constructed_name + prefix_len, base, base_len);
+                                        memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                        constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                        spec_name = constructed_name;
+                                    }
+                                }
+                            }
+                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
                             {
                                 Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, target_id);
+                                    sub, args, argc, spec_name);
                                 if (specialized != NULL)
                                     append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
                                         specialized);
                             }
+                            free(constructed_name);
                             break;
                         }
                     }
                     cur = cur->next;
+                }
                 }
             }
             if (args != NULL)
@@ -3537,29 +3596,73 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
             if (call_id != NULL &&
                 parse_generic_mangled_id(call_id, &base, &args, &argc))
             {
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter
+                 * (e.g. single uppercase letter "T").  These come from bodies
+                 * of generic record methods that haven't been specialized yet. */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
                 {
-                    if (cur->type == LIST_TREE && cur->cur != NULL)
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
                     {
-                        Tree_t *sub = (Tree_t *)cur->cur;
-                        if (sub->type == TREE_SUBPROGRAM &&
-                            sub->tree_data.subprogram_data.id != NULL &&
-                            sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
-                        {
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, call_id))
-                            {
-                                Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, call_id);
-                                if (specialized != NULL)
-                                    append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
-                                        specialized);
-                            }
-                            break;
-                        }
+                        has_unresolved_arg = 1;
+                        break;
                     }
-                    cur = cur->next;
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
+                    {
+                        if (cur->type == LIST_TREE && cur->cur != NULL)
+                        {
+                            Tree_t *sub = (Tree_t *)cur->cur;
+                            if (sub->type == TREE_SUBPROGRAM &&
+                                sub->tree_data.subprogram_data.id != NULL &&
+                                sub->tree_data.subprogram_data.num_generic_type_params == argc &&
+                                generic_base_name_matches(sub, base))
+                            {
+                                /* Build the proper specialized name: if the template has
+                                 * a class prefix (e.g., "TMarshal__UnfixArray") and the
+                                 * call_id is just "UnfixArray$TPtrWrapper", reconstruct
+                                 * to "TMarshal__UnfixArray$TPtrWrapper". */
+                                const char *sub_id = sub->tree_data.subprogram_data.id;
+                                const char *spec_name = call_id;
+                                char *constructed_name = NULL;
+                                if (strcasecmp(sub_id, base) != 0)
+                                {
+                                    /* Template has a prefix: extract it */
+                                    size_t sub_len = strlen(sub_id);
+                                    size_t base_len = strlen(base);
+                                    size_t prefix_len = sub_len - base_len;
+                                    const char *dollar = strchr(call_id, '$');
+                                    if (dollar != NULL)
+                                    {
+                                        size_t suffix_len = strlen(dollar);
+                                        constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                        if (constructed_name != NULL)
+                                        {
+                                            memcpy(constructed_name, sub_id, prefix_len);
+                                            memcpy(constructed_name + prefix_len, base, base_len);
+                                            memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                            constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                            spec_name = constructed_name;
+                                        }
+                                    }
+                                }
+                                if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
+                                {
+                                    Tree_t *specialized = instantiate_generic_subprogram(
+                                        sub, args, argc, spec_name);
+                                    if (specialized != NULL)
+                                        append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
+                                            specialized);
+                                }
+                                free(constructed_name);
+                                break;
+                            }
+                        }
+                        cur = cur->next;
+                    }
                 }
             }
             if (args != NULL)
@@ -3790,7 +3893,12 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
                         sub_tree->tree_data.subprogram_data.id,
                         sub_tree->tree_data.subprogram_data.num_generic_type_params);
                 }
-                collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
+                /* Skip bodies of unresolved generic templates — their expressions
+                 * still contain raw type parameter names (e.g. "T") which would
+                 * produce invalid specializations if matched. */
+                if (sub_tree->tree_data.subprogram_data.generic_type_params == NULL &&
+                    sub_tree->tree_data.subprogram_data.num_generic_type_params == 0)
+                    collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
             }
         }
         sub = sub->next;
@@ -4036,6 +4144,31 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             record != NULL && record->type_id != NULL)
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
+    }
+
+    /* Skip records whose generic_args are still unresolved type parameters.
+     * E.g. TFoo$T with generic_args=["T"] matching generic_decl params=["T"].
+     * Method clones from these would produce bodies with unresolved type refs. */
+    if (record->generic_decl->type_parameters != NULL)
+    {
+        int all_unresolved = 1;
+        for (int i = 0; i < record->num_generic_args && i < record->generic_decl->num_type_params; ++i)
+        {
+            const char *arg = record->generic_args[i];
+            const char *param = record->generic_decl->type_parameters[i];
+            if (arg == NULL || param == NULL || strcasecmp(arg, param) != 0)
+            {
+                all_unresolved = 0;
+                break;
+            }
+        }
+        if (all_unresolved)
+        {
+            if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
+                record->type_id != NULL)
+                fprintf(stderr, "[KGPC] skipping clone for %s (unresolved type params)\n", record->type_id);
+            return;
+        }
     }
     if (record->method_clones_emitted)
         return;
@@ -8715,45 +8848,137 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
     }
 }
 
+static int extract_interface_delegation_info(ast_t *method_decl_node,
+    char **iface_name_out, char **iface_method_out, char **target_name_out)
+{
+    if (iface_name_out != NULL)
+        *iface_name_out = NULL;
+    if (iface_method_out != NULL)
+        *iface_method_out = NULL;
+    if (target_name_out != NULL)
+        *target_name_out = NULL;
+    if (method_decl_node == NULL)
+        return 0;
+
+    ast_t *significant[3] = {0};
+    int count = 0;
+    for (ast_t *cur = method_decl_node->child; cur != NULL; cur = cur->next)
+    {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node == NULL)
+            continue;
+
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM ||
+            node->typ == PASCAL_T_RETURN_TYPE || node->typ == PASCAL_T_METHOD_DIRECTIVE)
+            return 0;
+
+        if (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_QUALIFIED_IDENTIFIER ||
+            (node->typ == PASCAL_T_NONE && node->child != NULL))
+        {
+            if (count >= 3)
+                return 0;
+            significant[count++] = node;
+        }
+    }
+
+    if (count != 3)
+        return 0;
+
+    QualifiedIdent *iface_qid = qualified_ident_from_ast(significant[0]);
+    QualifiedIdent *target_qid = qualified_ident_from_ast(significant[2]);
+    char *iface_name = iface_qid != NULL ? qualified_ident_join(iface_qid, ".") : dup_symbol(significant[0]);
+    char *iface_method = dup_symbol(significant[1]);
+    char *target_name = NULL;
+    if (target_qid != NULL)
+    {
+        const char *last = qualified_ident_last(target_qid);
+        if (last != NULL)
+            target_name = strdup(last);
+    }
+    if (target_name == NULL)
+        target_name = dup_symbol(significant[2]);
+    if (iface_qid != NULL)
+        qualified_ident_free(iface_qid);
+    if (target_qid != NULL)
+        qualified_ident_free(target_qid);
+
+    if (iface_name == NULL || iface_method == NULL || target_name == NULL)
+    {
+        free(iface_name);
+        free(iface_method);
+        free(target_name);
+        return 0;
+    }
+
+    if (iface_name_out != NULL)
+        *iface_name_out = iface_name;
+    else
+        free(iface_name);
+    if (iface_method_out != NULL)
+        *iface_method_out = iface_method;
+    else
+        free(iface_method);
+    if (target_name_out != NULL)
+        *target_name_out = target_name;
+    else
+        free(target_name);
+    return 1;
+}
+
 static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 {
     if (method_decl_node == NULL)
-        return NULL;
-
-    ast_t *name_node = method_decl_node->child;
-    while (name_node != NULL)
-    {
-        if (name_node->typ == PASCAL_T_IDENTIFIER)
-        {
-            const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
-            if (sym_name != NULL &&
-                (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
-            {
-                name_node = name_node->next;
-                continue;
-            }
-            break;
-        }
-        name_node = name_node->next;
-    }
-    if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
         return NULL;
 
     struct MethodTemplate *template = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
     if (template == NULL)
         return NULL;
 
-    template->name = strdup(name_node->sym->name);
-    if (template->name == NULL)
+    if (!extract_interface_delegation_info(method_decl_node,
+            &template->delegated_interface_name, &template->name,
+            &template->delegated_target_name))
     {
-        free(template);
-        return NULL;
+        ast_t *name_node = method_decl_node->child;
+        while (name_node != NULL)
+        {
+            if (name_node->typ == PASCAL_T_IDENTIFIER)
+            {
+                const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
+                if (sym_name != NULL &&
+                    (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
+                {
+                    name_node = name_node->next;
+                    continue;
+                }
+                break;
+            }
+            name_node = name_node->next;
+        }
+        if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+        template->name = strdup(name_node->sym->name);
+        if (template->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+    }
+    else
+    {
+        template->is_interface_delegation = 1;
     }
 
     template->method_ast = copy_ast_detached(method_decl_node);
     if (template->method_ast == NULL)
     {
         free(template->name);
+        free(template->delegated_interface_name);
+        free(template->delegated_target_name);
         free(template);
         return NULL;
     }
@@ -8770,10 +8995,6 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
         return;
     if (template->name != NULL)
         free(template->name);
-    if (template->method_ast != NULL)
-        free_ast_detached(template->method_ast);
-    if (template->method_impl_ast != NULL)
-        free_ast_detached(template->method_impl_ast);
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);
@@ -8850,7 +9071,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                             if (template != NULL)
                             {
                                 template->is_class_method = 1;
-                                {
+                                if (!template->is_interface_delegation) {
                                     int param_count = from_cparser_count_params_ast(template->params_ast);
                                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                                     register_class_method_ex(class_name, template->name,
@@ -8942,7 +9163,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                {
+                if (!template->is_interface_delegation) {
                     int param_count = from_cparser_count_params_ast(template->params_ast);
                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                     register_class_method_ex(class_name, template->name,
@@ -9015,12 +9236,24 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     char *parent_class_name = NULL;
     ast_t *body_start = class_node->child;
 
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
+    }
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         // First child is parent class name, extract it
         if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_class_name = strdup(body_start->sym->name);
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
+    }
+
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
     }
 
     /* Collect additional IDENTIFIER siblings as interface names */
@@ -9049,6 +9282,22 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         } else {
             fprintf(stderr, "[KGPC]   body_start is NULL\n");
         }
+        if (class_name != NULL &&
+            (strcasecmp(class_name, "TList") == 0 ||
+             strcasecmp(class_name, "TStringList") == 0 ||
+             strcasecmp(class_name, "TComponent") == 0 ||
+             strcasecmp(class_name, "TInterfaceList") == 0)) {
+            ast_t *raw = class_node->child;
+            int idx = 0;
+            while (raw != NULL && idx < 12) {
+                fprintf(stderr, "[KGPC]   raw[%d] typ=%d name=%s child=%p next=%p\n",
+                    idx, raw->typ,
+                    (raw->sym && raw->sym->name) ? raw->sym->name : "<null>",
+                    (void *)raw->child, (void *)raw->next);
+                raw = raw->next;
+                idx++;
+            }
+        }
         /* Debug: show additional parent identifiers (interfaces) */
         ast_t *dbg = body_start;
         while (dbg != NULL && dbg->typ == PASCAL_T_IDENTIFIER) {
@@ -9056,12 +9305,6 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
                 (dbg->sym && dbg->sym->name) ? dbg->sym->name : "<null>", dbg->typ);
             dbg = dbg->next;
         }
-    }
-
-    if (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
-        body_start->child != NULL && body_start->next == NULL)
-    {
-        body_start = body_start->child;
     }
 
     collect_class_members(body_start, class_name, &field_builder, &property_builder,
@@ -9189,8 +9432,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
         /* Extract GUID string from inside the GUID node if available */
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
@@ -9220,8 +9464,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL && !has_guid) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 free(guid_string);
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
@@ -12524,7 +12769,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
@@ -12554,7 +12799,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     {
                         if (template->is_class_method)
                             template->is_static = 1;
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
@@ -18363,6 +18608,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_varargs = 0;
     char *external_alias = NULL;
     char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
+    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name (e.g. "fpc_in_const_ptr") */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -18443,16 +18689,23 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                             cur = cur->next;
                     }
                 } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "internconst") == 0 ||
                            strcasecmp(self_sym, "compilerproc") == 0) {
                     is_external = 1;
-                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
+                       is the next sibling. */
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
-                        /* Always store the raw INTERNPROC name */
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(val->sym->name);
+                        if (strcasecmp(self_sym, "internconst") == 0) {
+                            if (internconst_id_str != NULL)
+                                free(internconst_id_str);
+                            internconst_id_str = strdup(val->sym->name);
+                        } else {
+                            if (internproc_id_str != NULL)
+                                free(internproc_id_str);
+                            internproc_id_str = strdup(val->sym->name);
+                        }
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = strdup(val->sym->name);
@@ -18508,24 +18761,38 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                 for (ast_t *child = cur->child; child != NULL; child = child->next) {
                     if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
                         char *kw = child->sym->name;
-                        if (strcasecmp(kw, "internproc") == 0 || strcasecmp(kw, "compilerproc") == 0) {
+                        if (strcasecmp(kw, "internproc") == 0 ||
+                            strcasecmp(kw, "internconst") == 0 ||
+                            strcasecmp(kw, "compilerproc") == 0) {
                             is_external = 1;
                             ast_t *val = child->next;
                             while (val != NULL && val->typ == PASCAL_T_NONE)
                                 val = val->child;
                             if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
-                                if (internproc_id_str != NULL)
-                                    free(internproc_id_str);
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
                                 if (external_alias != NULL)
                                     free(external_alias);
-                                internproc_id_str = dup_symbol(val);
                                 external_alias = dup_symbol(val);
                             } else if (val != NULL && val->typ == PASCAL_T_STRING) {
-                                if (internproc_id_str != NULL)
-                                    free(internproc_id_str);
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
                                 if (external_alias != NULL)
                                     free(external_alias);
-                                internproc_id_str = dup_symbol(val);
                                 external_alias = dup_symbol(val);
                             }
                         } else if (strcasecmp(kw, "external") == 0) {
@@ -18571,6 +18838,10 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
     else if (internproc_id_str != NULL)
         free(internproc_id_str);
+    if (tree != NULL && internconst_id_str != NULL)
+        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
+    else if (internconst_id_str != NULL)
+        free(internconst_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
@@ -18753,6 +19024,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_varargs = 0;
     char *external_alias = NULL;
     char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
+    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -18830,16 +19102,23 @@ static Tree_t *convert_function(ast_t *func_node) {
                             cur = cur->next;
                     }
                 } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "internconst") == 0 ||
                            strcasecmp(self_sym, "compilerproc") == 0) {
                     is_external = 1;
-                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
+                       is the next sibling. */
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
-                        /* Always store the raw INTERNPROC name */
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(val->sym->name);
+                        if (strcasecmp(self_sym, "internconst") == 0) {
+                            if (internconst_id_str != NULL)
+                                free(internconst_id_str);
+                            internconst_id_str = strdup(val->sym->name);
+                        } else {
+                            if (internproc_id_str != NULL)
+                                free(internproc_id_str);
+                            internproc_id_str = strdup(val->sym->name);
+                        }
                         if (external_alias != NULL)
                             free(external_alias);
                         external_alias = strdup(val->sym->name);
@@ -18895,24 +19174,38 @@ static Tree_t *convert_function(ast_t *func_node) {
                 for (ast_t *child = cur->child; child != NULL; child = child->next) {
                     if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
                         char *kw = child->sym->name;
-                        if (strcasecmp(kw, "internproc") == 0 || strcasecmp(kw, "compilerproc") == 0) {
+                        if (strcasecmp(kw, "internproc") == 0 ||
+                            strcasecmp(kw, "internconst") == 0 ||
+                            strcasecmp(kw, "compilerproc") == 0) {
                             is_external = 1;
                             ast_t *val = child->next;
                             while (val != NULL && val->typ == PASCAL_T_NONE)
                                 val = val->child;
                             if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
-                                if (internproc_id_str != NULL)
-                                    free(internproc_id_str);
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
                                 if (external_alias != NULL)
                                     free(external_alias);
-                                internproc_id_str = dup_symbol(val);
                                 external_alias = dup_symbol(val);
                             } else if (val != NULL && val->typ == PASCAL_T_STRING) {
-                                if (internproc_id_str != NULL)
-                                    free(internproc_id_str);
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
                                 if (external_alias != NULL)
                                     free(external_alias);
-                                internproc_id_str = dup_symbol(val);
                                 external_alias = dup_symbol(val);
                             }
                         } else if (strcasecmp(kw, "external") == 0) {
@@ -18963,6 +19256,10 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
     else if (internproc_id_str != NULL)
         free(internproc_id_str);
+    if (tree != NULL && internconst_id_str != NULL)
+        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
+    else if (internconst_id_str != NULL)
+        free(internconst_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;

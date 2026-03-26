@@ -211,10 +211,13 @@ static void destroy_method_template(struct MethodTemplate *method)
     if (method == NULL)
         return;
     free(method->name);
-    if (method->method_ast != NULL)
-        free_ast_detached(method->method_ast);
-    if (method->method_impl_ast != NULL)
-        free_ast_detached(method->method_impl_ast);
+    free(method->delegated_interface_name);
+    free(method->delegated_target_name);
+    /* Method templates keep detached AST copies for later specialization and
+     * semantic queries. Several code paths still share substructure across those
+     * detached copies, so reclaiming them during compiler teardown can trip
+     * double-free/use-after-free bugs. The compiler is a short-lived process, so
+     * let process exit reclaim these detached template ASTs. */
     if (method->method_tree != NULL)
         destroy_tree(method->method_tree);
     free(method);
@@ -230,9 +233,14 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
         return NULL;
 
     clone->name = method->name != NULL ? strdup(method->name) : NULL;
+    clone->delegated_interface_name = method->delegated_interface_name != NULL
+        ? strdup(method->delegated_interface_name) : NULL;
+    clone->delegated_target_name = method->delegated_target_name != NULL
+        ? strdup(method->delegated_target_name) : NULL;
     clone->method_ast = method->method_ast != NULL ? copy_ast_detached(method->method_ast) : NULL;
     clone->method_tree = NULL; /* Method trees are rebuilt on demand */
     clone->kind = method->kind;
+    clone->is_interface_delegation = method->is_interface_delegation;
     clone->is_class_method = method->is_class_method;
     clone->is_static = method->is_static;
     clone->is_virtual = method->is_virtual;
@@ -242,6 +250,38 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->return_type_ast = NULL;
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast_detached(method->method_impl_ast) : NULL;
+    clone->source_offset = method->source_offset;
+
+    return clone;
+}
+
+struct MethodTemplate *clone_method_template_detached(const struct MethodTemplate *method)
+{
+    if (method == NULL)
+        return NULL;
+
+    struct MethodTemplate *clone = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
+    if (clone == NULL)
+        return NULL;
+
+    clone->name = method->name != NULL ? strdup(method->name) : NULL;
+    clone->delegated_interface_name = method->delegated_interface_name != NULL
+        ? strdup(method->delegated_interface_name) : NULL;
+    clone->delegated_target_name = method->delegated_target_name != NULL
+        ? strdup(method->delegated_target_name) : NULL;
+    clone->method_ast = method->method_ast;
+    clone->method_tree = NULL;
+    clone->kind = method->kind;
+    clone->is_interface_delegation = method->is_interface_delegation;
+    clone->is_class_method = method->is_class_method;
+    clone->is_static = method->is_static;
+    clone->is_virtual = method->is_virtual;
+    clone->is_override = method->is_override;
+    clone->has_return_type = method->has_return_type;
+    clone->params_ast = method->params_ast;
+    clone->return_type_ast = method->return_type_ast;
+    clone->directives_ast = method->directives_ast;
+    clone->method_impl_ast = method->method_impl_ast;
     clone->source_offset = method->source_offset;
 
     return clone;
@@ -1261,6 +1301,8 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.subprogram_data.cname_override);
           if (tree->tree_data.subprogram_data.internproc_id != NULL)
             free(tree->tree_data.subprogram_data.internproc_id);
+          if (tree->tree_data.subprogram_data.internconst_id != NULL)
+            free(tree->tree_data.subprogram_data.internconst_id);
           if (tree->tree_data.subprogram_data.return_type_id != NULL)
             free(tree->tree_data.subprogram_data.return_type_id);
           if (tree->tree_data.subprogram_data.return_type_ref != NULL)
@@ -1425,11 +1467,20 @@ void destroy_stmt(struct Statement *stmt)
           }
           if (stmt->stmt_data.procedure_call_data.call_kgpc_type != NULL)
           {
-              destroy_kgpc_type(stmt->stmt_data.procedure_call_data.call_kgpc_type);
+              KgpcType *call_type = stmt->stmt_data.procedure_call_data.call_kgpc_type;
+              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
+                    call_type->info.proc_info.owns_params))
+              {
+                  destroy_kgpc_type(call_type);
+              }
               stmt->stmt_data.procedure_call_data.call_kgpc_type = NULL;
           }
           if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
               free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+          if (stmt->stmt_data.procedure_call_data.cached_owner_class != NULL)
+              free(stmt->stmt_data.procedure_call_data.cached_owner_class);
+          if (stmt->stmt_data.procedure_call_data.cached_method_name != NULL)
+              free(stmt->stmt_data.procedure_call_data.cached_method_name);
           if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
               free(stmt->stmt_data.procedure_call_data.call_qualifier);
           if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
@@ -1663,15 +1714,23 @@ void destroy_expr(struct Expression *expr)
           }
           if (expr->expr_data.function_call_data.call_kgpc_type != NULL)
           {
-              destroy_kgpc_type(expr->expr_data.function_call_data.call_kgpc_type);
+              KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+              /* Cached call signatures may reference parameter declaration trees
+               * owned by parse/type metadata. Let the original owner reclaim those
+               * procedure types instead of freeing them from expression teardown. */
+              if (!(call_type->kind == TYPE_KIND_PROCEDURE &&
+                    call_type->info.proc_info.owns_params))
+              {
+                  destroy_kgpc_type(call_type);
+              }
               expr->expr_data.function_call_data.call_kgpc_type = NULL;
           }
           if (expr->expr_data.function_call_data.placeholder_method_name != NULL)
               free(expr->expr_data.function_call_data.placeholder_method_name);
           if (expr->expr_data.function_call_data.call_qualifier != NULL)
               free(expr->expr_data.function_call_data.call_qualifier);
-          if (expr->expr_data.function_call_data.self_class_name != NULL)
-              free(expr->expr_data.function_call_data.self_class_name);
+          free(expr->expr_data.function_call_data.cached_owner_class);
+          free(expr->expr_data.function_call_data.cached_method_name);
           break;
 
         case EXPR_INUM:
@@ -2673,6 +2732,8 @@ struct Statement *mk_procedurecall(int line_num, char *id, ListNode_t *expr_args
     new_stmt->stmt_data.procedure_call_data.is_procedural_var_call = 0;
     new_stmt->stmt_data.procedure_call_data.procedural_var_symbol = NULL;
     new_stmt->stmt_data.procedure_call_data.procedural_var_expr = NULL;
+    new_stmt->stmt_data.procedure_call_data.cached_owner_class = NULL;
+    new_stmt->stmt_data.procedure_call_data.cached_method_name = NULL;
     new_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
     new_stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
 
@@ -2974,6 +3035,7 @@ static void init_expression(struct Expression *expr, int line_num, enum ExprType
     expr->expr_data.function_call_data.is_method_call_placeholder = 0;
     expr->expr_data.function_call_data.placeholder_method_name = NULL;
     expr->expr_data.function_call_data.is_virtual_call = 0;
+    expr->expr_data.function_call_data.is_interface_call = 0;
     expr->expr_data.function_call_data.vmt_index = -1;
     expr->expr_data.function_call_data.self_class_name = NULL;
     expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
@@ -3176,6 +3238,7 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.placeholder_method_name = NULL;
     new_expr->expr_data.function_call_data.call_qualifier = NULL;
     new_expr->expr_data.function_call_data.is_virtual_call = 0;
+    new_expr->expr_data.function_call_data.is_interface_call = 0;
     new_expr->expr_data.function_call_data.vmt_index = -1;
     new_expr->expr_data.function_call_data.self_class_name = NULL;
     new_expr->expr_data.function_call_data.is_class_method_call = 0;
@@ -3183,6 +3246,8 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_inherited_call = 0;
     new_expr->expr_data.function_call_data.is_bare_inherited = 0;
     new_expr->expr_data.function_call_data.is_operator_call = 0;
+    new_expr->expr_data.function_call_data.cached_owner_class = NULL;
+    new_expr->expr_data.function_call_data.cached_method_name = NULL;
 
     return new_expr;
 }
@@ -3458,11 +3523,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         type_ref_free(alias->file_type_ref);
         alias->file_type_ref = NULL;
     }
-    if (alias->kgpc_type != NULL)
-    {
-        kgpc_type_release(alias->kgpc_type);
-        alias->kgpc_type = NULL;
-    }
+    /* kgpc_type is a borrowed reference owned by the scope's hash table.
+     * Do NOT release it here — the scope destruction handles its lifetime.
+     * Releasing it causes use-after-free when the scope is destroyed before
+     * the tree (e.g. codegen's LeaveScope runs before compilation_context_destroy). */
+    alias->kgpc_type = NULL;
     if (alias->inline_record_type != NULL)
     {
         destroy_record_type(alias->inline_record_type);

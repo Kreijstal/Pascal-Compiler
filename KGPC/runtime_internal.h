@@ -12,20 +12,29 @@
 #endif
 #endif
 
+/* FPC-compatible tinterfaceentry (40 bytes on x86-64).
+ * Layout matches FPC objpash.inc tinterfaceentry exactly. */
 typedef struct kgpc_interface_entry {
-    uint32_t guid_d1;
-    uint16_t guid_d2;
-    uint16_t guid_d3;
-    uint8_t  guid_d4[8];
-    const char *name;
+    const void **iid_ref;       /* ^pguid: pointer to a pguid cell */
+    const void *vtable;         /* interface vtable (unused for now) */
+    uint64_t ioffset;           /* byte offset from instance to intf pointer */
+    const void **iidstr_ref;    /* ^pshortstring (unused for now) */
+    uint32_t itype;             /* tinterfaceentrytype: 0 = etStandard */
+    uint32_t _padding;
 } kgpc_interface_entry;
+
+/* FPC-compatible tinterfacetable */
+typedef struct kgpc_interface_table {
+    uint64_t entry_count;
+    kgpc_interface_entry entries[];  /* flexible array */
+} kgpc_interface_table;
 
 typedef struct kgpc_class_typeinfo
 {
     const struct kgpc_class_typeinfo *parent;
     const char *class_name;
     const void *vmt;
-    const kgpc_interface_entry *interfaces;
+    const kgpc_interface_table *interfaces;
     int num_interfaces;
 } kgpc_class_typeinfo;
 
@@ -54,6 +63,10 @@ int kgpc_directory_create(const char *path);
 int kgpc_directory_remove(const char *path);
 int kgpc_file_rename(const char *old_path, const char *new_path);
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr);
+void __kgpc_init_interface_vtables(void *instance);
+typedef void (*kgpc_method_ptr)(void);
+kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
+    const void *interface_guid, int method_index);
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf);
 
 /* Console / keyboard helpers used by KGPC RTL units (Crt/Keyboard). */

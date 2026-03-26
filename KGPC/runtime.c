@@ -234,6 +234,46 @@ int threadingalreadyused_void(void)
     return kgpc_threading_already_used();
 }
 
+int32_t kgpc_interlockedincrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int32_t kgpc_interlockeddecrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockedincrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockeddecrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
+}
+
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
 {
 #if defined(__GNUC__) || defined(__clang__)
@@ -1498,28 +1538,112 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+/* Resolve an interface method for dispatch.  Handles both raw object pointers
+ * and adjusted interface pointers (from kgpc_get_interface/Supports).
+ * - If self points to an object (first qword is VMT), navigates VMT → interface
+ *   table → vtable → method.
+ * - If self is already adjusted (first qword is an interface vtable), uses it directly.
+ * Returns the method function pointer, or __kgpc_abstract_method_error if not found. */
+typedef void (*kgpc_method_ptr)(void);
+extern void __kgpc_abstract_method_error(void);
+kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
+    const void *interface_guid, int method_index)
+{
+    if (self == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* self could be either:
+     * a) Raw object pointer: *(void**)self = VMT, VMT[10] = interface table
+     * b) Adjusted interface pointer: *(void**)self = interface vtable (flat array)
+     * Distinguish by checking VMT signature: VMT has vInstanceSize at offset 0
+     * (small positive int) and vInstanceSize2 = -vInstanceSize at offset 8. */
+    const void *first_qword = *(const void **)self;
+    if (first_qword == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* Check if first_qword looks like a VMT (vInstanceSize / vInstanceSize2 pattern) */
+    int64_t slot0 = *(const int64_t *)first_qword;
+    int64_t slot1 = *((const int64_t *)first_qword + 1);
+    int is_vmt = (slot0 > 0 && slot0 < 10000000 && slot1 == -slot0);
+
+    if (is_vmt) {
+        /* Case (a): raw object pointer — walk VMT chain looking for matching interface */
+        const void *cur_vmt = first_qword;
+        while (cur_vmt != NULL) {
+            /* vIntfTable at VMT offset 80 */
+            const kgpc_interface_table *intf_table =
+                *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+            if (intf_table != NULL && intf_table->entry_count > 0) {
+                for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                    const kgpc_interface_entry *entry = &intf_table->entries[i];
+                    if (entry->iid_ref != NULL && interface_guid != NULL) {
+                        const void *iid = *(entry->iid_ref);
+                        if (iid != NULL && memcmp(iid, interface_guid, 16) == 0) {
+                            if (entry->vtable != NULL) {
+                                const void **vtable = (const void **)entry->vtable;
+                                if (method_index >= 0)
+                                    return (kgpc_method_ptr)vtable[method_index];
+                            }
+                            return (kgpc_method_ptr)__kgpc_abstract_method_error;
+                        }
+                    }
+                }
+            }
+            /* Walk to parent via vParentRef (offset 16) */
+            const void * const *parent_ref =
+                *(const void * const * const *)((const char *)cur_vmt + 16);
+            if (parent_ref != NULL)
+                cur_vmt = *parent_ref;
+            else
+                cur_vmt = NULL;
+        }
+    } else {
+        /* Case (b): adjusted interface pointer — first_qword is the vtable directly */
+        const void **vtable = (const void **)first_qword;
+        if (method_index >= 0)
+            return (kgpc_method_ptr)vtable[method_index];
+    }
+
+    return (kgpc_method_ptr)__kgpc_abstract_method_error;
+}
+
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
 {
     if (self == NULL || guid == NULL || out_intf == NULL)
         return 0;
 
-    /* Get typeinfo pointer from the object's VMT (vTypeInfo at offset 56) */
+    /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
+     * This reads the FPC-compatible tinterfacetable layout:
+     *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
+     * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
     const void *vmt = *(const void * const *)self;
     if (vmt == NULL)
         return 0;
-    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
 
-    /* Walk the class hierarchy */
-    while (typeinfo != NULL) {
-        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
-            for (int i = 0; i < typeinfo->num_interfaces; i++) {
-                if (memcmp(&typeinfo->interfaces[i], guid, 16) == 0) {
-                    *out_intf = (void *)self;
-                    return 1;
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->iid_ref != NULL) {
+                    const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
+                    if (iid != NULL && memcmp(iid, guid, 16) == 0) {
+                        *out_intf = (void *)((const char *)self + entry->ioffset);
+                        return 1;
+                    }
                 }
             }
         }
-        typeinfo = typeinfo->parent;
+        /* Walk to parent via vParentRef (offset 16): PPVmt, deref to get parent VMT */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
     }
     return 0;
 }
@@ -2606,6 +2730,41 @@ void Initialize(void *value)
 }
 
 /* Generic default constructor for classes without explicit constructors */
+/* Initialize interface vtable pointer slots in a class instance.
+ * For each interface the class implements, the instance has a slot at
+ * (instance + ioffset) that must point to the interface vtable.
+ * This is called after the VMT pointer is set at offset 0. */
+void __kgpc_init_interface_vtables(void *instance)
+{
+    if (instance == NULL)
+        return;
+    const void *vmt = *(const void * const *)instance;
+    if (vmt == NULL)
+        return;
+    /* Walk the VMT chain (including parent classes) to init all interface slots */
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->ioffset > 0 && entry->vtable != NULL) {
+                    *(const void **)((char *)instance + entry->ioffset) = entry->vtable;
+                }
+            }
+        }
+        /* Walk to parent via vParentRef (offset 16) */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
+    }
+}
+
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
 {
     /* Allocate and zero-initialize the class instance */
@@ -2615,13 +2774,16 @@ void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
         fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
         exit(EXIT_FAILURE);
     }
-    
+
     /* Set the VMT pointer (first field of the instance) */
     if (vmt_ptr != NULL)
     {
         *(const void **)instance = vmt_ptr;
     }
-    
+
+    /* Initialize interface vtable pointer slots */
+    __kgpc_init_interface_vtables(instance);
+
     return instance;
 }
 
@@ -6652,33 +6814,6 @@ char *kgpc_float_to_string(double value, int precision)
     return kgpc_string_duplicate(buffer);
 }
 
-uint16_t *extractfilepath_us(const uint16_t *filename)
-{
-    int64_t len = kgpc_unicode_known_length(filename);
-    if (filename == NULL || len <= 0)
-        return kgpc_alloc_empty_unicodestring();
-
-    int64_t end = 0;
-    for (int64_t i = len; i > 0; --i)
-    {
-        uint16_t ch = filename[i - 1];
-        if (ch == (uint16_t)'/' || ch == (uint16_t)'\\')
-        {
-            end = i;
-            break;
-        }
-    }
-
-    if (end <= 0)
-        return kgpc_alloc_empty_unicodestring();
-
-    uint16_t *result = NULL;
-    kgpc_setstring_unicode(&result, filename, end);
-    if (result == NULL)
-        return kgpc_alloc_empty_unicodestring();
-    return result;
-}
-
 int kgpc_string_to_int(const char *text, int *out_value)
 {
     if (text == NULL)
@@ -8482,76 +8617,6 @@ void kgpc_runerror(int32_t code) {
     exit(code);
 }
 
-/* TDoubleRec property getters/setters (IEEE 754 double: sign=bit63, exp=bits52-62, frac=bits0-51) */
-uint64_t tdoublerec__getexp_u_tdoublerec(void *self) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    return (data >> 52) & 0x7FF;
-}
-void tdoublerec__setexp_u_tdoublerec_u64(void *self, uint64_t e) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    data = (data & ~(0x7FFULL << 52)) | ((e & 0x7FF) << 52);
-    memcpy(self, &data, sizeof(data));
-}
-int32_t tdoublerec__getsign_u_tdoublerec(void *self) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    return (data >> 63) & 1;
-}
-void tdoublerec__setsign_u_tdoublerec_bool(void *self, int32_t s) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    if (s) data |= (1ULL << 63); else data &= ~(1ULL << 63);
-    memcpy(self, &data, sizeof(data));
-}
-uint64_t tdoublerec__getfrac_u_tdoublerec(void *self) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    return data & 0xFFFFFFFFFFFFFULL;
-}
-void tdoublerec__setfrac_u_tdoublerec_u64(void *self, uint64_t f) {
-    uint64_t data;
-    memcpy(&data, self, sizeof(data));
-    data = (data & ~0xFFFFFFFFFFFFFULL) | (f & 0xFFFFFFFFFFFFFULL);
-    memcpy(self, &data, sizeof(data));
-}
-
-/* TSingleRec property getters/setters (IEEE 754 single: sign=bit31, exp=bits23-30, frac=bits0-22) */
-uint64_t tsinglerec__getexp_u_tsinglerec(void *self) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    return (data >> 23) & 0xFF;
-}
-void tsinglerec__setexp_u_tsinglerec_u64(void *self, uint64_t e) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    data = (data & ~(0xFFU << 23)) | (((uint32_t)(e & 0xFF)) << 23);
-    memcpy(self, &data, sizeof(data));
-}
-int32_t tsinglerec__getsign_u_tsinglerec(void *self) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    return (data >> 31) & 1;
-}
-void tsinglerec__setsign_u_tsinglerec_bool(void *self, int32_t s) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    if (s) data |= (1U << 31); else data &= ~(1U << 31);
-    memcpy(self, &data, sizeof(data));
-}
-uint64_t tsinglerec__getfrac_u_tsinglerec(void *self) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    return data & 0x7FFFFF;
-}
-void tsinglerec__setfrac_u_tsinglerec_u64(void *self, uint64_t f) {
-    uint32_t data;
-    memcpy(&data, self, sizeof(data));
-    data = (data & ~0x7FFFFF) | ((uint32_t)(f & 0x7FFFFF));
-    memcpy(self, &data, sizeof(data));
-}
-
 /* GetMemory/FreeMemory/ReallocMemory - C heap wrappers */
 void *kgpc_getmem_ptr(size_t size) { return malloc(size); }
 size_t kgpc_freemem_ptr(void *p) { free(p); return 0; }
@@ -8561,3 +8626,44 @@ void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
 void kgpc_readbarrier(void) {}
 void kgpc_writebarrier(void) {}
 void kgpc_readwritebarrier(void) {}
+
+/* SysBeep — system procedure that produces a beep.
+ * Not meaningful in a CLI/batch context; no-op. */
+void SysBeep(void) {}
+
+/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
+ * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
+ * TPtrWrapper (a simple record with no managed fields). */
+void tmarshal__unfixarray_u_tptrwrapper(void) {}
+
+/* FindComponentClass — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void FindComponentClass(void) { __kgpc_abstract_method_error(); }
+
+/* ReadDeltaStream — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
+
+/* Default IInterface implementations for non-reference-counted classes.
+ * Classes that implement interfaces without inheriting from TInterfacedObject
+ * (e.g. TList = class(TObject, IFPObserved)) need default QueryInterface,
+ * _AddRef, and _Release methods. These behave like FPC's defaults:
+ * no reference counting, QueryInterface delegates to GetInterface. */
+int64_t kgpc_default_queryinterface(const void *self, const void *guid, void **out_intf)
+{
+    if (kgpc_get_interface(self, guid, out_intf))
+        return 0;  /* S_OK */
+    return (int64_t)0x80004002u;  /* E_NOINTERFACE */
+}
+
+int64_t kgpc_default_addref(const void *self)
+{
+    (void)self;
+    return -1;
+}
+
+int64_t kgpc_default_release(const void *self)
+{
+    (void)self;
+    return -1;
+}

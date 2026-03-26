@@ -157,9 +157,12 @@ enum MethodTemplateKind
 struct MethodTemplate
 {
     char *name;               /* Simple method name */
+    char *delegated_interface_name; /* Interface owner for IFoo.GetValue=Impl */
+    char *delegated_target_name; /* Concrete method target (e.g. GetValueImpl) */
     struct ast_t *method_ast; /* Cloned AST for the original declaration */
     struct Tree *method_tree; /* Converted Tree_t template built on-demand */
     enum MethodTemplateKind kind;  /* Method classification */
+    int is_interface_delegation; /* 1 if declared as IFoo.Method=Impl */
     int is_class_method;      /* 1 if declared with CLASS */
     int is_static;            /* 1 if directive static found (no Self parameter) */
     int is_virtual;           /* 1 if directive virtual found */
@@ -284,6 +287,8 @@ struct Statement
             int call_hash_type;              /* HashType enum value (HASHTYPE_VAR, HASHTYPE_PROCEDURE, etc.) */
             struct KgpcType *call_kgpc_type;   /* KgpcType for getting formal parameters */
             int is_call_info_valid;          /* 1 if the above fields are valid, 0 otherwise */
+            char *cached_owner_class;        /* Cached owner class from resolved proc (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved proc (NULL if not a method) */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
@@ -291,6 +296,7 @@ struct Statement
             char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;           /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
@@ -524,6 +530,8 @@ struct Expression
             int call_hash_type;              /* HashType enum value */
             struct KgpcType *call_kgpc_type;   /* Procedure/function signature */
             int is_call_info_valid;          /* 1 if cached info is usable */
+            char *cached_owner_class;        /* Cached owner class from resolved func (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved func (NULL if not a method) */
             
             /* Support for calling through procedural variables */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable */
@@ -533,6 +541,7 @@ struct Expression
             char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int is_constructor_call;                 /* 1 if this call was resolved as a class constructor */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;                   /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
