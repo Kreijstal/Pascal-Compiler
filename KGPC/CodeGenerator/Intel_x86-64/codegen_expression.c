@@ -1925,6 +1925,9 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
         KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
         if (cached != NULL)
         {
+            /* Plain ShortString (not a bounded String[N]) is always 256 bytes */
+            if (kgpc_type_is_shortstring(cached))
+                return 256;
             struct TypeAlias *cached_alias = kgpc_type_get_type_alias(cached);
             if (cached_alias != NULL && cached_alias->is_shortstring &&
                 cached_alias->array_end >= cached_alias->array_start && cached_alias->array_end >= 0)
@@ -1949,6 +1952,9 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
             if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
+                /* If the type IS ShortString, return 256 immediately */
+                if (kgpc_type_is_shortstring(type_node->type))
+                    return 256;
                 struct TypeAlias *type_alias = kgpc_type_get_type_alias(type_node->type);
                 if (type_alias != NULL && type_alias->is_shortstring &&
                     type_alias->array_end >= type_alias->array_start && type_alias->array_end >= 0)
