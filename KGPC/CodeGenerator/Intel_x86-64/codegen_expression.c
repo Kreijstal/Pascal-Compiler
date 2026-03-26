@@ -92,7 +92,7 @@ void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprog
         if (already_emitted) continue;
         fprintf(out, "\n# Stub for unresolved method reference: %s\n", label);
         fprintf(out, "\t.text\n");
-        fprintf(out, "\t.weak %s\n", label);
+        fprintf(out, ".globl %s\n", label);
         fprintf(out, "%s:\n", label);
         fprintf(out, "\tjmp\t__kgpc_abstract_method_error\n");
     }
