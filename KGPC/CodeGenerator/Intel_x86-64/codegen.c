@@ -52,6 +52,8 @@ static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
 static void codegen_assert_interface_impl_resolved(const char *iface_name,
     const char *method_name, const char *class_label,
     const char *iface_symbol, const char *impl_symbol);
+static int codegen_method_uses_sret(CodeGenContext *ctx, SymTab_t *symtab,
+    const char *iface_name, const char *class_label, const char *method_name);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
@@ -79,6 +81,47 @@ int codegen_has_available_subprogram_label(const char *label)
     if (label == NULL || g_codegen_available_subprograms == NULL)
         return 0;
     return codegen_list_contains_string(g_codegen_available_subprograms, label);
+}
+
+static int codegen_method_uses_sret(CodeGenContext *ctx, SymTab_t *symtab,
+    const char *iface_name, const char *class_label, const char *method_name)
+{
+    char lookup_name[512];
+    HashNode_t *method_sym = NULL;
+    KgpcType *ret_type = NULL;
+
+    if (ctx == NULL || symtab == NULL || method_name == NULL)
+        return 0;
+
+    if (iface_name != NULL && iface_name[0] != '\0')
+    {
+        snprintf(lookup_name, sizeof(lookup_name), "%s__%s", iface_name, method_name);
+        FindSymbol(&method_sym, symtab, lookup_name);
+    }
+    if (method_sym == NULL && class_label != NULL && class_label[0] != '\0')
+    {
+        snprintf(lookup_name, sizeof(lookup_name), "%s__%s", class_label, method_name);
+        FindSymbol(&method_sym, symtab, lookup_name);
+    }
+    if (method_sym == NULL || method_sym->type == NULL)
+        return 0;
+
+    ret_type = kgpc_type_get_return_type(method_sym->type);
+    if (ret_type == NULL)
+        return 0;
+    if (kgpc_type_is_shortstring(ret_type))
+        return 1;
+    if (kgpc_type_is_record(ret_type))
+    {
+        long long ret_size = 0;
+        struct RecordType *ret_rec = kgpc_type_get_record(ret_type);
+        if (ret_rec != NULL &&
+            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL, ret_rec, &ret_size) == 0 &&
+            ret_size > 8)
+            return 1;
+    }
+
+    return 0;
 }
 
 const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
@@ -3811,39 +3854,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             class_label, iface_name, vtbl_imethod->name);
                         fprintf(ctx->output_file, "\t.text\n");
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
-                        /* Determine which register holds Self.  If the method
-                         * returns a large struct (>8 bytes, SRET convention),
-                         * the hidden return pointer occupies the first arg
+                        /* Determine which register holds Self. If the method uses
+                         * SRET, the hidden return pointer occupies the first arg
                          * register and Self shifts to the second. */
-                        int method_uses_sret = 0;
-                        {
-                            char lookup_name[512];
-                            snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
-                                iface_name, vtbl_imethod->name);
-                            HashNode_t *method_sym = NULL;
-                            FindSymbol(&method_sym, symtab, lookup_name);
-                            if (method_sym == NULL) {
-                                snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
-                                    class_label, vtbl_imethod->name);
-                                FindSymbol(&method_sym, symtab, lookup_name);
-                            }
-                            if (method_sym != NULL && method_sym->type != NULL) {
-                                KgpcType *ret_type = kgpc_type_get_return_type(method_sym->type);
-                                if (ret_type != NULL) {
-                                    if (kgpc_type_is_shortstring(ret_type)) {
-                                        /* ShortString is 256 bytes — always SRET */
-                                        method_uses_sret = 1;
-                                    } else if (kgpc_type_is_record(ret_type)) {
-                                        long long ret_size = 0;
-                                        struct RecordType *ret_rec = kgpc_type_get_record(ret_type);
-                                        if (ret_rec != NULL &&
-                                            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
-                                                ret_rec, &ret_size) == 0 && ret_size > 8)
-                                            method_uses_sret = 1;
-                                    }
-                                }
-                            }
-                        }
+                        int method_uses_sret = codegen_method_uses_sret(
+                            ctx, symtab, iface_name, class_label, vtbl_imethod->name);
                         const char *self_reg = codegen_target_is_windows()
                             ? (method_uses_sret ? "%rdx" : "%rcx")
                             : (method_uses_sret ? "%rsi" : "%rdi");
