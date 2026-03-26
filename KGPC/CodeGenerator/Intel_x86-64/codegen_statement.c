@@ -149,7 +149,6 @@ static int codegen_statement_return_storage_size(KgpcType *return_type)
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 
 
@@ -159,10 +158,8 @@ extern const char *kgpc_getenv(const char *name);
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
-/* Helper function to get RecordType from HashNode — wraps hashnode_get_record_type
- * with a static name to avoid collisions with the extern declaration in
- * SemCheck_Expr_Internal.h. */
-static inline struct RecordType* codegen_stmt_get_record_type_from_node(HashNode_t *node)
+/* Helper function to get RecordType from HashNode */
+static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
 }
@@ -4969,7 +4966,7 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
         HashNode_t *var_node = NULL;
         if (FindSymbol(&var_node, symtab, context_expr->expr_data.id) != 0 && var_node != NULL)
         {
-            struct RecordType *rec = codegen_stmt_get_record_type_from_node(var_node);
+            struct RecordType *rec = get_record_type_from_node(var_node);
             if (rec != NULL)
                 return rec;
             if (var_node->type != NULL)
@@ -4999,7 +4996,7 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
         {
             HashNode_t *type_node = NULL;
             if (FindSymbol(&type_node, symtab, target_id) != 0 && type_node != NULL)
-                return codegen_stmt_get_record_type_from_node(type_node);
+                return get_record_type_from_node(type_node);
         }
     }
     if (context_expr->type == EXPR_FUNCTION_CALL)
@@ -5009,7 +5006,7 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
         {
             HashNode_t *type_node = NULL;
             if (FindSymbol(&type_node, symtab, call_id) != 0 && type_node != NULL)
-                return codegen_stmt_get_record_type_from_node(type_node);
+                return get_record_type_from_node(type_node);
         }
     }
     if (context_expr->pointer_subtype_id != NULL)
@@ -5017,7 +5014,7 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
         HashNode_t *type_node = NULL;
         if (FindSymbol(&type_node, symtab, context_expr->pointer_subtype_id) != 0 &&
             type_node != NULL)
-            return codegen_stmt_get_record_type_from_node(type_node);
+            return get_record_type_from_node(type_node);
     }
     return NULL;
 }
@@ -11003,285 +11000,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
 }
 
-/* -----------------------------------------------------------------------
- * codegen_try_recover_vmt_dispatch
- *
- * When the semantic checker was skipped for an imported unit body
- * (KGPC_SKIP_IMPORTED_IMPL_BODIES), procedure calls inside those bodies
- * are left unresolved (is_call_info_valid=0, symbol not found).  Many of
- * those calls are virtual/abstract method calls that MUST go through VMT
- * dispatch rather than a direct call to a label that might not exist.
- *
- * This function attempts to recover:
- *  1. Method-call placeholders  (receiver.Method  pattern)
- *     – The first argument IS the receiver (Self for the callee).
- *     – We determine the receiver's class from the symtab and walk the
- *       class hierarchy looking for a virtual method with a matching name.
- *
- *  2. Implicit-self calls  (bare MethodName inside a class method body)
- *     – The enclosing function's owner_class tells us the class.
- *     – We inject a synthetic Self expression into the argument list so
- *       that the VMT dispatch code has the instance pointer in arg0.
- *
- * Returns 1 if VMT dispatch (or a resolved direct call) was emitted, and
- * the caller should return immediately.  Returns 0 if recovery failed and
- * the caller should fall through to the existing warning path.
- * ----------------------------------------------------------------------- */
-static int codegen_try_recover_vmt_dispatch(
-    struct Statement *stmt, ListNode_t **inst_list_ptr,
-    CodeGenContext *ctx, SymTab_t *symtab)
-{
-    assert(stmt != NULL);
-    assert(stmt->type == STMT_PROCEDURE_CALL);
-    assert(ctx != NULL);
-    assert(symtab != NULL);
-
-    const char *method_name = NULL;
-    const char *class_name = NULL;
-    int is_placeholder = stmt->stmt_data.procedure_call_data.is_method_call_placeholder;
-    int self_already_in_args = 0;
-
-    /* ---- Case 1: method-call placeholder (receiver.Method) ---- */
-    if (is_placeholder &&
-        stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-    {
-        method_name = stmt->stmt_data.procedure_call_data.placeholder_method_name;
-        self_already_in_args = 1;
-
-        /* Determine receiver class from the first argument's type. */
-        ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-        if (args != NULL)
-        {
-            struct Expression *receiver = (struct Expression *)args->cur;
-            if (receiver != NULL && receiver->type == EXPR_VAR_ID &&
-                receiver->expr_data.id != NULL)
-            {
-                HashNode_t *recv_sym = NULL;
-                if (FindSymbol(&recv_sym, symtab, receiver->expr_data.id) != 0 &&
-                    recv_sym != NULL && recv_sym->type != NULL)
-                {
-                    KgpcType *rt = recv_sym->type;
-                    /* Dereference pointer-to-record (class instances are pointers) */
-                    if (rt->kind == TYPE_KIND_POINTER && rt->info.points_to != NULL)
-                        rt = rt->info.points_to;
-                    if (rt->kind == TYPE_KIND_RECORD && rt->info.record_info != NULL &&
-                        rt->info.record_info->type_id != NULL)
-                    {
-                        class_name = rt->info.record_info->type_id;
-                    }
-                }
-            }
-            /* Also try Self inside a method — the receiver might be a field
-             * whose type we cannot determine, but if we know the enclosing
-             * class we can try the enclosing class's hierarchy. */
-            if (class_name == NULL && ctx->current_subprogram_owner_class != NULL)
-            {
-                /* Walk the enclosing class looking for a field matching the
-                 * receiver id, and extract its type. */
-                if (receiver != NULL && receiver->type == EXPR_VAR_ID &&
-                    receiver->expr_data.id != NULL)
-                {
-                    const char *field_id = receiver->expr_data.id;
-                    struct RecordType *owner_rec = semcheck_lookup_record_type(
-                        symtab, ctx->current_subprogram_owner_class);
-                    while (owner_rec != NULL)
-                    {
-                        for (ListNode_t *f = owner_rec->fields; f != NULL; f = f->next)
-                        {
-                            if (f->type != LIST_RECORD_FIELD || f->cur == NULL)
-                                continue;
-                            struct RecordField *rf = (struct RecordField *)f->cur;
-                            if (rf->name == NULL ||
-                                strcasecmp(rf->name, field_id) != 0)
-                                continue;
-                            /* Found the field — get its class type. */
-                            if (rf->type_id != NULL)
-                            {
-                                struct RecordType *field_rec =
-                                    semcheck_lookup_record_type(symtab, rf->type_id);
-                                if (field_rec != NULL && field_rec->type_id != NULL)
-                                    class_name = field_rec->type_id;
-                            }
-                            break;
-                        }
-                        if (class_name != NULL)
-                            break;
-                        owner_rec = (owner_rec->parent_class_name != NULL)
-                            ? semcheck_lookup_record_type(symtab,
-                                  owner_rec->parent_class_name)
-                            : NULL;
-                    }
-                }
-            }
-        }
-    }
-    /* ---- Case 2: implicit-self call (bare MethodName in class method) ---- */
-    else if (!is_placeholder && ctx->current_subprogram_owner_class != NULL)
-    {
-        const char *unmangled = stmt->stmt_data.procedure_call_data.id;
-        if (unmangled != NULL)
-        {
-            /* The parser sometimes prefixes with __ (class separator). Strip it. */
-            if (unmangled[0] == '_' && unmangled[1] == '_')
-                method_name = unmangled + 2;
-            else
-                method_name = unmangled;
-            class_name = ctx->current_subprogram_owner_class;
-            self_already_in_args = 0;
-        }
-    }
-
-    if (class_name == NULL || method_name == NULL)
-        return 0;
-
-    /* Look up the class record. */
-    struct RecordType *class_record = semcheck_lookup_record_type(symtab, class_name);
-    if (class_record == NULL || !record_type_is_class(class_record))
-        return 0;
-
-    /* Walk the class hierarchy looking for a virtual method. */
-    int vmt_index = -1;
-    {
-        const char *walk_class = class_name;
-        struct RecordType *walk_record = class_record;
-        while (walk_class != NULL && walk_record != NULL)
-        {
-            if (walk_record->methods != NULL)
-            {
-                for (ListNode_t *me = walk_record->methods; me != NULL;
-                     me = me->next)
-                {
-                    struct MethodInfo *mi = (struct MethodInfo *)me->cur;
-                    if (mi != NULL && mi->name != NULL &&
-                        (mi->is_virtual || mi->is_override) &&
-                        strcasecmp(mi->name, method_name) == 0)
-                    {
-                        vmt_index = mi->vmt_index;
-                        break;
-                    }
-                }
-            }
-            if (vmt_index >= 0)
-                break;
-            walk_class = walk_record->parent_class_name;
-            walk_record = walk_class
-                ? semcheck_lookup_record_type(symtab, walk_class)
-                : NULL;
-        }
-    }
-
-    /* ---- Emit VMT dispatch ---- */
-    if (vmt_index >= 0)
-    {
-        ListNode_t *args_to_pass = stmt->stmt_data.procedure_call_data.expr_args;
-        ListNode_t *injected_self_node = NULL;
-
-        /* For implicit-self calls, inject a synthetic Self argument. */
-        if (!self_already_in_args)
-        {
-            struct Expression *self_expr =
-                mk_varid(stmt->line_num, strdup("Self"));
-            if (self_expr == NULL)
-                return 0;
-            injected_self_node = CreateListNode(self_expr, LIST_EXPR);
-            if (injected_self_node == NULL)
-            {
-                destroy_expr(self_expr);
-                return 0;
-            }
-            injected_self_node->next = args_to_pass;
-            args_to_pass = injected_self_node;
-        }
-
-        *inst_list_ptr = codegen_pass_arguments(args_to_pass, *inst_list_ptr,
-            ctx, NULL, method_name, 0, NULL);
-
-        char buffer[CODEGEN_MAX_INST_BUF];
-        int self_arg_index = 0;
-        const char *self_reg = current_arg_reg64(self_arg_index);
-
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
-        *inst_list_ptr = add_inst(*inst_list_ptr, buffer);
-
-        /* Dereference instance to get VMT pointer. */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
-        *inst_list_ptr = add_inst(*inst_list_ptr, buffer);
-
-        int vmt_offset = vmt_index * 8;
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%r11), %%r11\n",
-            vmt_offset);
-        *inst_list_ptr = add_inst(*inst_list_ptr, buffer);
-
-        snprintf(buffer, sizeof(buffer), "\tcall\t*%%r11\n");
-        *inst_list_ptr = add_inst(*inst_list_ptr, buffer);
-
-        /* Clean up the injected Self node (but NOT the actual expression,
-         * which is now part of the call and will be freed by destroy_expr
-         * if the tree is freed later).  We just detach it from the list. */
-        if (injected_self_node != NULL)
-        {
-            /* Detach: restore the original args list on the statement. */
-            stmt->stmt_data.procedure_call_data.expr_args =
-                injected_self_node->next;
-            injected_self_node->next = NULL;
-            /* Free the injected Self expression and the list node. */
-            destroy_expr((struct Expression *)injected_self_node->cur);
-            injected_self_node->cur = NULL;
-            free(injected_self_node);
-        }
-
-        return 1;
-    }
-
-    /* ---- Not virtual — try to resolve a concrete mangled name ---- */
-    {
-        const char *impl_target = codegen_find_class_method_impl_id(
-            symtab, class_record, class_name, NULL, method_name);
-        if (impl_target != NULL)
-        {
-            ListNode_t *args_to_pass = stmt->stmt_data.procedure_call_data.expr_args;
-            ListNode_t *injected_self_node = NULL;
-
-            if (!self_already_in_args)
-            {
-                struct Expression *self_expr =
-                    mk_varid(stmt->line_num, strdup("Self"));
-                if (self_expr == NULL)
-                    return 0;
-                injected_self_node = CreateListNode(self_expr, LIST_EXPR);
-                if (injected_self_node == NULL)
-                {
-                    destroy_expr(self_expr);
-                    return 0;
-                }
-                injected_self_node->next = args_to_pass;
-                args_to_pass = injected_self_node;
-            }
-
-            *inst_list_ptr = codegen_pass_arguments(args_to_pass,
-                *inst_list_ptr, ctx, NULL, method_name, 0, NULL);
-
-            char buffer[CODEGEN_MAX_INST_BUF];
-            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", impl_target);
-            *inst_list_ptr = add_inst(*inst_list_ptr, buffer);
-
-            if (injected_self_node != NULL)
-            {
-                stmt->stmt_data.procedure_call_data.expr_args =
-                    injected_self_node->next;
-                injected_self_node->next = NULL;
-                destroy_expr((struct Expression *)injected_self_node->cur);
-                injected_self_node->cur = NULL;
-                free(injected_self_node);
-            }
-
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -11344,75 +11062,15 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         {
             call_hash_type = proc_node->hash_type;
             call_kgpc_type = proc_node->type;
-
-            /* Late VMT detection: if the symbol was found in the fallback
-             * lookup but the semantic checker never ran on this call site
-             * (is_virtual_call is 0), check whether the target is actually
-             * a virtual method and mark it so the downstream dispatch
-             * emitter produces VMT dispatch instead of a direct call. */
-            if (!stmt->stmt_data.procedure_call_data.is_virtual_call &&
-                proc_node->owner_class != NULL &&
-                proc_node->method_name != NULL &&
-                !from_cparser_is_method_static(proc_node->owner_class,
-                    proc_node->method_name))
-            {
-                struct RecordType *fallback_class =
-                    semcheck_lookup_record_type(symtab, proc_node->owner_class);
-                if (fallback_class != NULL &&
-                    record_type_is_class(fallback_class) &&
-                    fallback_class->methods != NULL)
-                {
-                    const char *walk_class = proc_node->owner_class;
-                    struct RecordType *walk_rec = fallback_class;
-                    while (walk_class != NULL && walk_rec != NULL)
-                    {
-                        for (ListNode_t *me = walk_rec->methods; me != NULL;
-                             me = me->next)
-                        {
-                            struct MethodInfo *mi =
-                                (struct MethodInfo *)me->cur;
-                            if (mi != NULL && mi->name != NULL &&
-                                (mi->is_virtual || mi->is_override) &&
-                                strcasecmp(mi->name,
-                                    proc_node->method_name) == 0)
-                            {
-                                stmt->stmt_data.procedure_call_data
-                                    .is_virtual_call = 1;
-                                stmt->stmt_data.procedure_call_data
-                                    .vmt_index = mi->vmt_index;
-                                if (stmt->stmt_data.procedure_call_data
-                                        .self_class_name == NULL)
-                                {
-                                    stmt->stmt_data.procedure_call_data
-                                        .self_class_name =
-                                        strdup(proc_node->owner_class);
-                                }
-                                goto fallback_vmt_found;
-                            }
-                        }
-                        walk_class = walk_rec->parent_class_name;
-                        walk_rec = walk_class
-                            ? semcheck_lookup_record_type(symtab, walk_class)
-                            : NULL;
-                    }
-                    fallback_vmt_found: ;
-                }
-            }
         }
         else
         {
-            /* Symbol not found.  Before emitting a blind direct call, try to
-             * recover virtual dispatch for method calls whose bodies were not
-             * semantically checked (KGPC_SKIP_IMPORTED_IMPL_BODIES). */
-            if (codegen_try_recover_vmt_dispatch(stmt, &inst_list, ctx, symtab))
-                return inst_list;
-
-            /* Recovery failed — emit as a direct call and hope the linker
-             * resolves it.  This handles runtime procedures and methods that
-             * may not be in the symbol table. */
+            /* Symbol not found - emit as a direct call and hope the linker resolves it.
+             * This handles runtime procedures and methods that may not be in the symbol table. */
             codegen_report_warning(ctx,
                 "WARNING: procedure %s not found during code generation, emitting direct call.",
                 unmangled_name ? unmangled_name : "(unknown)");
+            /* Emit a direct call to the mangled name */
             const char *call_target = proc_name ? proc_name : unmangled_name;
             if (call_target != NULL)
             {
