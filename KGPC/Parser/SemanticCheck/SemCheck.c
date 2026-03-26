@@ -14197,6 +14197,16 @@ void semcheck_add_builtins(SymTab_t *symtab)
             register_unary_builtin_func(symtab, "PopCnt", "AValue", popcnt_types[i], BYTE_TYPE);
     }
 
+    /* NextPowerOfTwo: function nextpowerof2(AValue: QWord): QWord */
+    {
+        static const int nextpow2_types[] = {LONGINT_TYPE, LONGWORD_TYPE, QWORD_TYPE, INT64_TYPE};
+        for (size_t i = 0; i < sizeof(nextpow2_types) / sizeof(nextpow2_types[0]); ++i)
+        {
+            register_unary_builtin_func(symtab, "nextpowerof2", "AValue", nextpow2_types[i], nextpow2_types[i]);
+            register_unary_builtin_func(symtab, "NextPowerOfTwo", "AValue", nextpow2_types[i], nextpow2_types[i]);
+        }
+    }
+
     /* IndexChar: function IndexChar(const buf; len: SizeInt; b: Char): SizeInt */
     {
         const char *func_name = "IndexChar";
