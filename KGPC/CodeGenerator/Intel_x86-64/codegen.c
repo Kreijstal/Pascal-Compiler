@@ -314,6 +314,70 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     return call_target;
 }
 
+KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
+    const struct Expression *expr, HashNode_t **resolved_node_out)
+{
+    HashNode_t *resolved_node = NULL;
+    const char *resolved_target = NULL;
+
+    if (resolved_node_out != NULL)
+        *resolved_node_out = NULL;
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return NULL;
+
+    if (expr->expr_data.function_call_data.is_call_info_valid)
+    {
+        if (resolved_node_out != NULL)
+            *resolved_node_out = expr->expr_data.function_call_data.resolved_func;
+        return expr->expr_data.function_call_data.call_kgpc_type;
+    }
+
+    if (expr->expr_data.function_call_data.resolved_func != NULL &&
+        expr->expr_data.function_call_data.resolved_func->type != NULL)
+    {
+        if (resolved_node_out != NULL)
+            *resolved_node_out = expr->expr_data.function_call_data.resolved_func;
+        return expr->expr_data.function_call_data.resolved_func->type;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.mangled_id != NULL &&
+        FindSymbol(&resolved_node, ctx->symtab,
+            expr->expr_data.function_call_data.mangled_id) != 0 &&
+        resolved_node != NULL && resolved_node->type != NULL)
+    {
+        if (resolved_node_out != NULL)
+            *resolved_node_out = resolved_node;
+        return resolved_node->type;
+    }
+
+    resolved_target = codegen_resolve_function_call_target(ctx, expr, NULL);
+    if (ctx != NULL && ctx->symtab != NULL &&
+        resolved_target != NULL &&
+        (expr->expr_data.function_call_data.mangled_id == NULL ||
+         strcmp(resolved_target, expr->expr_data.function_call_data.mangled_id) != 0) &&
+        FindSymbol(&resolved_node, ctx->symtab, resolved_target) != 0 &&
+        resolved_node != NULL && resolved_node->type != NULL)
+    {
+        if (resolved_node_out != NULL)
+            *resolved_node_out = resolved_node;
+        return resolved_node->type;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL &&
+        FindSymbol(&resolved_node, ctx->symtab,
+            expr->expr_data.function_call_data.id) != 0 &&
+        resolved_node != NULL && resolved_node->type != NULL)
+    {
+        if (resolved_node_out != NULL)
+            *resolved_node_out = resolved_node;
+        return resolved_node->type;
+    }
+
+    return NULL;
+}
+
 static int codegen_parse_guid_literal(const char *guid, uint32_t *d1,
     uint16_t *d2, uint16_t *d3, uint8_t d4[8])
 {

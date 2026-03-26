@@ -3535,22 +3535,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
 
         if (src_expr->type == EXPR_FUNCTION_CALL)
         {
-            struct KgpcType *func_type = NULL;
-            if (src_expr->expr_data.function_call_data.is_call_info_valid)
-            {
-                func_type = src_expr->expr_data.function_call_data.call_kgpc_type;
-            }
-            
-            if (func_type == NULL && ctx != NULL && ctx->symtab != NULL &&
-                src_expr->expr_data.function_call_data.id != NULL)
-            {
-                HashNode_t *func_node = NULL;
-                if (FindSymbol(&func_node, ctx->symtab,
-                        src_expr->expr_data.function_call_data.id) != 0 && func_node != NULL)
-                {
-                    func_type = func_node->type;
-                }
-            }
+            struct KgpcType *func_type =
+                codegen_resolve_function_call_type(ctx, src_expr, NULL);
 
             const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
             const char *func_id = src_expr->expr_data.function_call_data.id;
@@ -9025,11 +9011,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
              * conversion function that strips the length byte and builds a proper AnsiString.
              * Also handle typecasts like TFormatString(HexStr(...)) where the outer type
              * is AnsiString but the inner expression returns ShortString. */
-            int inner_is_shortstring = (assign_type == SHORTSTRING_TYPE);
+            int inner_is_shortstring = codegen_expr_is_shortstring_value_ctx(assign_expr, ctx);
             if (!inner_is_shortstring && assign_expr != NULL &&
                 assign_expr->type == EXPR_TYPECAST &&
                 assign_expr->expr_data.typecast_data.expr != NULL &&
-                expr_get_type_tag(assign_expr->expr_data.typecast_data.expr) == SHORTSTRING_TYPE)
+                codegen_expr_is_shortstring_value_ctx(
+                    assign_expr->expr_data.typecast_data.expr, ctx))
             {
                 inner_is_shortstring = 1;
             }
