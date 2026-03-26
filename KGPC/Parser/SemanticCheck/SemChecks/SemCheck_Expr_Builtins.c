@@ -3286,12 +3286,33 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
 
             if (arg_alias->target_type_id != NULL)
             {
-                HashNode_t *target_node = semcheck_find_preferred_type_node(symtab,
-                    arg_alias->target_type_id);
-                if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
-                    arg_alias = get_type_alias_from_node(target_node);
-                else
-                    arg_alias = NULL;
+                /* Follow the alias chain with a basic cycle guard to avoid infinite loops
+                 * on malformed or cyclic type definitions.
+                 */
+                int alias_depth = 0;
+                const int max_alias_depth = 32;
+
+                while (arg_alias != NULL && arg_alias->target_type_id != NULL)
+                {
+                    HashNode_t *target_node = semcheck_find_preferred_type_node(
+                        symtab, arg_alias->target_type_id);
+
+                    if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        arg_alias = get_type_alias_from_node(target_node);
+                    }
+                    else
+                    {
+                        arg_alias = NULL;
+                    }
+
+                    if (++alias_depth >= max_alias_depth)
+                    {
+                        /* Bail out on excessively deep or cyclic alias chains */
+                        arg_alias = NULL;
+                        break;
+                    }
+                }
             }
             else
             {
