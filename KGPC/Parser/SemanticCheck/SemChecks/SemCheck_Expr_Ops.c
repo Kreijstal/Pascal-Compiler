@@ -1447,14 +1447,7 @@ int semcheck_addop(int *type_return,
             /* Result is a pointer of the same type as the left operand */
             *type_return = POINTER_TYPE;
             /* Copy pointer metadata from left operand to result */
-            if (expr1->pointer_subtype != UNKNOWN_TYPE)
-            {
-                expr->pointer_subtype = expr1->pointer_subtype;
-            }
-            if (expr1->pointer_subtype_id != NULL)
-            {
-                expr->pointer_subtype_id = strdup(expr1->pointer_subtype_id);
-            }
+            semcheck_set_pointer_info(expr, expr1->pointer_subtype, expr1->pointer_subtype_id);
             /* Propagate KgpcType information for proper type checking */
             if (expr1->resolved_kgpc_type != NULL)
             {
@@ -1472,14 +1465,7 @@ int semcheck_addop(int *type_return,
             /* Result is a pointer of the same type as the right operand */
             *type_return = POINTER_TYPE;
             /* Copy pointer metadata from right operand to result */
-            if (expr2->pointer_subtype != UNKNOWN_TYPE)
-            {
-                expr->pointer_subtype = expr2->pointer_subtype;
-            }
-            if (expr2->pointer_subtype_id != NULL)
-            {
-                expr->pointer_subtype_id = strdup(expr2->pointer_subtype_id);
-            }
+            semcheck_set_pointer_info(expr, expr2->pointer_subtype, expr2->pointer_subtype_id);
             /* Propagate KgpcType information for proper type checking */
             if (expr2->resolved_kgpc_type != NULL)
             {
@@ -1500,14 +1486,7 @@ int semcheck_addop(int *type_return,
             /* Mark this expression as a pointer difference operation */
             expr->is_pointer_diff = 1;
             /* Store pointer element size from left operand for codegen */
-            if (expr1->pointer_subtype != UNKNOWN_TYPE)
-            {
-                expr->pointer_subtype = expr1->pointer_subtype;
-            }
-            if (expr1->pointer_subtype_id != NULL)
-            {
-                expr->pointer_subtype_id = strdup(expr1->pointer_subtype_id);
-            }
+            semcheck_set_pointer_info(expr, expr1->pointer_subtype, expr1->pointer_subtype_id);
             return return_val;
         }
     }
