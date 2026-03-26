@@ -251,19 +251,13 @@ entries per bucket), making every identifier lookup O(n).
 
 ### Semantic Analysis of Imported Implementation Bodies
 
-With `KGPC_SKIP_IMPORTED_IMPL_BODIES=1`, pp.pas semantic analysis completes in
-~3-6 seconds. Without it, the compiler hangs indefinitely (~8000+ subprogram
-bodies are checked, hanging around method 8368 in `tppumodule__buildderefunitimportsyms`).
+Imported unit implementation bodies are always skipped during semantic analysis.
+Only interface declarations from imported units are needed for checking the
+consumer program/unit.  pp.pas semantic analysis completes in ~3-6 seconds
+with this approach.
 
-The stack trace shows deep chains: `semcheck_proccall` → `MangleFunctionNameFromCallSite`
-→ `GetFlatTypeListFromCallSite` → `semcheck_expr_main` → `semcheck_funccall` →
-`FindAllIdents`, with `semcheck_with_try_resolve` and `sizeof_from_type_ref` in
-the middle. The combination of 267 units' worth of symbols + deep expression
-chains in FPC compiler source makes full body checking prohibitively slow.
-
-**Workaround**: Set `KGPC_SKIP_IMPORTED_IMPL_BODIES=1` to skip semantic checking
-of imported unit implementation bodies. This is safe when the program has errors
-(codegen is skipped anyway).
+Previously, the compiler would attempt to semantically check all ~8000+
+imported subprogram bodies, causing it to hang indefinitely.
 
 ### Parser Cache
 

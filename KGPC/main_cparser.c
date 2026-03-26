@@ -2984,11 +2984,23 @@ int main(int argc, char **argv)
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    /* Note: KGPC_SKIP_IMPORTED_IMPL_BODIES can be set externally to skip
-     * semantic checking of imported unit implementation bodies.  This is
-     * safe when the program has errors (codegen is skipped anyway) and
-     * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
+    /* In --no-stdlib mode (FPC bootstrap), skip semantic checking of imported
+     * unit implementation bodies.  The units are compiled individually with
+     * full body checking; when building the final program (pp.pas), only
+     * interface declarations are needed and checking ~8000+ imported bodies
+     * would hang the compiler. */
+    int auto_skip_bodies = 0;
+    if (g_skip_stdlib && kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") == NULL)
+    {
+        setenv("KGPC_SKIP_IMPORTED_IMPL_BODIES", "1", 1);
+        auto_skip_bodies = 1;
+    }
     SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
+    if (auto_skip_bodies)
+        unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
+    if (track_time)
+        g_time_semantic += current_time_seconds() - sem_start;
+    emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;
     emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);
