@@ -439,6 +439,54 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
  * the results into a single list.  Duplicate HashNode_t pointers
  * are skipped so that a method registered at several scope levels
  * is only included once. */
+/* Merge new_candidates into *existing by pointer-identity dedup.
+ * Nodes from new_candidates that are already in *existing (same HashNode_t*)
+ * are freed; unique nodes are appended to *existing.
+ * After the call, new_candidates is consumed and must not be used. */
+void semcheck_merge_candidate_lists_dedup(ListNode_t **existing,
+    ListNode_t *new_candidates)
+{
+    if (new_candidates == NULL)
+        return;
+    if (existing == NULL)
+    {
+        /* Nowhere to store — free all new nodes */
+        ListNode_t *cur = new_candidates;
+        while (cur != NULL)
+        {
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+        return;
+    }
+
+    ListNode_t *hc = new_candidates;
+    while (hc != NULL)
+    {
+        ListNode_t *next = hc->next;
+        hc->next = NULL;
+
+        int dup = 0;
+        for (ListNode_t *c = *existing; c != NULL; c = c->next)
+        {
+            if (c->cur == hc->cur) { dup = 1; break; }
+        }
+        if (!dup)
+        {
+            if (*existing == NULL)
+                *existing = hc;
+            else
+                *existing = PushListNodeBack(*existing, hc);
+        }
+        else
+        {
+            free(hc);
+        }
+        hc = next;
+    }
+}
+
 ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
     struct RecordType *start_record, const char *method_name)
 {
@@ -447,12 +495,39 @@ ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
 
     ListNode_t *combined = NULL;
     struct RecordType *current = start_record;
-    int max_iterations = 100;
-    int iterations = 0;
 
-    while (current != NULL && iterations < max_iterations)
+    /* Guard against runaway traversal (cyclic or unexpectedly deep hierarchies).
+     * Use a visited set of RecordType* pointers to detect cycles explicitly. */
+    const int max_visited = 100;
+    struct RecordType *visited[100];
+    int visited_count = 0;
+
+    while (current != NULL)
     {
-        iterations++;
+        /* Cycle detection: check if we've already visited this record */
+        int is_cycle = 0;
+        for (int i = 0; i < visited_count; i++)
+        {
+            if (visited[i] == current) { is_cycle = 1; break; }
+        }
+        if (is_cycle)
+        {
+            fprintf(stderr,
+                "semcheck_collect_hierarchy_method_overloads: cycle detected "
+                "in record hierarchy at '%s'; candidate overload list may be incomplete.\n",
+                current->type_id != NULL ? current->type_id : "(null)");
+            break;
+        }
+        if (visited_count >= max_visited)
+        {
+            fprintf(stderr,
+                "semcheck_collect_hierarchy_method_overloads: reached max hierarchy depth (%d) "
+                "when walking record hierarchy; candidate overload list may be incomplete.\n",
+                max_visited);
+            break;
+        }
+        visited[visited_count++] = current;
+
         if (current->type_id != NULL)
         {
             char mangled[256];
@@ -461,43 +536,7 @@ ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
 
             ListNode_t *class_overloads = FindAllIdents(symtab, mangled);
             if (class_overloads != NULL)
-            {
-                /* Append only nodes not already present in combined
-                 * (same HashNode_t pointer). */
-                ListNode_t *cur = class_overloads;
-                while (cur != NULL)
-                {
-                    ListNode_t *next = cur->next;
-                    /* Detach cur from class_overloads list */
-                    cur->next = NULL;
-
-                    /* Check for duplicate */
-                    int dup = 0;
-                    for (ListNode_t *c = combined; c != NULL; c = c->next)
-                    {
-                        if (c->cur == cur->cur)
-                        {
-                            dup = 1;
-                            break;
-                        }
-                    }
-
-                    if (!dup)
-                    {
-                        /* Append to combined list */
-                        if (combined == NULL)
-                            combined = cur;
-                        else
-                            combined = PushListNodeBack(combined, cur);
-                    }
-                    else
-                    {
-                        /* Free the duplicate list node shell */
-                        free(cur);
-                    }
-                    cur = next;
-                }
-            }
+                semcheck_merge_candidate_lists_dedup(&combined, class_overloads);
         }
 
         /* Walk type helper parent chain first, then class parent chain */

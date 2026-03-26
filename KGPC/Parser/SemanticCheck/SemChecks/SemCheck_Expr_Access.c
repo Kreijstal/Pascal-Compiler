@@ -3683,31 +3683,7 @@ int semcheck_funccall(int *type_return,
                         semcheck_collect_hierarchy_method_overloads(
                             symtab, owner_record, id);
                     if (hierarchy_candidates != NULL)
-                    {
-                        if (method_candidates != NULL)
-                        {
-                            ListNode_t *hc = hierarchy_candidates;
-                            while (hc != NULL)
-                            {
-                                ListNode_t *next = hc->next;
-                                hc->next = NULL;
-                                int dup = 0;
-                                for (ListNode_t *c = method_candidates; c != NULL; c = c->next)
-                                {
-                                    if (c->cur == hc->cur) { dup = 1; break; }
-                                }
-                                if (!dup)
-                                    method_candidates = PushListNodeBack(method_candidates, hc);
-                                else
-                                    free(hc);
-                                hc = next;
-                            }
-                        }
-                        else
-                        {
-                            method_candidates = hierarchy_candidates;
-                        }
-                    }
+                        semcheck_merge_candidate_lists_dedup(&method_candidates, hierarchy_candidates);
                 }
                 if (method_node == NULL && method_candidates != NULL)
                 {
@@ -4526,32 +4502,7 @@ int semcheck_funccall(int *type_return,
                                 semcheck_collect_hierarchy_method_overloads(
                                     symtab, record_info, method_name);
                             if (hierarchy_candidates != NULL)
-                            {
-                                if (method_candidates != NULL)
-                                {
-                                    /* Merge: add hierarchy candidates not already present */
-                                    ListNode_t *hc = hierarchy_candidates;
-                                    while (hc != NULL)
-                                    {
-                                        ListNode_t *next = hc->next;
-                                        hc->next = NULL;
-                                        int dup = 0;
-                                        for (ListNode_t *c = method_candidates; c != NULL; c = c->next)
-                                        {
-                                            if (c->cur == hc->cur) { dup = 1; break; }
-                                        }
-                                        if (!dup)
-                                            method_candidates = PushListNodeBack(method_candidates, hc);
-                                        else
-                                            free(hc);
-                                        hc = next;
-                                    }
-                                }
-                                else
-                                {
-                                    method_candidates = hierarchy_candidates;
-                                }
-                            }
+                                semcheck_merge_candidate_lists_dedup(&method_candidates, hierarchy_candidates);
                         }
 
                         /* Check if ANY overload has Self as first param (instance method).
@@ -5443,24 +5394,35 @@ int semcheck_funccall(int *type_return,
      * may have correctly resolved an inherited parent-class overload that
      * FindAllIdents(id) above cannot see — only the child-class forward declaration
      * is in scope.  Ensure the early-resolved candidate is in the list so the
-     * final overload resolution can consider it. */
-    if (overload_candidates != NULL &&
-        expr->expr_data.function_call_data.resolved_func != NULL)
+     * final overload resolution can consider it.  Prepend (rather than append)
+     * to preserve its priority from earlier resolution. */
+    if (expr->expr_data.function_call_data.resolved_func != NULL)
     {
         HashNode_t *early_resolved = expr->expr_data.function_call_data.resolved_func;
         if (early_resolved->hash_type == HASHTYPE_FUNCTION ||
             early_resolved->hash_type == HASHTYPE_PROCEDURE)
         {
-            int already_present = 0;
-            for (ListNode_t *c = overload_candidates; c != NULL; c = c->next)
+            if (overload_candidates != NULL)
             {
-                if (c->cur == early_resolved) { already_present = 1; break; }
+                int already_present = 0;
+                for (ListNode_t *c = overload_candidates; c != NULL; c = c->next)
+                {
+                    if (c->cur == early_resolved) { already_present = 1; break; }
+                }
+                if (!already_present)
+                {
+                    ListNode_t *node = CreateListNode(early_resolved, LIST_UNSPECIFIED);
+                    if (node != NULL)
+                    {
+                        node->next = overload_candidates;
+                        overload_candidates = node;
+                    }
+                }
             }
-            if (!already_present)
+            else
             {
-                ListNode_t *node = CreateListNode(early_resolved, LIST_UNSPECIFIED);
-                if (node != NULL)
-                    overload_candidates = PushListNodeBack(overload_candidates, node);
+                /* overload_candidates was NULL — create a new list with early-resolved */
+                overload_candidates = CreateListNode(early_resolved, LIST_UNSPECIFIED);
             }
         }
     }
