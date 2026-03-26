@@ -1936,9 +1936,7 @@ int semcheck_funccall(int *type_return,
         {
             if (first_arg->resolved_kgpc_type == NULL)
             {
-                int dummy_type = UNKNOWN_TYPE;
-                semcheck_expr_with_type(NULL, symtab, first_arg, max_scope_lev, NO_MUTATE);
-                (void)dummy_type;
+                (void)semcheck_expr_with_type(NULL, symtab, first_arg, max_scope_lev, NO_MUTATE);
             }
             if (first_arg->resolved_kgpc_type != NULL &&
                 kgpc_type_is_pointer(first_arg->resolved_kgpc_type))
