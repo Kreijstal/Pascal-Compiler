@@ -3229,10 +3229,16 @@ cleanup_constructor:
     if (expr->type == EXPR_VAR_ID)
     {
         int scope_depth = 0;
-        StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        StackNode_t *stack_node = NULL;
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
             FindSymbol(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        /* When the leaf was already resolved to an immediate constant, there is
+         * no stack slot to find and scanning every scope becomes pathological for
+         * large typed-const initializers like the x86 instruction tables. */
+        if (buf_leaf[0] != '$')
+            stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
