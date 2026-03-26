@@ -2015,74 +2015,6 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
     return 256;
 }
 
-static int codegen_expr_shortstring_storage_size(const struct Expression *expr, CodeGenContext *ctx)
-{
-    if (expr == NULL)
-        return 256;
-
-    KgpcType *expr_type = expr_get_kgpc_type(expr);
-    if (expr_type != NULL)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
-        if (alias != NULL && (alias->is_shortstring || alias->is_array))
-        {
-            if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-                return alias->array_end - alias->array_start + 1;
-            if (alias->storage_size > 1)
-                return (int)alias->storage_size;
-        }
-
-        if (kgpc_type_is_array(expr_type))
-        {
-            int start = 0;
-            int end = -1;
-            if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
-                end >= start && end >= 0)
-                return end - start + 1;
-        }
-
-        if (kgpc_type_is_shortstring(expr_type))
-            return 256;
-    }
-
-    if (expr->is_array_expr)
-    {
-        int lower_bound = expr_get_array_lower_bound(expr);
-        int upper_bound = expr_get_array_upper_bound(expr);
-        if (upper_bound >= lower_bound && upper_bound >= 0)
-            return upper_bound - lower_bound + 1;
-    }
-
-    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
-        {
-            if (node->type != NULL)
-            {
-                struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-                if (alias != NULL && alias->is_shortstring)
-                {
-                    if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-                        return alias->array_end - alias->array_start + 1;
-                    if (alias->storage_size > 1)
-                        return (int)alias->storage_size;
-                }
-            }
-
-            {
-                int start = 0;
-                int end = -1;
-                hashnode_get_array_bounds(node, &start, &end);
-                if (end >= start && end >= 0)
-                    return end - start + 1;
-            }
-        }
-    }
-
-    return 256;
-}
-
 static long long codegen_static_array_length(const struct Expression *expr)
 {
     if (expr == NULL || !expr->is_array_expr || expr->array_is_dynamic)
@@ -3574,6 +3506,7 @@ long long codegen_expr_sret_size(const struct Expression *expr)
 {
     KgpcType *ret_type = NULL;
     KgpcType *type = NULL;
+    long long size = 0;
 
     if (expr == NULL)
         return 0;
@@ -3617,9 +3550,19 @@ long long codegen_expr_sret_size(const struct Expression *expr)
         return 16;
     }
 
-    /* ShortStrings are passed via SRET because they're small fixed-size arrays */
+    /* ShortStrings are passed via SRET because they're small fixed-size arrays.
+     * Use the actual sized-shortstring storage when type metadata is available. */
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+    {
+        type = expr_get_kgpc_type(expr);
+        if (type != NULL)
+        {
+            size = kgpc_type_sizeof(type);
+            if (size > 0)
+                return size;
+        }
         return 256;
+    }
 
     type = expr_get_kgpc_type(expr);
     if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
@@ -4278,11 +4221,10 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     if (expr == NULL || size_out == NULL)
         return 1;
 
-    /* A plain ShortString uses fixed 256-byte storage, but sized shortstring
-     * aliases (e.g. string[1]) must preserve their actual storage length. */
+    /* ShortString uses fixed 256-byte storage (length byte + 255 chars). */
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
     {
-        *size_out = codegen_expr_shortstring_storage_size(expr, ctx);
+        *size_out = 256;
         return 0;
     }
 
@@ -4309,7 +4251,8 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     {
         if (kgpc_type_is_shortstring(expr_type))
         {
-            *size_out = codegen_expr_shortstring_storage_size(expr, ctx);
+            long long short_size = kgpc_type_sizeof(expr_type);
+            *size_out = (short_size > 1 && short_size <= INT_MAX) ? short_size : 256;
             return 0;
         }
         if (kgpc_type_is_string(expr_type))

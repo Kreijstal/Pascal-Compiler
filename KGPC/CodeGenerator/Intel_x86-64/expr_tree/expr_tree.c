@@ -3825,10 +3825,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             #endif
             {
                 int scope_depth = 0;
-                stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
-                #ifdef DEBUG_CODEGEN
-                CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
-                #endif
+                stack_node = NULL;
 
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
@@ -3874,6 +3871,12 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             node = builtin_node;
                     }
                 }
+
+                if (!(found && node != NULL && node->hash_type == HASHTYPE_CONST))
+                    stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+                #ifdef DEBUG_CODEGEN
+                CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
+                #endif
 
                 if (found && node->hash_type == HASHTYPE_CONST)
                 {

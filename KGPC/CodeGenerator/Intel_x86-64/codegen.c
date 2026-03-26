@@ -7456,8 +7456,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
         if (return_type != NULL && kgpc_type_is_shortstring(return_type))
         {
+            long long shortstring_size = kgpc_type_sizeof(return_type);
             has_record_return = 1;
-            record_return_size = 256;
+            record_return_size = shortstring_size > 0 ? shortstring_size : 256;
         }
     }
 
@@ -7965,9 +7966,15 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
         if (new_list_node != NULL)
         {
             if (cur_scope->x == NULL)
+            {
                 cur_scope->x = new_list_node;
+                cur_scope->x_tail = new_list_node;
+            }
             else
-                cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+            {
+                cur_scope->x_tail->next = new_list_node;
+                cur_scope->x_tail = new_list_node;
+            }
         }
     }
 }
@@ -8008,9 +8015,15 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     }
 
     if (cur_scope->x == NULL)
+    {
         cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
     else
-        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
 
     return 0;
 }
@@ -8052,9 +8065,15 @@ static int add_absolute_static_symbol_alias(const char *alias_label, const char 
     }
 
     if (cur_scope->x == NULL)
+    {
         cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
     else
-        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
 
     return 0;
 }
@@ -8114,9 +8133,15 @@ static int add_absolute_var_alias_with_offset(const char *alias_label, const cha
     }
 
     if (cur_scope->x == NULL)
+    {
         cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
     else
-        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
 
     return 0;
 }
