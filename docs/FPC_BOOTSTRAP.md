@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: pp.pas loads 267 units then hangs in semantic analysis; 2 remaining errors (DirectorySeparator)
+## Status: 56 RTL units compile (0 errors); pp.pas compiles with 78 errors (down from 1279)
 
 ## Prerequisites
 
@@ -8,6 +8,15 @@ Clone the FPC source code:
 ```bash
 git clone https://github.com/fpc/FPCSource
 ```
+
+Regenerate the compiler message includes before attempting `pp.pas`:
+```bash
+make -B -C ./FPCSource/compiler msg
+```
+
+Without this, a stale `FPCSource/compiler/msgtxt.inc` can be a documentation-text
+file instead of the generated Pascal include, which makes `verbose.pas` fail in
+preprocessing with a malformed compiler directive error.
 
 ## Build Commands
 
@@ -117,7 +126,7 @@ ordering issues.
   -I./FPCSource/rtl/x86_64
 ```
 
-### sysutils.pp (current blocker)
+### sysutils.pp (0 errors)
 ```bash
 ./build/KGPC/kgpc ./FPCSource/rtl/unix/sysutils.pp /tmp/sysutils.s \
   --no-stdlib \
@@ -138,6 +147,7 @@ ordering issues.
   -I./FPCSource/rtl/unix \
   -I./FPCSource/rtl/objpas \
   -I./FPCSource/rtl/objpas/sysutils \
+  -I./FPCSource/rtl/objpas/classes \
   -I./FPCSource/rtl/inc \
   -I./FPCSource/rtl/linux \
   -I./FPCSource/rtl/linux/x86_64 \
@@ -173,7 +183,7 @@ ordering issues.
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### pp.pas (2 errors + infinite loop)
+### pp.pas (current bootstrap attempt)
 ```bash
 ./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
   -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -Sg \
@@ -204,11 +214,97 @@ ordering issues.
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
 
-Remaining issues:
-1. `constant DirectorySeparator is undefined or not a string const` (×2) — sysutils typed constant
-2. **Infinite loop** in semantic analysis after loading 267 units (1GB+ RSS)
+### FPC RTL (56 units)
 
-## Remaining Blockers
+All 56 FPC RTL units now compile with 0 semantic errors via `meson test -C build-fpc "FPC RTL tests"`.
+The build-fpc directory uses `meson setup build-fpc -Drun_fpc_rtl_tests=true`.
+
+### FPC Compiler Units (99 units scanned standalone)
+
+All 99 compiler `.pas` files fail when compiled individually. Total: 257 errors.
+
+Top error categories:
+| Category | Count | Root Cause |
+|---|---|---|
+| Enum/Tconstexprint relational ops | 42 | `Tconstexprint` is a record with operator overloading (not yet supported) |
+| Overload resolution | 27 | Parameter type mismatches (`^record` subtype compatibility) |
+| Field not found / field access | 27 | Class field resolution, nested types, property getters |
+| Assignment type mismatch | 26 | Various type incompatibilities |
+| Type mismatch on arithmetic ops | 25 | `Tconstexprint` operator overloading |
+| Array literal element mismatch | 11 | Constant array type coercion |
+| `^record` vs `procedure` | 11 | Class instances typed as procedure (constructor resolution) |
+| String concat method shadowing | 8 | Built-in `Concat` shadows `TAsmList.Concat()` method |
+| Char/String mismatch | 7 | Implicit Char↔String conversion |
+
+### pp.pas (full compiler entry point)
+
+Compiling `pp.pas` loads ~200+ units together and produces ~16,000+ errors due to
+cascading from the root causes above.
+
+## Performance
+
+### Hash Table Size
+
+`TABLE_SIZE` was increased from 211 to 4099 (prime). With 267 units merged into
+a flat scope, the old 211-bucket hash table had severe collisions (~hundreds of
+entries per bucket), making every identifier lookup O(n).
+
+### Semantic Analysis of Imported Implementation Bodies
+
+With `KGPC_SKIP_IMPORTED_IMPL_BODIES=1`, pp.pas semantic analysis completes in
+~3-6 seconds. Without it, the compiler hangs indefinitely (~8000+ subprogram
+bodies are checked, hanging around method 8368 in `tppumodule__buildderefunitimportsyms`).
+
+The stack trace shows deep chains: `semcheck_proccall` → `MangleFunctionNameFromCallSite`
+→ `GetFlatTypeListFromCallSite` → `semcheck_expr_main` → `semcheck_funccall` →
+`FindAllIdents`, with `semcheck_with_try_resolve` and `sizeof_from_type_ref` in
+the middle. The combination of 267 units' worth of symbols + deep expression
+chains in FPC compiler source makes full body checking prohibitively slow.
+
+**Workaround**: Set `KGPC_SKIP_IMPORTED_IMPL_BODIES=1` to skip semantic checking
+of imported unit implementation bodies. This is safe when the program has errors
+(codegen is skipped anyway).
+
+### Parser Cache
+
+The AST parser cache (`kgpc_ast_cache_<hash>`) is keyed on the binary hash.
+Every recompile invalidates the cache, requiring a full re-parse of all 267
+units (~44 seconds uncached vs ~3-5 seconds cached).
+
+## Remaining Blockers (78 errors in pp.pas)
+
+### Error Categories
+| Category | Count | Root Cause |
+|---|---|---|
+| typecast unknown type (get_def_dwarf_labs) | 12 | Parser treats method call as typecast |
+| record field shiftval (TLongIntHelper) | 10 | Type helper method not resolved through helper chain |
+| overload resolution (createsection etc.) | 10 | semcheck_proccall uses different overload resolution than semcheck_funccall |
+| equality comparison (shortstring vs char) | 0 | **FIXED** — string-char comparisons now accepted |
+| UpCase expects char | 6 | Cascade from unresolved array access type |
+| Assigned expects pointer | 3 | Cascade from unresolved types |
+| function else() not declared | 4 | `{$else}` directive parsed as code |
+| function childcount() not declared | 4 | Line tracking, misattributed errors |
+| find/FindWithHash overload | 9 | ShortString/String overload matching |
+| initializer mismatch (inv) | 4 | Type mismatch in variable init |
+| for-in loop requires array | 3 | Unresolved iterator type |
+| Low/High non-array | 3 | Type resolution cascade |
+| Various 1-off errors | ~10 | Mixed causes |
+
+### Critical (blocks most remaining errors)
+1. **Operator overloading on records** — `Tconstexprint` uses `operator :=`, `operator <`, etc.
+2. **Type helper method resolution** — `shiftval` on integer types via `TLongIntHelper`
+3. **`{$else}` directive handling** — Conditional compilation directives parsed as code
+
+### References
+- Keep using the FPC-declared order from `make -n -B -C ./FPCSource/rtl/linux units`
+  for RTL bootstrap work.
+- For compiler bootstrap, `make -n -C ./FPCSource/compiler ppcx64` shows that
+  FPC expects the RTL to be prebuilt into `../rtl/units/x86_64-linux` and then
+  compiles `pp.pas` in one top-level invocation using:
+  - `-Fu../rtl/units/x86_64-linux`
+  - `-Fux86_64`
+  - `-Fux86`
+  - `-Fusystems`
 
 ## Flags
 

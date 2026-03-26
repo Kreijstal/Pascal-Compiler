@@ -146,6 +146,9 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
+#include "../../compilation_context.h"
+
+typedef struct CodeGenContext CodeGenContext;
 
 static inline int codegen_align_to(int value, int alignment)
 {
@@ -158,6 +161,25 @@ static inline int codegen_align_to(int value, int alignment)
 }
 
 ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target);
+const char *codegen_subprogram_emission_symbol(HashNode_t *cand);
+int codegen_has_available_subprogram_label(const char *label);
+const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
+    const struct RecordType *record, const char *fallback_class_label,
+    const char *iface_name, const char *method_name);
+typedef ListNode_t *(*CodegenCallArgSpillFn)(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets);
+typedef ListNode_t *(*CodegenCallArgRestoreFn)(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets);
+ListNode_t *codegen_emit_interface_vtable_slot_init(ListNode_t *inst_list,
+    CodeGenContext *ctx, const struct RecordType *class_record,
+    const char *class_type_id, Register_t *instance_reg);
+ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
+    CodeGenContext *ctx, const char *self_reg, const char *iface_name,
+    int vmt_index, const char *label_prefix, const char *target_slot_label,
+    int preserve_indirect_call_regs, CodegenCallArgSpillFn spill_fn,
+    CodegenCallArgRestoreFn restore_fn);
+const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
+    const struct Expression *expr, char **owned_target_out);
 
 /*
  * Compiler invariant policy:
@@ -203,7 +225,7 @@ typedef struct {
     struct RecordType *record_type;
 } CodeGenWithContext;
 
-typedef struct {
+typedef struct CodeGenContext {
     int label_counter;
     int write_label_counter;
     FILE *output_file;
@@ -275,12 +297,14 @@ void gen_label(char *buf, int buf_len, CodeGenContext *ctx);
 void escape_string(char *dest, const char *src, size_t dest_size);
 
 /* This is the entry function */
-void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
+void codegen(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab,
+             CompilationContext *comp_ctx);
 
 /* Entry function for unit compilation */
 void codegen_unit(Tree_t *, const char *input_file_name, CodeGenContext *ctx, SymTab_t *symtab);
 
-ListNode_t *add_inst(ListNode_t *, char *);
+ListNode_t *add_inst(ListNode_t *, const char *);
+void add_inst_invalidate_cache(void);
 ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_list);
 
 void codegen_program_header(const char *, CodeGenContext *ctx);
@@ -311,7 +335,8 @@ void codegen_begin_expression(CodeGenContext *ctx);
 void codegen_end_expression(CodeGenContext *ctx);
 Register_t *codegen_acquire_static_link(CodeGenContext *ctx, ListNode_t **inst_list, int levels_to_traverse);
 
-char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab);
+char * codegen_program(Tree_t *, CodeGenContext *ctx, SymTab_t *symtab,
+                       CompilationContext *comp_ctx);
 void codegen_function_locals(ListNode_t *, CodeGenContext *ctx, SymTab_t *symtab);
 ListNode_t *codegen_vect_reg(ListNode_t *, int);
 

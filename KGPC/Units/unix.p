@@ -99,6 +99,11 @@ function FpExecl(const PathName: PAnsiChar; const S: array of RawByteString): ci
 { Signal functions }
 function fpsigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint;
 
+function POpen(var F: text; const Prog: AnsiString; rw: Char): cint;
+function POpen(var F: file; const Prog: AnsiString; rw: Char): cint;
+function PClose(var F: text): cint;
+function PClose(var F: file): cint;
+
 var
     tzdaylight: boolean;
     tzname: array[boolean] of PChar;
@@ -201,6 +206,26 @@ end;
 function fpsigaction(sig: cint; act: psigactionrec; oact: psigactionrec): cint;
 begin
     fpsigaction := kgpc_unix_sigaction(sig, act, oact);
+end;
+
+function POpen(var F: text; const Prog: AnsiString; rw: Char): cint;
+begin
+    POpen := -1;
+end;
+
+function POpen(var F: file; const Prog: AnsiString; rw: Char): cint;
+begin
+    POpen := -1;
+end;
+
+function PClose(var F: text): cint;
+begin
+    PClose := -1;
+end;
+
+function PClose(var F: file): cint;
+begin
+    PClose := -1;
 end;
 
 end.

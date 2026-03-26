@@ -65,6 +65,7 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
 void from_cparser_enable_pending_specializations(void);
 void from_cparser_disable_pending_specializations(void);
 void resolve_pending_generic_aliases(Tree_t *program_tree);
+void flush_deferred_inline_specializations(Tree_t *program_tree);
 void append_generic_method_clones(Tree_t *program_tree);
 void resolve_pending_generic_subprograms(Tree_t *program_tree);
 

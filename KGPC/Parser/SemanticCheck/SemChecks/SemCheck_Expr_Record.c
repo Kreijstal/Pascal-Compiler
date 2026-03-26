@@ -49,6 +49,20 @@ struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
         return NULL;
 
     HashNode_t *parent_node = semcheck_find_preferred_type_node(symtab, record_info->parent_class_name);
+
+    /* Fallback: if dep_scope filtering hid the parent type, use FindSymbol
+     * which walks the full scope tree. Parent classes must always be
+     * reachable since the child class itself was accessible. */
+    if (parent_node == NULL)
+    {
+        HashNode_t *fallback = NULL;
+        if (FindSymbol(&fallback, symtab, record_info->parent_class_name) != 0 &&
+            fallback != NULL && fallback->hash_type == HASHTYPE_TYPE)
+        {
+            parent_node = fallback;
+        }
+    }
+
     if (parent_node == NULL)
         return NULL;
 
@@ -293,23 +307,67 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
             }
 
             HashNode_t *method_node = NULL;
-            int find_result = FindIdent(&method_node, symtab, mangled_name);
-
-            /* If not found, try looking up the class type to get its registered name */
-            if (find_result == -1 || method_node == NULL)
+            if (!FindSymbol(&method_node, symtab, mangled_name) || method_node == NULL)
             {
+                /* If not found, try looking up the class type to get its registered name */
                 HashNode_t *class_type_node = NULL;
-                if (FindIdent(&class_type_node, symtab, class_id) != -1 &&
+                if (FindSymbol(&class_type_node, symtab, class_id) &&
                     class_type_node != NULL && class_type_node->id != NULL &&
                     !pascal_identifier_equals(class_type_node->id, class_id))
                 {
                     snprintf(mangled_name, sizeof(mangled_name), "%s__%s",
                         class_type_node->id, method_name);
-                    find_result = FindIdent(&method_node, symtab, mangled_name);
+                    FindSymbol(&method_node, symtab, mangled_name);
                 }
             }
 
-            if (find_result != -1 && method_node != NULL)
+            /* Fallback: try FindAllIdents which searches all reachable scopes. */
+            if (method_node == NULL)
+            {
+                ListNode_t *all = FindAllIdents(symtab, mangled_name);
+                if (all != NULL)
+                {
+                    ListNode_t *cur = all;
+                    while (cur != NULL)
+                    {
+                        HashNode_t *candidate = (HashNode_t *)cur->cur;
+                        if (candidate != NULL &&
+                            (candidate->hash_type == HASHTYPE_FUNCTION ||
+                             candidate->hash_type == HASHTYPE_PROCEDURE))
+                        {
+                            method_node = candidate;
+                            break;
+                        }
+                        cur = cur->next;
+                    }
+                    DestroyList(all);
+                }
+            }
+
+            /* Class methods (including private getters/setters) must be
+             * reachable when we already have access to the class type.
+             * Search all unit scopes directly — the method may live in
+             * a unit that is not a direct/transitive dependency but
+             * whose class type was exposed through re-exports. */
+            if (method_node == NULL)
+            {
+                for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+                {
+                    if (symtab->unit_scopes[u] == NULL)
+                        continue;
+                    HashNode_t *found = FindIdentInTable(
+                        symtab->unit_scopes[u]->table, mangled_name);
+                    if (found != NULL &&
+                        (found->hash_type == HASHTYPE_FUNCTION ||
+                         found->hash_type == HASHTYPE_PROCEDURE))
+                    {
+                        method_node = found;
+                        break;
+                    }
+                }
+            }
+
+            if (method_node != NULL)
             {
                 if (method_node->hash_type == HASHTYPE_FUNCTION_RETURN)
                 {
@@ -355,7 +413,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
         if (current->is_type_helper && current->helper_parent_id != NULL)
         {
             HashNode_t *parent_node = NULL;
-            if (FindIdent(&parent_node, symtab, current->helper_parent_id) != -1 && parent_node != NULL)
+            if (FindSymbol(&parent_node, symtab, current->helper_parent_id) != 0 && parent_node != NULL)
             {
                 struct RecordType *parent_helper = get_record_type_from_node(parent_node);
                 if (parent_helper != NULL && parent_helper->is_type_helper)
@@ -369,7 +427,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
                 }
             }
         }
-        
+
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;

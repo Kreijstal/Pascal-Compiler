@@ -19,7 +19,9 @@ end;
 
 var
   F: TFoo;
+  I: IFoo;
 begin
   F := TFoo.Create;
-  WriteLn(F.GetValueImpl);
+  I := F;
+  WriteLn(I.GetValue);
 end.

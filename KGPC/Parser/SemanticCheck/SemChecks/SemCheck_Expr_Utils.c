@@ -83,6 +83,9 @@ void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag)
         if (expr->pointer_subtype != UNKNOWN_TYPE)
             points_to = create_primitive_type(expr->pointer_subtype);
         expr->resolved_kgpc_type = create_pointer_type(points_to);
+        /* Release local ref; create_pointer_type retained its own */
+        if (points_to != NULL)
+            kgpc_type_release(points_to);
         return;
     }
 
@@ -147,7 +150,7 @@ const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab)
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) == 0 && node != NULL && node->type != NULL)
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
             const char *alias_name = semcheck_type_alias_name(node->type);
             if (alias_name != NULL)
@@ -411,6 +414,61 @@ void semcheck_reset_function_call_cache(struct Expression *expr)
     semcheck_expr_set_call_kgpc_type(expr, NULL, had_call_info);
     expr->expr_data.function_call_data.is_call_info_valid = 0;
     expr->expr_data.function_call_data.arg0_is_dynarray_descriptor = 0;
+    free(expr->expr_data.function_call_data.cached_owner_class);
+    expr->expr_data.function_call_data.cached_owner_class = NULL;
+    free(expr->expr_data.function_call_data.cached_method_name);
+    expr->expr_data.function_call_data.cached_method_name = NULL;
+}
+
+char *semcheck_dup_function_call_target_symbol(HashNode_t *target)
+{
+    const char *target_name = NULL;
+
+    if (target == NULL)
+        return NULL;
+
+    /* INTERNPROC targets are runtime entry points, not normal Pascal-mangled ids. */
+    if (target->internproc_id != NULL && target->internproc_id[0] != '\0')
+        target_name = target->internproc_id;
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->type != NULL && target->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        Tree_t *proc_def = target->type->info.proc_info.definition;
+        if (proc_def != NULL)
+        {
+            if (proc_def->tree_data.subprogram_data.cname_override != NULL &&
+                proc_def->tree_data.subprogram_data.cname_override[0] != '\0')
+            {
+                target_name = proc_def->tree_data.subprogram_data.cname_override;
+            }
+            else if (proc_def->tree_data.subprogram_data.cname_flag &&
+                     proc_def->tree_data.subprogram_data.id != NULL &&
+                     proc_def->tree_data.subprogram_data.id[0] != '\0')
+            {
+                target_name = proc_def->tree_data.subprogram_data.id;
+            }
+            else if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                     proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
+            {
+                target_name = proc_def->tree_data.subprogram_data.mangled_id;
+            }
+        }
+    }
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->mangled_id != NULL && target->mangled_id[0] != '\0')
+    {
+        target_name = target->mangled_id;
+    }
+
+    if ((target_name == NULL || target_name[0] == '\0') &&
+        target->id != NULL && target->id[0] != '\0')
+    {
+        target_name = target->id;
+    }
+
+    return target_name != NULL ? strdup(target_name) : NULL;
 }
 
 void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target)
@@ -427,7 +485,21 @@ void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *targ
     int had_call_info = (expr->expr_data.function_call_data.is_call_info_valid == 1);
     expr->expr_data.function_call_data.resolved_func = NULL;
     expr->expr_data.function_call_data.call_hash_type = target->hash_type;
+    char *target_symbol = semcheck_dup_function_call_target_symbol(target);
+    if (target_symbol != NULL)
+    {
+        if (expr->expr_data.function_call_data.mangled_id != NULL)
+            free(expr->expr_data.function_call_data.mangled_id);
+        expr->expr_data.function_call_data.mangled_id = target_symbol;
+    }
     semcheck_expr_set_call_kgpc_type(expr, target->type, had_call_info);
+    /* Cache method identity so codegen doesn't need to parse mangled names. */
+    free(expr->expr_data.function_call_data.cached_owner_class);
+    expr->expr_data.function_call_data.cached_owner_class =
+        target->owner_class ? strdup(target->owner_class) : NULL;
+    free(expr->expr_data.function_call_data.cached_method_name);
+    expr->expr_data.function_call_data.cached_method_name =
+        target->method_name ? strdup(target->method_name) : NULL;
     expr->expr_data.function_call_data.is_call_info_valid = 1;
 }
 

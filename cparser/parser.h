@@ -236,6 +236,12 @@ void ensure_parse_error_contexts(ParseError* err, input_t* in);
 ast_t* ast1(tag_t typ, ast_t* a1);
 ast_t* ast2(tag_t typ, ast_t* a1, ast_t* a2);
 ast_t* copy_ast(ast_t* orig);
+/* Deep-copy an AST tree into standalone (malloc'd) memory, independent of
+ * the parser's AST node pool.  Must be freed with free_ast_detached(). */
+ast_t* copy_ast_detached(ast_t* orig);
+/* Free an AST tree that was allocated by copy_ast_detached().
+ * Nodes are released with free() rather than recycled to the pool. */
+void free_ast_detached(ast_t* ast);
 void parser_calculate_line_col(input_t* in, int index, int* out_line, int* out_col);
 char* parser_format_context(input_t* in, int line, int col, int index);
 
@@ -327,6 +333,8 @@ sym_t * sym_lookup(const char * name);
 
 // --- Memory Management ---
 void free_combinator(combinator_t* comb);
+void free_combinator_graph(combinator_t **roots, size_t count);
+void parser_drain_free_list(void);
 void exception(const char * err);
 
 

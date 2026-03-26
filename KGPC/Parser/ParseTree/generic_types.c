@@ -2,9 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <assert.h>
 
 // Global generic type registry
 static GenericRegistry g_generic_registry = {NULL, NULL};
+
+// Current generic context for scoped type-parameter checks
+static GenericTypeDecl *g_current_generic_context = NULL;
 
 void generic_registry_init(void) {
     g_generic_registry.generic_decls = NULL;
@@ -121,6 +125,26 @@ KgpcType* generic_substitute_type_parameter(KgpcType* type, const char* param_na
     
     // For now, return the original type (Phase 3 implementation)
     return type;
+}
+
+int generic_registry_is_type_param(const char *name) {
+    if (name == NULL) return 0;
+    assert(g_current_generic_context != NULL &&
+           "generic_registry_is_type_param called without a generic context");
+    for (int i = 0; i < g_current_generic_context->num_type_params; i++) {
+        if (g_current_generic_context->type_parameters[i] != NULL &&
+            strcasecmp(g_current_generic_context->type_parameters[i], name) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+void generic_registry_set_context(GenericTypeDecl *decl) {
+    g_current_generic_context = decl;
+}
+
+GenericTypeDecl *generic_registry_current_context(void) {
+    return g_current_generic_context;
 }
 
 void generic_registry_cleanup(void) {

@@ -9,7 +9,7 @@
 
 #ifndef HASH_TABLE_H
 #define HASH_TABLE_H
-#define TABLE_SIZE	211
+#define TABLE_SIZE	4099
 
 #include <stdio.h>
 #include <assert.h>
@@ -88,11 +88,13 @@ typedef struct HashNode
 
     int is_var_parameter;
     int is_varargs;                /* 1 if declared with varargs directive (C-style variadic) */
+    int is_operator;               /* 1 if declared with operator keyword */
     int requires_static_link;      /* 1 if this function needs to RECEIVE a static link from caller */
     int has_nested_requiring_link; /* 1 if this function has nested children that need static links */
     int defined_in_unit;
     int unit_is_public;
     int source_unit_index; /* Unit registry index (0 = local/unknown) */
+    int is_nested_scope;   /* 1 if mangled name indicates nested/qualified scope (e.g. parent$child) */
 
     char *method_name;    /* Bare method name (NULL for non-methods) */
     char *owner_class;    /* Owning class name (NULL for non-methods) */
@@ -100,6 +102,7 @@ typedef struct HashNode
     char *owner_class_outer; /* Outer class path for nested classes (NULL if not nested) */
 
     char *internproc_id;     /* FPC [INTERNPROC: name] identifier (NULL if not an internproc) */
+    char *internconst_id;    /* FPC [INTERNCONST: name] identifier (NULL if not an internconst) */
 
 } HashNode_t;
 
@@ -122,6 +125,15 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
 
+/* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
+ * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
+ * this skips program-local redeclarations to find the unit-defined symbol. */
+/* Check if a specific HashNode pointer exists in the table.
+ * Direct bucket walk — zero heap allocations. */
+int FindIdentPtrInTable(HashTable_t *table, HashNode_t *candidate);
+
+HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id);
+
 /* Like FindIdentInTable but prefers matches from caller_unit_index.
  * Priority: same unit > program-local (0) > any other unit. */
 HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int caller_unit_index);
@@ -131,6 +143,10 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
 
 /* Searches for any identifier starting with the given prefix. Returns first match or NULL */
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix);
+
+/* Searches for a type identifier whose name ends with ".suffix" (case-insensitive).
+ * Returns the first matching HASHTYPE_TYPE node or NULL. */
+HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix);
 
 /* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);

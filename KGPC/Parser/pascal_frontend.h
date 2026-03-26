@@ -2,6 +2,7 @@
 #define PASCAL_FRONTEND_H
 
 #include <stdbool.h>
+#include <time.h>
 
 #include "parser.h"
 
@@ -21,6 +22,10 @@ void pascal_frontend_clear_user_config(void);
  * to avoid re-preprocessing and re-parsing on subsequent compilations. */
 void pascal_frontend_set_ast_cache_dir(const char *dir);
 
+/* Set the compiler binary's modification time so cached ASTs older than
+ * the binary are invalidated automatically. */
+void pascal_frontend_set_compiler_mtime(time_t mtime);
+
 /* Get the list of user-defined include paths for unit search */
 const char * const *pascal_frontend_get_include_paths(int *count);
 const char *pascal_frontend_current_path(void);
@@ -28,6 +33,7 @@ const char *pascal_frontend_current_path(void);
 /* ObjFPC mode detection - used for automatic ObjPas import */
 bool pascal_frontend_is_objfpc_mode(void);
 void pascal_frontend_reset_objfpc_mode(void);
+void pascal_frontend_set_objfpc_mode(void);
 bool pascal_frontend_default_shortstring(void);
 
 #endif

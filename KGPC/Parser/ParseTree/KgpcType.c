@@ -35,23 +35,85 @@
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
+
+/* Check if a HashNode represents a class type (either a pointer to a class record
+ * or a direct class record).  Used to prefer class types over plain record aliases
+ * when the same name resolves to both (e.g. TTimeZone = timezone struct alias vs
+ * TTimeZone = class abstract). */
+static int hashnode_is_class_type(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
+        return 0;
+    if (node->type->kind == TYPE_KIND_POINTER &&
+        node->type->info.points_to != NULL &&
+        node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+        node->type->info.points_to->info.record_info != NULL &&
+        record_type_is_class(node->type->info.points_to->info.record_info))
+        return 1;
+    if (node->type->kind == TYPE_KIND_RECORD &&
+        node->type->info.record_info != NULL &&
+        record_type_is_class(node->type->info.record_info))
+        return 1;
+    return 0;
+}
+
+/* Check if a HashNode is a plain (non-class, non-interface) record type */
+static int hashnode_is_plain_record(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL || node->hash_type != HASHTYPE_TYPE)
+        return 0;
+    if (node->type->kind == TYPE_KIND_RECORD &&
+        node->type->info.record_info != NULL &&
+        !record_type_is_class(node->type->info.record_info) &&
+        !node->type->info.record_info->is_interface)
+        return 1;
+    return 0;
+}
+
+/* Find the best type node in a single hash table, preferring class types over
+ * plain record aliases when multiple entries share the same name. */
+static HashNode_t *find_best_type_in_table(HashTable_t *table, const char *type_id)
+{
+    HashNode_t *first = FindIdentInTable(table, type_id);
+    if (first == NULL || first->hash_type != HASHTYPE_TYPE)
+        return first;
+    /* If the first match is already a class type or not a plain record,
+     * no disambiguation needed. */
+    if (!hashnode_is_plain_record(first))
+        return first;
+    /* The first match is a plain record — check if there's a class type
+     * with the same name in this table. */
+    ListNode_t *all = FindAllIdentsInTable(table, type_id);
+    HashNode_t *best = first;
+    for (ListNode_t *n = all; n != NULL; n = n->next)
+    {
+        HashNode_t *cand = (HashNode_t *)n->cur;
+        if (cand != NULL && cand->hash_type == HASHTYPE_TYPE &&
+            hashnode_is_class_type(cand))
+        {
+            best = cand;
+            break;
+        }
+    }
+    DestroyList(all);
+    return best;
+}
+
 static HashNode_t *kgpc_find_type_node(SymTab_t *symtab, const char *type_id)
 {
     if (symtab == NULL || type_id == NULL)
         return NULL;
 
-    /* Prefer type identifiers even if a variable with the same name exists. */
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    /* Prefer type identifiers even if a variable with the same name exists.
+     * Walk the scope tree from current_scope up to (but not including) builtin_scope. */
+    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = FindIdentInTable(table, type_id);
+        HashNode_t *node = FindIdentInTable(sc->table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
             return node;
-        cur = cur->next;
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
+    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
         return builtin;
 
@@ -68,7 +130,7 @@ static int kgpc_resolve_const_identifier(SymTab_t *symtab, const char *id, long 
         return 1;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, symtab, id) >= 0 &&
+    if (FindSymbol(&node, symtab, id) != 0 &&
         node != NULL && (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
     {
         *out_value = node->const_int_value;
@@ -432,6 +494,15 @@ static HashNode_t *kgpc_find_type_node_ref_with_unit_flag(SymTab_t *symtab,
     return single;
 }
 
+/* Helper: return 1 if node's type is an UNKNOWN_TYPE primitive stub */
+static int hashnode_is_unknown_type_stub(const HashNode_t *node)
+{
+    if (node == NULL || node->type == NULL)
+        return 0;
+    return (node->type->kind == TYPE_KIND_PRIMITIVE &&
+            node->type->info.primitive_type_tag == UNKNOWN_TYPE);
+}
+
 static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit)
 {
@@ -440,23 +511,65 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
 
     HashNode_t *fallback = NULL;
     HashNode_t *fallback_outermost = NULL;
-    ListNode_t *cur = symtab->stack_head;
-    while (cur != NULL)
+    HashNode_t *fallback_resolved = NULL; /* best non-UNKNOWN fallback (cross-unit resolved type) */
+    HashNode_t *unit_match = NULL;  /* exact defined_in_unit match (may be plain record or UNKNOWN stub) */
+    /* Walk scope tree from current_scope up to (but not including) builtin_scope. */
+    for (ScopeNode *sc = symtab->current_scope; sc != NULL && sc != symtab->builtin_scope; sc = sc->parent)
     {
-        HashTable_t *table = (HashTable_t *)cur->cur;
-        HashNode_t *node = FindIdentInTable(table, type_id);
+        HashNode_t *node = find_best_type_in_table(sc->table, type_id);
         if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             if (node->defined_in_unit == defined_in_unit)
-                return node;
+            {
+                /* If this is a class type, return immediately.
+                 * If it's a plain record or an UNKNOWN_TYPE stub (cross-unit
+                 * alias that failed to resolve at predeclare time), save it
+                 * as a fallback — a resolved type from another unit is better.
+                 */
+                if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
+                    return node;
+                if (unit_match == NULL)
+                    unit_match = node;
+            }
             if (fallback == NULL)
                 fallback = node;
+            if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+                fallback_resolved = node;
             fallback_outermost = node;
         }
-        cur = cur->next;
     }
 
-    HashNode_t *builtin = FindIdentInTable(symtab->builtins, type_id);
+    /* Search per-unit tables (types from imported units live here) */
+    {
+        int n_units = unit_registry_count();
+        for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; i++)
+        {
+            if (symtab->unit_scopes[i] == NULL)
+                continue;
+            HashNode_t *node = find_best_type_in_table(symtab->unit_scopes[i]->table, type_id);
+            if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+            {
+                if (node->defined_in_unit == defined_in_unit)
+                {
+                    if (!hashnode_is_plain_record(node) && !hashnode_is_unknown_type_stub(node))
+                        return node;
+                    if (unit_match == NULL)
+                        unit_match = node;
+                }
+                /* When we already have a plain-record fallback and this candidate
+                 * is a class type, upgrade the fallback to the class. */
+                if (fallback == NULL)
+                    fallback = node;
+                else if (hashnode_is_plain_record(fallback) && hashnode_is_class_type(node))
+                    fallback = node;
+                if (!hashnode_is_unknown_type_stub(node) && fallback_resolved == NULL)
+                    fallback_resolved = node;
+                fallback_outermost = node;
+            }
+        }
+    }
+
+    HashNode_t *builtin = FindIdentInTable(symtab->builtin_scope->table, type_id);
     if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
     {
         if (builtin->defined_in_unit == defined_in_unit)
@@ -468,12 +581,30 @@ static HashNode_t *kgpc_find_type_node_with_unit_flag(SymTab_t *symtab,
     /* Imported declarations should prefer unit-defined symbols, but if absent
      * they must bind to outer/prelude types rather than local shadows.
      * Example: prefer UnixType.TSize over local Types.TSize; if UnixType.TSize
-     * is absent, still allow global System aliases. */
+     * is absent, still allow global System aliases.
+     * Additionally, prefer a resolved (non-UNKNOWN) type over an UNKNOWN stub
+     * so cross-unit aliases like TDateTime=System.TDateTime resolve correctly. */
     if (defined_in_unit)
     {
         if (builtin != NULL && builtin->hash_type == HASHTYPE_TYPE)
             return builtin;
+        if (fallback_resolved != NULL)
+            return fallback_resolved;
         return fallback_outermost;
+    }
+
+    /* If we found a unit_match (plain record or UNKNOWN stub) but a resolved
+     * type exists from another unit (e.g. System.TDateTime resolves TDateTime
+     * while SysUtils only has an UNKNOWN alias stub), prefer the resolved one.
+     * Also, if a class type was found in another table, prefer it over a plain
+     * record unit_match. */
+    if (unit_match != NULL)
+    {
+        if (hashnode_is_unknown_type_stub(unit_match) && fallback_resolved != NULL)
+            return fallback_resolved;
+        if (fallback != NULL && hashnode_is_class_type(fallback))
+            return fallback;
+        return unit_match;
     }
 
     return fallback;
@@ -729,8 +860,29 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                 pointee_type = create_primitive_type(pointer_type_tag);
             }
         } else if (pointer_type_tag != UNKNOWN_TYPE) {
-            /* Direct primitive type tag */
-            pointee_type = create_primitive_type(pointer_type_tag);
+            /* Direct primitive type tag.  When a type reference is available,
+             * prefer looking it up from the symbol table so that sized types
+             * (e.g. WideChar = CHAR_TYPE with storage_size 2) keep their
+             * correct size instead of collapsing to the default 1-byte
+             * create_primitive_type(CHAR_TYPE). */
+            if (symtab != NULL &&
+                (alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL))
+            {
+                HashNode_t *pointee_node = NULL;
+                if (alias->pointer_type_ref != NULL)
+                    pointee_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+                        alias->pointer_type_ref, defined_in_unit);
+                if (pointee_node == NULL && alias->pointer_type_id != NULL)
+                    pointee_node = kgpc_find_type_node_with_unit_flag(symtab,
+                        alias->pointer_type_id, defined_in_unit);
+                if (pointee_node != NULL && pointee_node->type != NULL)
+                {
+                    pointee_type = pointee_node->type;
+                    kgpc_type_retain(pointee_type);
+                }
+            }
+            if (pointee_type == NULL)
+                pointee_type = create_primitive_type(pointer_type_tag);
         } else if ((alias->pointer_type_ref != NULL || alias->pointer_type_id != NULL) &&
             symtab != NULL) {
             /* Type reference - try to resolve it */
@@ -1074,6 +1226,37 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                         return alias_type;
                     }
                 }
+                /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias
+                 * that couldn't be resolved at predeclare time), try to get a
+                 * resolved type from the freshly looked-up type_node now that
+                 * all unit scopes are wired. */
+                KgpcType *cached = var_decl->tree_data.var_decl_data.cached_kgpc_type;
+                if (cached != NULL &&
+                    cached->kind == TYPE_KIND_PRIMITIVE &&
+                    cached->info.primitive_type_tag == UNKNOWN_TYPE &&
+                    type_node->type != NULL &&
+                    !(type_node->type->kind == TYPE_KIND_PRIMITIVE &&
+                      type_node->type->info.primitive_type_tag == UNKNOWN_TYPE))
+                {
+                    kgpc_type_retain(type_node->type);
+                    return type_node->type;
+                }
+                /* If the cached type is a bare REAL_TYPE without an
+                 * alias name, prefer the symbol-table type which carries
+                 * proper size info (Single=4, Double=8) or a distinct tag
+                 * (EXTENDED_TYPE).  Without this, overload resolution
+                 * can't distinguish Single/Double/Extended formals. */
+                if (cached != NULL &&
+                    cached->kind == TYPE_KIND_PRIMITIVE &&
+                    is_real_family_type(cached->info.primitive_type_tag) &&
+                    (cached->type_alias == NULL ||
+                     cached->type_alias->alias_name == NULL) &&
+                    type_node->type != NULL &&
+                    type_node->type->kind == TYPE_KIND_PRIMITIVE)
+                {
+                    kgpc_type_retain(type_node->type);
+                    return type_node->type;
+                }
             }
         }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
@@ -1223,7 +1406,10 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
 
     /* Handle named type references using the symbol table */
     if (type_id != NULL && symtab != NULL) {
-        /* Look up the named type in the symbol table */
+        /* Look up the named type in the symbol table.
+         * kgpc_find_type_node_with_unit_flag already prefers class types over
+         * plain record aliases when the same name resolves to both (e.g.
+         * TTimeZone = timezone struct alias vs TTimeZone = class abstract). */
         struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
             type_id, var_decl->tree_data.var_decl_data.defined_in_unit);
         if (type_node != NULL && type_node->type != NULL) {
@@ -1329,6 +1515,11 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 case WORD_TYPE:
                 case LONGWORD_TYPE:
                 case QWORD_TYPE:
+                case ENUM_TYPE:
+                case SET_TYPE:
+                case RECORD_TYPE:
+                case EXTENDED_TYPE:
+                case VARIANT_TYPE:
                     if (owns_type != NULL)
                         *owns_type = 1;
                     return create_primitive_type(var_type_tag);
@@ -1392,9 +1583,14 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         if (superclass != NULL && superclass->type_id != NULL &&
             strcasecmp(current->parent_class_name, superclass->type_id) == 0)
             return 1;
-        /* Look up parent class in symbol table */
-        HashNode_t *parent_node = NULL;
-        if (FindIdent(&parent_node, symtab, current->parent_class_name) != -1 && parent_node != NULL) {
+        /* Look up parent class type in symbol table.  Use the type-specific
+         * lookup which prefers class types over plain record aliases when the
+         * same name resolves to both (e.g. TTimeZone struct alias vs class). */
+        HashNode_t *parent_node = kgpc_find_type_node_with_unit_flag(symtab,
+            current->parent_class_name, /*defined_in_unit=*/1);
+        if (parent_node == NULL)
+            parent_node = kgpc_find_type_node(symtab, current->parent_class_name);
+        if (parent_node != NULL) {
             struct RecordType *parent_record = get_record_type_from_hashnode(parent_node);
             if (records_same_type(parent_record, superclass))
                 return 1;
@@ -1402,6 +1598,16 @@ static int is_record_subclass(struct RecordType *subclass, struct RecordType *su
         } else {
             break;
         }
+    }
+
+    /* In Pascal, any class without an explicit parent implicitly inherits from TObject.
+     * If we walked the chain and ended at a class with no parent_class_name, and the
+     * superclass being checked is TObject, then subclass IS a subclass of TObject. */
+    if (current != NULL && current->parent_class_name == NULL &&
+        current->is_class && superclass != NULL && superclass->type_id != NULL &&
+        strcasecmp(superclass->type_id, "TObject") == 0)
+    {
+        return 1;
     }
 
     return 0;
@@ -1487,7 +1693,7 @@ static struct RecordType *resolve_record_field_record_type(struct RecordField *f
     if (field->type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, field->type_id) >= 0)
+        if (FindSymbol(&type_node, symtab, field->type_id) != 0)
         {
             struct RecordType *record = get_record_type_from_hashnode(type_node);
             if (record != NULL)
@@ -1642,6 +1848,18 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
             int rhs_tag = rhs_points_to->info.primitive_type_tag;
             if ((lhs_tag == CHAR_TYPE || lhs_tag == STRING_TYPE || lhs_tag == SHORTSTRING_TYPE) &&
                 (rhs_tag == CHAR_TYPE || rhs_tag == STRING_TYPE || rhs_tag == SHORTSTRING_TYPE))
+                return 1;
+            /* Allow ^WideChar/^UnicodeChar <-> ^Word assignment.
+             * WideChar is CHAR_TYPE with 2-byte storage; Word is WORD_TYPE
+             * with 2-byte storage.  FPC treats these as interchangeable
+             * pointer targets because WideChar = Word at the type level.
+             * More generally, pointers to same-sized primitive types where
+             * one is a char type and the other an integer type are compatible. */
+            long long lhs_sz = kgpc_type_sizeof(lhs_points_to);
+            long long rhs_sz = kgpc_type_sizeof(rhs_points_to);
+            if (lhs_sz > 0 && lhs_sz == rhs_sz &&
+                ((lhs_tag == CHAR_TYPE && is_integer_type(rhs_tag)) ||
+                 (rhs_tag == CHAR_TYPE && is_integer_type(lhs_tag))))
                 return 1;
         }
         if (lhs_points_to != NULL && rhs_points_to != NULL &&
@@ -1972,7 +2190,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                                     }
                                     /* Look up parent record to continue walking */
                                     struct HashNode *parent_node = NULL;
-                                    if (symtab != NULL && FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                    if (symtab != NULL && FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
                                         parent_node != NULL && parent_node->type != NULL &&
                                         parent_node->type->kind == TYPE_KIND_POINTER &&
                                         parent_node->type->info.points_to != NULL &&
@@ -2012,7 +2230,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         /* Check if RHS target is a subclass of LHS record */
                         if (symtab != NULL) {
                             struct HashNode *rhs_class_node = NULL;
-                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                            if (FindSymbol(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
                                 rhs_class_node != NULL && rhs_class_node->type != NULL &&
                                 rhs_class_node->type->kind == TYPE_KIND_POINTER &&
                                 rhs_class_node->type->info.points_to != NULL &&
@@ -2024,7 +2242,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                                         if (strcasecmp(lhs_record->type_id, parent) == 0)
                                             return 1;
                                         struct HashNode *parent_node = NULL;
-                                        if (FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                        if (FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
                                             parent_node != NULL && parent_node->type != NULL &&
                                             parent_node->type->kind == TYPE_KIND_POINTER &&
                                             parent_node->type->info.points_to != NULL &&
@@ -2046,7 +2264,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                                     return 1;
                                 struct HashNode *parent_node = NULL;
                                 if (symtab != NULL &&
-                                    FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                    FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
                                     parent_node != NULL && parent_node->type != NULL &&
                                     parent_node->type->kind == TYPE_KIND_POINTER &&
                                     parent_node->type->info.points_to != NULL &&
@@ -2083,7 +2301,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                         /* RHS must be a subclass of LHS (e.g., "class of TChild" assigned to "class of TParent" is allowed) */
                         if (symtab != NULL) {
                             struct HashNode *rhs_class_node = NULL;
-                            if (FindIdent(&rhs_class_node, symtab, rhs_alias->pointer_type_id) >= 0 &&
+                            if (FindSymbol(&rhs_class_node, symtab, rhs_alias->pointer_type_id) != 0 &&
                                 rhs_class_node != NULL && rhs_class_node->type != NULL &&
                                 rhs_class_node->type->kind == TYPE_KIND_POINTER &&
                                 rhs_class_node->type->info.points_to != NULL &&
@@ -2098,7 +2316,7 @@ int are_types_compatible_for_assignment(KgpcType *lhs_type, KgpcType *rhs_type, 
                                         }
                                         /* Look up parent record to continue walking */
                                         struct HashNode *parent_node = NULL;
-                                        if (FindIdent(&parent_node, symtab, (char*)parent) >= 0 &&
+                                        if (FindSymbol(&parent_node, symtab, (char*)parent) != 0 &&
                                             parent_node != NULL && parent_node->type != NULL &&
                                             parent_node->type->kind == TYPE_KIND_POINTER &&
                                             parent_node->type->info.points_to != NULL &&
@@ -2863,7 +3081,7 @@ static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long
         while (end >= trimmed && isspace((unsigned char)*end)) *end-- = '\0';
 
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, trimmed) >= 0 && node != NULL &&
+        if (FindSymbol(&node, symtab, trimmed) != 0 && node != NULL &&
             (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
         {
             *out_value = node->const_int_value;
@@ -2938,7 +3156,7 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
                 else if (symtab != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, range_str) >= 0 &&
+                    if (FindSymbol(&type_node, symtab, range_str) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         struct TypeAlias *range_alias = hashnode_get_type_alias(type_node);
@@ -3060,6 +3278,84 @@ KgpcType* kgpc_type_get_array_element_type_resolved(KgpcType *type, SymTab_t *sy
     }
     
     return NULL;
+}
+
+KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
+{
+    if (type == NULL || type->kind != TYPE_KIND_POINTER)
+        return type != NULL ? type->info.points_to : NULL;
+
+    KgpcType *pointee = type->info.points_to;
+
+    /* Already fully resolved */
+    if (pointee != NULL && pointee->kind == TYPE_KIND_RECORD)
+        return pointee;
+
+    /* Only try to resolve PRIMITIVE placeholders (from forward-declared types) */
+    if (pointee == NULL || pointee->kind != TYPE_KIND_PRIMITIVE ||
+        pointee->info.primitive_type_tag != RECORD_TYPE)
+        return pointee;
+
+    if (symtab == NULL)
+        return pointee;
+
+    /* Try to find the actual record type using type_alias metadata */
+    const char *target_id = NULL;
+
+    /* First try the pointer's own type_alias */
+    if (type->type_alias != NULL)
+    {
+        if (type->type_alias->pointer_type_id != NULL)
+            target_id = type->type_alias->pointer_type_id;
+        else if (type->type_alias->target_type_id != NULL)
+            target_id = type->type_alias->target_type_id;
+    }
+
+    /* Also try the pointee's type_alias */
+    if (target_id == NULL && pointee->type_alias != NULL)
+    {
+        if (pointee->type_alias->alias_name != NULL)
+            target_id = pointee->type_alias->alias_name;
+        else if (pointee->type_alias->target_type_id != NULL)
+            target_id = pointee->type_alias->target_type_id;
+    }
+
+    if (target_id == NULL)
+    {
+        /* Last resort: if the pointer's type_alias has a pointer_type_ref,
+         * try to resolve through that */
+        if (type->type_alias != NULL && type->type_alias->pointer_type_ref != NULL)
+        {
+            HashNode_t *ref_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
+                type->type_alias->pointer_type_ref, 0);
+            if (ref_node != NULL && ref_node->type != NULL &&
+                ref_node->type->kind == TYPE_KIND_RECORD &&
+                ref_node->type->info.record_info != NULL)
+            {
+                KgpcType *resolved = ref_node->type;
+                kgpc_type_retain(resolved);
+                kgpc_type_release(pointee);
+                type->info.points_to = resolved;
+                return resolved;
+            }
+        }
+        return pointee;
+    }
+
+    HashNode_t *target_node = kgpc_find_type_node(symtab, target_id);
+    if (target_node != NULL && target_node->type != NULL &&
+        target_node->type->kind == TYPE_KIND_RECORD &&
+        target_node->type->info.record_info != NULL)
+    {
+        /* Found the actual record type — patch the pointer's points_to */
+        KgpcType *resolved = target_node->type;
+        kgpc_type_retain(resolved);
+        kgpc_type_release(pointee);
+        type->info.points_to = resolved;
+        return resolved;
+    }
+
+    return pointee;
 }
 
 ListNode_t* kgpc_type_get_procedure_params(KgpcType *type)
@@ -3316,7 +3612,19 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     free(alias->pointer_type_id);
     free(alias->set_element_type_id);
     free(alias->file_type_id);
-    
+
+    /* Free cloned TypeRef fields */
+    if (alias->target_type_ref != NULL)
+        type_ref_free(alias->target_type_ref);
+    if (alias->array_element_type_ref != NULL)
+        type_ref_free(alias->array_element_type_ref);
+    if (alias->pointer_type_ref != NULL)
+        type_ref_free(alias->pointer_type_ref);
+    if (alias->set_element_type_ref != NULL)
+        type_ref_free(alias->set_element_type_ref);
+    if (alias->file_type_ref != NULL)
+        type_ref_free(alias->file_type_ref);
+
     /* Free deep-copied lists */
     if (alias->array_dimensions != NULL)
         destroy_list(alias->array_dimensions);
@@ -3357,6 +3665,14 @@ void kgpc_type_set_type_alias(KgpcType *type, struct TypeAlias *alias)
     /* Copy the alias to make KgpcType own it, or set to NULL if alias is NULL */
     if (alias != NULL) {
         type->type_alias = copy_type_alias(alias);
+        /* Break circular reference: if the copied alias's kgpc_type points back
+         * to this type, it would create an ownership cycle that prevents the
+         * ref_count from ever reaching zero.  Release the circular retain and
+         * NULL the pointer; destroy_kgpc_type already guards against this case. */
+        if (type->type_alias != NULL && type->type_alias->kgpc_type == type) {
+            type->type_alias->kgpc_type = NULL;
+            kgpc_type_release(type);
+        }
     } else {
         type->type_alias = NULL;
     }
@@ -3502,7 +3818,18 @@ static int kgpc_type_equals_internal(KgpcType *a, KgpcType *b, int depth)
     switch (a->kind)
     {
         case TYPE_KIND_PRIMITIVE:
-            return a->info.primitive_type_tag == b->info.primitive_type_tag;
+            if (a->info.primitive_type_tag != b->info.primitive_type_tag)
+                return 0;
+            /* For real types, also compare storage sizes so that
+             * Single (4), Double (8), and Extended (16) are distinct. */
+            if (is_real_family_type(a->info.primitive_type_tag))
+            {
+                long long sa = kgpc_type_sizeof(a);
+                long long sb = kgpc_type_sizeof(b);
+                if (sa > 0 && sb > 0 && sa != sb)
+                    return 0;
+            }
+            return 1;
         case TYPE_KIND_POINTER:
             return kgpc_type_equals_internal(a->info.points_to, b->info.points_to, depth + 1);
         case TYPE_KIND_ARRAY:
@@ -3676,6 +4003,25 @@ KgpcType* kgpc_type_build_function_return(struct TypeAlias *inline_alias,
     else if (resolved_type_node != NULL && resolved_type_node->type != NULL) {
         kgpc_type_retain(resolved_type_node->type);
         result = resolved_type_node->type;
+        /* If the cached type is an UNKNOWN_TYPE stub (cross-unit alias that
+         * couldn't be resolved at predeclare time), try to re-resolve it via
+         * the node's alias now that all unit scopes are wired as deps. */
+        if (result->kind == TYPE_KIND_PRIMITIVE &&
+            result->info.primitive_type_tag == UNKNOWN_TYPE)
+        {
+            struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);
+            if (alias != NULL &&
+                (alias->target_type_id != NULL || alias->target_type_ref != NULL))
+            {
+                KgpcType *resolved = create_kgpc_type_from_type_alias(alias, symtab,
+                    resolved_type_node->source_unit_index);
+                if (resolved != NULL)
+                {
+                    destroy_kgpc_type(result);
+                    result = resolved;
+                }
+            }
+        }
     }
     else if (resolved_type_node != NULL) {
         struct TypeAlias *alias = hashnode_get_type_alias(resolved_type_node);

@@ -44,7 +44,7 @@ static struct RecordType *semcheck_resolve_record_type_from_ref(SymTab_t *symtab
     if (type_node == NULL)
         type_node = semcheck_find_type_node_with_kgpc_type_ref(symtab, type_ref, type_id);
     if (type_node == NULL && type_id != NULL)
-        FindIdent(&type_node, symtab, type_id);
+        FindSymbol(&type_node, symtab, type_id);
 
     if (type_node != NULL)
     {
@@ -69,7 +69,7 @@ static struct RecordType *semcheck_resolve_record_type_from_ref(SymTab_t *symtab
                     target_node = semcheck_find_type_node_with_kgpc_type_ref(
                         symtab, alias->target_type_ref, alias->target_type_id);
                 if (target_node == NULL && alias->target_type_id != NULL)
-                    FindIdent(&target_node, symtab, alias->target_type_id);
+                    FindSymbol(&target_node, symtab, alias->target_type_id);
                 if (target_node != NULL)
                 {
                     record = get_record_type_from_node(target_node);
@@ -302,15 +302,10 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
                  * open-array string contexts (e.g. array of RawByteString). */
                 compatible = 1;
             }
-            else if (is_string_type(expected_type) && element_type == CHAR_TYPE &&
-                     element_expr != NULL &&
-                     (element_expr->type == EXPR_CHAR_CODE ||
-                      (element_expr->type == EXPR_STRING &&
-                       element_expr->expr_data.string != NULL &&
-                       strlen(element_expr->expr_data.string) == 1)))
+            else if (is_string_type(expected_type) && element_type == CHAR_TYPE)
             {
-                /* Allow literal char elements like ['A', 'B'] in string arrays
-                 * without accepting arbitrary char expressions as strings. */
+                /* Char values are assignment-compatible with string in Pascal.
+                 * Allow both literal chars and char-typed variables/expressions. */
                 compatible = 1;
             }
             else if (expected_element_kgpc != NULL && actual_element_kgpc != NULL &&
@@ -661,7 +656,10 @@ KgpcType *semcheck_field_expected_kgpc_type(SymTab_t *symtab, struct RecordField
         }
         if (pointee_type == NULL && field->pointer_type != UNKNOWN_TYPE)
             pointee_type = create_primitive_type(field->pointer_type);
-        return create_pointer_type(pointee_type);
+        KgpcType *ptr_result = create_pointer_type(pointee_type);
+        if (pointee_type != NULL)
+            kgpc_type_release(pointee_type);
+        return ptr_result;
     }
 
     if (field->nested_record != NULL)
@@ -716,16 +714,6 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
     if (expr->resolved_kgpc_type != NULL)
         destroy_kgpc_type(expr->resolved_kgpc_type);
     expr->resolved_kgpc_type = create_record_type(record_type);
-
-    /* Temporarily set unit context to the record's defining unit so field
-     * type lookups prefer same-unit types. */
-    int saved_unit_ctx = 0;
-    int has_unit_ctx = (record_type->source_unit_index > 0);
-    if (has_unit_ctx)
-    {
-        saved_unit_ctx = semcheck_save_unit_context();
-        semcheck_restore_unit_context(record_type->source_unit_index);
-    }
 
     int error_count = 0;
     ListNode_t *cur = expr->expr_data.record_constructor_data.fields;
@@ -899,7 +887,7 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
         if (!field->field_is_array && field_desc->type_id != NULL)
         {
             HashNode_t *alias_node = NULL;
-            if (FindIdent(&alias_node, symtab, field_desc->type_id) != -1 && alias_node != NULL)
+            if (FindSymbol(&alias_node, symtab, field_desc->type_id) != 0 && alias_node != NULL)
             {
                 struct TypeAlias *alias = get_type_alias_from_node(alias_node);
                 if (alias != NULL && alias->is_array)
@@ -1043,10 +1031,6 @@ int semcheck_typecheck_record_constructor(struct Expression *expr, SymTab_t *sym
 
         cur = cur->next;
     }
-
-    /* Restore unit context */
-    if (has_unit_ctx)
-        semcheck_restore_unit_context(saved_unit_ctx);
 
     expr->expr_data.record_constructor_data.fields_semchecked = 1;
     return error_count;

@@ -19,8 +19,18 @@ int unit_registry_contains(const char *name);
 /* Record that unit_idx uses (depends on) dep_idx. */
 void unit_registry_add_dep(int unit_idx, int dep_idx);
 
+/* Record that unit_idx has an interface (public) dependency on dep_idx.
+ * Also records as a general dependency (calls unit_registry_add_dep internally). */
+void unit_registry_add_iface_dep(int unit_idx, int dep_idx);
+
 /* Check if dep_idx is a direct dependency of unit_idx. */
 int unit_registry_is_dep(int unit_idx, int dep_idx);
+
+/* Check if dep_idx is an interface dependency of unit_idx. */
+int unit_registry_is_iface_dep(int unit_idx, int dep_idx);
+
+/* Return the number of registered units (indices 1..count are valid). */
+int unit_registry_count(void);
 
 /* Reset the registry (call between compilations if needed). */
 void unit_registry_reset(void);

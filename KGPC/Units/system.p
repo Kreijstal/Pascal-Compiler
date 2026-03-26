@@ -22,8 +22,6 @@ type
   QWord = Int64;
   UInt64 = QWord;
 
-  { Single, Double, Extended are now builtin types with correct sizes (4, 8, 16 bytes) }
-
   { Size types - platform dependent }
   NativeInt = Int64;
   NativeUInt = QWord;
@@ -153,7 +151,16 @@ type
   UnicodeString = String;
   WideString = String;
   RawByteString = String;   { Alias for String type - KGPC doesn't distinguish encoding }
+  UTF8String = String;
+  PUTF8String = ^UTF8String;
+  UCS4Char = LongWord;
+  PUCS4Char = ^UCS4Char;
+  UCS4String = array of UCS4Char;
+  TThreadID = PtrUInt;
+  PRTLEvent = type Pointer;
+  PEventState = Pointer;
   RTLString = AnsiString;
+  TAnsiStringArray = array of AnsiString;
   PAnsiString = ^AnsiString;
   PUnicodeString = ^UnicodeString;
   { ShortString: length-prefixed string[255] compatible layout.
@@ -226,6 +233,7 @@ type
   { Low-level I/O compatibility types }
   THandle = LongInt;
   HRESULT = LongInt;  { Windows COM result type }
+  HMODULE = PtrUInt;
   CodePointer = Pointer;
   PCodePointer = ^CodePointer;
 
@@ -235,13 +243,6 @@ type
   end;
   PMethod = ^TMethod;
   
-  TInterfacedObject = class(TObject)
-  protected
-    FRefCount : LongInt;
-  public
-    property RefCount : LongInt read FRefCount;
-  end;
-
   { GUID type for SysUtils compatibility }
   TGUID = record
     D1: LongWord;
@@ -250,11 +251,75 @@ type
     D4: array[0..7] of Byte;
   end;
 
+  TFloatSpecial = (fsZero, fsNZero, fsDenormal, fsNDenormal, fsPositive, fsNegative,
+                   fsInf, fsNInf, fsNaN, fsInvalidOp);
+
   TDoubleRec = packed record
-    case integer of
-      0: (Value: Double);
-      1: (Frac: QWord; Exp: Word; Sign: Word);
+  private
+  const
+    Bias = $3FF;
+    function GetExp : QWord;
+    procedure SetExp(e : QWord);
+    function GetSign : Boolean;
+    procedure SetSign(s : Boolean);
+    function GetFrac : QWord;
+    procedure SetFrac(e : QWord);
+  public
+    function Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+    function Fraction : ValReal;
+    function Exponent : Longint;
+    property Sign : Boolean read GetSign write SetSign;
+    property Exp : QWord read GetExp write SetExp;
+    property Frac : QWord read Getfrac write SetFrac;
+    function SpecialType : TFloatSpecial;
+    procedure BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+    case byte of
+      0: (Bytes : array[0..7] of Byte);
+      1: (Words : array[0..3] of Word);
+      2: (Data : QWord);
+      3: (Value: Double);
   end;
+
+  TSingleRec = packed record
+  private
+  const
+    Bias = $7F;
+    function GetExp : QWord;
+    procedure SetExp(e : QWord);
+    function GetSign : Boolean;
+    procedure SetSign(s : Boolean);
+    function GetFrac : QWord;
+    procedure SetFrac(e : QWord);
+  public
+    function Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+    function Fraction : ValReal;
+    function Exponent : Longint;
+    property Sign : Boolean read GetSign write SetSign;
+    property Exp : QWord read GetExp write SetExp;
+    property Frac : QWord read Getfrac write SetFrac;
+    function SpecialType : TFloatSpecial;
+    procedure BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+    case byte of
+      0: (Bytes : array[0..3] of Byte);
+      1: (Words : array[0..1] of Word);
+      2: (Data : DWord);
+      3: (Value: Single);
+  end;
+
+  TPtrWrapper = record
+  private
+    FValue: Pointer;
+    class function GetNilValue: TPtrWrapper; inline; static;
+  public
+    constructor Create(AValue: PtrInt); overload;
+    constructor Create(AValue: Pointer); overload;
+    function ToPointer: Pointer; inline;
+    function ToInteger: PtrInt; inline;
+    class property NilValue: TPtrWrapper read GetNilValue;
+    class operator =(Left, Right: TPtrWrapper): Boolean; inline;
+    property Value: Pointer read FValue write FValue;
+  end;
+  TPtrWrapperArray = Array of TPtrWrapper;
 
   { IInterface / IUnknown - root interface type }
   IInterface = interface
@@ -264,6 +329,16 @@ type
   end;
   PInterface = ^IInterface;
   IUnknown = IInterface;
+
+  TInterfacedObject = class(TObject, IInterface)
+  protected
+    FRefCount : LongInt;
+  public
+    function QueryInterface(const IID: TGUID; out Obj): HRESULT;
+    function _AddRef: LongInt;
+    function _Release: LongInt;
+    property RefCount : LongInt read FRefCount;
+  end;
 
   TCustomAttribute = class
   end;
@@ -357,6 +432,16 @@ type
   { Variant and PVariant are registered as built-in types (VARIANT_TYPE, 16 bytes)
     and auto-coerce to/from any value type.  No Pascal-level alias needed. }
   PVariant = ^Variant;
+
+  PExceptObject = ^TExceptObject;
+  TExceptObject = record
+    FObject    : TObject;
+    Addr       : CodePointer;
+    Next       : PExceptObject;
+    refcount   : LongInt;
+    Framecount : LongInt;
+    Frames     : PCodePointer;
+  end;
 
 const
   CP_ACP     = 0;     { default to ANSI code page }
@@ -566,27 +651,30 @@ var
   Example: UpCase('a') returns 'A'
 }
 
-{ Math intrinsics — declared with external name to map to runtime functions }
-{ Pi is injected as a builtin constant by the semantic checker }
+{ Internal string conversion helper }
+procedure fpc_pchar_to_shortstr(var res: shortstring; p: PAnsiChar); cdecl; external name 'fpc_pchar_to_shortstr';
 
-function Sqrt(x: Real): Real; cdecl; external name 'kgpc_sqrt';
-function Sin(x: Real): Real; cdecl; external name 'kgpc_sin';
-function Cos(x: Real): Real; cdecl; external name 'kgpc_cos';
-function ArcTan(x: Real): Real; cdecl; external name 'kgpc_arctan';
-function Ln(x: Real): Real; cdecl; external name 'kgpc_ln';
-function Exp(x: Real): Real; cdecl; external name 'kgpc_exp';
-function Frac(x: Real): Real; cdecl; external name 'kgpc_frac';
-function Int(x: Real): Real; cdecl; external name 'kgpc_int_real';
-function Round(x: Real): Int64; cdecl; external name 'kgpc_round';
-function Trunc(x: Real): Int64; cdecl; external name 'kgpc_trunc';
+{ Math intrinsics — declared with internproc or external name to map to runtime functions }
+function Pi: Real; [internproc:fpc_in_pi_real];
 
-function Abs(x: LongInt): LongInt; cdecl; external name 'kgpc_abs_int';
+function Sqrt(x: Real): Real; cdecl; external name 'fpc_in_sqrt_real';
+function Sin(x: Real): Real; cdecl; external name 'fpc_in_sin_real';
+function Cos(x: Real): Real; cdecl; external name 'fpc_in_cos_real';
+function ArcTan(x: Real): Real; cdecl; external name 'fpc_in_arctan_real';
+function Ln(x: Real): Real; cdecl; external name 'fpc_in_ln_real';
+function Exp(x: Real): Real; cdecl; external name 'fpc_in_exp_real';
+function Frac(x: Real): Real; cdecl; external name 'fpc_in_frac_real';
+function Int(x: Real): Real; cdecl; external name 'fpc_in_int_real';
+function Round(x: Real): Int64; cdecl; external name 'fpc_in_round_real';
+function Trunc(x: Real): Int64; cdecl; external name 'fpc_in_trunc_real';
+
+function Abs(x: LongInt): LongInt; cdecl; external name 'fpc_in_abs_long';
 function Abs(x: Int64): Int64; cdecl; external name 'kgpc_abs_longint';
-function Abs(x: Real): Real; cdecl; external name 'kgpc_abs_real';
+function Abs(x: Real): Real; cdecl; external name 'fpc_in_abs_real';
 
 function Sqr(x: LongInt): LongInt; cdecl; external name 'kgpc_sqr_int64';
 function Sqr(x: Int64): Int64; cdecl; external name 'kgpc_sqr_int64';
-function Sqr(x: Real): Real; cdecl; external name 'kgpc_sqr_real';
+function Sqr(x: Real): Real; cdecl; external name 'fpc_in_sqr_real';
 
 function Odd(x: Int64): Boolean; cdecl; external name 'kgpc_is_odd';
 
@@ -615,8 +703,61 @@ function Lo(value: LongWord): Word; cdecl; external name 'kgpc_lo_dword';
 function Lo(value: Word): Byte; cdecl; external name 'kgpc_lo_word';
 
 function CompareMem(p1: Pointer; p2: Pointer; count: Int64): Boolean; cdecl; external name 'kgpc_compare_mem';
+function compareword(const buf1; const buf2; len: Int64): Integer; cdecl; external name 'kgpc_compareword';
 procedure prefetch(const p); cdecl; external name 'kgpc_prefetch';
 procedure RunError(code: LongInt); cdecl; external name 'kgpc_runerror';
+function BackTraceStrFunc(Addr: Pointer): ShortString; cdecl; external name 'kgpc_backtracestrfunc';
+function NtoBE(value: Word): Word; cdecl; external name 'kgpc_ntobe16';
+function NtoBE(value: LongInt): LongInt; cdecl; external name 'kgpc_ntobe32';
+function NtoBE(value: LongWord): LongWord; cdecl; external name 'kgpc_ntobe32';
+function NtoBE(value: QWord): QWord; cdecl; external name 'kgpc_ntobe64';
+function BEtoN(value: Word): Word; cdecl; external name 'kgpc_beton16';
+function BEtoN(value: LongInt): LongInt; cdecl; external name 'kgpc_beton32';
+function BEtoN(value: LongWord): LongWord; cdecl; external name 'kgpc_beton32';
+function BEtoN(value: QWord): QWord; cdecl; external name 'kgpc_beton64';
+function NtoLE(value: Word): Word; cdecl; external name 'kgpc_ntole16';
+function NtoLE(value: LongInt): LongInt; cdecl; external name 'kgpc_ntole32';
+function NtoLE(value: LongWord): LongWord; cdecl; external name 'kgpc_ntole32';
+function NtoLE(value: QWord): QWord; cdecl; external name 'kgpc_ntole64';
+function LEtoN(value: Word): Word; cdecl; external name 'kgpc_leton16';
+function LEtoN(value: LongInt): LongInt; cdecl; external name 'kgpc_leton32';
+function LEtoN(value: LongWord): LongWord; cdecl; external name 'kgpc_leton32';
+function LEtoN(value: QWord): QWord; cdecl; external name 'kgpc_leton64';
+function indexword(const buf; len: SizeInt; b: Word): SizeInt; cdecl; external name 'kgpc_indexword';
+function InterlockedDecrement(var Target: LongInt): LongInt; cdecl; external name 'kgpc_interlockeddecrement';
+function InterlockedDecrement(var Target: LongWord): LongWord; cdecl; external name 'kgpc_interlockeddecrement';
+function InterlockedDecrement(var Target: Int64): Int64; cdecl; external name 'kgpc_interlockeddecrement64';
+function InterlockedIncrement(var Target: LongInt): LongInt; cdecl; external name 'kgpc_interlockedincrement';
+function InterlockedIncrement(var Target: LongWord): LongWord; cdecl; external name 'kgpc_interlockedincrement';
+function InterlockedIncrement(var Target: Int64): Int64; cdecl; external name 'kgpc_interlockedincrement64';
+function InterlockedExchange(var Target: LongInt; Source: LongInt): LongInt; cdecl; external name 'kgpc_interlockedexchange';
+function InterlockedExchangeAdd(var Target: LongInt; Source: LongInt): LongInt; cdecl; external name 'kgpc_interlockedexchangeadd';
+function InterlockedExchangeAdd(var Target: LongWord; Source: LongWord): LongWord; cdecl; external name 'kgpc_interlockedexchangeadd';
+function InterlockedCompareExchange(var Target: LongInt; NewValue: LongInt; Comperand: LongInt): LongInt; cdecl; external name 'kgpc_interlockedcompareexchange';
+function InterlockedCompareExchange(var Target: Pointer; NewValue: Pointer; Comperand: Pointer): Pointer; cdecl; external name 'kgpc_interlockedcompareexchange_ptr';
+procedure RTLEventResetEvent(state: PRTLEvent); cdecl; external name 'kgpc_rtleventresetevent';
+procedure RTLEventWaitFor(state: PRTLEvent); cdecl; external name 'kgpc_rtleventwaitfor';
+procedure RTLEventSetEvent(state: PRTLEvent); cdecl; external name 'kgpc_rtleventsetevent';
+procedure RTLEventDestroy(state: PRTLEvent); cdecl; external name 'kgpc_rtleventdestroy';
+function BasicEventCreate(EventAttributes: Pointer; AManualReset: Boolean; InitialState: Boolean; const Name: AnsiString): PEventState; cdecl; external name 'kgpc_basiceventcreate';
+procedure BasicEventDestroy(state: PEventState); cdecl; external name 'kgpc_basiceventdestroy';
+procedure BasicEventResetEvent(state: PEventState); cdecl; external name 'kgpc_basiceventresetevent';
+procedure BasicEventSetEvent(Event: Pointer); cdecl; external name 'kgpc_basiceventresetevent';
+function BasicEventWaitFor(timeout: Int64; Event: Pointer): LongInt; cdecl; external name 'kgpc_basiceventwaitfor';
+function Utf8CodePointLen(p: PAnsiChar; MaxLen: SizeInt; IncludePartial: Boolean): SizeInt; cdecl; external name 'kgpc_utf8codepointlen';
+function UTF8Encode(const s: UnicodeString): RawByteString; cdecl; external name 'kgpc_utf8encode';
+function UnicodeToUtf8(Dest: PAnsiChar; MaxDestBytes: SizeUInt; Source: PUnicodeChar; SourceChars: SizeUInt): SizeUInt; cdecl; external name 'kgpc_unicodetoutf8';
+function Utf8ToUnicode(Dest: PUnicodeChar; MaxDestChars: SizeUInt; Source: PAnsiChar; SourceBytes: SizeUInt): SizeUInt; cdecl; external name 'kgpc_utf8tounicode';
+function GetMemory(size: PtrUInt): Pointer; cdecl; external name 'kgpc_getmem_ptr';
+function FreeMemory(p: Pointer): PtrUInt; cdecl; external name 'kgpc_freemem_ptr';
+function ReallocMemory(p: Pointer; size: PtrUInt): Pointer; cdecl; external name 'kgpc_reallocmem_ptr';
+procedure ReadBarrier; inline;
+procedure WriteBarrier; inline;
+procedure ReadWriteBarrier; inline;
+procedure ReadDependencyBarrier; inline;
+function ArrayStringToPPchar(const S: TAnsiStringArray; reserveentries: LongInt): PPAnsiChar; cdecl; external name 'kgpc_array_string_to_ppchar';
+function SwapEndian(value: LongInt): LongInt; overload;
+function SwapEndian(value: Int64): Int64; overload;
 
 function Random: Real; cdecl; external name 'kgpc_random_real';
 function Random(upper: LongInt): LongInt; cdecl; external name 'kgpc_random_int';
@@ -626,6 +767,8 @@ function Random(upper: Real): Real; cdecl; external name 'kgpc_random_real_upper
 { HexStr(value, digits) - Converts an integer to a hexadecimal string }
 function HexStr(value: Int64; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
 function HexStr(value: LongWord; digits: Integer): AnsiString; cdecl; external name 'kgpc_hexstr';
+function HexStr(Val: Pointer; Cnt: Integer): ShortString; overload; cdecl; external name 'kgpc_hexstr';
+function HexStr(Val: Pointer): ShortString; overload; cdecl; external name 'kgpc_hexstr';
 function OctStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'kgpc_octstr';
 function OctStr(value: LongInt; digits: Byte): AnsiString; cdecl; external name 'kgpc_octstr';
 function BinStr(value: Int64; digits: Byte): AnsiString; cdecl; external name 'kgpc_binstr';
@@ -637,9 +780,13 @@ procedure Flush(var f: Text); cdecl; external name 'kgpc_flush';
 { GetFPCHeapStatus - returns heap usage information }
 function GetFPCHeapStatus: TFPCHeapStatus; cdecl; external name 'kgpc_get_fpc_heap_status';
 
-{ RandomRange(low, high) - Returns a random integer in [low, high)
-  Overloaded for integer and longint types.
-}
+function RandomRange(low, high: LongInt): LongInt; cdecl; external name 'kgpc_random_range';
+function RandomRange(low, high: Int64): Int64; cdecl; external name 'kgpc_random_range';
+
+function has_init_list: Boolean; cdecl; external name 'kgpc_has_init_list';
+function GetInterfaceWeak(Instance: Pointer; const IID: TGUID; out Intf): Boolean; cdecl; external name 'kgpc_getinterfaceweak';
+function GetInterfaceEntry(Instance: Pointer; const IID: TGUID): Pointer; cdecl; external name 'kgpc_getinterfaceentry';
+function GetInterfaceEntryByStr(Instance: Pointer; const IIDStr: ShortString): Pointer; cdecl; external name 'kgpc_getinterfaceentrybystr';
 
 { Copy(s, index, count) - Returns a substring
   Example: Copy('Hello', 2, 3) returns 'ell'
@@ -680,6 +827,40 @@ procedure SetRandSeed(seed: LongWord);
 begin
     RandSeed := seed;
 end;
+
+procedure SystemErrorShim(dummy: LongInt; code: LongInt); [public,alias:'__Error'];
+begin
+    RunError(code);
+end;
+
+function SwapEndian(value: LongInt): LongInt; overload;
+var
+    u: LongWord;
+begin
+    u := LongWord(value);
+    u := ((u and $000000FF) shl 24) or
+         ((u and $0000FF00) shl 8) or
+         ((u and $00FF0000) shr 8) or
+         ((u and $FF000000) shr 24);
+    Result := LongInt(u);
+end;
+
+function SwapEndian(value: Int64): Int64; overload;
+var
+    u: QWord;
+begin
+    u := QWord(value);
+    u := ((u and $00000000000000FF) shl 56) or
+         ((u and $000000000000FF00) shl 40) or
+         ((u and $0000000000FF0000) shl 24) or
+         ((u and $00000000FF000000) shl 8) or
+         ((u and $000000FF00000000) shr 8) or
+         ((u and $0000FF0000000000) shr 24) or
+         ((u and $00FF000000000000) shr 40) or
+         ((u and $FF00000000000000) shr 56);
+    Result := Int64(u);
+end;
+
 
 function succ(i: integer): integer;
 begin
@@ -781,6 +962,14 @@ begin
     end
 end;
 
+procedure interlocked_exchange_add_i32_u32_impl(var target: longword; value: longword; var result: longword);
+begin
+    assembler;
+    asm
+        call kgpc_interlocked_exchange_add_i32
+    end
+end;
+
 procedure interlocked_exchange_add_i64_impl(var target: int64; value: int64; var result: int64);
 begin
     assembler;
@@ -830,6 +1019,9 @@ procedure kgpc_tfile_filesize(var f: file; var size: int64); cdecl; external nam
 procedure kgpc_tfile_seek(var f: file; index: longint); cdecl; external name 'kgpc_tfile_seek';
 procedure kgpc_tfile_truncate_current(var f: file); cdecl; external name 'kgpc_tfile_truncate_current';
 procedure kgpc_tfile_truncate(var f: file; length: longint); cdecl; external name 'kgpc_tfile_truncate';
+procedure Erase(var f: file); external;
+procedure POpen(var f: text; command: String; mode: Char); external;
+function PClose(var f: text): LongInt; external;
 procedure kgpc_init_args(argc: longint; argv: Pointer); cdecl; external name 'kgpc_init_args';
 function kgpc_param_count: longint; cdecl; external name 'kgpc_param_count';
 function kgpc_param_str(index: longint): AnsiString; cdecl; external name 'kgpc_param_str';
@@ -854,6 +1046,15 @@ begin
     InterlockedExchangeAdd := result;
 end;
 
+function InterlockedExchangeAdd(var target: longword; value: longword): longword; overload;
+var
+    result: longword;
+begin
+    result := 0;
+    interlocked_exchange_add_i32_u32_impl(target, value, result);
+    InterlockedExchangeAdd := result;
+end;
+
 function InterlockedExchangeAdd(var target: int64; value: int64): int64; overload;
 var
     result: int64;
@@ -871,6 +1072,57 @@ begin
     interlocked_exchange_add_ptr_impl(target, value, result);
     Exit(result);
 end;
+
+function InterlockedIncrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, 1) + 1;
+end;
+
+function InterlockedIncrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, LongWord(1)) + 1;
+end;
+
+function InterlockedIncrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedIncrement := InterlockedExchangeAdd(Target, Int64(1)) + 1;
+end;
+
+function InterlockedDecrement(var Target: LongInt): LongInt; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, -1) - 1;
+end;
+
+function InterlockedDecrement(var Target: LongWord): LongWord; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, LongWord(-1)) - 1;
+end;
+
+function InterlockedDecrement(var Target: Int64): Int64; overload;
+begin
+    InterlockedDecrement := InterlockedExchangeAdd(Target, Int64(-1)) - 1;
+end;
+
+function InterlockedExchange(var Target: LongInt; Source: LongInt): LongInt; overload;
+begin
+    InterlockedExchange := Target;
+    Target := Source;
+end;
+
+function InterlockedCompareExchange(var Target: LongInt; NewValue: LongInt; Comperand: LongInt): LongInt; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
+end;
+
+function InterlockedCompareExchange(var Target: Pointer; NewValue: Pointer; Comperand: Pointer): Pointer; overload;
+begin
+    InterlockedCompareExchange := Target;
+    if Target = Comperand then
+        Target := NewValue;
+end;
+
 
 function UpCase(c: char): char; overload;
 begin
@@ -961,6 +1213,11 @@ begin
         kgpc_text_setbuf(f, @buf[0], Length(buf))
     else
         kgpc_text_setbuf(f, nil, 0);
+end;
+
+procedure SetTextBuf(var f: text; var buf; size: Integer); overload;
+begin
+    kgpc_text_setbuf(f, @buf, size);
 end;
 
 
@@ -1258,6 +1515,11 @@ begin
     fillchar_impl(dest, count, value);
 end;
 
+procedure filldword(var x; count: LongInt; value: LongWord);
+begin
+    fillchar_impl(x, count * 4, 0);
+end;
+
 procedure getmem_impl(var target; size: longint);
 begin
     assembler;
@@ -1513,6 +1775,44 @@ begin
     GetInterface := kgpc_get_interface(Pointer(Self), @IID, Obj) <> 0;
 end;
 
+function TInterfacedObject.QueryInterface(const IID: TGUID; out Obj): HRESULT;
+begin
+    if Self.GetInterface(IID, Obj) then
+        QueryInterface := 0
+    else
+        QueryInterface := LongInt($80004002);
+end;
+
+function TInterfacedObject._AddRef: LongInt;
+begin
+    if FRefCount = 0 then
+    begin
+        FRefCount := 1;
+        Exit(FRefCount);
+    end;
+
+    if FRefCount > 0 then
+        _AddRef := InterlockedIncrement(FRefCount)
+    else
+        _AddRef := FRefCount;
+end;
+
+function TInterfacedObject._Release: LongInt;
+begin
+    if FRefCount = 1 then
+        _Release := 0
+    else if FRefCount > 0 then
+        _Release := InterlockedDecrement(FRefCount)
+    else
+        Exit(FRefCount);
+
+    if _Release <= 0 then
+    begin
+        FRefCount := -1;
+        Destroy;
+    end;
+end;
+
 function TObject.ClassInfo: Pointer;
 begin
     ClassInfo := Self.ClassType.ClassInfo;
@@ -1542,6 +1842,212 @@ begin
         ToString := ''
     else
         ToString := name_ptr;
+end;
+
+function TDoubleRec.Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+begin
+    Result := Data and $fffffffffffff;
+    if (Result = 0) and (GetExp = 0) then
+        Exit;
+    if IncludeHiddenBit then
+        Result := Result or $10000000000000;
+end;
+
+function TDoubleRec.Fraction : ValReal;
+begin
+    Result := System.Frac(Value);
+end;
+
+function TDoubleRec.Exponent : Longint;
+var
+    E: QWord;
+begin
+    Result := 0;
+    E := GetExp;
+    if (0 < E) and (E < 2 * Bias + 1) then
+        Result := Exp - Bias
+    else if (Exp = 0) and (Frac <> 0) then
+        Result := -(Bias - 1);
+end;
+
+function TDoubleRec.GetExp : QWord;
+begin
+    Result := (Data and $7ff0000000000000) shr 52;
+end;
+
+procedure TDoubleRec.SetExp(e : QWord); public name 'tdoublerec__setexp_u_tdoublerec_u64';
+begin
+    Data := (Data and $800fffffffffffff) or ((e and $7ff) shl 52);
+end;
+
+function TDoubleRec.GetSign : Boolean;
+begin
+    Result := (Data and $8000000000000000) <> 0;
+end;
+
+procedure TDoubleRec.SetSign(s : Boolean);
+begin
+    Data := (Data and $7fffffffffffffff) or (QWord(Ord(s)) shl 63);
+end;
+
+function TDoubleRec.GetFrac : QWord;
+begin
+    Result := Data and $fffffffffffff;
+end;
+
+procedure TDoubleRec.SetFrac(e : QWord); public name 'tdoublerec__setfrac_u_tdoublerec_u64';
+begin
+    Data := (Data and $fff0000000000000) or (e and $fffffffffffff);
+end;
+
+function TDoubleRec.SpecialType : TFloatSpecial;
+const
+    Denormal : array[Boolean] of TFloatSpecial = (fsDenormal, fsNDenormal);
+begin
+    case Exp of
+        0:
+            begin
+                if Mantissa = 0 then
+                begin
+                    if Sign then
+                        Result := fsNZero
+                    else
+                        Result := fsZero;
+                end
+                else
+                    Result := Denormal[Sign];
+            end;
+        $7ff:
+            if Mantissa = 0 then
+            begin
+                if Sign then
+                    Result := fsNInf
+                else
+                    Result := fsInf;
+            end
+            else
+                Result := fsNaN;
+    else
+        begin
+            if Sign then
+                Result := fsNegative
+            else
+                Result := fsPositive;
+        end;
+    end;
+end;
+
+procedure TDoubleRec.BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+begin
+    Value := 0.0;
+    SetSign(_Sign);
+    if (_Mantissa = 0) and (_Exponent = 0) then
+        Exit;
+    SetExp(_Exponent + Bias);
+    SetFrac(_Mantissa and $fffffffffffff);
+end;
+
+function TSingleRec.Mantissa(IncludeHiddenBit: Boolean = False) : QWord;
+begin
+    Result := Data and $7fffff;
+    if (Result = 0) and (GetExp = 0) then
+        Exit;
+    if IncludeHiddenBit then
+        Result := Result or $800000;
+end;
+
+function TSingleRec.Fraction : ValReal;
+begin
+    Result := System.Frac(Value);
+end;
+
+function TSingleRec.Exponent : Longint;
+var
+    E: QWord;
+begin
+    Result := 0;
+    E := GetExp;
+    if (0 < E) and (E < 2 * Bias + 1) then
+        Result := Exp - Bias
+    else if (Exp = 0) and (Frac <> 0) then
+        Result := -(Bias - 1);
+end;
+
+function TSingleRec.GetExp : QWord;
+begin
+    Result := (Data and $7f800000) shr 23;
+end;
+
+procedure TSingleRec.SetExp(e : QWord); public name 'tsinglerec__setexp_u_tsinglerec_u64';
+begin
+    Data := (Data and $807fffff) or ((e and $ff) shl 23);
+end;
+
+function TSingleRec.GetSign : Boolean;
+begin
+    Result := (Data and $80000000) <> 0;
+end;
+
+procedure TSingleRec.SetSign(s : Boolean);
+begin
+    Data := (Data and $7fffffff) or (DWord(Ord(s)) shl 31);
+end;
+
+function TSingleRec.GetFrac : QWord;
+begin
+    Result := Data and $7fffff;
+end;
+
+procedure TSingleRec.SetFrac(e : QWord); public name 'tsinglerec__setfrac_u_tsinglerec_u64';
+begin
+    Data := (Data and $ff800000) or (e and $7fffff);
+end;
+
+function TSingleRec.SpecialType : TFloatSpecial;
+const
+    Denormal : array[Boolean] of TFloatSpecial = (fsDenormal, fsNDenormal);
+begin
+    case Exp of
+        0:
+            begin
+                if Mantissa = 0 then
+                begin
+                    if Sign then
+                        Result := fsNZero
+                    else
+                        Result := fsZero;
+                end
+                else
+                    Result := Denormal[Sign];
+            end;
+        $ff:
+            if Mantissa = 0 then
+            begin
+                if Sign then
+                    Result := fsNInf
+                else
+                    Result := fsInf;
+            end
+            else
+                Result := fsNaN;
+    else
+        begin
+            if Sign then
+                Result := fsNegative
+            else
+                Result := fsPositive;
+        end;
+    end;
+end;
+
+procedure TSingleRec.BuildUp(const _Sign : Boolean; const _Mantissa : QWord; const _Exponent : Longint);
+begin
+    Value := 0.0;
+    SetSign(_Sign);
+    if (_Mantissa = 0) and (_Exponent = 0) then
+        Exit;
+    SetExp(_Exponent + Bias);
+    SetFrac(_Mantissa and $7fffff);
 end;
 
 begin

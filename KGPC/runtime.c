@@ -18,8 +18,43 @@
 
 static const double KGPC_PI = 3.14159265358979323846264338327950288;
 
+/* FPC RTL compatibility symbols for float-to-ASCII conversion (flt_core.inc) */
+const unsigned int C_1_SHL_31 = 0x80000000u;
+const unsigned long long C_MANT2_INTEGER = (1ULL << 52);
+const int C_EXP2_SPECIAL = 2047;  /* C_EXP2_BIAS * 2 + 1 for double */
+const int RT_NATIVE = 2;  /* RT_S64REAL for double */
+
+/* FPC Grisu lookup table for float-to-string conversion.
+ * This is a simplified placeholder - the full table is in FPC's flt_core.inc. */
+static const char lookup_placeholder[1] = { 0 };
+const char *lookup = lookup_placeholder;
+
+/* FPC dynamic library handle placeholder */
+#ifdef _WIN32
+static void *Libdl_handle = NULL;
+void *Libdl = NULL;
+void *libdl = NULL;
+#else
+static void *Libdl_handle = NULL;
+void *Libdl = &Libdl_handle;
+void *libdl = &Libdl_handle;
+#endif
+
+/* FPC I/O check functions - weak stubs for real number I/O.
+ * These are provided by FPC's RTL when linked, but we provide weak fallbacks
+ * for cases where the RTL code isn't included. */
+__attribute__((weak)) void checkread_t(void) { }
+__attribute__((weak)) void readreal_t_ss(void) { }
+
+/* FPC errno setter - weak stub */
+__attribute__((weak)) void FPC_SYS_SETERRNO(int err) { errno = err; }
+
 uint32_t kgpc_randseed = 0u;
 static uint32_t kgpc_old_randseed = 0xFFFFFFFFu;
+/* Native stdlib lowering currently materializes a qualifier symbol for
+ * unit-qualified System.Error(...) calls. Provide an addressable symbol so
+ * those references link without reviving the broad System.Error alias. */
+int32_t System = 0;
 
 /* Xoshiro128** state (matching FPC rtl/inc/system.inc). */
 static uint32_t kgpc_xsr_state[4] = {
@@ -197,6 +232,46 @@ int kgpc_threading_already_used(void)
 int threadingalreadyused_void(void)
 {
     return kgpc_threading_already_used();
+}
+
+int32_t kgpc_interlockedincrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int32_t kgpc_interlockeddecrement(int32_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockedincrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target += 1;
+    return *target;
+#endif
+}
+
+int64_t kgpc_interlockeddecrement64(int64_t *target)
+{
+#if defined(__GNUC__) || defined(__clang__)
+    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
+#else
+    *target -= 1;
+    return *target;
+#endif
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
@@ -1463,28 +1538,112 @@ void kgpc_rtti_check_cast(const kgpc_class_typeinfo *value_type,
     abort();
 }
 
+/* Resolve an interface method for dispatch.  Handles both raw object pointers
+ * and adjusted interface pointers (from kgpc_get_interface/Supports).
+ * - If self points to an object (first qword is VMT), navigates VMT → interface
+ *   table → vtable → method.
+ * - If self is already adjusted (first qword is an interface vtable), uses it directly.
+ * Returns the method function pointer, or __kgpc_abstract_method_error if not found. */
+typedef void (*kgpc_method_ptr)(void);
+extern void __kgpc_abstract_method_error(void);
+kgpc_method_ptr __kgpc_resolve_intf_method(void *self,
+    const void *interface_guid, int method_index)
+{
+    if (self == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* self could be either:
+     * a) Raw object pointer: *(void**)self = VMT, VMT[10] = interface table
+     * b) Adjusted interface pointer: *(void**)self = interface vtable (flat array)
+     * Distinguish by checking VMT signature: VMT has vInstanceSize at offset 0
+     * (small positive int) and vInstanceSize2 = -vInstanceSize at offset 8. */
+    const void *first_qword = *(const void **)self;
+    if (first_qword == NULL)
+        return (kgpc_method_ptr)__kgpc_abstract_method_error;
+
+    /* Check if first_qword looks like a VMT (vInstanceSize / vInstanceSize2 pattern) */
+    int64_t slot0 = *(const int64_t *)first_qword;
+    int64_t slot1 = *((const int64_t *)first_qword + 1);
+    int is_vmt = (slot0 > 0 && slot0 < 10000000 && slot1 == -slot0);
+
+    if (is_vmt) {
+        /* Case (a): raw object pointer — walk VMT chain looking for matching interface */
+        const void *cur_vmt = first_qword;
+        while (cur_vmt != NULL) {
+            /* vIntfTable at VMT offset 80 */
+            const kgpc_interface_table *intf_table =
+                *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+            if (intf_table != NULL && intf_table->entry_count > 0) {
+                for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                    const kgpc_interface_entry *entry = &intf_table->entries[i];
+                    if (entry->iid_ref != NULL && interface_guid != NULL) {
+                        const void *iid = *(entry->iid_ref);
+                        if (iid != NULL && memcmp(iid, interface_guid, 16) == 0) {
+                            if (entry->vtable != NULL) {
+                                const void **vtable = (const void **)entry->vtable;
+                                if (method_index >= 0)
+                                    return (kgpc_method_ptr)vtable[method_index];
+                            }
+                            return (kgpc_method_ptr)__kgpc_abstract_method_error;
+                        }
+                    }
+                }
+            }
+            /* Walk to parent via vParentRef (offset 16) */
+            const void * const *parent_ref =
+                *(const void * const * const *)((const char *)cur_vmt + 16);
+            if (parent_ref != NULL)
+                cur_vmt = *parent_ref;
+            else
+                cur_vmt = NULL;
+        }
+    } else {
+        /* Case (b): adjusted interface pointer — first_qword is the vtable directly */
+        const void **vtable = (const void **)first_qword;
+        if (method_index >= 0)
+            return (kgpc_method_ptr)vtable[method_index];
+    }
+
+    return (kgpc_method_ptr)__kgpc_abstract_method_error;
+}
+
 int kgpc_get_interface(const void *self, const void *guid, void **out_intf)
 {
     if (self == NULL || guid == NULL || out_intf == NULL)
         return 0;
 
-    /* Get typeinfo pointer from the object's VMT (vTypeInfo at offset 56) */
+    /* Walk the VMT chain via vIntfTable (offset 80) and vParentRef (offset 16).
+     * This reads the FPC-compatible tinterfacetable layout:
+     *   uint64_t EntryCount, then EntryCount * tinterfaceentry (40 bytes each).
+     * Each entry's IIDRef is ^pguid: double-deref to get the 16-byte GUID. */
     const void *vmt = *(const void * const *)self;
     if (vmt == NULL)
         return 0;
-    const kgpc_class_typeinfo *typeinfo = *(const kgpc_class_typeinfo * const *)((const char *)vmt + 56);
 
-    /* Walk the class hierarchy */
-    while (typeinfo != NULL) {
-        if (typeinfo->interfaces != NULL && typeinfo->num_interfaces > 0) {
-            for (int i = 0; i < typeinfo->num_interfaces; i++) {
-                if (memcmp(&typeinfo->interfaces[i], guid, 16) == 0) {
-                    *out_intf = (void *)self;
-                    return 1;
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->iid_ref != NULL) {
+                    const void *iid = *(entry->iid_ref);  /* deref ^pguid to pguid */
+                    if (iid != NULL && memcmp(iid, guid, 16) == 0) {
+                        *out_intf = (void *)((const char *)self + entry->ioffset);
+                        return 1;
+                    }
                 }
             }
         }
-        typeinfo = typeinfo->parent;
+        /* Walk to parent via vParentRef (offset 16): PPVmt, deref to get parent VMT */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
     }
     return 0;
 }
@@ -1925,7 +2084,9 @@ static void kgpc_keyboard_init_once(void)
         return;
 
     struct termios raw = kgpc_keyboard_saved_termios;
-    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO);
+    /* Crt.ReadKey must receive control characters like Ctrl+C as input bytes
+     * instead of letting the terminal driver turn them into signals. */
+    raw.c_lflag &= (tcflag_t) ~(ICANON | ECHO | ISIG);
     raw.c_iflag &= (tcflag_t) ~(IXON | ICRNL);
     raw.c_cc[VMIN] = 1;
     raw.c_cc[VTIME] = 0;
@@ -2569,6 +2730,41 @@ void Initialize(void *value)
 }
 
 /* Generic default constructor for classes without explicit constructors */
+/* Initialize interface vtable pointer slots in a class instance.
+ * For each interface the class implements, the instance has a slot at
+ * (instance + ioffset) that must point to the interface vtable.
+ * This is called after the VMT pointer is set at offset 0. */
+void __kgpc_init_interface_vtables(void *instance)
+{
+    if (instance == NULL)
+        return;
+    const void *vmt = *(const void * const *)instance;
+    if (vmt == NULL)
+        return;
+    /* Walk the VMT chain (including parent classes) to init all interface slots */
+    const void *cur_vmt = vmt;
+    while (cur_vmt != NULL) {
+        /* vIntfTable at VMT offset 80 */
+        const kgpc_interface_table *intf_table =
+            *(const kgpc_interface_table * const *)((const char *)cur_vmt + 80);
+        if (intf_table != NULL && intf_table->entry_count > 0) {
+            for (uint64_t i = 0; i < intf_table->entry_count; i++) {
+                const kgpc_interface_entry *entry = &intf_table->entries[i];
+                if (entry->ioffset > 0 && entry->vtable != NULL) {
+                    *(const void **)((char *)instance + entry->ioffset) = entry->vtable;
+                }
+            }
+        }
+        /* Walk to parent via vParentRef (offset 16) */
+        const void * const *parent_ref =
+            *(const void * const * const *)((const char *)cur_vmt + 16);
+        if (parent_ref != NULL)
+            cur_vmt = *parent_ref;
+        else
+            cur_vmt = NULL;
+    }
+}
+
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
 {
     /* Allocate and zero-initialize the class instance */
@@ -2578,13 +2774,16 @@ void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
         fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
         exit(EXIT_FAILURE);
     }
-    
+
     /* Set the VMT pointer (first field of the instance) */
     if (vmt_ptr != NULL)
     {
         *(const void **)instance = vmt_ptr;
     }
-    
+
+    /* Initialize interface vtable pointer slots */
+    __kgpc_init_interface_vtables(instance);
+
     return instance;
 }
 
@@ -2874,6 +3073,30 @@ static void kgpc_string_release(char *value)
         kgpc_string_set_remove(value);
         free(hdr);
     }
+}
+
+void FPC_ANSISTR_UNIQUE(char **value)
+{
+    if (value == NULL || *value == NULL)
+        return;
+    KgpcStringHeader *hdr = kgpc_string_header(*value);
+    if (hdr == NULL)
+        return;
+    if (hdr->refcount == 1 || hdr->refcount < 0)
+        return;
+    size_t len = (size_t)hdr->length;
+    char *new_str = (char *)malloc(sizeof(KgpcStringHeader) + len + 1);
+    if (new_str == NULL)
+        return;
+    KgpcStringHeader *new_hdr = (KgpcStringHeader *)new_str;
+    new_hdr->codepage = hdr->codepage;
+    new_hdr->elementsize = hdr->elementsize;
+    new_hdr->refcount = 1;
+    new_hdr->length = len;
+    char *new_data = new_str + sizeof(KgpcStringHeader);
+    memcpy(new_data, *value, len + 1);
+    kgpc_string_release(*value);
+    *value = new_data;
 }
 
 char *kgpc_alloc_empty_string(void)
@@ -5501,9 +5724,19 @@ int64_t kgpc_bsfdword_li(uint32_t value)
     return (int64_t)__builtin_ctz(value);
 }
 
-int64_t popcnt_i64(uint64_t value)
+int64_t fpc_in_popcnt_x(uint64_t value)
 {
     return (int64_t)__builtin_popcountll(value);
+}
+
+int32_t popcnt_i(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
+}
+
+int32_t popcnt_li(int32_t value)
+{
+    return (int32_t)__builtin_popcount((uint32_t)value);
 }
 
 /* filecreate_rbs: FPC FileCreate(Filename: string): THandle
@@ -5523,15 +5756,19 @@ int64_t kgpc_filecreate_rbs(const char *filename)
 }
 
 /* Chr function - returns a character value as an integer */
-int64_t kgpc_chr(int64_t value)
+int64_t fpc_in_chr_byte(int64_t value)
 {
-    /* Clamp value to valid character range [0, 255] */
     if (value < 0)
         return 0;
     if (value > 255)
         return 255;
     
     return value;
+}
+
+int64_t kgpc_chr(int64_t value)
+{
+    return fpc_in_chr_byte(value);
 }
 
 /* Convert a character value to a single-character string */
@@ -5598,6 +5835,16 @@ int64_t kgpc_is_odd(int64_t value)
     return (value & 1) ? 1 : 0;
 }
 
+int64_t fpc_in_const_odd(int64_t value)
+{
+    return (value & 1) ? 1 : 0;
+}
+
+void *fpc_in_const_ptr(void *value)
+{
+    return value;
+}
+
 int32_t kgpc_sqr_int32(int32_t value)
 {
     return value * value;
@@ -5608,7 +5855,12 @@ int64_t kgpc_sqr_int64(int64_t value)
     return value * value;
 }
 
-double kgpc_sqr_real(double value)
+int64_t fpc_in_const_sqr(int64_t value)
+{
+    return value * value;
+}
+
+double fpc_in_sqr_real(double value)
 {
     return value * value;
 }
@@ -6562,33 +6814,6 @@ char *kgpc_float_to_string(double value, int precision)
     return kgpc_string_duplicate(buffer);
 }
 
-uint16_t *extractfilepath_us(const uint16_t *filename)
-{
-    int64_t len = kgpc_unicode_known_length(filename);
-    if (filename == NULL || len <= 0)
-        return kgpc_alloc_empty_unicodestring();
-
-    int64_t end = 0;
-    for (int64_t i = len; i > 0; --i)
-    {
-        uint16_t ch = filename[i - 1];
-        if (ch == (uint16_t)'/' || ch == (uint16_t)'\\')
-        {
-            end = i;
-            break;
-        }
-    }
-
-    if (end <= 0)
-        return kgpc_alloc_empty_unicodestring();
-
-    uint16_t *result = NULL;
-    kgpc_setstring_unicode(&result, filename, end);
-    if (result == NULL)
-        return kgpc_alloc_empty_unicodestring();
-    return result;
-}
-
 int kgpc_string_to_int(const char *text, int *out_value)
 {
     if (text == NULL)
@@ -7135,7 +7360,7 @@ int64_t kgpc_aligned(const void *ptr, int64_t alignment)
     return (((uintptr_t)ptr % alignment) == 0) ? 1 : 0;
 }
 
-int32_t kgpc_abs_int(int32_t value)
+int32_t fpc_in_abs_long(int32_t value)
 {
     return (value < 0) ? -value : value;
 }
@@ -7145,23 +7370,27 @@ int64_t kgpc_abs_longint(int64_t value)
     return (value < 0) ? -value : value;
 }
 
-/* Abs for unsigned types is a no-op (identity function) */
+int64_t fpc_in_const_abs(int64_t value)
+{
+    return (value < 0) ? -value : value;
+}
+
 uint64_t kgpc_abs_unsigned(uint64_t value)
 {
     return value;
 }
 
-double kgpc_abs_real(double value)
+double fpc_in_abs_real(double value)
 {
     return fabs(value);
 }
 
-double kgpc_sqrt(double value)
+double fpc_in_sqrt_real(double value)
 {
     return sqrt(value);
 }
 
-double kgpc_sin(double value)
+double fpc_in_sin_real(double value)
 {
     return sin(value);
 }
@@ -7171,7 +7400,7 @@ double kgpc_csc(double value)
     return 1.0 / sin(value);
 }
 
-double kgpc_cos(double value)
+double fpc_in_cos_real(double value)
 {
     return cos(value);
 }
@@ -7222,7 +7451,7 @@ double kgpc_coth(double value)
     return s != 0.0 ? cosh(value) / s : (value >= 0.0 ? INFINITY : -INFINITY);
 }
 
-double kgpc_arctan(double value)
+double fpc_in_arctan_real(double value)
 {
     return atan(value);
 }
@@ -7327,7 +7556,7 @@ double kgpc_rad_to_cycle(double value)
     return value / (2.0 * KGPC_PI);
 }
 
-double kgpc_ln(double value)
+double fpc_in_ln_real(double value)
 {
     return log(value);
 }
@@ -7337,7 +7566,7 @@ double kgpc_logn(double base, double value)
     return log(value) / log(base);
 }
 
-double kgpc_exp(double value)
+double fpc_in_exp_real(double value)
 {
     return exp(value);
 }
@@ -7352,7 +7581,7 @@ double kgpc_hypot(double x, double y)
     return hypot(x, y);
 }
 
-long long kgpc_round(double value)
+long long fpc_in_round_real(double value)
 {
     double rounded;
     if (value >= 0.0)
@@ -7362,7 +7591,7 @@ long long kgpc_round(double value)
     return (long long)rounded;
 }
 
-long long kgpc_trunc(double value)
+long long fpc_in_trunc_real(double value)
 {
     /* Use trunc() to avoid conflict with FPC RTL's Pascal ceil/floor aliases.
      * FPC's math.pp generates ".set ceil, ceil_r" and ".set floor, floor_r"
@@ -7384,26 +7613,26 @@ long long kgpc_trunc_currency(long long currency_value)
 
 long long kgpc_int(double value)
 {
-    return kgpc_trunc(value);
+    return fpc_in_trunc_real(value);
 }
 
-/* kgpc_int_real: Int() intrinsic returning the integer part as a double.
+/* fpc_in_int_real: Int() intrinsic returning the integer part as a double.
    Used by FPC RTL [internproc:fpc_in_int_real]. */
-double kgpc_int_real(double value)
+double fpc_in_int_real(double value)
 {
-    return (double)kgpc_trunc(value);
+    return (double)fpc_in_trunc_real(value);
 }
 
-/* kgpc_pi: Pi() intrinsic returning the mathematical constant.
+/* fpc_in_pi_real: Pi() intrinsic returning the mathematical constant.
    Used by FPC RTL [internproc:fpc_in_pi_real]. */
-double kgpc_pi(void)
+double fpc_in_pi_real(void)
 {
     return 3.14159265358979323846;
 }
 
-double kgpc_frac(double value)
+double fpc_in_frac_real(double value)
 {
-    return value - (double)kgpc_trunc(value);
+    return value - (double)fpc_in_trunc_real(value);
 }
 
 long long kgpc_ceil(double value)
@@ -7652,6 +7881,11 @@ off_t fplSeek(int fd, off_t offset, int whence)
 {
     return lseek(fd, offset, whence);
 }
+
+int fpchmod(const char *path, mode_t mode)
+{
+    return chmod(path, mode);
+}
 #else
 /* Windows implementations using POSIX-like functions from io.h */
 /* Translate Unix paths to Windows equivalents */
@@ -7739,6 +7973,11 @@ off_t fplSeek(int fd, off_t offset, int whence)
 {
     return (off_t)_lseeki64(fd, (__int64)offset, whence);
 }
+
+int fpchmod(const char *path, int mode)
+{
+    return _chmod(path, mode);
+}
 #endif
 
 void Halt(int64_t code)
@@ -7796,6 +8035,20 @@ uint32_t atomicincrement_u32(uint32_t *target)
     return __sync_add_and_fetch(target, 1);
 }
 
+/* LongInt (32-bit signed) overloads for compiler intrinsics.
+ * AtomicIncrement/AtomicDecrement/AtomicExchange/AtomicCmpExchange are true
+ * compiler intrinsics (like Ord, Chr) — they have no Pascal source body.
+ * The runtime provides all type-specific implementations. */
+int32_t atomicincrement_li(int32_t *target)
+{
+    return __sync_add_and_fetch(target, 1);
+}
+
+int32_t atomicincrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_add_and_fetch(target, value);
+}
+
 long atomicdecrement_i(long *target)
 {
     return __sync_sub_and_fetch(target, 1);
@@ -7804,6 +8057,26 @@ long atomicdecrement_i(long *target)
 uint32_t atomicdecrement_u32(uint32_t *target)
 {
     return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li(int32_t *target)
+{
+    return __sync_sub_and_fetch(target, 1);
+}
+
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value)
+{
+    return __sync_sub_and_fetch(target, value);
+}
+
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val)
+{
+    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
+}
+
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand)
+{
+    return __sync_val_compare_and_swap(target, comparand, new_val);
 }
 
 void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)
@@ -7887,45 +8160,32 @@ uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint6
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
  * system.pp).  Removed from runtime to avoid duplicate symbol conflicts. */
 
-/* Lo/Hi for Word/Integer — [internproc] fpc_in_lo_Word / fpc_in_hi_Word */
-uint8_t lo_w(uint16_t value)
+uint8_t fpc_in_lo_Word(uint16_t value)
 {
     return (uint8_t)value;
 }
 
-uint8_t hi_w(uint16_t value)
+uint8_t fpc_in_hi_Word(uint16_t value)
 {
     return (uint8_t)(value >> 8);
 }
 
-/* Lo/Hi for LongInt/DWord — [internproc] fpc_in_lo_long / fpc_in_hi_long */
-uint16_t lo_li(int32_t value)
+uint16_t fpc_in_lo_long(int32_t value)
 {
     return (uint16_t)value;
 }
 
-uint16_t hi_li(int32_t value)
+uint16_t fpc_in_hi_long(int32_t value)
 {
     return (uint16_t)((uint32_t)value >> 16);
 }
 
-/* Lo/Hi for Int64/QWord — [internproc] fpc_in_lo_qword / fpc_in_hi_qword */
-uint32_t lo_i64(int64_t value)
+uint32_t fpc_in_lo_qword(uint64_t value)
 {
     return (uint32_t)value;
 }
 
-uint32_t hi_i64(int64_t value)
-{
-    return (uint32_t)((uint64_t)value >> 32);
-}
-
-uint32_t lo_qw(uint64_t value)
-{
-    return (uint32_t)value;
-}
-
-uint32_t hi_qw(uint64_t value)
+uint32_t fpc_in_hi_qword(uint64_t value)
 {
     return (uint32_t)(value >> 32);
 }
@@ -8276,6 +8536,13 @@ int64_t kgpc_sar_int64(int64_t value, int32_t shift) {
     return value >> (shift & 63);
 }
 
+/* FPC internal intrinsic stub — the FPC compiler would inline SAR
+ * instructions, but since we emit a regular call we need a runtime
+ * symbol.  The generic version uses 64-bit arithmetic. */
+int64_t fpc_in_sar_x_y(int64_t value, int64_t shift) {
+    return value >> (shift & 63);
+}
+
 int32_t kgpc_sar_longint(int32_t value, int32_t shift) {
     return value >> (shift & 31);
 }
@@ -8348,4 +8615,55 @@ uint8_t  kgpc_lo_word(uint16_t value)  { return (uint8_t)(value & 0xFF); }
 void kgpc_runerror(int32_t code) {
     fprintf(stderr, "Runtime error %d\n", code);
     exit(code);
+}
+
+/* GetMemory/FreeMemory/ReallocMemory - C heap wrappers */
+void *kgpc_getmem_ptr(size_t size) { return malloc(size); }
+size_t kgpc_freemem_ptr(void *p) { free(p); return 0; }
+void *kgpc_reallocmem_ptr(void *p, size_t size) { return realloc(p, size); }
+
+/* Memory barriers - no-ops on x86 (strong memory model) */
+void kgpc_readbarrier(void) {}
+void kgpc_writebarrier(void) {}
+void kgpc_readwritebarrier(void) {}
+
+/* SysBeep — system procedure that produces a beep.
+ * Not meaningful in a CLI/batch context; no-op. */
+void SysBeep(void) {}
+
+/* TMarshal.UnfixArray<TPtrWrapper> — generic method specialization.
+ * The body is Finalize(TArray<TPtrWrapper>) which is a no-op for
+ * TPtrWrapper (a simple record with no managed fields). */
+void tmarshal__unfixarray_u_tptrwrapper(void) {}
+
+/* FindComponentClass — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void FindComponentClass(void) { __kgpc_abstract_method_error(); }
+
+/* ReadDeltaStream — FPC TReader class method referenced but not
+ * exercised in test programs. Raises abstract method error if called. */
+void ReadDeltaStream(void) { __kgpc_abstract_method_error(); }
+
+/* Default IInterface implementations for non-reference-counted classes.
+ * Classes that implement interfaces without inheriting from TInterfacedObject
+ * (e.g. TList = class(TObject, IFPObserved)) need default QueryInterface,
+ * _AddRef, and _Release methods. These behave like FPC's defaults:
+ * no reference counting, QueryInterface delegates to GetInterface. */
+int64_t kgpc_default_queryinterface(const void *self, const void *guid, void **out_intf)
+{
+    if (kgpc_get_interface(self, guid, out_intf))
+        return 0;  /* S_OK */
+    return (int64_t)0x80004002u;  /* E_NOINTERFACE */
+}
+
+int64_t kgpc_default_addref(const void *self)
+{
+    (void)self;
+    return -1;
+}
+
+int64_t kgpc_default_release(const void *self)
+{
+    (void)self;
+    return -1;
 }

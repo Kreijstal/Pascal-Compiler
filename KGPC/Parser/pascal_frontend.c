@@ -14,6 +14,7 @@
 #include "ParseTree/from_cparser.h"
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
+#include "../string_intern.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -29,6 +30,11 @@ static char *g_last_parse_path = NULL;
 /* AST cache directory (NULL = disabled). When set, parsed ASTs for units
  * are cached to binary files in this directory. */
 static char *g_ast_cache_dir = NULL;
+static bool g_ast_cache_reads_enabled = true;
+
+/* Modification time of the compiler binary. When set, cached ASTs older
+ * than the binary are considered stale and re-parsed. */
+static time_t g_compiler_mtime = 0;
 
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
@@ -58,7 +64,15 @@ static bool ast_cache_is_fresh(const char *cache_path, const char *source_path)
     if (stat(source_path, &source_st) != 0)
         return false;
 
-    return cache_st.st_mtime >= source_st.st_mtime;
+    /* Cache must be newer than the source file */
+    if (cache_st.st_mtime < source_st.st_mtime)
+        return false;
+
+    /* Cache must be newer than the compiler binary (if known) */
+    if (g_compiler_mtime > 0 && cache_st.st_mtime < g_compiler_mtime)
+        return false;
+
+    return true;
 }
 
 /* Check if source buffer contains {$MODE objfpc} directive */
@@ -175,6 +189,11 @@ void pascal_frontend_reset_objfpc_mode(void)
     g_default_shortstring = false;
 }
 
+void pascal_frontend_set_objfpc_mode(void)
+{
+    g_objfpc_mode_detected = true;
+}
+
 bool pascal_frontend_default_shortstring(void)
 {
     return g_default_shortstring;
@@ -216,6 +235,11 @@ void pascal_frontend_set_ast_cache_dir(const char *dir)
     if (g_ast_cache_dir != NULL)
         free(g_ast_cache_dir);
     g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
+}
+
+void pascal_frontend_set_compiler_mtime(time_t mtime)
+{
+    g_compiler_mtime = mtime;
 }
 
 const char * const *pascal_frontend_get_include_paths(int *count)
@@ -626,16 +650,20 @@ static void report_preprocessor_error(ParseError **error_out, const char *path, 
 
 void pascal_frontend_cleanup(void)
 {
+    /* Free the cached parser graphs. free_combinator_graph() uses a shared
+     * visited set and ignores the cached flag, so shared subtrees between
+     * the unit and program parsers are freed exactly once. */
+    combinator_t *roots[2];
+    size_t root_count = 0;
     if (cached_unit_parser != NULL)
-    {
-        free_combinator(cached_unit_parser);
-        cached_unit_parser = NULL;
-    }
+        roots[root_count++] = cached_unit_parser;
     if (cached_program_parser != NULL)
-    {
-        free_combinator(cached_program_parser);
-        cached_program_parser = NULL;
-    }
+        roots[root_count++] = cached_program_parser;
+    if (root_count > 0)
+        free_combinator_graph(roots, root_count);
+    cached_unit_parser = NULL;
+    cached_program_parser = NULL;
+    parser_drain_free_list();
     if (generic_registry_ready)
     {
         generic_registry_cleanup();
@@ -662,7 +690,9 @@ void pascal_frontend_cleanup(void)
         free(g_ast_cache_dir);
         g_ast_cache_dir = NULL;
     }
+    g_ast_cache_reads_enabled = true;
     from_cparser_cleanup();
+    string_intern_reset();
 }
 
 /* Compute the cache file path for a given source path.
@@ -684,8 +714,30 @@ static char *compute_ast_cache_path(const char *source_path)
     return cache_path;
 }
 
-static bool source_path_is_unit(const char *path)
+static bool path_is_compiler_prelude(const char *path)
 {
+    if (path == NULL)
+        return false;
+
+    const char *base = strrchr(path, '/');
+#ifdef _WIN32
+    const char *backslash = strrchr(path, '\\');
+    if (backslash != NULL && (base == NULL || backslash > base))
+        base = backslash;
+#endif
+    base = (base != NULL) ? base + 1 : path;
+
+    if (strcmp(base, "system.p") != 0 && strcmp(base, "prelude.p") != 0)
+        return false;
+
+    return strstr(path, "KGPC/Units/") != NULL || strstr(path, "KGPC\\Units\\") != NULL;
+}
+
+static bool source_path_is_cacheable(const char *path)
+{
+    if (path_is_compiler_prelude(path))
+        return true;
+
     size_t length = 0;
     char *buffer = read_file(path, &length);
     if (buffer == NULL)
@@ -719,10 +771,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     if (path != NULL)
         g_last_parse_path = strdup(path);
 
-    bool cache_units_only = source_path_is_unit(path);
+    bool cache_units_only = source_path_is_cacheable(path);
 
     /* --- AST cache: try loading a cached binary AST to skip preprocessing+parsing --- */
-    if (cache_units_only)
+    if (cache_units_only && g_ast_cache_reads_enabled)
     {
         char *cache_path = compute_ast_cache_path(path);
         if (cache_path != NULL)
@@ -769,6 +821,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
                 return success;
             }
+            g_ast_cache_reads_enabled = false;
             free(cache_path);
             /* Cache miss — proceed with normal parsing, save at the end */
         }
@@ -831,6 +884,9 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         "FPC_HAS_FEATURE_OBJECTIVEC1", "FPC_HAS_FEATURE_STACKCHECK",
         // FPC floating-point type availability (KGPC maps Extended to Double)
         "FPC_HAS_TYPE_SINGLE", "FPC_HAS_TYPE_DOUBLE",
+        // KGPC cannot evaluate FPU intrinsics (ln, round, etc.) in constant expressions,
+        // so define FPUSOFT to prevent FPC RTL from using them in const initializers.
+        "FPUSOFT",
         "FPC_WIDESTRING_EQUAL_UNICODESTRING",
         "FPC_ANSI_TEXTFILEREC"
     };

@@ -457,6 +457,12 @@ struct Expression *clone_expression(const struct Expression *expr)
             }
             clone->expr_data.function_call_data.arg0_is_dynarray_descriptor =
                 expr->expr_data.function_call_data.arg0_is_dynarray_descriptor;
+            clone->expr_data.function_call_data.is_inherited_call =
+                expr->expr_data.function_call_data.is_inherited_call;
+            clone->expr_data.function_call_data.is_bare_inherited =
+                expr->expr_data.function_call_data.is_bare_inherited;
+            clone->expr_data.function_call_data.is_operator_call =
+                expr->expr_data.function_call_data.is_operator_call;
             clone->expr_data.function_call_data.call_qualifier =
                 expr->expr_data.function_call_data.call_qualifier != NULL ?
                     strdup(expr->expr_data.function_call_data.call_qualifier) : NULL;
@@ -468,7 +474,165 @@ struct Expression *clone_expression(const struct Expression *expr)
             }
             break;
         }
+        case EXPR_AS:
+            clone->expr_data.as_data.expr =
+                clone_expression(expr->expr_data.as_data.expr);
+            if (expr->expr_data.as_data.expr != NULL &&
+                clone->expr_data.as_data.expr == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.as_data.target_type =
+                expr->expr_data.as_data.target_type;
+            clone->expr_data.as_data.target_type_id =
+                expr->expr_data.as_data.target_type_id != NULL ?
+                    strdup(expr->expr_data.as_data.target_type_id) : NULL;
+            if (expr->expr_data.as_data.target_type_id != NULL &&
+                clone->expr_data.as_data.target_type_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.as_data.target_type_ref =
+                type_ref_clone(expr->expr_data.as_data.target_type_ref);
+            clone->expr_data.as_data.target_record_type =
+                expr->expr_data.as_data.target_record_type;
+            break;
+
+        case EXPR_IS:
+            clone->expr_data.is_data.expr =
+                clone_expression(expr->expr_data.is_data.expr);
+            if (expr->expr_data.is_data.expr != NULL &&
+                clone->expr_data.is_data.expr == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.is_data.target_type =
+                expr->expr_data.is_data.target_type;
+            clone->expr_data.is_data.target_type_id =
+                expr->expr_data.is_data.target_type_id != NULL ?
+                    strdup(expr->expr_data.is_data.target_type_id) : NULL;
+            if (expr->expr_data.is_data.target_type_id != NULL &&
+                clone->expr_data.is_data.target_type_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.is_data.target_type_ref =
+                type_ref_clone(expr->expr_data.is_data.target_type_ref);
+            clone->expr_data.is_data.target_record_type =
+                expr->expr_data.is_data.target_record_type;
+            break;
+
+        case EXPR_ARRAY_LITERAL:
+        {
+            clone->expr_data.array_literal_data.element_count =
+                expr->expr_data.array_literal_data.element_count;
+            clone->expr_data.array_literal_data.elements_semchecked =
+                expr->expr_data.array_literal_data.elements_semchecked;
+
+            ListNode_t *elem_head = NULL;
+            ListNode_t *elem_tail = NULL;
+            ListNode_t *cur = expr->expr_data.array_literal_data.elements;
+            while (cur != NULL)
+            {
+                struct Expression *elem_expr = (struct Expression *)cur->cur;
+                struct Expression *elem_clone = clone_expression(elem_expr);
+                if (elem_expr != NULL && elem_clone == NULL)
+                {
+                    destroy_expr(clone);
+                    return NULL;
+                }
+
+                ListNode_t *node = CreateListNode(elem_clone, LIST_EXPR);
+                if (node == NULL)
+                {
+                    if (elem_clone != NULL)
+                        destroy_expr(elem_clone);
+                    destroy_expr(clone);
+                    return NULL;
+                }
+
+                if (elem_head == NULL)
+                {
+                    elem_head = node;
+                    elem_tail = node;
+                }
+                else
+                {
+                    elem_tail->next = node;
+                    elem_tail = node;
+                }
+                cur = cur->next;
+            }
+            clone->expr_data.array_literal_data.elements = elem_head;
+            break;
+        }
+
+        case EXPR_TYPEINFO:
+            clone->expr_data.typeinfo_data.type_id =
+                expr->expr_data.typeinfo_data.type_id != NULL ?
+                    strdup(expr->expr_data.typeinfo_data.type_id) : NULL;
+            if (expr->expr_data.typeinfo_data.type_id != NULL &&
+                clone->expr_data.typeinfo_data.type_id == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.typeinfo_data.type_ref =
+                type_ref_clone(expr->expr_data.typeinfo_data.type_ref);
+            break;
+
+        case EXPR_ADDR_OF_PROC:
+            clone->expr_data.addr_of_proc_data.proc_mangled_id =
+                expr->expr_data.addr_of_proc_data.proc_mangled_id != NULL ?
+                    strdup(expr->expr_data.addr_of_proc_data.proc_mangled_id) : NULL;
+            clone->expr_data.addr_of_proc_data.proc_id =
+                expr->expr_data.addr_of_proc_data.proc_id != NULL ?
+                    strdup(expr->expr_data.addr_of_proc_data.proc_id) : NULL;
+            if ((expr->expr_data.addr_of_proc_data.proc_mangled_id != NULL &&
+                 clone->expr_data.addr_of_proc_data.proc_mangled_id == NULL) ||
+                (expr->expr_data.addr_of_proc_data.proc_id != NULL &&
+                 clone->expr_data.addr_of_proc_data.proc_id == NULL))
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+
+        case EXPR_ANONYMOUS_FUNCTION:
+        case EXPR_ANONYMOUS_PROCEDURE:
+            /* Anonymous methods contain statement trees and parameter lists
+             * that are expensive to deep-clone.  Copy only the scalar and
+             * owned-string fields; leave parameters, body, and type_ref as
+             * NULL so destroy_expr will not double-free them. */
+            clone->expr_data.anonymous_method_data.generated_name =
+                expr->expr_data.anonymous_method_data.generated_name != NULL ?
+                    strdup(expr->expr_data.anonymous_method_data.generated_name) : NULL;
+            clone->expr_data.anonymous_method_data.return_type =
+                expr->expr_data.anonymous_method_data.return_type;
+            clone->expr_data.anonymous_method_data.return_type_id =
+                expr->expr_data.anonymous_method_data.return_type_id != NULL ?
+                    strdup(expr->expr_data.anonymous_method_data.return_type_id) : NULL;
+            clone->expr_data.anonymous_method_data.is_function =
+                expr->expr_data.anonymous_method_data.is_function;
+            /* parameters, body, and return_type_ref remain NULL (from calloc) */
+            if ((expr->expr_data.anonymous_method_data.generated_name != NULL &&
+                 clone->expr_data.anonymous_method_data.generated_name == NULL) ||
+                (expr->expr_data.anonymous_method_data.return_type_id != NULL &&
+                 clone->expr_data.anonymous_method_data.return_type_id == NULL))
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            break;
+
         default:
+            fprintf(stderr,
+                "Warning: clone_expression: unhandled expression type %d at line %d\n",
+                expr->type, expr->line_num);
             destroy_expr(clone);
             return NULL;
     }
@@ -541,8 +705,35 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             /* Prefer explicit symbols to avoid clobbering user-defined "result" variables. */
             HashNode_t *node = NULL;
             if (expr->expr_data.id != NULL &&
-                FindIdent(&node, symtab, expr->expr_data.id) != -1 && node != NULL)
+                FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL)
             {
+                /* When in assignment context, an enum constant cannot be the
+                 * target.  Look for an assignable alternative just as
+                 * semcheck_varid does. */
+                if (mutating != NO_MUTATE &&
+                    node->hash_type == HASHTYPE_CONST && !node->is_typed_const &&
+                    node->type != NULL &&
+                    node->type->kind == TYPE_KIND_PRIMITIVE &&
+                    kgpc_type_get_primitive_tag(node->type) == ENUM_TYPE)
+                {
+                    ListNode_t *all = FindAllIdents(symtab, expr->expr_data.id);
+                    for (ListNode_t *cur = all; cur != NULL; cur = cur->next)
+                    {
+                        HashNode_t *alt = (HashNode_t *)cur->cur;
+                        if (alt == NULL || alt == node)
+                            continue;
+                        if (alt->hash_type == HASHTYPE_VAR ||
+                            alt->hash_type == HASHTYPE_FUNCTION_RETURN ||
+                            (alt->hash_type == HASHTYPE_CONST && alt->is_typed_const))
+                        {
+                            node = alt;
+                            break;
+                        }
+                    }
+                    if (all != NULL)
+                        DestroyList(all);
+                }
+
                 if (kgpc_getenv("KGPC_DEBUG_PROC_VAR") != NULL &&
                     pascal_identifier_equals(expr->expr_data.id, "Ctr"))
                 {
@@ -580,6 +771,18 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
 
                 if (node->type != NULL)
                 {
+                    /* For functions referenced without parentheses (implicit
+                     * zero-arg call), return the return type, not the function
+                     * type.  E.g. `Result := ReadInteger;` should give LongInt,
+                     * not "procedure". */
+                    if (node->hash_type == HASHTYPE_FUNCTION &&
+                        node->type->kind == TYPE_KIND_PROCEDURE &&
+                        node->type->info.proc_info.return_type != NULL)
+                    {
+                        if (owns_type != NULL)
+                            *owns_type = 0;
+                        return node->type->info.proc_info.return_type;
+                    }
                     /* Return a shared reference - caller doesn't own it */
                     if (owns_type != NULL)
                         *owns_type = 0;
@@ -644,8 +847,8 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (expr->expr_data.function_call_data.id != NULL && symtab != NULL)
             {
                 HashNode_t *func_node = NULL;
-                if (FindIdent(&func_node, symtab,
-                        expr->expr_data.function_call_data.id) >= 0 &&
+                if (FindSymbol(&func_node, symtab,
+                        expr->expr_data.function_call_data.id) &&
                     func_node != NULL && func_node->type != NULL &&
                     func_node->type->kind == TYPE_KIND_PROCEDURE &&
                     func_node->type->info.proc_info.return_type != NULL)
@@ -678,7 +881,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (record_expr->type == EXPR_VAR_ID && record_expr->expr_data.id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, record_expr->expr_data.id) != -1 &&
+                    if (FindSymbol(&type_node, symtab, record_expr->expr_data.id) != 0 &&
                         type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
                     {
                         size_t len = strlen(record_expr->expr_data.id) + strlen(field_name) + 3;
@@ -687,7 +890,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         {
                             snprintf(mangled, len, "%s__%s", record_expr->expr_data.id, field_name);
                             HashNode_t *const_node = NULL;
-                            if (FindIdent(&const_node, symtab, mangled) != -1 &&
+                            if (FindSymbol(&const_node, symtab, mangled) != 0 &&
                                 const_node != NULL &&
                                 (const_node->hash_type == HASHTYPE_CONST ||
                                  const_node->hash_type == HASHTYPE_ARRAY ||
@@ -729,15 +932,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                     struct RecordType *record_info = record_type->info.record_info;
                     if (record_info != NULL)
                     {
-                    /* Temporarily set unit context to the record's defining unit
-                     * so field type lookups prefer same-unit types (e.g., system's
-                     * pstring vs objpas's PString). */
-                    int saved_unit_ctx = 0;
-                    if (record_info->source_unit_index > 0)
-                    {
-                        saved_unit_ctx = semcheck_save_unit_context();
-                        semcheck_restore_unit_context(record_info->source_unit_index);
-                    }
                     ListNode_t *field_cursor = record_info->fields;
                     while (field_cursor != NULL)
                     {
@@ -777,6 +971,8 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         if (owns_type != NULL)
                                             *owns_type = 1;
                                         field_type = create_pointer_type(pointee_type);
+                                        if (pointee_type != NULL)
+                                            kgpc_type_release(pointee_type);
                                     }
                                     else if (field->is_array)
                                     {
@@ -863,10 +1059,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                                         field_type = create_primitive_type(field->type);
                                     }
                                     
-                                    /* Restore unit context before returning */
-                                    if (record_info->source_unit_index > 0)
-                                        semcheck_restore_unit_context(saved_unit_ctx);
-
                                     /* Clean up record type if we owned it */
                                     if (record_type_owned)
                                         destroy_kgpc_type(record_type);
@@ -896,9 +1088,6 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                         }
                         field_cursor = field_cursor->next;
                     }
-                    /* Restore unit context after field lookup */
-                    if (record_info->source_unit_index > 0)
-                        semcheck_restore_unit_context(saved_unit_ctx);
                     }
                 }
                 
@@ -950,7 +1139,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                     fprintf(stderr, "[SemCheck] Resolving array element type alias: %s\n", alias_id);
                 }
-                if (FindIdent(&type_node, symtab, alias_id) != -1 &&
+                if (FindSymbol(&type_node, symtab, alias_id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     if (debug_fstd)
@@ -1010,7 +1199,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
                 if (expr->pointer_subtype_id != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, expr->pointer_subtype_id) != -1 &&
+                    if (FindSymbol(&type_node, symtab, expr->pointer_subtype_id) != 0 &&
                         type_node != NULL && type_node->type != NULL)
                     {
                         kgpc_type_retain(type_node->type);
@@ -1229,7 +1418,7 @@ KgpcType* semcheck_resolve_expression_kgpc_type(SymTab_t *symtab, struct Express
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, symtab, target_id) >= 0 &&
+                if (FindSymbol(&type_node, symtab, target_id) != 0 &&
                     type_node != NULL && type_node->type != NULL &&
                     type_node->type->kind == TYPE_KIND_PROCEDURE)
                 {
@@ -1282,13 +1471,16 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
     int type_tag = UNKNOWN_TYPE;
     int *type_return = &type_tag;
     if (expr != NULL && expr->type == EXPR_VAR_ID && kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-        fprintf(stderr, "[SemCheck] semcheck_expr_main: Checking identifier: %s\n", expr->expr_data.id);
-        HashNode_t *ident_node = NULL;
-        int index = FindIdent(&ident_node, symtab, expr->expr_data.id);
-        if (index == -1) {
-            fprintf(stderr, "[SemCheck]   FindIdent failed\n");
-        } else {
-            fprintf(stderr, "[SemCheck]   Found identifier: %s (index %d)\n", ident_node->id, index);
+        fprintf(stderr, "[SemCheck] semcheck_expr_main: Checking identifier: %s\n",
+            expr->expr_data.id != NULL ? expr->expr_data.id : "(null)");
+        if (expr->expr_data.id != NULL) {
+            HashNode_t *ident_node = NULL;
+            int found = FindSymbol(&ident_node, symtab, expr->expr_data.id);
+            if (!found) {
+                fprintf(stderr, "[SemCheck]   FindSymbol failed\n");
+            } else {
+                fprintf(stderr, "[SemCheck]   Found identifier: %s\n", ident_node->id);
+            }
         }
     }
 
@@ -1411,7 +1603,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 assert(lookup_id != NULL &&
                        "EXPR_ADDR_OF_PROC must have proc_id set");
                 HashNode_t *proc_node = NULL;
-                if (FindIdent(&proc_node, symtab, lookup_id) >= 0 &&
+                if (FindSymbol(&proc_node, symtab, lookup_id) != 0 &&
                     proc_node != NULL && proc_node->type != NULL)
                 {
                     kgpc_type_retain(proc_node->type);
@@ -1630,7 +1822,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 if (return_type_id != NULL) {
                     /* Try to look up the type in the symbol table */
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, symtab, return_type_id) >= 0 && type_node != NULL) {
+                    if (FindSymbol(&type_node, symtab, return_type_id) != 0 && type_node != NULL) {
                         /* Use the KgpcType from the symbol table if available */
                         if (type_node->type != NULL) {
                             return_type = type_node->type;
@@ -1673,7 +1865,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
             /* We need to create a new scope with parameters and return variable */
             if (expr->expr_data.anonymous_method_data.body != NULL)
             {
-                PushScope(symtab);
+                EnterScope(symtab, 0);
                 
                 /* Add parameters to the scope */
                 if (params != NULL)
@@ -1698,7 +1890,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                                     if (param_tree->tree_data.var_decl_data.type_id != NULL)
                                     {
                                         HashNode_t *type_node = NULL;
-                                        if (FindIdent(&type_node, symtab, param_tree->tree_data.var_decl_data.type_id) >= 0 &&
+                                        if (FindSymbol(&type_node, symtab, param_tree->tree_data.var_decl_data.type_id) != 0 &&
                                             type_node != NULL && type_node->type != NULL)
                                         {
                                             param_kgpc_type = type_node->type;
@@ -1727,7 +1919,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                     
                     /* Also add "Result" as an alias in the current scope */
                     HashNode_t *result_check = NULL;
-                    HashTable_t *cur_hash = (HashTable_t *)symtab->stack_head->cur;
+                    HashTable_t *cur_hash = SymTab_GetTargetTable(symtab);
                     result_check = (cur_hash != NULL) ? FindIdentInTable(cur_hash, "Result") : NULL;
                     if (result_check == NULL)
                     {
@@ -1738,7 +1930,7 @@ int semcheck_expr_main(SymTab_t *symtab, struct Expression *expr,
                 /* Semantic check the body statement */
                 return_val += semcheck_stmt(symtab, expr->expr_data.anonymous_method_data.body, max_scope_lev);
                 
-                PopScope(symtab);
+                LeaveScope(symtab);
             }
             
             break;

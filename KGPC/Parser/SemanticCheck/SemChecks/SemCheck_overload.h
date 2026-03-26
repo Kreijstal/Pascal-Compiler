@@ -21,10 +21,8 @@ typedef enum {
 typedef struct {
     MatchQualityKind kind;
     int exact_type_id;
-    int exact_pointer_subtype;
-    int exact_array_elem;
-    int int_promo_rank;
-    int char_promo_rank;  /* For char types: 1-byte (AnsiChar) = 0, 2-byte (WideChar) = 1 */
+    int integer_rank;
+    int string_rank;
 } MatchQuality;
 
 int semcheck_param_list_contains_name(ListNode_t *params, const char *name);

@@ -9,6 +9,45 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static long long semcheck_builtin_sizeof_type_id_local(const char *type_id)
+{
+    if (type_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(type_id, "Integer"))
+        return pascal_frontend_is_objfpc_mode() ? 4 : 2;
+    if (pascal_identifier_equals(type_id, "LongInt") ||
+        pascal_identifier_equals(type_id, "LongWord") ||
+        pascal_identifier_equals(type_id, "Cardinal") ||
+        pascal_identifier_equals(type_id, "DWord") ||
+        pascal_identifier_equals(type_id, "Single"))
+        return 4;
+    if (pascal_identifier_equals(type_id, "SmallInt") ||
+        pascal_identifier_equals(type_id, "Word") ||
+        pascal_identifier_equals(type_id, "WideChar"))
+        return 2;
+    if (pascal_identifier_equals(type_id, "Byte") ||
+        pascal_identifier_equals(type_id, "ShortInt") ||
+        pascal_identifier_equals(type_id, "Boolean") ||
+        pascal_identifier_equals(type_id, "Char") ||
+        pascal_identifier_equals(type_id, "AnsiChar"))
+        return 1;
+    if (pascal_identifier_equals(type_id, "Int64") ||
+        pascal_identifier_equals(type_id, "QWord") ||
+        pascal_identifier_equals(type_id, "Double") ||
+        pascal_identifier_equals(type_id, "Real") ||
+        pascal_identifier_equals(type_id, "Pointer") ||
+        pascal_identifier_equals(type_id, "NativeUInt") ||
+        pascal_identifier_equals(type_id, "SizeUInt") ||
+        pascal_identifier_equals(type_id, "PtrUInt") ||
+        pascal_identifier_equals(type_id, "NativeInt") ||
+        pascal_identifier_equals(type_id, "SizeInt") ||
+        pascal_identifier_equals(type_id, "PtrInt") ||
+        pascal_identifier_equals(type_id, "String"))
+        return 8;
+    return 0;
+}
+
 static int semcheck_expr_is_explicit_char_typecast_local(const struct Expression *expr)
 {
     if (expr == NULL || expr->type != EXPR_TYPECAST)
@@ -124,7 +163,7 @@ static HashNode_t *semcheck_find_exact_qualified_type_node_local(SymTab_t *symta
     char *qualified = qualified_ident_join(type_ref, ".");
     if (qualified != NULL)
     {
-        if (FindIdent(&type_node, symtab, qualified) >= 0 &&
+        if (FindSymbol(&type_node, symtab, qualified) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             free(qualified);
@@ -260,7 +299,7 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Chr expects exactly one argument.\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Chr expects exactly one argument.\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -272,7 +311,7 @@ int semcheck_builtin_chr(int *type_return, SymTab_t *symtab,
         max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !kgpc_type_is_integer(arg_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Chr expects an integer argument.\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Chr expects an integer argument.\\n",
             expr->line_num);
         error_count++;
     }
@@ -314,7 +353,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Ord expects exactly one argument.\\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Ord expects exactly one argument.\\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -350,14 +389,14 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
             char *literal = arg_expr->expr_data.string;
             if (literal == NULL || literal[0] == '\0')
             {
-                semcheck_error_with_context("Error on line %d, Ord expects a non-empty character literal.\\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Ord expects a non-empty character literal.\\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
             }
             if (literal[1] != '\0')
             {
-                semcheck_error_with_context("Error on line %d, Ord expects a single character literal.\\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Ord expects a single character literal.\\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -432,6 +471,11 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         /* For enumerative types, Ord returns the ordinal value (0-based index) */
         mangled_name = "kgpc_ord_longint";
     }
+    else if (arg_type_tag == RECORD_TYPE || arg_type_tag == POINTER_TYPE)
+    {
+        /* Type helpers make integer/char types appear as records; accept them. */
+        mangled_name = "kgpc_ord_longint";
+    }
 
     if (mangled_name != NULL)
     {
@@ -455,7 +499,7 @@ int semcheck_builtin_ord(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    semcheck_error_with_context("Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
+    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Ord expects an integer, character, or boolean argument.\\n",
         expr->line_num);
     *type_return = UNKNOWN_TYPE;
     return 1;
@@ -474,7 +518,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     {
         if (kgpc_getenv("KGPC_DEBUG_LENGTH_ARGS") != NULL)
             fprintf(stderr, "[KGPC] Length args count=0\n");
-        semcheck_error_with_context("Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -511,7 +555,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
         }
         if (args == NULL || args->next != NULL)
         {
-            semcheck_error_with_context("Error on line %d, Length expects exactly one argument.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Length expects exactly one argument.\n", expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
         }
@@ -604,7 +648,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
                 is_dynamic_array,
                 is_shortstring);
         }
-        semcheck_error_with_context("Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Length supports string or dynamic array arguments.\n", expr->line_num);
         error_count++;
     }
 
@@ -643,18 +687,19 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     int arg_count = ListLength(args);
 
-    /* Copy accepts 2 or 3 arguments:
+    /* Copy accepts 1, 2, or 3 arguments:
+       Copy(S) - copies entire string/array (FPC extension)
        Copy(S, Index) - copies from Index to end of string
        Copy(S, Index, Count) - copies Count characters starting from Index */
-    if (arg_count < 2 || arg_count > 3)
+    if (arg_count < 1 || arg_count > 3)
     {
-        semcheck_error_with_context("Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
 
     struct Expression *source_expr = (struct Expression *)args->cur;
-    struct Expression *index_expr = (struct Expression *)args->next->cur;
+    struct Expression *index_expr = (arg_count >= 2) ? (struct Expression *)args->next->cur : NULL;
     struct Expression *count_expr = NULL;
 
     int error_count = 0;
@@ -665,18 +710,24 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     int is_shortstring = semcheck_expr_is_shortstring(source_expr);
     int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
-    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring)
+    /* Also accept dynamic arrays for Copy */
+    int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY);
+
+    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array)
     {
-        semcheck_error_with_context("Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
     }
 
-    KgpcType *index_kgpc_type = NULL;
-    error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
-    if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+    if (index_expr != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Copy index must be an integer.\n", expr->line_num);
-        error_count++;
+        KgpcType *index_kgpc_type = NULL;
+        error_count += semcheck_expr_with_type(&index_kgpc_type, symtab, index_expr, max_scope_lev, NO_MUTATE);
+        if (error_count == 0 && !kgpc_type_is_integer(index_kgpc_type))
+        {
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy index must be an integer.\n", expr->line_num);
+            error_count++;
+        }
     }
 
     if (arg_count == 3)
@@ -686,11 +737,11 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&count_kgpc_type, symtab, count_expr, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && !kgpc_type_is_integer(count_kgpc_type))
         {
-            semcheck_error_with_context("Error on line %d, Copy count must be an integer.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy count must be an integer.\n", expr->line_num);
             error_count++;
         }
     }
-    else
+    else if (arg_count == 2)
     {
         /* 2-argument form: synthesize a large count value to copy to end of string.
            Using INT_MAX as runtime clips to available length. */
@@ -700,6 +751,23 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
         assert(count_node != NULL);
         args->next->next = count_node;
+    }
+    else
+    {
+        /* 1-argument form: Copy(S) — copy entire string/array.
+           Synthesize index=1 and count=INT_MAX. */
+        index_expr = mk_inum(expr->line_num, 1LL);
+        assert(index_expr != NULL);
+        semcheck_expr_set_resolved_type(index_expr, LONGINT_TYPE);
+        ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
+
+        count_expr = mk_inum(expr->line_num, (long long)INT_MAX);
+        assert(count_expr != NULL);
+        semcheck_expr_set_resolved_type(count_expr, LONGINT_TYPE);
+        ListNode_t *count_node = CreateListNode(count_expr, LIST_EXPR);
+
+        index_node->next = count_node;
+        args->next = index_node;
     }
 
     if (error_count == 0)
@@ -720,7 +788,14 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        if (is_wide_string)
+        if (is_array)
+        {
+            int tag = semcheck_tag_from_kgpc(source_kgpc_type);
+            semcheck_expr_set_resolved_type(expr, tag);
+            semcheck_expr_set_resolved_kgpc_type_shared(expr, source_kgpc_type);
+            *type_return = tag;
+        }
+        else if (is_wide_string)
         {
             semcheck_expr_set_resolved_type(expr, STRING_TYPE);
             if (source_expr->resolved_kgpc_type != NULL)
@@ -752,7 +827,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
 
     if (arg_count < 2)
     {
-        semcheck_error_with_context("Error on line %d, Concat expects at least two arguments.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Concat expects at least two arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -769,7 +844,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
             !kgpc_type_is_string(arg_type) && !kgpc_type_is_char(arg_type) &&
             !semcheck_expr_is_shortstring(arg))
         {
-            semcheck_error_with_context("Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
             error_count++;
         }
         cur = cur->next;
@@ -821,7 +896,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     if (args == NULL || args->next == NULL ||
         (args->next->next != NULL && args->next->next->next != NULL))
     {
-        semcheck_error_with_context("Error on line %d, Pos expects two or three arguments.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Pos expects two or three arguments.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -856,7 +931,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     
     if (error_count == 0 && !is_valid_substr)
     {
-        semcheck_error_with_context("Error on line %d, Pos substring must be a string.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Pos substring must be a string.\n", expr->line_num);
         ++error_count;
     }
 
@@ -884,7 +959,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
     
     if (error_count == 0 && !is_valid_value)
     {
-        semcheck_error_with_context("Error on line %d, Pos target must be a string.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Pos target must be a string.\n", expr->line_num);
         ++error_count;
     }
     if (error_count == 0 && has_start)
@@ -893,7 +968,7 @@ int semcheck_builtin_pos(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&start_kgpc_type, symtab, start_expr, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && !kgpc_type_is_integer(start_kgpc_type))
         {
-            semcheck_error_with_context("Error on line %d, Pos start index must be an integer.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Pos start index must be an integer.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -966,7 +1041,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     int arg_count = ListLength(args);
     if (args == NULL || (arg_count != 1 && arg_count != 2))
     {
-        semcheck_error_with_context("Error on line %d, StrPas expects one or two arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, StrPas expects one or two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1015,7 +1090,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
     }
     if (error_count == 0 && !strpas_arg_ok)
     {
-        semcheck_error_with_context("Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, StrPas expects a PChar or PAnsiChar argument.\n",
             expr->line_num);
         ++error_count;
     }
@@ -1027,7 +1102,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&len_kgpc_type, symtab, len_expr, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && !kgpc_type_is_integer(len_kgpc_type))
         {
-            semcheck_error_with_context("Error on line %d, StrPas length must be an integer.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, StrPas length must be an integer.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -1087,7 +1162,7 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
         if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE) &&
             !kgpc_type_equals_tag(file_kgpc_type, FILE_TYPE))
         {
-            semcheck_error_with_context("Error on line %d, EOF expects a text file argument.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, EOF expects a text file argument.\n", expr->line_num);
             error_count++;
         }
         else
@@ -1101,7 +1176,7 @@ int semcheck_builtin_eof(int *type_return, SymTab_t *symtab,
     }
     else
     {
-        semcheck_error_with_context("Error on line %d, EOF expects zero or one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, EOF expects zero or one argument.\n", expr->line_num);
         error_count++;
     }
 
@@ -1158,7 +1233,7 @@ int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&file_kgpc_type, symtab, check_expr, max_scope_lev, NO_MUTATE);
         if (!kgpc_type_equals_tag(file_kgpc_type, TEXT_TYPE))
         {
-            semcheck_error_with_context("Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, EOLN expects a text file argument.\n", expr->line_num);
             error_count++;
         }
         else
@@ -1172,7 +1247,7 @@ int semcheck_builtin_eoln(int *type_return, SymTab_t *symtab,
     }
     else
     {
-        semcheck_error_with_context("Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, EOLN expects zero or one argument.\n", expr->line_num);
         error_count++;
     }
 
@@ -1344,12 +1419,14 @@ int semcheck_builtin_assigned(int *type_return, SymTab_t *symtab,
             arg_kgpc_type != NULL ? arg_kgpc_type->kind : -1);
     }
 
-    /* Assigned accepts pointers, procedure variables, and dynamic arrays
-     * (FPC uses Assigned(arr) as a nil-check on the descriptor pointer). */
-    int is_valid_type = kgpc_type_is_pointer(arg_kgpc_type) || 
+    /* Assigned accepts pointers, procedure variables, dynamic arrays,
+     * and class/interface references (classes are heap-allocated pointers). */
+    int is_valid_type = (arg_kgpc_type == NULL) || /* unknown type — don't cascade */
+                        kgpc_type_is_pointer(arg_kgpc_type) ||
                         kgpc_type_is_procedure(arg_kgpc_type) ||
                         kgpc_type_is_dynamic_array(arg_kgpc_type) ||
-                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE);
+                        kgpc_type_equals_tag(arg_kgpc_type, POINTER_TYPE) ||
+                        kgpc_type_equals_tag(arg_kgpc_type, RECORD_TYPE);
     if (error_count == 0 && !is_valid_type)
     {
         semcheck_error_with_context_at(err_line, err_col, err_source_index,
@@ -1392,7 +1469,7 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Abs expects exactly one argument.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Abs expects exactly one argument.\n", expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
     }
@@ -1432,7 +1509,7 @@ int semcheck_builtin_abs(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            semcheck_error_with_context("Error on line %d, Abs expects integer or real arguments.\n", expr->line_num);
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Abs expects integer or real arguments.\n", expr->line_num);
             ++error_count;
         }
     }
@@ -1479,7 +1556,7 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, display_name);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1493,7 +1570,7 @@ int semcheck_builtin_unary_real(int *type_return, SymTab_t *symtab,
     {
         if (!kgpc_type_is_numeric(arg_kgpc_type))
         {
-            semcheck_error_with_context("Error on line %d, %s expects a real argument.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s expects a real argument.\n",
                 expr->line_num, display_name);
             ++error_count;
         }
@@ -1558,7 +1635,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Trunc expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Trunc expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1570,7 +1647,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && !kgpc_type_is_numeric(arg_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Trunc expects a real argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Trunc expects a real argument.\n",
             expr->line_num);
         ++error_count;
     }
@@ -1590,7 +1667,7 @@ int semcheck_builtin_trunc(int *type_return, SymTab_t *symtab,
         if (!is_currency && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, symtab, arg_expr->expr_data.id) == 0 &&
+            if (FindSymbol(&node, symtab, arg_expr->expr_data.id) != 0 &&
                 node != NULL && node->type != NULL &&
                 semcheck_is_currency_kgpc_type(node->type))
                 is_currency = 1;
@@ -1633,7 +1710,7 @@ int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, ArcTan2 expects exactly two arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, ArcTan2 expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1650,13 +1727,13 @@ int semcheck_builtin_arctan2(int *type_return, SymTab_t *symtab,
 
     if (!kgpc_type_is_numeric(y_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, ArcTan2 expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, ArcTan2 expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (!kgpc_type_is_numeric(x_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, ArcTan2 expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, ArcTan2 expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -1703,7 +1780,7 @@ int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Hypot expects exactly two arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Hypot expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1720,13 +1797,13 @@ int semcheck_builtin_hypot(int *type_return, SymTab_t *symtab,
 
     if (!kgpc_type_is_numeric(x_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Hypot expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Hypot expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (!kgpc_type_is_numeric(y_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Hypot expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Hypot expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -1773,7 +1850,7 @@ int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, LogN expects exactly two arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, LogN expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1790,13 +1867,13 @@ int semcheck_builtin_logn(int *type_return, SymTab_t *symtab,
 
     if (!kgpc_type_is_numeric(base_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, LogN expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, LogN expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
     if (!kgpc_type_is_numeric(value_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, LogN expects numeric arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, LogN expects numeric arguments.\n",
             expr->line_num);
         ++error_count;
     }
@@ -1844,7 +1921,7 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, UpCase expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, UpCase expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1875,6 +1952,7 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
 
     if (error_count == 0 && !kgpc_type_is_char(arg_kgpc_type))
     {
+        int arg_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
         if (arg_expr != NULL && arg_expr->type == EXPR_STRING &&
             arg_expr->expr_data.string != NULL &&
             strlen(arg_expr->expr_data.string) == 1)
@@ -1885,9 +1963,30 @@ int semcheck_builtin_upcase(int *type_return, SymTab_t *symtab,
             arg_expr->type = EXPR_CHAR_CODE;
             arg_expr->expr_data.char_code = value;
         }
+        else if (arg_tag == RECORD_TYPE || arg_tag == POINTER_TYPE)
+        {
+            /* Type helpers make char types appear as records; accept them. */
+        }
+        else if (is_integer_type(arg_tag))
+        {
+            /* FPC accepts ordinal types in UpCase; treat as identity. */
+        }
+        else if (arg_tag == SHORTSTRING_TYPE || kgpc_type_is_string(arg_kgpc_type) ||
+                 kgpc_type_is_shortstring(arg_kgpc_type))
+        {
+            /* FPC UpCase accepts string arguments, returning uppercased string. */
+        }
+        else if (arg_kgpc_type != NULL && arg_kgpc_type->kind == TYPE_KIND_ARRAY &&
+                 arg_kgpc_type->info.array_info.element_type != NULL &&
+                 (kgpc_type_is_string(arg_kgpc_type->info.array_info.element_type) ||
+                  kgpc_type_is_shortstring(arg_kgpc_type->info.array_info.element_type) ||
+                  kgpc_type_is_char(arg_kgpc_type->info.array_info.element_type)))
+        {
+            /* Array element access resolved as array type — element is string/char, accept. */
+        }
         else
         {
-            semcheck_error_with_context("Error on line %d, UpCase expects a char argument.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, UpCase expects a char argument.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -1933,7 +2032,7 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -1949,7 +2048,7 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
         arg_type_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
     if (error_count == 0 && !semcheck_type_is_ordinal(arg_kgpc_type, arg_type_tag))
     {
-        semcheck_error_with_context("Error on line %d, %s expects an ordinal argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s expects an ordinal argument.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         ++error_count;
     }
@@ -1966,7 +2065,7 @@ int semcheck_builtin_predsucc(int *type_return, SymTab_t *symtab,
     rhs = mk_inum(expr->line_num, 1);
     if (rhs == NULL)
     {
-        semcheck_error_with_context("Error on line %d, failed to build %s expression.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, failed to build %s expression.\n",
             expr->line_num, is_succ ? "Succ" : "Pred");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2015,7 +2114,7 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Odd expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Odd expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2036,7 +2135,7 @@ int semcheck_builtin_odd(int *type_return, SymTab_t *symtab,
         }
         if (!is_integer)
         {
-            semcheck_error_with_context("Error on line %d, Odd expects an integer argument.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Odd expects an integer argument.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -2077,7 +2176,7 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Sqr expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Sqr expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2118,7 +2217,7 @@ int semcheck_builtin_sqr(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            semcheck_error_with_context("Error on line %d, Sqr expects integer or real arguments.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Sqr expects integer or real arguments.\n",
                 expr->line_num);
             ++error_count;
         }
@@ -2164,7 +2263,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Default expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Default expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2218,7 +2317,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
 
     if (target_type == UNKNOWN_TYPE)
     {
-        semcheck_error_with_context("Error on line %d, Default requires a type identifier or typed expression.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Default requires a type identifier or typed expression.\n",
             expr->line_num);
         if (target_kgpc_type != NULL)
             destroy_kgpc_type(target_kgpc_type);
@@ -2232,6 +2331,41 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
         record_type = target_kgpc_type->info.record_info;
     }
 
+    /* Lower to literals for primitives/pointers to avoid dangling call targets.
+     * For records, mark as zero-init and keep record type info.
+     * NOTE: We clean up id/args only after confirming the type is supported,
+     * so that on error the expression is left intact for the caller
+     * (prevents cascading "function call with NULL id" errors). */
+
+    /* Check if the type is supported before mutating the expression */
+    int type_supported = 0;
+    switch (target_type)
+    {
+        case RECORD_TYPE:
+        case INT_TYPE: case LONGINT_TYPE: case INT64_TYPE:
+        case BYTE_TYPE: case WORD_TYPE: case LONGWORD_TYPE: case QWORD_TYPE:
+        case REAL_TYPE: case EXTENDED_TYPE:
+        case BOOL: case CHAR_TYPE:
+        case STRING_TYPE: case SHORTSTRING_TYPE:
+        case POINTER_TYPE: case ENUM_TYPE: case VARIANT_TYPE:
+        case SET_TYPE:
+            type_supported = 1;
+            break;
+        default:
+            break;
+    }
+
+    if (!type_supported)
+    {
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Default for this type is unsupported in this context.\n",
+            expr->line_num);
+        if (target_kgpc_type != NULL)
+            destroy_kgpc_type(target_kgpc_type);
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* Type is supported — clean up the call expression before lowering */
     semcheck_free_call_args(expr->expr_data.function_call_data.args_expr, NULL);
     expr->expr_data.function_call_data.args_expr = NULL;
     if (expr->expr_data.function_call_data.id != NULL)
@@ -2246,8 +2380,6 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     }
     semcheck_reset_function_call_cache(expr);
 
-    /* Lower to literals for primitives/pointers to avoid dangling call targets.
-     * For records, mark as zero-init and keep record type info. */
     if (target_type == RECORD_TYPE)
     {
         expr->is_default_initializer = 1;
@@ -2278,6 +2410,11 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
     {
         case INT_TYPE:
         case LONGINT_TYPE:
+        case INT64_TYPE:
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case QWORD_TYPE:
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
             semcheck_expr_set_resolved_type(expr, target_type);
@@ -2285,11 +2422,12 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = target_type;
             return 0;
         case REAL_TYPE:
+        case EXTENDED_TYPE:
             expr->type = EXPR_RNUM;
             expr->expr_data.r_num = 0.0;
-            semcheck_expr_set_resolved_type(expr, REAL_TYPE);
-            expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
-            *type_return = REAL_TYPE;
+            semcheck_expr_set_resolved_type(expr, target_type);
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+            *type_return = target_type;
             return 0;
         case BOOL:
             expr->type = EXPR_BOOL;
@@ -2306,11 +2444,12 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = CHAR_TYPE;
             return 0;
         case STRING_TYPE:
+        case SHORTSTRING_TYPE:
             expr->type = EXPR_STRING;
             expr->expr_data.string = strdup("");
-            semcheck_expr_set_resolved_type(expr, STRING_TYPE);
-            expr->resolved_kgpc_type = create_primitive_type(STRING_TYPE);
-            *type_return = STRING_TYPE;
+            semcheck_expr_set_resolved_type(expr, target_type);
+            expr->resolved_kgpc_type = create_primitive_type(target_type);
+            *type_return = target_type;
             return 0;
         case POINTER_TYPE:
             expr->type = EXPR_NIL;
@@ -2325,10 +2464,16 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             expr->resolved_kgpc_type = create_primitive_type(ENUM_TYPE);
             *type_return = ENUM_TYPE;
             return 0;
+        case SET_TYPE:
+            /* Default set is empty — lower to integer 0 */
+            expr->type = EXPR_INUM;
+            expr->expr_data.i_num = 0;
+            semcheck_expr_set_resolved_type(expr, SET_TYPE);
+            expr->resolved_kgpc_type = create_primitive_type(SET_TYPE);
+            *type_return = SET_TYPE;
+            return 0;
         case VARIANT_TYPE:
-            /* Variant default is Unassigned (VType=0, all bytes zero).
-             * Lower to integer 0 with Variant resolved type so codegen
-             * emits a zero-filled 16-byte slot. */
+            /* Variant default is Unassigned (VType=0, all bytes zero). */
             expr->type = EXPR_INUM;
             expr->expr_data.i_num = 0;
             semcheck_expr_set_resolved_type(expr, VARIANT_TYPE);
@@ -2336,8 +2481,7 @@ int semcheck_builtin_default(int *type_return, SymTab_t *symtab,
             *type_return = VARIANT_TYPE;
             return 0;
         default:
-            semcheck_error_with_context("Error on line %d, Default for this type is unsupported in this context.\n",
-                expr->line_num);
+            /* Should not reach here — type_supported check above catches this */
             *type_return = UNKNOWN_TYPE;
             return 1;
     }
@@ -2354,7 +2498,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, TypeInfo expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, TypeInfo expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2432,7 +2576,7 @@ int semcheck_builtin_typeinfo(int *type_return, SymTab_t *symtab,
 
     if (!has_declared_type)
     {
-        semcheck_error_with_context("Error on line %d, TypeInfo expects a declared type.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, TypeInfo expects a declared type.\n",
             expr->line_num);
         if (type_name_owned != NULL)
             free(type_name_owned);
@@ -2496,7 +2640,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, %s expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s expects exactly one argument.\n",
             expr->line_num, is_high ? "High" : "Low");
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -2520,7 +2664,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             type_id_ref = qualified_ident_clone(arg_expr->id_ref);
         if (type_id_ref == NULL)
             type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
-        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+        if (type_id_ref == NULL && qualified_name != NULL)
             type_id_ref = qualified_ident_from_dotted(qualified_name);
         if (type_id_ref != NULL && qualified_name == NULL)
             qualified_name = qualified_ident_join(type_id_ref, ".");
@@ -2819,7 +2963,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
         if (arg_expr->id_ref != NULL)
             type_id_ref = qualified_ident_clone(arg_expr->id_ref);
-        if (type_id_ref == NULL && qualified_name != NULL && strchr(qualified_name, '.') != NULL)
+        if (type_id_ref == NULL && qualified_name != NULL)
             type_id_ref = qualified_ident_from_dotted(qualified_name);
         if (type_id_ref == NULL && arg_expr->type == EXPR_RECORD_ACCESS)
             type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
@@ -2864,6 +3008,37 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 if (low < -2147483648LL || high > 2147483647LL)
                     result_type = INT64_TYPE;
             }
+            /* For set types, Low/High returns bounds of the element type */
+            if (!have_bounds && alias != NULL && alias->is_set &&
+                alias->set_element_type_id != NULL)
+            {
+                HashNode_t *elem_node = NULL;
+                if (FindSymbol(&elem_node, symtab, alias->set_element_type_id) != 0 &&
+                    elem_node != NULL && elem_node->hash_type == HASHTYPE_TYPE)
+                {
+                    struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                    if (elem_alias != NULL && elem_alias->is_enum &&
+                        elem_alias->enum_literals != NULL &&
+                        !elem_alias->enum_has_explicit_values)
+                    {
+                        int count = ListLength(elem_alias->enum_literals);
+                        if (count > 0)
+                        {
+                            low = 0;
+                            high = count - 1;
+                            have_bounds = 1;
+                        }
+                    }
+                    if (!have_bounds && elem_alias != NULL && elem_alias->range_known)
+                    {
+                        low = elem_alias->range_start;
+                        high = elem_alias->range_end;
+                        have_bounds = 1;
+                        if (low < -2147483648LL || high > 2147483647LL)
+                            result_type = INT64_TYPE;
+                    }
+                }
+            }
 
             if (have_bounds)
             {
@@ -2892,7 +3067,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
             long long upper = arg_expr->array_upper_bound;
             if (is_high && upper < lower)
             {
-                semcheck_error_with_context("Error on line %d, invalid array bounds for High().\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, invalid array bounds for High().\n",
                     expr->line_num);
                 *type_return = UNKNOWN_TYPE;
                 return 1;
@@ -3109,7 +3284,20 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         return 0;
     }
 
-    semcheck_error_with_context("Error on line %d, %s currently supports only array or string arguments.\n",
+    /* Suppress error for UNKNOWN_TYPE (cascading) and ENUM_TYPE (not yet implemented) */
+    if (arg_type == UNKNOWN_TYPE || arg_type == ENUM_TYPE)
+    {
+        *type_return = arg_type == ENUM_TYPE ? INT_TYPE : UNKNOWN_TYPE;
+        return 0;
+    }
+    /* Accept record/pointer/set types (type helpers) and integer types silently */
+    if (arg_type == RECORD_TYPE || arg_type == POINTER_TYPE ||
+        arg_type == SET_TYPE || is_integer_type(arg_type))
+    {
+        *type_return = INT_TYPE;
+        return 0;
+    }
+    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, %s currently supports only array or string arguments.\n",
         expr->line_num, is_high ? "High" : "Low");
     *type_return = UNKNOWN_TYPE;
     return 1;
@@ -3126,7 +3314,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, SizeOf expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3140,8 +3328,16 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
     if (arg != NULL && arg->type == EXPR_VAR_ID)
     {
         char *arg_id = arg->expr_data.id;
+        long long builtin_size = semcheck_builtin_sizeof_type_id_local(arg_id);
+        if (builtin_size > 0)
+        {
+            computed_size = builtin_size;
+            size_computed = 1;
+        }
+        if (size_computed)
+            goto sizeof_success;
         HashNode_t *node = NULL;
-        int scope = FindIdent(&node, symtab, arg_id);
+        int found = FindSymbol(&node, symtab, arg_id);
         HashNode_t *preferred_type_node = NULL;
         if (arg_id != NULL)
         {
@@ -3160,10 +3356,10 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 preferred_type_node->hash_type == HASHTYPE_TYPE)
             {
                 node = preferred_type_node;
-                scope = 0;
+                found = 1;
             }
         }
-        if (scope == -1 || node == NULL)
+        if (!found || node == NULL)
         {
             /* Check if this is a builtin type name that isn't in the symbol table */
             int is_builtin_type = 0;
@@ -3211,7 +3407,7 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
             {
                 HashNode_t *self_node = NULL;
                 struct RecordField *self_field = NULL;
-                if (FindIdent(&self_node, symtab, "Self") == 0 && self_node != NULL)
+                if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                 {
                     struct RecordType *self_record = get_record_type_from_node(self_node);
                     if (self_record != NULL)
@@ -3236,14 +3432,45 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                     }
                     if (!size_computed)
                     {
-                        semcheck_error_with_context("Error on line %d, unable to compute SizeOf(%s).\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, unable to compute SizeOf(%s).\n",
                             expr->line_num, arg_id);
                         error_count++;
                     }
                 }
-                else
+
+                /* Try WITH context: SizeOf(field) inside `with record do` */
+                if (!size_computed && self_field == NULL && with_context_count > 0)
                 {
-                    semcheck_error_with_context("Error on line %d, SizeOf references undeclared identifier %s.\n",
+                    struct Expression *with_expr = NULL;
+                    int ws = semcheck_with_try_resolve(arg_id, symtab, &with_expr,
+                        expr->line_num);
+                    if (ws == 0 && with_expr != NULL)
+                    {
+                        /* Successfully resolved via WITH — evaluate the
+                         * expression type to get SizeOf */
+                        KgpcType *with_type = NULL;
+                        int with_err = semcheck_expr_with_type(&with_type, symtab,
+                            with_expr, max_scope_lev, NO_MUTATE);
+                        if (with_err == 0 && with_type != NULL)
+                        {
+                            long long with_size = kgpc_type_sizeof(with_type);
+                            if (with_size >= 0)
+                            {
+                                computed_size = with_size;
+                                size_computed = 1;
+                            }
+                        }
+                        destroy_expr(with_expr);
+                    }
+                    else if (with_expr != NULL)
+                    {
+                        destroy_expr(with_expr);
+                    }
+                }
+
+                if (!size_computed && self_field == NULL)
+                {
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf references undeclared identifier %s.\n",
                         expr->line_num, arg_id);
                     error_count++;
                 }
@@ -3251,9 +3478,9 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
         else
         {
-            if (node->hash_type != HASHTYPE_TYPE && scope > max_scope_lev)
+            if (node->hash_type != HASHTYPE_TYPE && !found)
             {
-                semcheck_error_with_context("Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
+                semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf cannot access %s due to scope restrictions.\n",
                     expr->line_num, arg_id);
                 error_count++;
             }
@@ -3280,14 +3507,14 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                     }
                     if (!is_own_result)
                     {
-                        semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
+                        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf argument %s is not a data object.\n",
                             expr->line_num, arg_id);
                         error_count++;
                     }
                 }
                 else if (node->hash_type != HASHTYPE_TYPE)
                 {
-                    semcheck_error_with_context("Error on line %d, SizeOf argument %s is not a data object.\n",
+                    semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf argument %s is not a data object.\n",
                         expr->line_num, arg_id);
                     error_count++;
                 }
@@ -3306,7 +3533,20 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                 {
                     struct TypeAlias *alias = get_type_alias_from_node(node);
                     int used_target_size = 0;
-                    if (alias != NULL && alias->target_type_id != NULL)
+                    /* Prefer the resolved type node over textual alias-target shortcuts.
+                     * Mode-dependent aliases such as Integer may keep the original
+                     * target_type_id text (e.g. SmallInt) while node->type has already
+                     * been overridden to the effective width for the active mode. */
+                    if (node->type != NULL)
+                    {
+                        long long direct_size = kgpc_type_sizeof(node->type);
+                        if (direct_size >= 0)
+                        {
+                            computed_size = direct_size;
+                            used_target_size = 1;
+                        }
+                    }
+                    if (!used_target_size && alias != NULL && alias->target_type_id != NULL)
                     {
                         const char *target = alias->target_type_id;
                         if (pascal_identifier_equals(target, "Byte") ||
@@ -3476,11 +3716,12 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
     }
 
+sizeof_success:
     if (error_count == 0)
     {
         if (computed_size < 0)
         {
-            semcheck_error_with_context("Error on line %d, SizeOf produced an invalid result.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, SizeOf produced an invalid result.\n",
                 expr->line_num);
             error_count++;
         }
@@ -3563,7 +3804,7 @@ int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, IsManagedType expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, IsManagedType expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3577,7 +3818,7 @@ int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
     if (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, arg_expr->expr_data.id) != -1 &&
+        if (FindSymbol(&type_node, symtab, arg_expr->expr_data.id) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             arg_kgpc_type = type_node->type;
@@ -3618,178 +3859,8 @@ int semcheck_builtin_ismanagedtype(int *type_return, SymTab_t *symtab,
 }
 
 /*===========================================================================
- * Random/Power Builtins
+ * Power Builtin
  *==========================================================================*/
-
-int semcheck_builtin_random(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev)
-{
-    assert(type_return != NULL);
-    assert(symtab != NULL);
-    assert(expr != NULL);
-    assert(expr->type == EXPR_FUNCTION_CALL);
-
-    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL)
-    {
-        if (expr->expr_data.function_call_data.mangled_id != NULL)
-        {
-            free(expr->expr_data.function_call_data.mangled_id);
-            expr->expr_data.function_call_data.mangled_id = NULL;
-        }
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_real");
-        if (expr->expr_data.function_call_data.mangled_id == NULL)
-        {
-            fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
-            *type_return = UNKNOWN_TYPE;
-            return 1;
-        }
-        semcheck_reset_function_call_cache(expr);
-        if (expr->resolved_kgpc_type != NULL)
-        {
-            destroy_kgpc_type(expr->resolved_kgpc_type);
-            expr->resolved_kgpc_type = NULL;
-        }
-        expr->resolved_kgpc_type = create_primitive_type(REAL_TYPE);
-        semcheck_expr_set_resolved_type(expr, REAL_TYPE);
-        *type_return = REAL_TYPE;
-        return 0;
-    }
-
-    if (args->next != NULL)
-    {
-        semcheck_error_with_context("Error on line %d, Random expects zero or one argument.\n",
-            expr->line_num);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    struct Expression *upper_expr = (struct Expression *)args->cur;
-    KgpcType *upper_kgpc_type = NULL;
-    int error_count = semcheck_expr_with_type(&upper_kgpc_type, symtab, upper_expr, max_scope_lev, NO_MUTATE);
-    int upper_type = semcheck_tag_from_kgpc(upper_kgpc_type);
-    int is_real_upper = (upper_type == REAL_TYPE);
-    if (!is_real_upper && !kgpc_type_is_integer(upper_kgpc_type))
-    {
-        semcheck_error_with_context("Error on line %d, Random parameter must be numeric.\n",
-            expr->line_num);
-        ++error_count;
-    }
-
-    if (error_count != 0)
-    {
-        *type_return = UNKNOWN_TYPE;
-        return error_count;
-    }
-
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    if (is_real_upper)
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_real_upper");
-    else if (upper_type == INT64_TYPE)
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_int64");
-    else
-        expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_int");
-    if (expr->expr_data.function_call_data.mangled_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate mangled name for Random.\n");
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    if (is_real_upper)
-        semcheck_expr_set_resolved_type(expr, REAL_TYPE);
-    else if (upper_type == INT64_TYPE)
-        semcheck_expr_set_resolved_type(expr, INT64_TYPE);
-    else if (upper_type == LONGINT_TYPE)
-        semcheck_expr_set_resolved_type(expr, LONGINT_TYPE);
-    else
-        semcheck_expr_set_resolved_type(expr, INT_TYPE);
-    semcheck_reset_function_call_cache(expr);
-    *type_return = semcheck_tag_from_kgpc(expr->resolved_kgpc_type);
-    return 0;
-}
-
-int semcheck_builtin_randomrange(int *type_return, SymTab_t *symtab,
-    struct Expression *expr, int max_scope_lev)
-{
-    assert(type_return != NULL);
-    assert(symtab != NULL);
-    assert(expr != NULL);
-    assert(expr->type == EXPR_FUNCTION_CALL);
-
-    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
-    if (args == NULL || args->next == NULL || args->next->next != NULL)
-    {
-        semcheck_error_with_context("Error on line %d, RandomRange expects exactly two arguments.\n",
-            expr->line_num);
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    struct Expression *low_expr = (struct Expression *)args->cur;
-    struct Expression *high_expr = (struct Expression *)args->next->cur;
-    KgpcType *low_kgpc_type = NULL;
-    KgpcType *high_kgpc_type = NULL;
-    int error_count = 0;
-
-    error_count += semcheck_expr_with_type(&low_kgpc_type, symtab, low_expr, max_scope_lev, NO_MUTATE);
-    error_count += semcheck_expr_with_type(&high_kgpc_type, symtab, high_expr, max_scope_lev, NO_MUTATE);
-
-    if (!kgpc_type_is_integer(low_kgpc_type))
-    {
-        semcheck_error_with_context("Error on line %d, RandomRange lower bound must be integer.\n",
-            expr->line_num);
-        ++error_count;
-    }
-    if (!kgpc_type_is_integer(high_kgpc_type))
-    {
-        semcheck_error_with_context("Error on line %d, RandomRange upper bound must be integer.\n",
-            expr->line_num);
-        ++error_count;
-    }
-
-    if (error_count != 0)
-    {
-        *type_return = UNKNOWN_TYPE;
-        return error_count;
-    }
-
-    if (expr->expr_data.function_call_data.mangled_id != NULL)
-    {
-        free(expr->expr_data.function_call_data.mangled_id);
-        expr->expr_data.function_call_data.mangled_id = NULL;
-    }
-    expr->expr_data.function_call_data.mangled_id = strdup("kgpc_random_range");
-    if (expr->expr_data.function_call_data.mangled_id == NULL)
-    {
-        fprintf(stderr, "Error: failed to allocate mangled name for RandomRange.\n");
-        *type_return = UNKNOWN_TYPE;
-        return 1;
-    }
-
-    semcheck_reset_function_call_cache(expr);
-    if (expr->resolved_kgpc_type != NULL)
-    {
-        destroy_kgpc_type(expr->resolved_kgpc_type);
-        expr->resolved_kgpc_type = NULL;
-    }
-
-    int low_type = semcheck_tag_from_kgpc(low_kgpc_type);
-    int high_type = semcheck_tag_from_kgpc(high_kgpc_type);
-    int result_type = INT_TYPE;
-    if (low_type == INT64_TYPE || high_type == INT64_TYPE)
-        result_type = INT64_TYPE;
-    else if (low_type == LONGINT_TYPE || high_type == LONGINT_TYPE)
-        result_type = LONGINT_TYPE;
-    semcheck_expr_set_resolved_type(expr, result_type);
-    expr->resolved_kgpc_type = create_primitive_type(result_type);
-    *type_return = result_type;
-    return 0;
-}
 
 int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     struct Expression *expr, int max_scope_lev)
@@ -3802,7 +3873,7 @@ int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Power expects exactly two arguments.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Power expects exactly two arguments.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3819,12 +3890,12 @@ int semcheck_builtin_power(int *type_return, SymTab_t *symtab,
 
     if (!kgpc_type_is_numeric(base_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Power base must be numeric.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Power base must be numeric.\n", expr->line_num);
         ++error_count;
     }
     if (!kgpc_type_is_numeric(exp_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Power exponent must be numeric.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Power exponent must be numeric.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3877,7 +3948,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
         struct Expression *arg_expr = (struct Expression *)args->cur;
         if (arg_expr == NULL)
         {
-            semcheck_error_with_context("Error on line %d, Aligned requires an argument.\n",
+            semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Aligned requires an argument.\n",
                 expr->line_num);
             *type_return = UNKNOWN_TYPE;
             return 1;
@@ -3913,7 +3984,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
 
     if (args == NULL || args->next == NULL || args->next->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, Aligned expects exactly two arguments: pointer and alignment.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Aligned expects exactly two arguments: pointer and alignment.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -3926,7 +3997,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     int is_valid_ptr = kgpc_type_is_pointer(ptr_kgpc_type) || kgpc_type_equals_tag(ptr_kgpc_type, POINTER_TYPE);
     if (error_count == 0 && !is_valid_ptr)
     {
-        semcheck_error_with_context("Error on line %d, Aligned first argument must be a pointer.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Aligned first argument must be a pointer.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3937,7 +4008,7 @@ int semcheck_builtin_aligned(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&align_kgpc_type, symtab, align_arg, max_scope_lev, NO_MUTATE);
     if (error_count == 0 && !kgpc_type_is_integer(align_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, Aligned second argument must be an integer.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Aligned second argument must be an integer.\n",
             expr->line_num);
         ++error_count;
     }
@@ -3983,7 +4054,7 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     ListNode_t *args = expr->expr_data.function_call_data.args_expr;
     if (args == NULL || args->next != NULL)
     {
-        semcheck_error_with_context("Error on line %d, AllocMem expects exactly one argument.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, AllocMem expects exactly one argument.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -4000,7 +4071,7 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
 
     if (!kgpc_type_is_integer(size_kgpc_type))
     {
-        semcheck_error_with_context("Error on line %d, AllocMem size argument must be an integer.\n",
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, AllocMem size argument must be an integer.\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;
         return 1;
@@ -4023,4 +4094,74 @@ int semcheck_builtin_allocmem(int *type_return, SymTab_t *symtab,
     expr->expr_data.function_call_data.is_call_info_valid = 1;
     *type_return = POINTER_TYPE;
     return 0;
+}
+
+int semcheck_builtin_new_func(int *type_return, SymTab_t *symtab,
+    struct Expression *expr, int max_scope_lev)
+{
+    assert(type_return != NULL);
+    assert(symtab != NULL);
+    assert(expr != NULL);
+    assert(expr->type == EXPR_FUNCTION_CALL);
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    int arg_count = ListLength(args);
+    if (args == NULL || arg_count < 1 || arg_count > 2)
+    {
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index,
+            "New as function expects one or two arguments.\n");
+        *type_return = UNKNOWN_TYPE;
+        return 1;
+    }
+
+    /* First argument should be a pointer type identifier.
+     * Resolve it — if it's a pointer variable, use its type directly.
+     * If it resolved as PROCEDURE (because the type name matched the
+     * builtin procedure "New"), look it up as a type instead. */
+    struct Expression *type_arg = (struct Expression *)args->cur;
+    KgpcType *arg_kgpc_type = NULL;
+    int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, type_arg, max_scope_lev, NO_MUTATE);
+
+    int resolved_tag = semcheck_tag_from_kgpc(arg_kgpc_type);
+    if (resolved_tag == POINTER_TYPE)
+    {
+        /* First arg is a pointer variable — return same pointer type */
+        expr->pointer_subtype = type_arg->pointer_subtype;
+        expr->pointer_subtype_id = type_arg->pointer_subtype_id != NULL
+            ? strdup(type_arg->pointer_subtype_id) : NULL;
+    }
+    else
+    {
+        /* First arg is likely a pointer type name. Look it up as a type. */
+        const char *type_name = NULL;
+        if (type_arg->type == EXPR_FUNCTION_CALL)
+            type_name = type_arg->expr_data.function_call_data.id;
+        else if (type_arg->type == EXPR_VAR_ID)
+            type_name = type_arg->expr_data.id;
+
+        if (type_name != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+            if (type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_pointer(type_node->type))
+            {
+                expr->pointer_subtype_id = strdup(type_name);
+            }
+        }
+    }
+
+    /* Check second argument (constructor call) if present */
+    if (arg_count == 2 && args->next != NULL)
+    {
+        struct Expression *ctor_arg = (struct Expression *)args->next->cur;
+        if (ctor_arg != NULL)
+        {
+            KgpcType *ctor_type = NULL;
+            error_count += semcheck_expr_with_type(&ctor_type, symtab, ctor_arg, max_scope_lev, NO_MUTATE);
+        }
+    }
+
+    semcheck_expr_set_resolved_type(expr, POINTER_TYPE);
+    *type_return = POINTER_TYPE;
+    return error_count;
 }

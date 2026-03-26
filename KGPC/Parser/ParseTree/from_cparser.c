@@ -27,6 +27,8 @@ static char* strndup(const char* s, size_t n)
 
 #include "from_cparser.h"
 #include "../../string_intern.h"
+#include "../../unit_registry.h"
+#include "../../compilation_context.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
@@ -98,19 +100,48 @@ static const char *g_current_method_name = NULL;
 
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
- * defined in already-loaded units can be resolved when parsing later units. */
+ * defined in already-loaded units can be resolved when parsing later units.
+ * Uses a hash table for O(1) lookup. */
 typedef struct EnumTypeEntry {
     char *name;
     int start;
     int end;
     struct EnumTypeEntry *next;
 } EnumTypeEntry;
-static EnumTypeEntry *g_enum_type_registry = NULL;
+
+#define ENUM_HT_INITIAL_CAPACITY 64
+
+static struct {
+    EnumTypeEntry **buckets;
+    size_t capacity;
+    size_t size;
+} g_enum_ht = {NULL, 0, 0};
+
+/* Reuse the same FNV-1a case-insensitive hash */
+static size_t enum_ht_hash(const char *name, size_t capacity) {
+    size_t h = 2166136261u;
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'A' && c <= 'Z') c += 32;
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h & (capacity - 1);
+}
+
+static void enum_ht_init(void) {
+    if (g_enum_ht.buckets != NULL) return;
+    g_enum_ht.capacity = ENUM_HT_INITIAL_CAPACITY;
+    g_enum_ht.buckets = (EnumTypeEntry **)calloc(g_enum_ht.capacity, sizeof(EnumTypeEntry *));
+    g_enum_ht.size = 0;
+}
 
 static void enum_registry_add(const char *name, int start, int end) {
     if (name == NULL) return;
+    enum_ht_init();
+    size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
     /* Check for existing entry (case-insensitive) */
-    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+    for (EnumTypeEntry *e = g_enum_ht.buckets[idx]; e != NULL; e = e->next) {
         if (strcasecmp(e->name, name) == 0) {
             e->start = start;
             e->end = end;
@@ -122,13 +153,15 @@ static void enum_registry_add(const char *name, int start, int end) {
     entry->name = strdup(name);
     entry->start = start;
     entry->end = end;
-    entry->next = g_enum_type_registry;
-    g_enum_type_registry = entry;
+    entry->next = g_enum_ht.buckets[idx];
+    g_enum_ht.buckets[idx] = entry;
+    g_enum_ht.size++;
 }
 
 static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
-    if (name == NULL) return -1;
-    for (EnumTypeEntry *e = g_enum_type_registry; e != NULL; e = e->next) {
+    if (name == NULL || g_enum_ht.buckets == NULL) return -1;
+    size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
+    for (EnumTypeEntry *e = g_enum_ht.buckets[idx]; e != NULL; e = e->next) {
         if (strcasecmp(e->name, name) == 0) {
             *out_start = e->start;
             *out_end = e->end;
@@ -139,14 +172,20 @@ static int enum_registry_lookup(const char *name, int *out_start, int *out_end) 
 }
 
 static void enum_registry_free(void) {
-    EnumTypeEntry *e = g_enum_type_registry;
-    while (e != NULL) {
-        EnumTypeEntry *next = e->next;
-        free(e->name);
-        free(e);
-        e = next;
+    if (g_enum_ht.buckets == NULL) return;
+    for (size_t i = 0; i < g_enum_ht.capacity; i++) {
+        EnumTypeEntry *e = g_enum_ht.buckets[i];
+        while (e != NULL) {
+            EnumTypeEntry *next = e->next;
+            free(e->name);
+            free(e);
+            e = next;
+        }
     }
-    g_enum_type_registry = NULL;
+    free(g_enum_ht.buckets);
+    g_enum_ht.buckets = NULL;
+    g_enum_ht.capacity = 0;
+    g_enum_ht.size = 0;
 }
 
 /* Forward declaration for const expression evaluator (defined later in the file). */
@@ -399,6 +438,9 @@ typedef struct {
     int is_shortstring;
     int is_open_array;
     ListNode_t *array_dimensions;
+    char *array_dim_start_str;  /* Symbolic lower bound */
+    char *array_dim_end_str;    /* Symbolic upper bound */
+    int array_dims_parsed;
     int is_pointer;
     int pointer_type;
     char *pointer_type_id;
@@ -999,13 +1041,184 @@ typedef struct PendingGenericAlias {
 
 static PendingGenericAlias *g_pending_generic_aliases = NULL;
 static int g_allow_pending_specializations = 0;
+
+/* Deferred inline specializations: when `specialize Foo<T>` appears in
+ * expression context (e.g. `specialize Foo<T>.Method(...)`), we need to
+ * instantiate the generic record and create a type declaration so that
+ * append_generic_method_clones() can emit method implementations. */
+typedef struct DeferredInlineSpec {
+    Tree_t *type_decl;
+    struct DeferredInlineSpec *next;
+} DeferredInlineSpec;
+static DeferredInlineSpec *g_deferred_inline_specs = NULL;
 static ListNode_t *g_const_sections = NULL;
+static ListNode_t *g_const_sections_tail = NULL; /* tail pointer for O(1) append */
+
+/* ---- Hash table for const int cache (replaces linear-search linked list) ---- */
+#define CONST_INT_HT_INITIAL_CAPACITY 256
+#define CONST_INT_HT_LOAD_FACTOR_NUM 3   /* numerator */
+#define CONST_INT_HT_LOAD_FACTOR_DEN 4   /* denominator: grow when size > 3/4 capacity */
+
 typedef struct ConstIntEntry {
     char *name;
     int value;
-    struct ConstIntEntry *next;
+    struct ConstIntEntry *next;  /* chaining for collisions */
 } ConstIntEntry;
-static ConstIntEntry *g_const_ints = NULL;
+
+typedef struct {
+    ConstIntEntry **buckets;
+    size_t capacity;
+    size_t size;
+} ConstIntHashTable;
+
+static ConstIntHashTable g_const_int_ht = {NULL, 0, 0};
+
+static size_t const_int_ht_hash(const char *name, size_t capacity) {
+    /* FNV-1a case-insensitive hash */
+    size_t h = 2166136261u;
+    for (const char *p = name; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c >= 'A' && c <= 'Z') c += 32;
+        h ^= c;
+        h *= 16777619u;
+    }
+    return h & (capacity - 1);  /* capacity is always a power of 2 */
+}
+
+static void const_int_ht_init(void) {
+    if (g_const_int_ht.buckets != NULL) return;
+    g_const_int_ht.capacity = CONST_INT_HT_INITIAL_CAPACITY;
+    g_const_int_ht.buckets = (ConstIntEntry **)calloc(g_const_int_ht.capacity, sizeof(ConstIntEntry *));
+    g_const_int_ht.size = 0;
+}
+
+static void const_int_ht_grow(void) {
+    size_t new_cap = g_const_int_ht.capacity * 2;
+    ConstIntEntry **new_buckets = (ConstIntEntry **)calloc(new_cap, sizeof(ConstIntEntry *));
+    if (new_buckets == NULL) return;
+    for (size_t i = 0; i < g_const_int_ht.capacity; i++) {
+        ConstIntEntry *e = g_const_int_ht.buckets[i];
+        while (e != NULL) {
+            ConstIntEntry *next = e->next;
+            size_t idx = const_int_ht_hash(e->name, new_cap);
+            e->next = new_buckets[idx];
+            new_buckets[idx] = e;
+            e = next;
+        }
+    }
+    free(g_const_int_ht.buckets);
+    g_const_int_ht.buckets = new_buckets;
+    g_const_int_ht.capacity = new_cap;
+}
+
+static void const_int_ht_destroy(void) {
+    if (g_const_int_ht.buckets == NULL) return;
+    for (size_t i = 0; i < g_const_int_ht.capacity; i++) {
+        ConstIntEntry *e = g_const_int_ht.buckets[i];
+        while (e != NULL) {
+            ConstIntEntry *next = e->next;
+            free(e->name);
+            free(e);
+            e = next;
+        }
+    }
+    free(g_const_int_ht.buckets);
+    g_const_int_ht.buckets = NULL;
+    g_const_int_ht.capacity = 0;
+    g_const_int_ht.size = 0;
+}
+
+/* ---- Const-decl AST index: name → value AST node ----
+ * Built when const sections are registered, enables O(1) lookup of const
+ * declaration value nodes instead of recursive AST walking. */
+#define CONST_DECL_INDEX_CAPACITY 512
+
+typedef struct ConstDeclIndexEntry {
+    const char *name;        /* NOT owned - points into AST sym->name */
+    ast_t *value_node;       /* the value expression AST node */
+    ast_t *const_section;    /* which section it came from */
+    struct ConstDeclIndexEntry *next;
+} ConstDeclIndexEntry;
+
+static struct {
+    ConstDeclIndexEntry **buckets;
+    size_t capacity;
+    size_t size;
+} g_const_decl_index = {NULL, 0, 0};
+
+static void const_decl_index_init(void) {
+    if (g_const_decl_index.buckets != NULL) return;
+    g_const_decl_index.capacity = CONST_DECL_INDEX_CAPACITY;
+    g_const_decl_index.buckets = (ConstDeclIndexEntry **)calloc(
+        g_const_decl_index.capacity, sizeof(ConstDeclIndexEntry *));
+    g_const_decl_index.size = 0;
+}
+
+static void const_decl_index_destroy(void) {
+    if (g_const_decl_index.buckets == NULL) return;
+    for (size_t i = 0; i < g_const_decl_index.capacity; i++) {
+        ConstDeclIndexEntry *e = g_const_decl_index.buckets[i];
+        while (e != NULL) {
+            ConstDeclIndexEntry *next = e->next;
+            free(e);
+            e = next;
+        }
+    }
+    free(g_const_decl_index.buckets);
+    g_const_decl_index.buckets = NULL;
+    g_const_decl_index.capacity = 0;
+    g_const_decl_index.size = 0;
+}
+
+/* Insert a const declaration into the index.  Does NOT overwrite existing entries
+ * (first definition wins, matching Pascal semantics). */
+static void const_decl_index_insert(const char *name, ast_t *value_node, ast_t *section) {
+    if (name == NULL || g_const_decl_index.buckets == NULL) return;
+    size_t idx = const_int_ht_hash(name, g_const_decl_index.capacity);
+    /* Check if already present */
+    for (ConstDeclIndexEntry *e = g_const_decl_index.buckets[idx]; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0)
+            return; /* first definition wins */
+    }
+    ConstDeclIndexEntry *e = (ConstDeclIndexEntry *)malloc(sizeof(ConstDeclIndexEntry));
+    if (e == NULL) return;
+    e->name = name;
+    e->value_node = value_node;
+    e->const_section = section;
+    e->next = g_const_decl_index.buckets[idx];
+    g_const_decl_index.buckets[idx] = e;
+    g_const_decl_index.size++;
+}
+
+/* Lookup a const declaration by name. Returns the value AST node or NULL. */
+static ast_t *const_decl_index_lookup(const char *name) {
+    if (name == NULL || g_const_decl_index.buckets == NULL) return NULL;
+    size_t idx = const_int_ht_hash(name, g_const_decl_index.capacity);
+    for (ConstDeclIndexEntry *e = g_const_decl_index.buckets[idx]; e != NULL; e = e->next) {
+        if (strcasecmp(e->name, name) == 0)
+            return e->value_node;
+    }
+    return NULL;
+}
+
+/* Scan a const section and index all CONST_DECL entries.
+ * Walks the AST iteratively (siblings only) to find CONST_DECL nodes. */
+static void const_decl_index_scan_section(ast_t *section) {
+    if (section == NULL) return;
+    const_decl_index_init();
+    for (ast_t *node = section->child; node != NULL; node = node->next) {
+        if (node->typ == PASCAL_T_CONST_DECL) {
+            ast_t *id_node = node->child;
+            if (id_node != NULL && id_node->sym != NULL && id_node->sym->name != NULL) {
+                /* Find the value node (skip optional type spec) */
+                ast_t *value_node = id_node->next;
+                if (value_node != NULL && value_node->typ == PASCAL_T_TYPE_SPEC)
+                    value_node = value_node->next;
+                const_decl_index_insert(id_node->sym->name, value_node, section);
+            }
+        }
+    }
+}
 
 static void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
@@ -1067,6 +1280,14 @@ static void destroy_type_info_contents(TypeInfo *info) {
         destroy_list(info->array_dimensions);
         info->array_dimensions = NULL;
     }
+    if (info->array_dim_start_str != NULL) {
+        free(info->array_dim_start_str);
+        info->array_dim_start_str = NULL;
+    }
+    if (info->array_dim_end_str != NULL) {
+        free(info->array_dim_end_str);
+        info->array_dim_end_str = NULL;
+    }
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
         info->record_type = NULL;
@@ -1089,13 +1310,10 @@ static void reset_const_sections(void) {
     if (g_const_sections != NULL) {
         DestroyList(g_const_sections);
         g_const_sections = NULL;
+        g_const_sections_tail = NULL;
     }
-    while (g_const_ints != NULL) {
-        ConstIntEntry *next = g_const_ints->next;
-        free(g_const_ints->name);
-        free(g_const_ints);
-        g_const_ints = next;
-    }
+    const_int_ht_destroy();
+    const_decl_index_destroy();
 }
 
 static void register_const_section(ast_t *const_section) {
@@ -1108,9 +1326,13 @@ static void register_const_section(ast_t *const_section) {
     ListNode_t *node = CreateListNode(const_section, LIST_UNSPECIFIED);
     if (g_const_sections == NULL) {
         g_const_sections = node;
+        g_const_sections_tail = node;
     } else {
-        PushListNodeBack(g_const_sections, node);
+        g_const_sections_tail->next = node;
+        g_const_sections_tail = node;
     }
+    /* Index const declarations for O(1) lookup */
+    const_decl_index_scan_section(const_section);
 }
 
 static int const_section_is_resourcestring(ast_t *const_section) {
@@ -1178,7 +1400,10 @@ static int resolve_const_expr_from_sections(const char *expr, int *result)
 static int lookup_const_int(const char *name, int *out_value) {
     if (name == NULL || out_value == NULL)
         return -1;
-    for (ConstIntEntry *cur = g_const_ints; cur != NULL; cur = cur->next) {
+    if (g_const_int_ht.buckets == NULL)
+        return -1;
+    size_t idx = const_int_ht_hash(name, g_const_int_ht.capacity);
+    for (ConstIntEntry *cur = g_const_int_ht.buckets[idx]; cur != NULL; cur = cur->next) {
         if (strcasecmp(cur->name, name) == 0) {
             *out_value = cur->value;
             return 0;
@@ -1190,12 +1415,16 @@ static int lookup_const_int(const char *name, int *out_value) {
 static void register_const_int(const char *name, int value) {
     if (name == NULL)
         return;
-    for (ConstIntEntry *cur = g_const_ints; cur != NULL; cur = cur->next) {
+    const_int_ht_init();
+    size_t idx = const_int_ht_hash(name, g_const_int_ht.capacity);
+    /* Check for existing entry */
+    for (ConstIntEntry *cur = g_const_int_ht.buckets[idx]; cur != NULL; cur = cur->next) {
         if (strcasecmp(cur->name, name) == 0) {
             cur->value = value;
             return;
         }
     }
+    /* Insert new entry */
     ConstIntEntry *entry = (ConstIntEntry *)malloc(sizeof(ConstIntEntry));
     if (entry == NULL)
         return;
@@ -1205,8 +1434,13 @@ static void register_const_int(const char *name, int value) {
         return;
     }
     entry->value = value;
-    entry->next = g_const_ints;
-    g_const_ints = entry;
+    entry->next = g_const_int_ht.buckets[idx];
+    g_const_int_ht.buckets[idx] = entry;
+    g_const_int_ht.size++;
+    /* Grow if load factor exceeded */
+    if (g_const_int_ht.size * CONST_INT_HT_LOAD_FACTOR_DEN >
+        g_const_int_ht.capacity * CONST_INT_HT_LOAD_FACTOR_NUM)
+        const_int_ht_grow();
 }
 
 static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
@@ -1257,9 +1491,11 @@ void from_cparser_set_source_offset(int offset)
     g_source_offset = offset;
 }
 
-/* Helper to copy source index from AST node to Expression for accurate error context */
+/* Helper to copy source index from AST node to Expression for accurate error context.
+ * node->index == -1 means the parser position is unknown; preserve that sentinel
+ * rather than producing a bogus global offset (-1 + g_source_offset). */
 static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
-    if (expr != NULL && node != NULL) {
+    if (expr != NULL && node != NULL && node->index >= 0) {
         expr->source_index = node->index + g_source_offset;
     }
     return expr;
@@ -1286,6 +1522,165 @@ static void substitute_generic_identifiers(ast_t *node, char **params, char **ar
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
 static ListNode_t *class_method_bindings = NULL;
+
+/* ---- Class-method hash index (keyed by interned class_name pointer) ----
+ *
+ * The flat class_method_bindings list is O(n) per lookup.  With hundreds
+ * of RTL classes this makes is_method_static / is_method_virtual / … the
+ * dominant cost during compilation.  The hash index maps an interned
+ * class_name to a small chain of ClassMethodBinding pointers for that
+ * class, giving O(1) class lookup + O(k) method scan within the class.
+ *
+ * Because class_name strings are interned (string_intern.h), we can use
+ * pointer identity for hashing and comparison.
+ */
+#define CMB_INDEX_SIZE 512
+
+typedef struct CMBIndexEntry {
+    const char            *class_name;  /* interned pointer – identity key */
+    ClassMethodBinding   **bindings;    /* dynamic array of binding pointers */
+    int                    count;
+    int                    capacity;
+    struct CMBIndexEntry  *next;        /* hash chain */
+} CMBIndexEntry;
+
+static CMBIndexEntry *cmb_index[CMB_INDEX_SIZE];
+
+static unsigned int cmb_ptr_hash(const char *ptr)
+{
+    uintptr_t v = (uintptr_t)ptr;
+    v ^= v >> 16;
+    v *= 0x45d9f3bu;  /* murmurhash3 finalizer constant */
+    v ^= v >> 16;
+    return (unsigned int)(v % CMB_INDEX_SIZE);
+}
+
+static CMBIndexEntry *cmb_index_find(const char *interned_class)
+{
+    unsigned int h = cmb_ptr_hash(interned_class);
+    for (CMBIndexEntry *e = cmb_index[h]; e != NULL; e = e->next)
+        if (e->class_name == interned_class)
+            return e;
+    return NULL;
+}
+
+static CMBIndexEntry *cmb_index_get_or_create(const char *interned_class)
+{
+    unsigned int h = cmb_ptr_hash(interned_class);
+    for (CMBIndexEntry *e = cmb_index[h]; e != NULL; e = e->next)
+        if (e->class_name == interned_class)
+            return e;
+
+    CMBIndexEntry *e = (CMBIndexEntry *)malloc(sizeof(CMBIndexEntry));
+    assert(e != NULL);
+    e->class_name = interned_class;
+    e->count    = 0;
+    e->capacity = 4;
+    e->bindings = (ClassMethodBinding **)malloc(sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+    assert(e->bindings != NULL);
+    e->next = cmb_index[h];
+    cmb_index[h] = e;
+    return e;
+}
+
+static void cmb_index_add(const char *interned_class, ClassMethodBinding *binding)
+{
+    CMBIndexEntry *e = cmb_index_get_or_create(interned_class);
+    if (e->count == e->capacity) {
+        e->capacity *= 2;
+        e->bindings = (ClassMethodBinding **)realloc(e->bindings,
+                        sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+        assert(e->bindings != NULL);
+    }
+    e->bindings[e->count++] = binding;
+}
+
+static void cmb_index_reset(void)
+{
+    for (int i = 0; i < CMB_INDEX_SIZE; i++) {
+        CMBIndexEntry *e = cmb_index[i];
+        while (e != NULL) {
+            CMBIndexEntry *next = e->next;
+            free(e->bindings);
+            free(e);
+            e = next;
+        }
+        cmb_index[i] = NULL;
+    }
+}
+
+/* ---- Method-name index (keyed by interned method_name pointer) ----
+ *
+ * Used by find_class_for_method and from_cparser_find_classes_with_method
+ * which look up by method_name across all classes.
+ */
+#define CMB_METHOD_INDEX_SIZE 512
+
+typedef struct CMBMethodEntry {
+    const char            *method_name;  /* interned pointer – identity key */
+    ClassMethodBinding   **bindings;
+    int                    count;
+    int                    capacity;
+    struct CMBMethodEntry *next;
+} CMBMethodEntry;
+
+static CMBMethodEntry *cmb_method_index[CMB_METHOD_INDEX_SIZE];
+
+static CMBMethodEntry *cmb_method_index_find(const char *interned_method)
+{
+    unsigned int h = cmb_ptr_hash(interned_method);
+    h = h % CMB_METHOD_INDEX_SIZE;
+    for (CMBMethodEntry *e = cmb_method_index[h]; e != NULL; e = e->next)
+        if (e->method_name == interned_method)
+            return e;
+    return NULL;
+}
+
+static CMBMethodEntry *cmb_method_index_get_or_create(const char *interned_method)
+{
+    unsigned int h = cmb_ptr_hash(interned_method);
+    h = h % CMB_METHOD_INDEX_SIZE;
+    for (CMBMethodEntry *e = cmb_method_index[h]; e != NULL; e = e->next)
+        if (e->method_name == interned_method)
+            return e;
+
+    CMBMethodEntry *e = (CMBMethodEntry *)malloc(sizeof(CMBMethodEntry));
+    assert(e != NULL);
+    e->method_name = interned_method;
+    e->count    = 0;
+    e->capacity = 4;
+    e->bindings = (ClassMethodBinding **)malloc(sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+    assert(e->bindings != NULL);
+    e->next = cmb_method_index[h];
+    cmb_method_index[h] = e;
+    return e;
+}
+
+static void cmb_method_index_add(const char *interned_method, ClassMethodBinding *binding)
+{
+    CMBMethodEntry *e = cmb_method_index_get_or_create(interned_method);
+    if (e->count == e->capacity) {
+        e->capacity *= 2;
+        e->bindings = (ClassMethodBinding **)realloc(e->bindings,
+                        sizeof(ClassMethodBinding *) * (size_t)e->capacity);
+        assert(e->bindings != NULL);
+    }
+    e->bindings[e->count++] = binding;
+}
+
+static void cmb_method_index_reset(void)
+{
+    for (int i = 0; i < CMB_METHOD_INDEX_SIZE; i++) {
+        CMBMethodEntry *e = cmb_method_index[i];
+        while (e != NULL) {
+            CMBMethodEntry *next = e->next;
+            free(e->bindings);
+            free(e);
+            e = next;
+        }
+        cmb_method_index[i] = NULL;
+    }
+}
 
 /* Counter for generating unique anonymous method names */
 static int anonymous_method_counter = 0;
@@ -1491,7 +1886,11 @@ static void register_class_method_ex(const char *class_name, const char *method_
 
     node->next = class_method_bindings;
     class_method_bindings = node;
-    
+
+    /* Maintain hash indices for O(1) lookup by class and method name. */
+    cmb_index_add(binding->class_name, binding);
+    cmb_method_index_add(binding->method_name, binding);
+
     if (kgpc_getenv("KGPC_DEBUG_CLASS_METHODS") != NULL) {
         fprintf(stderr,
             "[KGPC] Registered method %s.%s (virtual=%d, override=%d, static=%d, class_method=%d, params=%d, sig=%s)\n",
@@ -1512,14 +1911,13 @@ static const char *find_class_for_method(const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->method_name, method_name) == 0)
-            return binding->class_name;
-        cur = cur->next;
-    }
+    const char *interned = string_intern(method_name);
+    if (interned == NULL)
+        return NULL;
+
+    CMBMethodEntry *me = cmb_method_index_find(interned);
+    if (me != NULL && me->count > 0)
+        return me->bindings[0]->class_name;
     return NULL;
 }
 
@@ -1528,21 +1926,25 @@ static int is_method_static(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
     int has_static = 0;
     int has_instance = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             if (binding->is_static)
                 has_static = 1;
             else
                 has_instance = 1;
         }
-        cur = cur->next;
     }
     if (has_instance)
         return 0;
@@ -1556,16 +1958,21 @@ static int is_method_static_with_signature(const char *class_name, const char *m
     if (param_sig == NULL && param_count < 0)
         return is_method_static(class_name, method_name);
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return is_method_static(class_name, method_name);
+
     int has_static = 0;
     int has_instance = 0;
     int has_match = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             int matches = 0;
             if (param_sig != NULL && binding->param_sig != NULL) {
                 if (strcmp(binding->param_sig, param_sig) == 0)
@@ -1581,7 +1988,6 @@ static int is_method_static_with_signature(const char *class_name, const char *m
                     has_instance = 1;
             }
         }
-        cur = cur->next;
     }
     if (has_match) {
         if (has_instance)
@@ -1601,17 +2007,20 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
 int from_cparser_is_method_class_method(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_class_method)
-                return 1;
-        }
-        cur = cur->next;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn && binding->is_class_method)
+            return 1;
     }
     return 0;
 }
@@ -1623,21 +2032,26 @@ int from_cparser_is_method_class_method(const char *class_name, const char *meth
 int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
         return 0;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return 0;
+
     int found_nonstatic_class = 0;
     int found_instance = 0;
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding->method_name == mn) {
             if (binding->is_class_method && !binding->is_static)
                 found_nonstatic_class = 1;
             else if (!binding->is_class_method)
                 found_instance = 1;
         }
-        cur = cur->next;
     }
     /* If there are mixed overloads (class + instance with same name),
      * don't mark as class method — overload resolution should pick correctly. */
@@ -1655,39 +2069,40 @@ int from_cparser_is_method_virtual(const char *class_name, const char *method_na
     if (class_name == NULL || method_name == NULL)
         return 0;
 
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
     /* Check ALL overloads — return 1 if ANY overload with this name is virtual.
      * Overloaded methods may have both virtual and non-virtual variants
      * (e.g. TEncoding.GetAnsiBytes has virtual abstract + non-virtual overloads). */
     /* First pass: search under exact class name. */
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_virtual || binding->is_override)
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding->method_name == mn &&
+                (binding->is_virtual || binding->is_override))
                 return 1;
         }
-        cur = cur->next;
     }
     /* Second pass: for nested types (e.g., TMarshaller.TDeferBase), methods may have been
      * registered under the unqualified name before renaming. Only try if no exact match. */
     const char *dot = strrchr(class_name, '.');
     if (dot == NULL)
         return 0;
-    const char *unqualified = dot + 1;
-    cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->class_name, unqualified) == 0 &&
-            strcasecmp(binding->method_name, method_name) == 0)
-        {
-            if (binding->is_virtual || binding->is_override)
+    const char *unqualified = string_intern(dot + 1);
+    if (unqualified == NULL)
+        return 0;
+    entry = cmb_index_find(unqualified);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding->method_name == mn &&
+                (binding->is_virtual || binding->is_override))
                 return 1;
         }
-        cur = cur->next;
     }
     return 0;
 }
@@ -1701,42 +2116,50 @@ int from_cparser_is_method_virtual_with_signature(const char *class_name, const 
     if (param_sig == NULL && param_count < 0)
         return from_cparser_is_method_virtual(class_name, method_name);
 
-    /* Helper lambda-like: check bindings for a given class name string. */
-    #define CHECK_BINDINGS_FOR(cname) \
-        do { \
-            ListNode_t *_cur = class_method_bindings; \
-            while (_cur != NULL) { \
-                ClassMethodBinding *_b = (ClassMethodBinding *)_cur->cur; \
-                if (_b != NULL && _b->class_name != NULL && _b->method_name != NULL && \
-                    strcasecmp(_b->class_name, (cname)) == 0 && \
-                    strcasecmp(_b->method_name, method_name) == 0) \
-                { \
-                    int _matches = 0; \
-                    if (param_sig != NULL && _b->param_sig != NULL) { \
-                        if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
-                    } else if (param_count >= 0 && _b->param_count == param_count) { \
-                        _matches = 1; \
-                    } \
-                    if (_matches) { \
-                        has_match = 1; \
-                        if (_b->is_virtual || _b->is_override) has_virtual = 1; \
-                    } \
-                } \
-                _cur = _cur->next; \
-            } \
-        } while (0)
+    const char *mn = string_intern(method_name);
+    if (mn == NULL)
+        return 0;
 
     int has_match = 0;
     int has_virtual = 0;
+
+    /* Helper: check bindings for a given interned class name. */
+    #define CHECK_INDEX_FOR(interned_cname) \
+        do { \
+            CMBIndexEntry *_entry = cmb_index_find(interned_cname); \
+            if (_entry != NULL) { \
+                for (int _i = 0; _i < _entry->count; _i++) { \
+                    ClassMethodBinding *_b = _entry->bindings[_i]; \
+                    if (_b->method_name == mn) { \
+                        int _matches = 0; \
+                        if (param_sig != NULL && _b->param_sig != NULL) { \
+                            if (strcmp(_b->param_sig, param_sig) == 0) _matches = 1; \
+                        } else if (param_count >= 0 && _b->param_count == param_count) { \
+                            _matches = 1; \
+                        } \
+                        if (_matches) { \
+                            has_match = 1; \
+                            if (_b->is_virtual || _b->is_override) has_virtual = 1; \
+                        } \
+                    } \
+                } \
+            } \
+        } while (0)
+
     /* First pass: exact class name. */
-    CHECK_BINDINGS_FOR(class_name);
+    const char *cn = string_intern(class_name);
+    if (cn != NULL)
+        CHECK_INDEX_FOR(cn);
     /* Second pass: unqualified fallback — only if nothing found under exact name. */
     if (!has_match) {
         const char *dot = strrchr(class_name, '.');
-        if (dot != NULL)
-            CHECK_BINDINGS_FOR(dot + 1);
+        if (dot != NULL) {
+            const char *uq = string_intern(dot + 1);
+            if (uq != NULL)
+                CHECK_INDEX_FOR(uq);
+        }
     }
-    #undef CHECK_BINDINGS_FOR
+    #undef CHECK_INDEX_FOR
     if (has_match)
         return has_virtual;
     return 0;
@@ -1747,40 +2170,42 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
     if (count_out != NULL) *count_out = 0;
     if (method_name == NULL) return NULL;
 
+    const char *mn = string_intern(method_name);
+    if (mn == NULL) return NULL;
+
+    CMBMethodEntry *me = cmb_method_index_find(mn);
+    if (me == NULL)
+        return NULL;
+
     ListNode_t *result = NULL;
     int count = 0;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->method_name != NULL &&
-            strcasecmp(binding->method_name, method_name) == 0) {
-            /* Check if we already have this class in the result */
-            ListNode_t *check = result;
-            int found = 0;
-            while (check != NULL) {
-                char *existing_class = (char *)check->cur;
-                if (existing_class != NULL && strcasecmp(existing_class, binding->class_name) == 0) {
-                    found = 1;
-                    break;
-                }
-                check = check->next;
+    for (int i = 0; i < me->count; i++) {
+        ClassMethodBinding *binding = me->bindings[i];
+        if (binding->class_name == NULL) continue;
+        /* Check if we already have this class in the result (pointer comparison). */
+        ListNode_t *check = result;
+        int found = 0;
+        while (check != NULL) {
+            if (check->cur == binding->class_name) {
+                found = 1;
+                break;
             }
-            if (!found && binding->class_name != NULL) {
-                char *class_copy = strdup(binding->class_name);
-                if (class_copy != NULL) {
-                    ListNode_t *node = CreateListNode(class_copy, LIST_UNSPECIFIED);
-                    if (node != NULL) {
-                        node->next = result;
-                        result = node;
-                        count++;
-                    } else {
-                        free(class_copy);
-                    }
+            check = check->next;
+        }
+        if (!found) {
+            char *class_copy = strdup(binding->class_name);
+            if (class_copy != NULL) {
+                ListNode_t *node = CreateListNode(class_copy, LIST_UNSPECIFIED);
+                if (node != NULL) {
+                    node->next = result;
+                    result = node;
+                    count++;
+                } else {
+                    free(class_copy);
                 }
             }
         }
-        cur = cur->next;
     }
 
     if (count_out != NULL) *count_out = count;
@@ -1811,6 +2236,13 @@ static int is_operator_token_name(const char *name)
             strcasecmp(name, "GreaterThanOrEqual") == 0 ||
             strcasecmp(name, "LessThan") == 0 ||
             strcasecmp(name, "LessThanOrEqual") == 0);
+}
+
+/* Tag a function call expression as an operator dispatch if applicable. */
+static void tag_operator_call(struct Expression *expr, int is_operator)
+{
+    if (expr != NULL && is_operator)
+        expr->expr_data.function_call_data.is_operator_call = 1;
 }
 
 /* Encode operator symbols into valid identifier names for assembly */
@@ -1937,27 +2369,29 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
     if (class_name == NULL || methods_out == NULL || count_out == NULL)
         return;
 
+    const char *cn = string_intern(class_name);
+    if (cn == NULL)
+        return;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry == NULL)
+        return;
+
     ListNode_t *head = NULL;
     ListNode_t **tail = &head;
     int count = 0;
 
-    ListNode_t *cur = class_method_bindings;
-    while (cur != NULL) {
-        ClassMethodBinding *binding = (ClassMethodBinding *)cur->cur;
-        if (binding != NULL && binding->class_name != NULL &&
-            strcasecmp(binding->class_name, class_name) == 0) {
-            /* Found a method for this class - create a copy of the list node */
-            ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
-            if (node != NULL) {
-                node->type = LIST_UNSPECIFIED;
-                node->cur = binding;
-                node->next = NULL;
-                *tail = node;
-                tail = &node->next;
-                count++;
-            }
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
+        if (node != NULL) {
+            node->type = LIST_UNSPECIFIED;
+            node->cur = binding;
+            node->next = NULL;
+            *tail = node;
+            tail = &node->next;
+            count++;
         }
-        cur = cur->next;
     }
 
     *methods_out = head;
@@ -2559,7 +2993,7 @@ static void record_generic_method_impl(const char *class_name, const char *metho
             if (template != NULL && template->method_impl_ast == NULL &&
                 strcasecmp(template->name, method_name) == 0)
             {
-                template->method_impl_ast = copy_ast(method_ast);
+                template->method_impl_ast = copy_ast_detached(method_ast);
                 if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL)
                     fprintf(stderr, "[KGPC] recorded method implementation for %s.%s\n", class_name, method_name);
                 break;
@@ -2682,6 +3116,20 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     if (method_template == NULL || method_template->method_impl_ast == NULL || record == NULL)
         return NULL;
 
+    /* Register method bindings for the specialized class name so that
+     * convert_method_impl can look up is_static / is_class_method correctly.
+     * The original bindings are registered under the generic class name,
+     * but the cloned method will have the specialized class name. */
+    if (record->type_id != NULL && method_template->name != NULL)
+    {
+        int param_count = from_cparser_count_params_ast(method_template->params_ast);
+        char *param_sig = param_type_signature_from_params_ast(method_template->params_ast);
+        register_class_method_ex(record->type_id, method_template->name,
+            method_template->is_virtual, method_template->is_override,
+            method_template->is_static, method_template->is_class_method,
+            param_count, param_sig);
+    }
+
     ast_t *method_copy = copy_ast(method_template->method_impl_ast);
     if (method_copy == NULL)
         return NULL;
@@ -2692,7 +3140,16 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
      * so source_index values map to the correct source buffer. */
     int saved_offset = g_source_offset;
     g_source_offset = method_template->source_offset;
+
+    /* Set the current generic context so that generic_registry_is_type_param()
+     * only checks the enclosing generic's type parameters, not all generics. */
+    GenericTypeDecl *saved_context = generic_registry_current_context();
+    generic_registry_set_context(record->generic_decl);
+
     Tree_t *method_tree = convert_method_impl(method_copy);
+
+    generic_registry_set_context(saved_context);
+
     g_source_offset = saved_offset;
 
     free_ast(method_copy);
@@ -2829,6 +3286,65 @@ static void substitute_generic_identifiers(ast_t *node, char **params, char **ar
     }
 }
 
+/* Collect local type names from TYPE_DECL nodes within a subprogram AST.
+ * Only walks children of the root node (not siblings) to avoid picking up
+ * global type declarations from the program tree.
+ * Returns allocated arrays via out params; caller must free. */
+static void collect_local_type_names(ast_t *node, char ***names_out, int *count_out)
+{
+    *names_out = NULL;
+    *count_out = 0;
+    if (node == NULL || node->child == NULL)
+        return;
+
+    int capacity = 4;
+    int count = 0;
+    char **names = (char **)malloc(capacity * sizeof(char *));
+    if (names == NULL)
+        return;
+
+    /* Walk only children of the root (subprogram body), not siblings */
+    ast_t *stack[256];
+    int sp = 0;
+    /* Push only children of root, not root->next */
+    for (ast_t *c = node->child; c != NULL; c = c->next)
+    {
+        if (sp < 256)
+            stack[sp++] = c;
+    }
+
+    while (sp > 0)
+    {
+        ast_t *cur = stack[--sp];
+        if (cur->typ == PASCAL_T_TYPE_DECL)
+        {
+            ast_t *id_node = cur->child;
+            if (id_node != NULL && id_node->typ == PASCAL_T_IDENTIFIER &&
+                id_node->sym != NULL && id_node->sym->name != NULL)
+            {
+                if (count >= capacity)
+                {
+                    capacity *= 2;
+                    char **tmp = (char **)realloc(names, capacity * sizeof(char *));
+                    if (tmp == NULL) break;
+                    names = tmp;
+                }
+                names[count++] = strdup(id_node->sym->name);
+            }
+            /* Don't recurse into type decl children */
+            continue;
+        }
+        if (cur->child != NULL && sp < 256)
+            stack[sp++] = cur->child;
+        /* Follow next for non-root nodes */
+        if (cur->next != NULL && sp < 256)
+            stack[sp++] = cur->next;
+    }
+
+    *names_out = names;
+    *count_out = count;
+}
+
 static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *specialized_name,
     char **params, char **args, int count)
 {
@@ -2845,6 +3361,65 @@ static void rewrite_generic_subprogram_ast(ast_t *subprogram_ast, const char *sp
     }
 
     substitute_generic_identifiers(subprogram_ast, params, args, count);
+
+    /* Strip the generic type parameter list node (PASCAL_T_TYPE_PARAM_LIST)
+     * from the rewritten AST.  The specialization is a concrete subprogram;
+     * leaving the node would cause convert_procedure/convert_function to
+     * re-detect it as a generic template and create a spurious
+     * generic_template_ast (a use-after-free hazard, see issue #478). */
+    {
+        ast_t *prev = NULL;
+        ast_t *node = subprogram_ast->child;
+        while (node != NULL)
+        {
+            if (node->typ == PASCAL_T_TYPE_PARAM_LIST)
+            {
+                /* Unlink the node from the sibling chain. */
+                if (prev == NULL)
+                    subprogram_ast->child = node->next;
+                else
+                    prev->next = node->next;
+                /* Sever the sibling link before freeing: free_ast() follows
+                 * both child and next pointers, and we must not free the
+                 * remaining AST siblings that follow this node. */
+                node->next = NULL;
+                free_ast(node);
+                break;
+            }
+            prev = node;
+            node = node->next;
+        }
+    }
+
+    /* Rename local type declarations so each specialization gets unique names.
+     * E.g., local type "RawT" in Swap<LongInt> becomes "Swap$LongInt.RawT". */
+    char **local_names = NULL;
+    int local_count = 0;
+    collect_local_type_names(subprogram_ast, &local_names, &local_count);
+    if (local_count > 0 && local_names != NULL)
+    {
+        char **renamed = (char **)malloc(local_count * sizeof(char *));
+        if (renamed != NULL)
+        {
+            for (int i = 0; i < local_count; i++)
+            {
+                size_t len = strlen(specialized_name) + 1 + strlen(local_names[i]) + 1;
+                renamed[i] = (char *)malloc(len);
+                if (renamed[i] != NULL)
+                    snprintf(renamed[i], len, "%s$%s", specialized_name, local_names[i]);
+            }
+            substitute_generic_identifiers(subprogram_ast, local_names, renamed, local_count);
+            for (int i = 0; i < local_count; i++)
+                free(renamed[i]);
+            free(renamed);
+        }
+    }
+    if (local_names != NULL)
+    {
+        for (int i = 0; i < local_count; i++)
+            free(local_names[i]);
+        free(local_names);
+    }
 }
 
 static Tree_t *instantiate_generic_subprogram(Tree_t *template,
@@ -2853,6 +3428,8 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     if (template == NULL || arg_types == NULL || arg_count <= 0 ||
         template->tree_data.subprogram_data.generic_template_ast == NULL)
         return NULL;
+
+    assert(template->tree_data.subprogram_data.is_generic_template);
 
     ast_t *ast_copy = copy_ast(template->tree_data.subprogram_data.generic_template_ast);
     if (ast_copy == NULL)
@@ -2878,16 +3455,40 @@ static Tree_t *instantiate_generic_subprogram(Tree_t *template,
     g_source_offset = saved_offset;
     free_ast(ast_copy);
 
-    if (result != NULL && result->tree_data.subprogram_data.generic_type_params != NULL)
+    if (result != NULL)
     {
-        for (int i = 0; i < result->tree_data.subprogram_data.num_generic_type_params; i++)
-            free(result->tree_data.subprogram_data.generic_type_params[i]);
-        free(result->tree_data.subprogram_data.generic_type_params);
-        result->tree_data.subprogram_data.generic_type_params = NULL;
-        result->tree_data.subprogram_data.num_generic_type_params = 0;
+        /* Verify that the specialization has no generic metadata.
+         * rewrite_generic_subprogram_ast() strips TYPE_PARAM_LIST so
+         * convert_procedure/convert_function should not detect any
+         * generic type parameters on the rewritten AST. */
+        assert(result->tree_data.subprogram_data.num_generic_type_params == 0);
+        assert(result->tree_data.subprogram_data.generic_type_params == NULL);
+        assert(!result->tree_data.subprogram_data.is_generic_template);
+        assert(result->tree_data.subprogram_data.generic_template_ast == NULL);
     }
 
     return result;
+}
+
+/* Check if a subprogram ID matches a generic base name.
+ * Handles both exact match ("UnfixArray" == "UnfixArray") and
+ * class-prefixed match ("TMarshal__UnfixArray" ends with "__UnfixArray").
+ * This is needed because specialize calls inside generic record methods
+ * use the short method name (e.g. "UnfixArray$T") while the subprogram
+ * templates carry the class-qualified ID (e.g. "TMarshal__UnfixArray"). */
+static int generic_base_name_matches(Tree_t *sub, const char *base)
+{
+    if (sub == NULL || base == NULL)
+        return 0;
+    /* For class methods, the bare method_name is the relevant identifier */
+    if (sub->tree_data.subprogram_data.method_name != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.method_name, base) == 0)
+        return 1;
+    /* For standalone subprograms, check the id directly */
+    if (sub->tree_data.subprogram_data.id != NULL &&
+        strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+        return 1;
+    return 0;
 }
 
 static void collect_specialize_from_expr(struct Expression *expr, Tree_t *program_tree)
@@ -2909,8 +3510,20 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                 if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                     fprintf(stderr, "[KGPC] specialize expr target=%s base=%s argc=%d\n",
                         target_id, base ? base : "<null>", argc);
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
+                {
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
+                    {
+                        has_unresolved_arg = 1;
+                        break;
+                    }
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
                 {
                     if (cur->type == LIST_TREE && cur->cur != NULL)
                     {
@@ -2918,23 +3531,49 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
                         if (sub->type == TREE_SUBPROGRAM &&
                             sub->tree_data.subprogram_data.id != NULL &&
                             sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
+                            generic_base_name_matches(sub, base))
                         {
                             if (kgpc_getenv("KGPC_DEBUG_GENERIC_SUBPROGRAM") != NULL)
                                 fprintf(stderr, "[KGPC] generic template match %s\n",
                                     sub->tree_data.subprogram_data.id);
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, target_id))
+                            /* Reconstruct proper specialized name with class prefix */
+                            const char *sub_id = sub->tree_data.subprogram_data.id;
+                            const char *spec_name = target_id;
+                            char *constructed_name = NULL;
+                            if (strcasecmp(sub_id, base) != 0)
+                            {
+                                size_t sub_len = strlen(sub_id);
+                                size_t base_len = strlen(base);
+                                size_t prefix_len = sub_len - base_len;
+                                const char *dollar = strchr(target_id, '$');
+                                if (dollar != NULL)
+                                {
+                                    size_t suffix_len = strlen(dollar);
+                                    constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                    if (constructed_name != NULL)
+                                    {
+                                        memcpy(constructed_name, sub_id, prefix_len);
+                                        memcpy(constructed_name + prefix_len, base, base_len);
+                                        memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                        constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                        spec_name = constructed_name;
+                                    }
+                                }
+                            }
+                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
                             {
                                 Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, target_id);
+                                    sub, args, argc, spec_name);
                                 if (specialized != NULL)
                                     append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
                                         specialized);
                             }
+                            free(constructed_name);
                             break;
                         }
                     }
                     cur = cur->next;
+                }
                 }
             }
             if (args != NULL)
@@ -2957,29 +3596,73 @@ static void collect_specialize_from_expr(struct Expression *expr, Tree_t *progra
             if (call_id != NULL &&
                 parse_generic_mangled_id(call_id, &base, &args, &argc))
             {
-                ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
-                while (cur != NULL)
+                /* Skip if any type arg looks like an unresolved type parameter
+                 * (e.g. single uppercase letter "T").  These come from bodies
+                 * of generic record methods that haven't been specialized yet. */
+                int has_unresolved_arg = 0;
+                for (int i = 0; i < argc; ++i)
                 {
-                    if (cur->type == LIST_TREE && cur->cur != NULL)
+                    if (args[i] != NULL && strlen(args[i]) == 1 && isupper((unsigned char)args[i][0]))
                     {
-                        Tree_t *sub = (Tree_t *)cur->cur;
-                        if (sub->type == TREE_SUBPROGRAM &&
-                            sub->tree_data.subprogram_data.id != NULL &&
-                            sub->tree_data.subprogram_data.num_generic_type_params == argc &&
-                            strcasecmp(sub->tree_data.subprogram_data.id, base) == 0)
-                        {
-                            if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, call_id))
-                            {
-                                Tree_t *specialized = instantiate_generic_subprogram(
-                                    sub, args, argc, call_id);
-                                if (specialized != NULL)
-                                    append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
-                                        specialized);
-                            }
-                            break;
-                        }
+                        has_unresolved_arg = 1;
+                        break;
                     }
-                    cur = cur->next;
+                }
+                if (!has_unresolved_arg)
+                {
+                    ListNode_t *cur = program_tree->tree_data.program_data.subprograms;
+                    while (cur != NULL)
+                    {
+                        if (cur->type == LIST_TREE && cur->cur != NULL)
+                        {
+                            Tree_t *sub = (Tree_t *)cur->cur;
+                            if (sub->type == TREE_SUBPROGRAM &&
+                                sub->tree_data.subprogram_data.id != NULL &&
+                                sub->tree_data.subprogram_data.num_generic_type_params == argc &&
+                                generic_base_name_matches(sub, base))
+                            {
+                                /* Build the proper specialized name: if the template has
+                                 * a class prefix (e.g., "TMarshal__UnfixArray") and the
+                                 * call_id is just "UnfixArray$TPtrWrapper", reconstruct
+                                 * to "TMarshal__UnfixArray$TPtrWrapper". */
+                                const char *sub_id = sub->tree_data.subprogram_data.id;
+                                const char *spec_name = call_id;
+                                char *constructed_name = NULL;
+                                if (strcasecmp(sub_id, base) != 0)
+                                {
+                                    /* Template has a prefix: extract it */
+                                    size_t sub_len = strlen(sub_id);
+                                    size_t base_len = strlen(base);
+                                    size_t prefix_len = sub_len - base_len;
+                                    const char *dollar = strchr(call_id, '$');
+                                    if (dollar != NULL)
+                                    {
+                                        size_t suffix_len = strlen(dollar);
+                                        constructed_name = (char *)malloc(prefix_len + base_len + suffix_len + 1);
+                                        if (constructed_name != NULL)
+                                        {
+                                            memcpy(constructed_name, sub_id, prefix_len);
+                                            memcpy(constructed_name + prefix_len, base, base_len);
+                                            memcpy(constructed_name + prefix_len + base_len, dollar, suffix_len);
+                                            constructed_name[prefix_len + base_len + suffix_len] = '\0';
+                                            spec_name = constructed_name;
+                                        }
+                                    }
+                                }
+                                if (!subprogram_list_has_id(program_tree->tree_data.program_data.subprograms, spec_name))
+                                {
+                                    Tree_t *specialized = instantiate_generic_subprogram(
+                                        sub, args, argc, spec_name);
+                                    if (specialized != NULL)
+                                        append_subprogram_node(&program_tree->tree_data.program_data.subprograms,
+                                            specialized);
+                                }
+                                free(constructed_name);
+                                break;
+                            }
+                        }
+                        cur = cur->next;
+                    }
                 }
             }
             if (args != NULL)
@@ -3210,21 +3893,31 @@ void resolve_pending_generic_subprograms(Tree_t *program_tree)
                         sub_tree->tree_data.subprogram_data.id,
                         sub_tree->tree_data.subprogram_data.num_generic_type_params);
                 }
-                collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
+                /* Skip bodies of unresolved generic templates — their expressions
+                 * still contain raw type parameter names (e.g. "T") which would
+                 * produce invalid specializations if matched. */
+                if (sub_tree->tree_data.subprogram_data.generic_type_params == NULL &&
+                    sub_tree->tree_data.subprogram_data.num_generic_type_params == 0)
+                    collect_specialize_from_stmt(sub_tree->tree_data.subprogram_data.statement_list, program_tree);
             }
         }
         sub = sub->next;
     }
 
     collect_specialize_from_stmt(program_tree->tree_data.program_data.body_statement, program_tree);
-    if (program_tree->tree_data.program_data.finalization_statements != NULL)
+    /* Scan unit init/final blocks for generic specializations */
     {
-        ListNode_t *final_node = program_tree->tree_data.program_data.finalization_statements;
-        while (final_node != NULL)
-        {
-            if (final_node->type == LIST_STMT)
-                collect_specialize_from_stmt((struct Statement *)final_node->cur, program_tree);
-            final_node = final_node->next;
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                if (unit_tree->tree_data.unit_data.initialization != NULL)
+                    collect_specialize_from_stmt(unit_tree->tree_data.unit_data.initialization, program_tree);
+                if (unit_tree->tree_data.unit_data.finalization != NULL)
+                    collect_specialize_from_stmt(unit_tree->tree_data.unit_data.finalization, program_tree);
+            }
         }
     }
 }
@@ -3384,7 +4077,7 @@ static void sync_method_impls_from_generic_template(struct RecordType *record)
                 strcasecmp(src_tmpl->name, tmpl->name) == 0 &&
                 src_tmpl->method_impl_ast != NULL)
             {
-                tmpl->method_impl_ast = copy_ast(src_tmpl->method_impl_ast);
+                tmpl->method_impl_ast = copy_ast_detached(src_tmpl->method_impl_ast);
                 break;
             }
         }
@@ -3452,6 +4145,31 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
             fprintf(stderr, "[KGPC] skipping clone for %s (missing templates)\n", record->type_id);
         return;
     }
+
+    /* Skip records whose generic_args are still unresolved type parameters.
+     * E.g. TFoo$T with generic_args=["T"] matching generic_decl params=["T"].
+     * Method clones from these would produce bodies with unresolved type refs. */
+    if (record->generic_decl->type_parameters != NULL)
+    {
+        int all_unresolved = 1;
+        for (int i = 0; i < record->num_generic_args && i < record->generic_decl->num_type_params; ++i)
+        {
+            const char *arg = record->generic_args[i];
+            const char *param = record->generic_decl->type_parameters[i];
+            if (arg == NULL || param == NULL || strcasecmp(arg, param) != 0)
+            {
+                all_unresolved = 0;
+                break;
+            }
+        }
+        if (all_unresolved)
+        {
+            if (kgpc_getenv("KGPC_DEBUG_GENERIC_CLONES") != NULL &&
+                record->type_id != NULL)
+                fprintf(stderr, "[KGPC] skipping clone for %s (unresolved type params)\n", record->type_id);
+            return;
+        }
+    }
     if (record->method_clones_emitted)
         return;
 
@@ -3490,6 +4208,51 @@ static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprogr
     }
     if (appended_any)
         record->method_clones_emitted = 1;
+}
+
+void flush_deferred_inline_specializations(Tree_t *program_tree)
+{
+    DeferredInlineSpec *cur = g_deferred_inline_specs;
+    g_deferred_inline_specs = NULL;
+
+    ListNode_t **type_list = NULL;
+    ListNode_t **subprograms = NULL;
+    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
+        type_list = &program_tree->tree_data.program_data.type_declaration;
+        subprograms = &program_tree->tree_data.program_data.subprograms;
+    } else if (program_tree != NULL && program_tree->type == TREE_UNIT) {
+        type_list = &program_tree->tree_data.unit_data.interface_type_decls;
+        subprograms = &program_tree->tree_data.unit_data.subprograms;
+    }
+
+    if (type_list == NULL) {
+        while (cur != NULL) {
+            DeferredInlineSpec *next = cur->next;
+            if (cur->type_decl != NULL)
+                destroy_tree(cur->type_decl);
+            free(cur);
+            cur = next;
+        }
+        return;
+    }
+
+    while (cur != NULL) {
+        DeferredInlineSpec *next = cur->next;
+        if (cur->type_decl != NULL) {
+            /* Emit method clones for this inline specialization */
+            if (subprograms != NULL)
+                append_specialized_method_clones(cur->type_decl, subprograms);
+            ListNode_t *node = CreateListNode(cur->type_decl, LIST_TREE);
+            if (node != NULL) {
+                node->next = *type_list;
+                *type_list = node;
+            } else {
+                destroy_tree(cur->type_decl);
+            }
+        }
+        free(cur);
+        cur = next;
+    }
 }
 
 void append_generic_method_clones(Tree_t *program_tree)
@@ -4267,7 +5030,7 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, base_type_id) == 0 && type_node != NULL)
+        if (FindSymbol(&type_node, symtab, base_type_id) != 0 && type_node != NULL)
         {
             if (type_node->type != NULL && type_node->type->kind == TYPE_KIND_RECORD)
             {
@@ -5391,6 +6154,50 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
     if (lookup_const_int(identifier, &cached) == 0)
         return cached;
 
+    /* Fast path: use the indexed const-decl map for O(1) lookup.
+     * This replaces the recursive resolve_const_int_in_section walk. */
+    ast_t *indexed_value = const_decl_index_lookup(identifier);
+    if (indexed_value != NULL) {
+        ast_t *value_node = unwrap_pascal_node(indexed_value);
+        if (value_node != NULL && value_node->sym != NULL) {
+            char *endptr;
+            long val = strtol(value_node->sym->name, &endptr, 10);
+            if (*endptr == '\0' && val >= INT_MIN && val <= INT_MAX) {
+                register_const_int(identifier, (int)val);
+                return (int)val;
+            }
+            /* Value is another identifier — resolve recursively */
+            if (value_node->typ == PASCAL_T_IDENTIFIER &&
+                strcasecmp(value_node->sym->name, identifier) != 0) {
+                int resolved = resolve_const_int_from_ast_internal(
+                    value_node->sym->name, const_section, INT_MIN, depth + 1);
+                if (resolved != INT_MIN) {
+                    register_const_int(identifier, resolved);
+                    return resolved;
+                }
+            }
+        } else if (value_node != NULL && value_node->typ == PASCAL_T_NEG &&
+                   value_node->child != NULL) {
+            ast_t *inner = unwrap_pascal_node(value_node->child);
+            if (inner != NULL && inner->sym != NULL) {
+                int resolved = resolve_const_int_from_ast_internal(
+                    inner->sym->name, const_section, INT_MIN, depth + 1);
+                if (resolved != INT_MIN) {
+                    register_const_int(identifier, -resolved);
+                    return -resolved;
+                }
+            }
+        } else if (value_node != NULL) {
+            /* Try evaluating as a const expression (handles +, -, *, etc.) */
+            int eval_result = 0;
+            if (evaluate_const_int_expr(value_node, &eval_result, depth + 1) == 0) {
+                register_const_int(identifier, eval_result);
+                return eval_result;
+            }
+        }
+    }
+
+    /* Slow fallback: recursive AST walk (for const sections not yet indexed) */
     int resolved = INT_MIN;
     int found = 0;
     if (g_const_sections != NULL) {
@@ -5401,12 +6208,17 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
             }
         }
     } else {
+        /* Index this const_section for future O(1) lookups */
+        const_decl_index_scan_section(const_section);
         if (resolve_const_int_in_section(identifier, const_section, &resolved, depth) == 0)
             found = 1;
     }
 
-    if (found)
+    if (found) {
+        /* Cache the resolved value so future lookups are O(1) */
+        register_const_int(identifier, resolved);
         return resolved;
+    }
     return fallback_value; /* Not found */
 }
 
@@ -6105,11 +6917,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (type_info->file_type_id != NULL)
                 type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
         }
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+        if (result == UNKNOWN_TYPE && type_id_out != NULL) {
+            /* map_type_name sets *type_id_out to the bare last component even
+             * for UNKNOWN_TYPE.  Override with the full qualified name so that
+             * unit-qualified references like baseunix.stat are preserved. */
             if (qualified_name != NULL) {
+                free(*type_id_out);
                 *type_id_out = qualified_name;
                 qualified_name = NULL;
-            } else {
+            } else if (*type_id_out == NULL) {
                 *type_id_out = last_dup;
                 last_dup = NULL;
             }
@@ -6136,11 +6952,12 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
             if (type_info->file_type_id != NULL)
                 type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
         }
-        if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+        if (result == UNKNOWN_TYPE && type_id_out != NULL) {
             if (qualified_name != NULL) {
+                free(*type_id_out);
                 *type_id_out = qualified_name;
                 qualified_name = NULL;
-            } else {
+            } else if (*type_id_out == NULL) {
                 *type_id_out = last_dup;
                 last_dup = NULL;
             }
@@ -6170,15 +6987,18 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 if (type_info->file_type_id != NULL)
                     type_info->file_type_ref = type_ref_from_single_name(type_info->file_type_id);
             }
-            if (result == UNKNOWN_TYPE && type_id_out != NULL && *type_id_out == NULL) {
+            if (result == UNKNOWN_TYPE && type_id_out != NULL) {
                 if (qualified_name != NULL) {
+                    free(*type_id_out);
                     *type_id_out = qualified_name;
                     qualified_name = NULL;
-                } else if (dup != NULL) {
-                    *type_id_out = strdup(dup);
-                } else {
-                    *type_id_out = last_dup;
-                    last_dup = NULL;
+                } else if (*type_id_out == NULL) {
+                    if (dup != NULL)
+                        *type_id_out = strdup(dup);
+                    else {
+                        *type_id_out = last_dup;
+                        last_dup = NULL;
+                    }
                 }
             }
             free(qualified_name);
@@ -6220,6 +7040,8 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                 snprintf(buffer, sizeof(buffer), "0..%d", size_val);
                 list_builder_append(&dims_builder, strdup(buffer), LIST_STRING);
                 type_info->array_dimensions = list_builder_finish(&dims_builder);
+                /* Numeric bounds are in type_info->start/end; no symbolic strings needed */
+                type_info->array_dims_parsed = 1;
             }
 
             free(dup);
@@ -6465,6 +7287,10 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                                 end_val = atoi(upper_str);
                             type_info->start = start_val;
                             type_info->end = end_val;
+                            /* Store structured bounds for semcheck */
+                            type_info->array_dim_start_str = strdup(lower_str);
+                            type_info->array_dim_end_str = strdup(upper_str);
+                            type_info->array_dims_parsed = 1;
                         }
                         char buffer[128];
                         snprintf(buffer, sizeof(buffer), "%s..%s", lower_str, upper_str);
@@ -7229,7 +8055,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
-                            if (symtab != NULL && FindIdent(&type_node, symtab, ret_type_name) != -1 && 
+                            if (symtab != NULL && FindSymbol(&type_node, symtab, ret_type_name) != 0 && 
                                 type_node != NULL && type_node->type != NULL) {
                                 return_type = type_node->type;
                             }
@@ -7393,6 +8219,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
            cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_SET &&
+           cursor->typ != PASCAL_T_POINTER_TYPE &&
+           cursor->typ != PASCAL_T_ENUMERATED_TYPE &&
            cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
@@ -7460,13 +8289,25 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
-            field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
-            field_desc->array_element_record = field_info.record_type;
-            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
-            field_info.element_type_id = NULL;  /* Ownership transferred */
+            /* For multi-name fields (e.g. a, b: array[0..1] of T),
+             * duplicate shared resources; transfer ownership only for the last name. */
+            if (name_node->next == NULL)
+            {
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_info.element_type_id = NULL;
+                field_desc->array_element_record = field_info.record_type;
+                field_info.record_type = NULL;
+            }
+            else
+            {
+                field_desc->array_element_type_id =
+                    field_info.element_type_id ? strdup(field_info.element_type_id) : NULL;
+                field_desc->array_element_record =
+                    field_info.record_type ? clone_record_type(field_info.record_type) : NULL;
+            }
             /* Transfer pre-built element KgpcType for nested arrays */
             if (field_info.element_kgpc_type != NULL)
             {
@@ -8007,45 +8848,137 @@ static void annotate_method_template(struct MethodTemplate *method_template, ast
     }
 }
 
+static int extract_interface_delegation_info(ast_t *method_decl_node,
+    char **iface_name_out, char **iface_method_out, char **target_name_out)
+{
+    if (iface_name_out != NULL)
+        *iface_name_out = NULL;
+    if (iface_method_out != NULL)
+        *iface_method_out = NULL;
+    if (target_name_out != NULL)
+        *target_name_out = NULL;
+    if (method_decl_node == NULL)
+        return 0;
+
+    ast_t *significant[3] = {0};
+    int count = 0;
+    for (ast_t *cur = method_decl_node->child; cur != NULL; cur = cur->next)
+    {
+        ast_t *node = unwrap_pascal_node(cur);
+        if (node == NULL)
+            node = cur;
+        if (node == NULL)
+            continue;
+
+        if (node->typ == PASCAL_T_PARAM_LIST || node->typ == PASCAL_T_PARAM ||
+            node->typ == PASCAL_T_RETURN_TYPE || node->typ == PASCAL_T_METHOD_DIRECTIVE)
+            return 0;
+
+        if (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_QUALIFIED_IDENTIFIER ||
+            (node->typ == PASCAL_T_NONE && node->child != NULL))
+        {
+            if (count >= 3)
+                return 0;
+            significant[count++] = node;
+        }
+    }
+
+    if (count != 3)
+        return 0;
+
+    QualifiedIdent *iface_qid = qualified_ident_from_ast(significant[0]);
+    QualifiedIdent *target_qid = qualified_ident_from_ast(significant[2]);
+    char *iface_name = iface_qid != NULL ? qualified_ident_join(iface_qid, ".") : dup_symbol(significant[0]);
+    char *iface_method = dup_symbol(significant[1]);
+    char *target_name = NULL;
+    if (target_qid != NULL)
+    {
+        const char *last = qualified_ident_last(target_qid);
+        if (last != NULL)
+            target_name = strdup(last);
+    }
+    if (target_name == NULL)
+        target_name = dup_symbol(significant[2]);
+    if (iface_qid != NULL)
+        qualified_ident_free(iface_qid);
+    if (target_qid != NULL)
+        qualified_ident_free(target_qid);
+
+    if (iface_name == NULL || iface_method == NULL || target_name == NULL)
+    {
+        free(iface_name);
+        free(iface_method);
+        free(target_name);
+        return 0;
+    }
+
+    if (iface_name_out != NULL)
+        *iface_name_out = iface_name;
+    else
+        free(iface_name);
+    if (iface_method_out != NULL)
+        *iface_method_out = iface_method;
+    else
+        free(iface_method);
+    if (target_name_out != NULL)
+        *target_name_out = target_name;
+    else
+        free(target_name);
+    return 1;
+}
+
 static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 {
     if (method_decl_node == NULL)
-        return NULL;
-
-    ast_t *name_node = method_decl_node->child;
-    while (name_node != NULL)
-    {
-        if (name_node->typ == PASCAL_T_IDENTIFIER)
-        {
-            const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
-            if (sym_name != NULL &&
-                (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
-            {
-                name_node = name_node->next;
-                continue;
-            }
-            break;
-        }
-        name_node = name_node->next;
-    }
-    if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
         return NULL;
 
     struct MethodTemplate *template = (struct MethodTemplate *)calloc(1, sizeof(struct MethodTemplate));
     if (template == NULL)
         return NULL;
 
-    template->name = strdup(name_node->sym->name);
-    if (template->name == NULL)
+    if (!extract_interface_delegation_info(method_decl_node,
+            &template->delegated_interface_name, &template->name,
+            &template->delegated_target_name))
     {
-        free(template);
-        return NULL;
+        ast_t *name_node = method_decl_node->child;
+        while (name_node != NULL)
+        {
+            if (name_node->typ == PASCAL_T_IDENTIFIER)
+            {
+                const char *sym_name = name_node->sym != NULL ? name_node->sym->name : NULL;
+                if (sym_name != NULL &&
+                    (is_method_decl_keyword(sym_name) || strcasecmp(sym_name, "generic") == 0))
+                {
+                    name_node = name_node->next;
+                    continue;
+                }
+                break;
+            }
+            name_node = name_node->next;
+        }
+        if (name_node == NULL || name_node->sym == NULL || name_node->sym->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+        template->name = strdup(name_node->sym->name);
+        if (template->name == NULL)
+        {
+            free(template);
+            return NULL;
+        }
+    }
+    else
+    {
+        template->is_interface_delegation = 1;
     }
 
-    template->method_ast = copy_ast(method_decl_node);
+    template->method_ast = copy_ast_detached(method_decl_node);
     if (template->method_ast == NULL)
     {
         free(template->name);
+        free(template->delegated_interface_name);
+        free(template->delegated_target_name);
         free(template);
         return NULL;
     }
@@ -8062,10 +8995,6 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
         return;
     if (template->name != NULL)
         free(template->name);
-    if (template->method_ast != NULL)
-        free_ast(template->method_ast);
-    if (template->method_impl_ast != NULL)
-        free_ast(template->method_impl_ast);
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);
@@ -8142,7 +9071,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                             if (template != NULL)
                             {
                                 template->is_class_method = 1;
-                                {
+                                if (!template->is_interface_delegation) {
                                     int param_count = from_cparser_count_params_ast(template->params_ast);
                                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                                     register_class_method_ex(class_name, template->name,
@@ -8234,7 +9163,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
                     fprintf(stderr, "[KGPC] captured template %s.%s\n",
                         class_name != NULL ? class_name : "<unknown>", template->name);
 
-                {
+                if (!template->is_interface_delegation) {
                     int param_count = from_cparser_count_params_ast(template->params_ast);
                     char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                     register_class_method_ex(class_name, template->name,
@@ -8307,13 +9236,24 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     char *parent_class_name = NULL;
     ast_t *body_start = class_node->child;
 
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
+    }
+
     if (body_start != NULL && body_start->typ == PASCAL_T_IDENTIFIER) {
         // First child is parent class name, extract it
-        if (body_start->sym != NULL && body_start->sym->name != NULL) {
+        if (body_start->sym != NULL && body_start->sym->name != NULL)
             parent_class_name = strdup(body_start->sym->name);
-        }
         // Move to the actual class body (next sibling)
         body_start = body_start->next;
+    }
+
+    while (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
+        body_start->child != NULL && body_start->next == NULL)
+    {
+        body_start = body_start->child;
     }
 
     /* Collect additional IDENTIFIER siblings as interface names */
@@ -8342,6 +9282,22 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
         } else {
             fprintf(stderr, "[KGPC]   body_start is NULL\n");
         }
+        if (class_name != NULL &&
+            (strcasecmp(class_name, "TList") == 0 ||
+             strcasecmp(class_name, "TStringList") == 0 ||
+             strcasecmp(class_name, "TComponent") == 0 ||
+             strcasecmp(class_name, "TInterfaceList") == 0)) {
+            ast_t *raw = class_node->child;
+            int idx = 0;
+            while (raw != NULL && idx < 12) {
+                fprintf(stderr, "[KGPC]   raw[%d] typ=%d name=%s child=%p next=%p\n",
+                    idx, raw->typ,
+                    (raw->sym && raw->sym->name) ? raw->sym->name : "<null>",
+                    (void *)raw->child, (void *)raw->next);
+                raw = raw->next;
+                idx++;
+            }
+        }
         /* Debug: show additional parent identifiers (interfaces) */
         ast_t *dbg = body_start;
         while (dbg != NULL && dbg->typ == PASCAL_T_IDENTIFIER) {
@@ -8349,12 +9305,6 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
                 (dbg->sym && dbg->sym->name) ? dbg->sym->name : "<null>", dbg->typ);
             dbg = dbg->next;
         }
-    }
-
-    if (body_start != NULL && body_start->typ == PASCAL_T_NONE &&
-        body_start->child != NULL && body_start->next == NULL)
-    {
-        body_start = body_start->child;
     }
 
     collect_class_members(body_start, class_name, &field_builder, &property_builder,
@@ -8388,6 +9338,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
     record->type_id = class_name != NULL ? strdup(class_name) : NULL;
+    record->outer_type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
     record->generic_decl = NULL;
@@ -8481,8 +9432,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
         /* Extract GUID string from inside the GUID node if available */
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
                 break;
@@ -8512,8 +9464,9 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
     if (body_start != NULL && body_start->typ == PASCAL_T_INTERFACE_GUID) {
         ast_t *guid_child = body_start->child;
         while (guid_child != NULL && !has_guid) {
-            if (guid_child->typ == PASCAL_T_STRING && guid_child->sym != NULL &&
-                guid_child->sym->name != NULL) {
+            if ((guid_child->typ == PASCAL_T_STRING ||
+                 guid_child->typ == PASCAL_T_IDENTIFIER) &&
+                guid_child->sym != NULL && guid_child->sym->name != NULL) {
                 free(guid_string);
                 guid_string = strdup(guid_child->sym->name);
                 has_guid = parse_guid_literal(guid_child->sym->name, &guid_d1, &guid_d2, &guid_d3, guid_d4);
@@ -8651,7 +9604,10 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
 
     while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC &&
            cursor->typ != PASCAL_T_RECORD_TYPE && cursor->typ != PASCAL_T_OBJECT_TYPE &&
-           cursor->typ != PASCAL_T_IDENTIFIER &&
+           cursor->typ != PASCAL_T_IDENTIFIER && cursor->typ != PASCAL_T_ARRAY_TYPE &&
+           cursor->typ != PASCAL_T_SET &&
+           cursor->typ != PASCAL_T_POINTER_TYPE &&
+           cursor->typ != PASCAL_T_ENUMERATED_TYPE &&
            cursor->typ != PASCAL_T_FILE_TYPE &&
            cursor->typ != PASCAL_T_PROCEDURE_TYPE &&
            cursor->typ != PASCAL_T_FUNCTION_TYPE &&
@@ -8737,13 +9693,25 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
             field_desc->array_element_type = field_info.element_type;
-            field_desc->array_element_type_id = field_info.element_type_id;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
-            field_desc->array_element_record = field_info.record_type;
-            field_info.record_type = NULL;  /* Ownership transferred */
             field_desc->array_is_open = field_info.is_open_array;
-            field_info.element_type_id = NULL;
+            /* For multi-name fields (e.g. a, b: array[0..1] of T),
+             * duplicate shared resources; transfer ownership only for the last name. */
+            if (name_node->next == NULL)
+            {
+                field_desc->array_element_type_id = field_info.element_type_id;
+                field_info.element_type_id = NULL;
+                field_desc->array_element_record = field_info.record_type;
+                field_info.record_type = NULL;
+            }
+            else
+            {
+                field_desc->array_element_type_id =
+                    field_info.element_type_id ? strdup(field_info.element_type_id) : NULL;
+                field_desc->array_element_record =
+                    field_info.record_type ? clone_record_type(field_info.record_type) : NULL;
+            }
             /* Transfer pre-built element KgpcType for nested arrays */
             if (field_info.element_kgpc_type != NULL)
             {
@@ -9247,6 +10215,7 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     record->helper_base_type_id = NULL;
     record->helper_parent_id = NULL;
     record->type_id = NULL;
+    record->outer_type_id = NULL;
     record->has_cached_size = 0;
     record->cached_size = 0;
     record->generic_decl = NULL;
@@ -10381,9 +11350,21 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             return -1;
         }
     } else if (tuple_node->typ != PASCAL_T_TUPLE) {
-        fprintf(stderr, "ERROR: Const array %s must use tuple syntax for its initializer.\n",
-                *id_ptr);
-        return -1;
+        /* Single-element parenthesized initializer: (nil), (0), (expr), etc.
+         * The parser parses (expr) as a parenthesized expression rather than
+         * a 1-element tuple, so wrap the value into a synthetic TUPLE node. */
+        ast_t *wrapper = new_ast();
+        wrapper->typ = PASCAL_T_TUPLE;
+        wrapper->child = tuple_node;
+        wrapper->next = NULL;
+        /* Detach from any sibling chain so iteration sees exactly 1 element */
+        ast_t *saved_next = tuple_node->next;
+        tuple_node->next = NULL;
+        tuple_node = wrapper;
+        /* Note: wrapper is a small allocation; it is not freed here because
+         * the AST is freed in bulk after translation.  saved_next is unused
+         * since single-element array consts only have one value. */
+        (void)saved_next;
     }
 
     int start = type_info->start;
@@ -11788,7 +12769,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     method_ast->typ == PASCAL_T_DESTRUCTOR_DECL)) {
                     struct MethodTemplate *template = create_method_template(method_ast);
                     if (template != NULL) {
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
@@ -11818,7 +12799,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
                     {
                         if (template->is_class_method)
                             template->is_static = 1;
-                        {
+                        if (!template->is_interface_delegation) {
                             int param_count = from_cparser_count_params_ast(template->params_ast);
                             char *param_sig = param_type_signature_from_params_ast(template->params_ast);
                             register_class_method_ex(id, template->name,
@@ -11892,6 +12873,13 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
         if (type_info.array_dimensions != NULL) {
             alias->array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;
+        }
+        if (type_info.array_dims_parsed) {
+            alias->array_dim_start_str = type_info.array_dim_start_str;
+            alias->array_dim_end_str = type_info.array_dim_end_str;
+            alias->array_dims_parsed = 1;
+            type_info.array_dim_start_str = NULL;
+            type_info.array_dim_end_str = NULL;
         }
         if (type_info.type_ref != NULL) {
             type_ref_free(alias->target_type_ref);
@@ -12117,7 +13105,7 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     decl->tree_data.type_decl_data.info.generic.num_type_params = param_count;
     decl->tree_data.type_decl_data.info.generic.original_ast = NULL;
     if (type_spec_node != NULL)
-        decl->tree_data.type_decl_data.info.generic.original_ast = copy_ast(type_spec_node);
+        decl->tree_data.type_decl_data.info.generic.original_ast = copy_ast_detached(type_spec_node);
     decl->tree_data.type_decl_data.info.generic.record_template = record_template;
 
     /* Register the generic declaration for future specialization */
@@ -12465,7 +13453,7 @@ static void qualify_param_type_id(char **type_id, struct TypeRef **type_ref,
             continue;
         snprintf(qualified, len, "%s.%s", owner, *type_id);
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, qualified) >= 0 &&
+        if (FindSymbol(&node, symtab, qualified) != 0 &&
             node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
             free(qualified);
@@ -12510,6 +13498,23 @@ static void rewrite_class_const_expr_nested_types(struct Expression *expr,
     switch (expr->type) {
         case EXPR_FUNCTION_CALL: {
             const char *func_id = expr->expr_data.function_call_data.id;
+            /* A function call whose id matches a nested type is really a typecast
+               (e.g. Node(nil^) where Node is a nested record type).  Qualify
+               the id so the semantic checker can resolve it. */
+            if (func_id != NULL &&
+                type_name_exists_in_sections(func_id, nested_type_sections))
+            {
+                size_t olen = strlen(owner_id);
+                size_t flen = strlen(func_id);
+                char *qualified = (char *)malloc(olen + 1 + flen + 1);
+                if (qualified != NULL)
+                {
+                    snprintf(qualified, olen + 1 + flen + 1, "%s.%s", owner_id, func_id);
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = qualified;
+                    func_id = qualified;
+                }
+            }
             int is_type_intrinsic = func_id != NULL &&
                 (pascal_identifier_equals(func_id, "SizeOf") ||
                  pascal_identifier_equals(func_id, "TypeInfo") ||
@@ -13480,6 +14485,11 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                         snprintf(qualified_id, len, "%s.%s", parent_type_name, orig_id);
                         free(orig_id);
                         decl->tree_data.type_decl_data.id = qualified_id;
+                        /* Set outer_type_id on record types for nested type qualification */
+                        if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                            decl->tree_data.type_decl_data.info.record != NULL &&
+                            decl->tree_data.type_decl_data.info.record->outer_type_id == NULL)
+                            decl->tree_data.type_decl_data.info.record->outer_type_id = strdup(parent_type_name);
                     }
                     /* Also qualify pointer_type_id for pointer aliases referencing
                      * sibling types in the same nested scope */
@@ -13549,6 +14559,8 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
                     {
                         free(decl->tree_data.type_decl_data.info.record->type_id);
                         decl->tree_data.type_decl_data.info.record->type_id = strdup(qualified_id);
+                        if (decl->tree_data.type_decl_data.info.record->outer_type_id == NULL)
+                            decl->tree_data.type_decl_data.info.record->outer_type_id = strdup(parent_type_name);
                         qualify_record_field_nested_types(decl->tree_data.type_decl_data.info.record,
                             parent_type_name, type_section);
                         if (decl->tree_data.type_decl_data.info.record->parent_class_name != NULL &&
@@ -13968,6 +14980,66 @@ static struct Expression *convert_factor(ast_t *expr_node) {
             char *specialized_name = mangle_specialized_name_from_list(base_name, type_args);
             if (specialized_name == NULL && base_name != NULL)
                 specialized_name = strdup(base_name);
+
+            /* Trigger generic instantiation for inline specialize in expression
+             * context — but only if this specialization hasn't already been
+             * registered by the normal type-declaration pipeline. */
+            if (base_name != NULL && type_args != NULL) {
+                /* Skip inline spec creation if any type arg is itself a
+                 * generic type parameter (e.g. specialize T<T> inside a
+                 * generic method body — not a concrete specialization). */
+                int has_type_param_arg = 0;
+                if (generic_registry_current_context() != NULL) {
+                    for (ListNode_t *a = type_args; a != NULL; a = a->next) {
+                        if (a->type == LIST_STRING && a->cur != NULL &&
+                            generic_registry_is_type_param((const char *)a->cur)) {
+                            has_type_param_arg = 1;
+                            break;
+                        }
+                    }
+                }
+                if (has_type_param_arg) goto skip_inline_spec;
+
+                ListNode_t *args_copy = NULL;
+                ListNode_t *args_tail = NULL;
+                for (ListNode_t *a = type_args; a != NULL; a = a->next) {
+                    if (a->type == LIST_STRING && a->cur != NULL) {
+                        ListNode_t *n = CreateListNode(strdup((char *)a->cur), LIST_STRING);
+                        if (n != NULL) {
+                            if (args_tail != NULL) { args_tail->next = n; args_tail = n; }
+                            else { args_copy = n; args_tail = n; }
+                        }
+                    }
+                }
+                if (args_copy != NULL) {
+                    char *inst_name = NULL;
+                    struct RecordType *record = instantiate_generic_record(
+                        base_name, args_copy, &inst_name);
+                    if (record != NULL) {
+                        char *rec_id = inst_name != NULL ? strdup(inst_name) : strdup(specialized_name);
+                        Tree_t *type_decl = mk_record_type(expr_node->line, rec_id, record);
+                        if (type_decl != NULL) {
+                            DeferredInlineSpec *entry = (DeferredInlineSpec *)calloc(1, sizeof(DeferredInlineSpec));
+                            if (entry != NULL) {
+                                entry->type_decl = type_decl;
+                                entry->next = g_deferred_inline_specs;
+                                g_deferred_inline_specs = entry;
+                            } else {
+                                destroy_tree(type_decl);
+                            }
+                        }
+                    }
+                    /* args_copy ownership: instantiate_generic_record takes ownership
+                     * on success (it stores args in the record); on failure it may or
+                     * may not have freed them, but we can safely destroy_list a NULL. */
+                    if (record == NULL)
+                        destroy_list(args_copy);
+                    if (inst_name != NULL)
+                        free(inst_name);
+                }
+                skip_inline_spec: ;
+            }
+
             if (type_args != NULL)
                 destroy_list(type_args);
             if (base_name != NULL)
@@ -14016,6 +15088,7 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 if (base_expr != NULL)
                     args = PushListNodeFront(args, CreateListNode(base_expr, LIST_EXPR));
                 struct Expression *call_expr = mk_functioncall(expr_node->line, method_id, args);
+                tag_operator_call(call_expr, is_operator_token_name(method_id));
                 if (call_expr != NULL)
                 {
                     call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
@@ -14095,10 +15168,12 @@ static struct Expression *convert_factor(ast_t *expr_node) {
                 }
             }
         }
+        int is_bare_inherited = 0;
         if (id == NULL && saw_inherited && g_current_method_name != NULL) {
             /* cparser encodes bare "inherited" as FUNC_CALL with an empty child node.
              * In method bodies, that means "inherited <current-method-name>". */
             id = strdup(g_current_method_name);
+            is_bare_inherited = 1;
         }
         if (saw_inherited && id != NULL)
         {
@@ -14111,8 +15186,11 @@ static struct Expression *convert_factor(ast_t *expr_node) {
         }
         ListNode_t *args = convert_expression_list(child);
         struct Expression *result = mk_functioncall(expr_node->line, id, args);
-        if (saw_inherited && result != NULL)
+        tag_operator_call(result, is_operator_token_name(id));
+        if (saw_inherited && result != NULL) {
             result->expr_data.function_call_data.is_inherited_call = 1;
+            result->expr_data.function_call_data.is_bare_inherited = is_bare_inherited;
+        }
         return result;
     }
     case PASCAL_T_ARRAY_ACCESS: {
@@ -14376,8 +15454,11 @@ static struct Expression *convert_expression(ast_t *expr_node) {
         result = convert_unary_expr(expr_node);
         return set_expr_source_index(result, original_node);
     case PASCAL_T_NOT:
-        result = mk_relop(expr_node->line, NOT, convert_expression(expr_node->child), NULL);
+    {
+        struct Expression *not_operand = convert_expression(expr_node->child);
+        result = mk_relop(expr_node->line, NOT, not_operand, NULL);
         return set_expr_source_index(result, original_node);
+    }
     case PASCAL_T_TUPLE:
     {
         if (tuple_is_record_constructor(expr_node))
@@ -15722,7 +16803,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
         }
     }
     struct Statement *stmt = mk_varassign(assign_node->line, assign_node->col, left, right);
-    if (stmt != NULL) {
+    if (stmt != NULL && assign_node->index >= 0) {
         stmt->source_index = assign_node->index + g_source_offset;
     }
     return stmt;
@@ -15743,6 +16824,43 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     if (child != NULL && child->typ == PASCAL_T_MEMBER_ACCESS) {
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
             fprintf(stderr, "[KGPC]   Handling MEMBER_ACCESS\n");
+        }
+        /* Check for unit-qualified procedure calls (e.g. System.SetLength).
+         * If the left side is a known unit name, create a direct procedure call
+         * with call_qualifier set instead of a method call placeholder. */
+        ast_t *lhs = child->child;
+        ast_t *rhs = (lhs != NULL) ? lhs->next : NULL;
+        if (lhs != NULL && lhs->typ == PASCAL_T_IDENTIFIER && rhs != NULL)
+        {
+            char *lhs_name = dup_symbol(lhs);
+            if (lhs_name != NULL && unit_registry_contains(lhs_name))
+            {
+                /* Extract the procedure name from rhs */
+                ast_t *method_ident = unwrap_pascal_node(rhs);
+                ast_t *call_args = child->next;
+                if (method_ident != NULL && method_ident->typ == PASCAL_T_FUNC_CALL)
+                {
+                    call_args = method_ident->child ? method_ident->child->next : NULL;
+                    method_ident = method_ident->child;
+                    if (method_ident != NULL)
+                        method_ident = unwrap_pascal_node(method_ident);
+                }
+                if (method_ident != NULL && method_ident->typ == PASCAL_T_IDENTIFIER)
+                {
+                    char *proc_name = dup_symbol(method_ident);
+                    ListNode_t *args = convert_expression_list(call_args);
+                    struct Statement *call = mk_procedurecall(call_node->line, proc_name, args);
+                    if (call != NULL) {
+                        if (call_node->index >= 0)
+                            call->source_index = call_node->index + g_source_offset;
+                        call->stmt_data.procedure_call_data.call_qualifier = lhs_name;
+                    } else {
+                        free(lhs_name);
+                    }
+                    return call;
+                }
+            }
+            free(lhs_name);
         }
         ast_t *args_node = child->next;
         struct Statement *method_stmt = convert_method_call_statement(child, args_node);
@@ -15804,7 +16922,8 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     ListNode_t *args = convert_expression_list(args_start);
     struct Statement *call = mk_procedurecall(call_node->line, id, args);
     if (call != NULL) {
-        call->source_index = call_node->index + g_source_offset;
+        if (call_node->index >= 0)
+            call->source_index = call_node->index + g_source_offset;
         /* If id starts with __, it's a method call placeholder from convert_method_call_statement.
          * Extract the bare method name and set the structured flag. */
         if (id != NULL && strncmp(id, "__", 2) == 0) {
@@ -16661,12 +17780,24 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                         first_param_tree->type == TREE_VAR_DECL &&
                         first_param_tree->tree_data.var_decl_data.type_id != NULL) {
                         const char *param_type_id = first_param_tree->tree_data.var_decl_data.type_id;
+                        /* Get second param type for binary operator disambiguation */
+                        const char *second_param_type_id = NULL;
+                        if (params->next != NULL) {
+                            Tree_t *second_param_tree = (Tree_t *)params->next->cur;
+                            if (second_param_tree != NULL && second_param_tree->type == TREE_VAR_DECL &&
+                                second_param_tree->tree_data.var_decl_data.type_id != NULL)
+                                second_param_type_id = second_param_tree->tree_data.var_decl_data.type_id;
+                        }
 
-                        /* Build mangled name: TypeName__op_suffix */
-                        size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3;
+                        /* Build mangled name: TypeName__op_suffix[_SecondParamType] */
+                        size_t name_len = strlen(param_type_id) + strlen(encoded_op) + 3
+                            + (second_param_type_id != NULL ? strlen(second_param_type_id) + 1 : 0);
                         char *mangled_name = (char *)malloc(name_len);
                         if (mangled_name != NULL) {
-                            snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
+                            if (second_param_type_id != NULL)
+                                snprintf(mangled_name, name_len, "%s__%s_%s", param_type_id, encoded_op, second_param_type_id);
+                            else
+                                snprintf(mangled_name, name_len, "%s__%s", param_type_id, encoded_op);
 
                             if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
                                 fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
@@ -16755,7 +17886,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             ListNode_t *op_label_decls = list_builder_finish(&op_label_builder);
                             Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
-                            if (tree != NULL)
+                            if (tree != NULL && method_node->index >= 0)
                                 tree->source_index = method_node->index + g_source_offset;
                             if (tree != NULL && result_var_name_method != NULL) {
                                 tree->tree_data.subprogram_data.return_type_ref =
@@ -17240,7 +18371,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                            label_decls, type_decls, list_builder_finish(&var_builder),
                            nested_subs, body, 0, 0);
     }
-    if (tree != NULL)
+    if (tree != NULL && method_node->index >= 0)
         tree->source_index = method_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
@@ -17269,6 +18400,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         tree->tree_data.subprogram_data.owner_class = (char *)string_intern(effective_class);
         tree->tree_data.subprogram_data.is_constructor = is_constructor;
         tree->tree_data.subprogram_data.is_static_method = is_static_method;
+        tree->tree_data.subprogram_data.is_operator = method_declares_operator;
         if (effective_class_full != NULL && effective_class_full != effective_class)
             tree->tree_data.subprogram_data.owner_class_full = (char *)string_intern(effective_class_full);
         if (tree->tree_data.subprogram_data.owner_class_full == NULL &&
@@ -17299,7 +18431,8 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         if (num_generic_type_params > 0) {
             tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
             tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
-            tree->tree_data.subprogram_data.generic_template_ast = copy_ast(method_node);
+            tree->tree_data.subprogram_data.is_generic_template = 1;
+            tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(method_node);
             tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
             generic_type_params = NULL;
             num_generic_type_params = 0;
@@ -17385,46 +18518,6 @@ static int extract_generic_type_params(ast_t *type_param_list, char ***out_param
     return count;
 }
 
-/* Map FPC [internproc:fpc_in_XXX] intrinsic names to KGPC runtime function names.
-   Returns a strdup'd name or NULL if no mapping exists. */
-static char *map_internproc_to_runtime(const char *fpc_name)
-{
-    if (fpc_name == NULL) return NULL;
-    static const struct { const char *fpc; const char *kgpc; } table[] = {
-        /* Math real intrinsics (ValReal = Double on x86_64) */
-        {"fpc_in_trunc_real",  "kgpc_trunc"},
-        {"fpc_in_round_real",  "kgpc_round"},
-        {"fpc_in_sqrt_real",   "kgpc_sqrt"},
-        {"fpc_in_abs_real",    "kgpc_abs_real"},
-        {"fpc_in_sin_real",    "kgpc_sin"},
-        {"fpc_in_cos_real",    "kgpc_cos"},
-        {"fpc_in_arctan_real", "kgpc_arctan"},
-        {"fpc_in_ln_real",     "kgpc_ln"},
-        {"fpc_in_exp_real",    "kgpc_exp"},
-        {"fpc_in_frac_real",   "kgpc_frac"},
-        {"fpc_in_int_real",    "kgpc_int_real"},
-        {"fpc_in_pi_real",     "kgpc_pi"},
-        {"fpc_in_sqr_real",    "kgpc_sqr_real"},
-        /* Lo/Hi intrinsics */
-        {"fpc_in_lo_Word",     "lo_w"},
-        {"fpc_in_lo_long",     "lo_li"},
-        {"fpc_in_lo_qword",    "lo_qw"},
-        {"fpc_in_hi_Word",     "hi_w"},
-        {"fpc_in_hi_long",     "hi_li"},
-        {"fpc_in_hi_qword",    "hi_qw"},
-        /* Integer Abs */
-        {"fpc_in_abs_long",    "kgpc_abs_int"},
-        /* Chr intrinsic */
-        {"fpc_in_chr_byte",    "kgpc_chr"},
-        {NULL, NULL}
-    };
-    for (int i = 0; table[i].fpc != NULL; i++) {
-        if (strcasecmp(fpc_name, table[i].fpc) == 0)
-            return strdup(table[i].kgpc);
-    }
-    return NULL;
-}
-
 static char *extract_external_name_from_node(ast_t *node)
 {
     if (node == NULL || node->child == NULL)
@@ -17433,14 +18526,17 @@ static char *extract_external_name_from_node(ast_t *node)
     if (node->child->typ == PASCAL_T_STRING)
         return dup_symbol(node->child);
 
+    if (node->child->typ == PASCAL_T_IDENTIFIER)
+        return dup_symbol(node->child);
+
     if (node->child->typ == PASCAL_T_EXTERNAL_NAME_EXPR &&
         node->child->child != NULL &&
-        node->child->child->typ == PASCAL_T_STRING)
+        (node->child->child->typ == PASCAL_T_STRING ||
+         node->child->child->typ == PASCAL_T_IDENTIFIER))
         return dup_symbol(node->child->child);
 
-    /* Handle bracket form: [external name 'X'] — children are keyword, keyword, string */
     for (ast_t *c = node->child; c != NULL; c = c->next) {
-        if (c->typ == PASCAL_T_STRING)
+        if (c->typ == PASCAL_T_STRING || c->typ == PASCAL_T_IDENTIFIER)
             return dup_symbol(c);
     }
 
@@ -17512,6 +18608,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     int is_varargs = 0;
     char *external_alias = NULL;
     char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
+    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name (e.g. "fpc_in_const_ptr") */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -17592,34 +18689,39 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                             cur = cur->next;
                     }
                 } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "internconst") == 0 ||
                            strcasecmp(self_sym, "compilerproc") == 0) {
                     is_external = 1;
-                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
+                       is the next sibling. */
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
-                        /* Always store the raw INTERNPROC name */
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(val->sym->name);
-                        char *mapped = map_internproc_to_runtime(val->sym->name);
-                        if (mapped != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = mapped;
+                        if (strcasecmp(self_sym, "internconst") == 0) {
+                            if (internconst_id_str != NULL)
+                                free(internconst_id_str);
+                            internconst_id_str = strdup(val->sym->name);
+                        } else {
+                            if (internproc_id_str != NULL)
+                                free(internproc_id_str);
+                            internproc_id_str = strdup(val->sym->name);
                         }
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = strdup(val->sym->name);
                         cur = cur->next;  /* Skip the value node */
                     }
                 } else {
                     /* Fallback: if the identifier itself is an internproc value
                        (e.g. fpc_in_trunc_real), the "internproc" keyword was
-                       consumed by the parser and only the value survived. */
-                    char *mapped = map_internproc_to_runtime(self_sym);
-                    if (mapped != NULL) {
+                       consumed by the parser and only the value survived.
+                       Only treat it as an internproc if it looks like an FPC intrinsic name. */
+                    if (strncasecmp(self_sym, "fpc_in_", 7) == 0 ||
+                        strncasecmp(self_sym, "fpc_", 4) == 0) {
                         is_external = 1;
                         if (external_alias != NULL)
                             free(external_alias);
-                        external_alias = mapped;
+                        external_alias = strdup(self_sym);
                         if (internproc_id_str != NULL)
                             free(internproc_id_str);
                         internproc_id_str = strdup(self_sym);
@@ -17654,6 +18756,60 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                 is_external = 1;
             }
             break;
+        case PASCAL_T_NONE:
+            {
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
+                        char *kw = child->sym->name;
+                        if (strcasecmp(kw, "internproc") == 0 ||
+                            strcasecmp(kw, "internconst") == 0 ||
+                            strcasecmp(kw, "compilerproc") == 0) {
+                            is_external = 1;
+                            ast_t *val = child->next;
+                            while (val != NULL && val->typ == PASCAL_T_NONE)
+                                val = val->child;
+                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                external_alias = dup_symbol(val);
+                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                external_alias = dup_symbol(val);
+                            }
+                        } else if (strcasecmp(kw, "external") == 0) {
+                            is_external = 1;
+                        }
+                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
+                        char *name = extract_external_name_from_node(child);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        is_external = 1;
+                    }
+                }
+            }
+            break;
         default:
             break;
         }
@@ -17666,7 +18822,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
                                 nested_subs, body, is_external, 0);
-    if (tree != NULL)
+    if (tree != NULL && proc_node->index >= 0)
         tree->source_index = proc_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
@@ -17682,10 +18838,15 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
     else if (internproc_id_str != NULL)
         free(internproc_id_str);
+    if (tree != NULL && internconst_id_str != NULL)
+        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
+    else if (internconst_id_str != NULL)
+        free(internconst_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(proc_node);
+        tree->tree_data.subprogram_data.is_generic_template = 1;
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(proc_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
@@ -17761,6 +18922,7 @@ static Tree_t *convert_function(ast_t *func_node) {
      * vs variant__op_assign_real. */
     char *deferred_encoded_op = NULL;
     const char *deferred_param_type_id = NULL;
+    const char *deferred_second_param_type_id = NULL;
     if (is_standalone_operator && operator_symbol != NULL && params != NULL) {
         /* Get the type of the first parameter (params is a list of Tree_t* with TREE_VAR_DECL) */
         Tree_t *first_param = (Tree_t *)params->cur;
@@ -17771,6 +18933,13 @@ static Tree_t *convert_function(ast_t *func_node) {
         if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
             first_param->tree_data.var_decl_data.type_id != NULL) {
             deferred_encoded_op = encode_operator_name(operator_symbol);
+            /* Capture second param type for binary operator disambiguation */
+            if (params->next != NULL) {
+                Tree_t *second_param = (Tree_t *)params->next->cur;
+                if (second_param != NULL && second_param->type == TREE_VAR_DECL &&
+                    second_param->tree_data.var_decl_data.type_id != NULL)
+                    deferred_second_param_type_id = second_param->tree_data.var_decl_data.type_id;
+            }
             deferred_param_type_id = first_param->tree_data.var_decl_data.type_id;
         }
         free(operator_symbol);
@@ -17810,13 +18979,24 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (deferred_encoded_op != NULL && deferred_param_type_id != NULL) {
         const char *ret_suffix = return_type_id;
         if (ret_suffix == NULL) ret_suffix = result_var_name;
+        /* For binary operators, include second param type to disambiguate from
+         * unary operators with the same name (e.g. binary - vs unary -). */
         size_t name_len = strlen(deferred_param_type_id) + strlen(deferred_encoded_op) + 3
-            + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0);
+            + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0)
+            + (deferred_second_param_type_id != NULL ? strlen(deferred_second_param_type_id) + 1 : 0);
         char *mangled_name = (char *)malloc(name_len);
         if (mangled_name != NULL) {
-            if (ret_suffix != NULL) {
+            if (ret_suffix != NULL && deferred_second_param_type_id != NULL) {
+                snprintf(mangled_name, name_len, "%s__%s_%s_%s",
+                    deferred_param_type_id, deferred_encoded_op,
+                    deferred_second_param_type_id, ret_suffix);
+            } else if (ret_suffix != NULL) {
                 snprintf(mangled_name, name_len, "%s__%s_%s",
                     deferred_param_type_id, deferred_encoded_op, ret_suffix);
+            } else if (deferred_second_param_type_id != NULL) {
+                snprintf(mangled_name, name_len, "%s__%s_%s",
+                    deferred_param_type_id, deferred_encoded_op,
+                    deferred_second_param_type_id);
             } else {
                 snprintf(mangled_name, name_len, "%s__%s",
                     deferred_param_type_id, deferred_encoded_op);
@@ -17844,6 +19024,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     int is_varargs = 0;
     char *external_alias = NULL;
     char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
+    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name */
     ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
     ListNode_t *type_decls = NULL;
 
@@ -17921,34 +19102,39 @@ static Tree_t *convert_function(ast_t *func_node) {
                             cur = cur->next;
                     }
                 } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "internconst") == 0 ||
                            strcasecmp(self_sym, "compilerproc") == 0) {
                     is_external = 1;
-                    /* The internproc value (e.g. fpc_in_trunc_real) is the next sibling */
+                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
+                       is the next sibling. */
                     ast_t *val = cur->next;
                     if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
                         val->sym != NULL && val->sym->name != NULL) {
-                        /* Always store the raw INTERNPROC name */
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(val->sym->name);
-                        char *mapped = map_internproc_to_runtime(val->sym->name);
-                        if (mapped != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = mapped;
+                        if (strcasecmp(self_sym, "internconst") == 0) {
+                            if (internconst_id_str != NULL)
+                                free(internconst_id_str);
+                            internconst_id_str = strdup(val->sym->name);
+                        } else {
+                            if (internproc_id_str != NULL)
+                                free(internproc_id_str);
+                            internproc_id_str = strdup(val->sym->name);
                         }
+                        if (external_alias != NULL)
+                            free(external_alias);
+                        external_alias = strdup(val->sym->name);
                         cur = cur->next;  /* Skip the value node */
                     }
                 } else {
                     /* Fallback: if the identifier itself is an internproc value
                        (e.g. fpc_in_trunc_real), the "internproc" keyword was
-                       consumed by the parser and only the value survived. */
-                    char *mapped = map_internproc_to_runtime(self_sym);
-                    if (mapped != NULL) {
+                       consumed by the parser and only the value survived.
+                       Only treat it as an internproc if it looks like an FPC intrinsic name. */
+                    if (strncasecmp(self_sym, "fpc_in_", 7) == 0 ||
+                        strncasecmp(self_sym, "fpc_", 4) == 0) {
                         is_external = 1;
                         if (external_alias != NULL)
                             free(external_alias);
-                        external_alias = mapped;
+                        external_alias = strdup(self_sym);
                         if (internproc_id_str != NULL)
                             free(internproc_id_str);
                         internproc_id_str = strdup(self_sym);
@@ -17983,6 +19169,60 @@ static Tree_t *convert_function(ast_t *func_node) {
                 is_external = 1;
             }
             break;
+        case PASCAL_T_NONE:
+            {
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
+                        char *kw = child->sym->name;
+                        if (strcasecmp(kw, "internproc") == 0 ||
+                            strcasecmp(kw, "internconst") == 0 ||
+                            strcasecmp(kw, "compilerproc") == 0) {
+                            is_external = 1;
+                            ast_t *val = child->next;
+                            while (val != NULL && val->typ == PASCAL_T_NONE)
+                                val = val->child;
+                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                external_alias = dup_symbol(val);
+                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (internconst_id_str != NULL)
+                                        free(internconst_id_str);
+                                    internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (internproc_id_str != NULL)
+                                        free(internproc_id_str);
+                                    internproc_id_str = dup_symbol(val);
+                                }
+                                if (external_alias != NULL)
+                                    free(external_alias);
+                                external_alias = dup_symbol(val);
+                            }
+                        } else if (strcasecmp(kw, "external") == 0) {
+                            is_external = 1;
+                        }
+                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
+                        char *name = extract_external_name_from_node(child);
+                        if (name != NULL) {
+                            if (external_alias != NULL)
+                                free(external_alias);
+                            external_alias = name;
+                        }
+                        is_external = 1;
+                    }
+                }
+            }
+            break;
         default:
             break;
         }
@@ -17995,7 +19235,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
                                 return_type, return_type_id, inline_return_type, is_external, 0);
-    if (tree != NULL)
+    if (tree != NULL && func_node->index >= 0)
         tree->source_index = func_node->index + g_source_offset;
     if (!is_nostackframe)
         is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
@@ -18016,10 +19256,15 @@ static Tree_t *convert_function(ast_t *func_node) {
         tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
     else if (internproc_id_str != NULL)
         free(internproc_id_str);
+    if (tree != NULL && internconst_id_str != NULL)
+        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
+    else if (internconst_id_str != NULL)
+        free(internconst_id_str);
     if (tree != NULL && num_generic_type_params > 0) {
         tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
         tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast(func_node);
+        tree->tree_data.subprogram_data.is_generic_template = 1;
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(func_node);
         tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
     } else if (generic_type_params != NULL) {
         for (int i = 0; i < num_generic_type_params; i++)
@@ -18031,6 +19276,8 @@ static Tree_t *convert_function(ast_t *func_node) {
     } else if (result_var_name != NULL) {
         free(result_var_name);
     }
+    if (tree != NULL && is_standalone_operator)
+        tree->tree_data.subprogram_data.is_operator = 1;
     return tree;
 }
 
@@ -18148,6 +19395,8 @@ void from_cparser_cleanup(void)
     }
 
     /* Free class method bindings (interned strings - do NOT free, just free structs + list nodes) */
+    cmb_index_reset();
+    cmb_method_index_reset();
     while (class_method_bindings != NULL) {
         ListNode_t *next = class_method_bindings->next;
         ClassMethodBinding *binding = (ClassMethodBinding *)class_method_bindings->cur;
@@ -18166,6 +19415,15 @@ void from_cparser_cleanup(void)
             destroy_list(g_pending_generic_aliases->type_args);
         free(g_pending_generic_aliases);
         g_pending_generic_aliases = next;
+    }
+
+    /* Free deferred inline specializations */
+    while (g_deferred_inline_specs != NULL) {
+        DeferredInlineSpec *next = g_deferred_inline_specs->next;
+        if (g_deferred_inline_specs->type_decl != NULL)
+            destroy_tree(g_deferred_inline_specs->type_decl);
+        free(g_deferred_inline_specs);
+        g_deferred_inline_specs = next;
     }
 
     /* Free scoped enum source cache */

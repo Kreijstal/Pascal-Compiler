@@ -41,6 +41,12 @@ jobs:
           sudo apt-get install -y make wget tar zstd gawk gpg gpgv wine wine64 flex bison
           sudo apt-get install -y llvm clang lld
 
+      - name: Clone FPC RTL source
+        run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
+
+      - name: Configure FPC RTL build
+        run: meson setup build-fpc --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Dfpc_rtl_dir=./FPCSource
+
       - name: Clone quasi-msys2
         run: |
           git clone https://github.com/HolyBlackCat/quasi-msys2.git
@@ -55,5 +61,3 @@ jobs:
         timeout-minutes: 30          
 
           
-
-

@@ -40,6 +40,32 @@ const char *semcheck_type_tag_name(int type_tag)
     }
 }
 
+/* Return a valid Pascal type identifier for a given type tag.
+ * Unlike semcheck_type_tag_name() which returns display-only strings
+ * (e.g. "int", "bool"), this function returns names that can be
+ * looked up in the symbol table (e.g. "Integer", "Boolean"). */
+const char *semcheck_type_tag_pascal_name(int type_tag)
+{
+    switch (type_tag)
+    {
+        case INT_TYPE: return "Integer";
+        case LONGINT_TYPE: return "LongInt";
+        case INT64_TYPE: return "Int64";
+        case REAL_TYPE: return "Real";
+        case BOOL: return "Boolean";
+        case CHAR_TYPE: return "Char";
+        case STRING_TYPE: return "String";
+        case SHORTSTRING_TYPE: return "ShortString";
+        case POINTER_TYPE: return "Pointer";
+        case BYTE_TYPE: return "Byte";
+        case WORD_TYPE: return "Word";
+        case LONGWORD_TYPE: return "LongWord";
+        case QWORD_TYPE: return "QWord";
+        case EXTENDED_TYPE: return "Extended";
+        default: return NULL;
+    }
+}
+
 HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
     const char *type_id, const char *owner_full, const char *owner_outer)
 {
@@ -86,12 +112,16 @@ int semcheck_map_builtin_type_name(SymTab_t *symtab, const char *id)
     if (symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, id) == 0 &&
+        if (FindSymbol(&type_node, symtab, id) != 0 &&
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             int mapped = UNKNOWN_TYPE;
             set_type_from_hashtype(&mapped, type_node);
-            if (mapped != UNKNOWN_TYPE)
+            /* Only trust the symtab result for primitive/scalar types.
+             * Core builtin names like Word/Byte/LongWord may be registered
+             * as record types in the RTL but must map to their primitive tags
+             * for typecast and expression type resolution. */
+            if (mapped != UNKNOWN_TYPE && mapped != RECORD_TYPE)
                 return mapped;
         }
     }
@@ -167,6 +197,28 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         type_node = semcheck_find_type_node_in_owner_chain(symtab, type_id, owner_full, owner_outer);
     }
     
+    /* Fallback: search for nested type by suffix (e.g., "TPtrWrapper" matches
+     * "TMarshal.TPtrWrapper" registered under its owning class). */
+    if (type_node == NULL && type_id != NULL)
+    {
+        for (ScopeNode *cur = symtab->current_scope; cur != NULL && type_node == NULL; cur = cur->parent)
+        {
+            type_node = FindTypeBySuffixInTable(cur->table, type_id);
+        }
+        if (type_node == NULL)
+        {
+            for (int u = 0; u < SYMTAB_MAX_UNITS; u++)
+            {
+                if (symtab->unit_scopes[u] != NULL && symtab->unit_scopes[u]->table != NULL)
+                {
+                    type_node = FindTypeBySuffixInTable(symtab->unit_scopes[u]->table, type_id);
+                    if (type_node != NULL)
+                        break;
+                }
+            }
+        }
+    }
+
     if (type_node == NULL)
     {
         if (type_ref != NULL && type_ref->num_generic_args > 0)
@@ -205,7 +257,7 @@ int resolve_type_identifier_ref(int *out_type, SymTab_t *symtab,
         if (alias->target_type_id != NULL)
         {
             HashNode_t *target_node = NULL;
-            if (FindIdent(&target_node, symtab, alias->target_type_id) != -1 &&
+            if (FindSymbol(&target_node, symtab, alias->target_type_id) != 0 &&
                 target_node != NULL)
             {
                 set_type_from_hashtype(out_type, target_node);

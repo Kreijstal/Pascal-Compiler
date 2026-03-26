@@ -46,6 +46,9 @@ struct TypeAlias
     int is_wide_string;
     int is_open_array;
     ListNode_t *array_dimensions;
+    char *array_dim_start_str;  /* Symbolic lower bound (e.g. "Low(T)"), NULL if numeric */
+    char *array_dim_end_str;    /* Symbolic upper bound (e.g. "High(T)"), NULL if numeric */
+    int array_dims_parsed;      /* 1 if start_str/end_str were extracted from dimensions */
     int is_pointer;
     int is_class_reference;  /* 1 if declared as "class of T" */
     int pointer_type;
@@ -110,6 +113,9 @@ struct RecordField
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;
     ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
+    long long cached_size;     /* Cached field size (valid when has_cached_layout=1) */
+    int cached_alignment;      /* Cached field alignment (valid when has_cached_layout=1) */
+    int has_cached_layout;     /* 1 if cached_size and cached_alignment are valid */
 };
 
 struct ClassProperty
@@ -151,9 +157,12 @@ enum MethodTemplateKind
 struct MethodTemplate
 {
     char *name;               /* Simple method name */
+    char *delegated_interface_name; /* Interface owner for IFoo.GetValue=Impl */
+    char *delegated_target_name; /* Concrete method target (e.g. GetValueImpl) */
     struct ast_t *method_ast; /* Cloned AST for the original declaration */
     struct Tree *method_tree; /* Converted Tree_t template built on-demand */
     enum MethodTemplateKind kind;  /* Method classification */
+    int is_interface_delegation; /* 1 if declared as IFoo.Method=Impl */
     int is_class_method;      /* 1 if declared with CLASS */
     int is_static;            /* 1 if directive static found (no Self parameter) */
     int is_virtual;           /* 1 if directive virtual found */
@@ -180,6 +189,7 @@ struct RecordType
     char *helper_base_type_id; /* Base type name for helpers (the "for X" part) */
     char *helper_parent_id;   /* Parent helper type name (for inheritance like "type helper(Parent) for X") */
     char *type_id;            /* Canonical type name if available */
+    char *outer_type_id;      /* Outer class for nested types (e.g. "TOuter" for "TOuter.TInner"), NULL if not nested */
     int parent_fields_merged; /* 1 if parent class fields have been merged into fields */
     int has_cached_size;      /* 1 if cached_size has been computed */
     long long cached_size;    /* Cached byte size for kgpc_type_sizeof */
@@ -277,6 +287,8 @@ struct Statement
             int call_hash_type;              /* HashType enum value (HASHTYPE_VAR, HASHTYPE_PROCEDURE, etc.) */
             struct KgpcType *call_kgpc_type;   /* KgpcType for getting formal parameters */
             int is_call_info_valid;          /* 1 if the above fields are valid, 0 otherwise */
+            char *cached_owner_class;        /* Cached owner class from resolved proc (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved proc (NULL if not a method) */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable/expression */
             struct HashNode *procedural_var_symbol; /* Symbol for procedural var (if any) */
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
@@ -284,9 +296,11 @@ struct Statement
             char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;           /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
+            char *call_qualifier;            /* Unit prefix if call was qualified, e.g. "System" (NULL if unqualified) */
         } procedure_call_data;
 
         /* Expression statement */
@@ -509,13 +523,15 @@ struct Expression
             char *id;
             char *mangled_id;
             ListNode_t *args_expr;
-            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after PopScope. */
+            struct HashNode *resolved_func;  /* DEPRECATED: may be invalid after leaving semantic scope. */
             
             /* Cached information copied during semantic checking so codegen
              * no longer depends on HashNode lifetime. */
             int call_hash_type;              /* HashType enum value */
             struct KgpcType *call_kgpc_type;   /* Procedure/function signature */
             int is_call_info_valid;          /* 1 if cached info is usable */
+            char *cached_owner_class;        /* Cached owner class from resolved func (NULL if not a method) */
+            char *cached_method_name;        /* Cached bare method name from resolved func (NULL if not a method) */
             
             /* Support for calling through procedural variables */
             int is_procedural_var_call;      /* 1 if calling through a procedural variable */
@@ -525,6 +541,7 @@ struct Expression
             char *placeholder_method_name;           /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
             int is_constructor_call;                 /* 1 if this call was resolved as a class constructor */
             int is_virtual_call;                     /* 1 if this is a virtual method call (needs VMT dispatch) */
+            int is_interface_call;                   /* 1 if this is an interface method call (needs interface vtable dispatch) */
             int vmt_index;                           /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;                   /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;                /* 1 if calling a class method (Self = VMT, not instance) */
@@ -532,6 +549,8 @@ struct Expression
             int arg0_is_dynarray_descriptor;         /* 1 if arg0 should be passed as dynarray descriptor */
             char *call_qualifier;  /* Unit/object prefix if call was qualified, e.g. "SysUtils" (NULL if unqualified) */
             int is_inherited_call;             /* 1 if this is an "inherited MethodName(args)" call */
+            int is_bare_inherited;             /* 1 if bare "inherited" (no explicit method name) — forward enclosing args */
+            int is_operator_call;              /* 1 if this call targets an operator (set by parser) */
         } function_call_data;
 
         /* Integer number */

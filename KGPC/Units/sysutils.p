@@ -20,7 +20,7 @@ type
     Byte = 0..255;
     TBytes = array of Byte;
 
-    TSysCharSet = set of Char;
+    TSysCharSet = set of AnsiChar;
     TExecuteFlags = set of (ExecInheritsHandles);
 
     TFloatFormat = (ffGeneral, ffExponent, ffFixed, ffNumber, ffCurrency);
@@ -142,12 +142,14 @@ procedure AppendStr(var Dest: AnsiString; const S: AnsiString);
 function StringReplace(const S, OldPattern, NewPattern: AnsiString): AnsiString;
 function StringReplace(const S, OldPattern, NewPattern: AnsiString; Flags: TReplaceFlags): AnsiString;
 function BoolToStr(B: Boolean; UseBoolStrs: Boolean): AnsiString;
+function BoolToStr(B: Boolean; const TrueS, FalseS: AnsiString): AnsiString;
 function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
 function PadRight(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
 function QuotedString(const S: AnsiString; QuoteChar: AnsiChar): AnsiString;
 function StartsWith(const S, Prefix: AnsiString): Boolean;
 function EndsWith(const S, Suffix: AnsiString): Boolean;
 function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
+function StringOfChar(C: AnsiChar; Count: SizeInt): AnsiString; overload;
 function StringOfChar(C: WideChar; Count: SizeInt): WideString; overload;
 function IntToHex(Value: LongInt): AnsiString;
 function IntToHex(Value: LongInt; Digits: Integer): AnsiString;
@@ -218,7 +220,7 @@ type
     TStringHelper = type helper for AnsiString
     public
         function Trim: AnsiString; overload;
-        function Trim(const TrimChars: set of AnsiChar): AnsiString; overload;
+        function Trim(const TrimChars: TSysCharSet): AnsiString; overload;
         function Split(const Separators: array of AnsiChar; ACount: SizeInt): TStringArray;
         function Split(const Separators: array of AnsiString; Options: TStringSplitOptions): TStringArray;
         function LastIndexOf(const AValue: AnsiString; AStartIndex, ACount: SizeInt): SizeInt;
@@ -249,6 +251,29 @@ procedure FreeAndNil(var Obj: Pointer);
 
 { Interface support }
 function Supports(const Instance: TObject; const IID: TGUID; out Intf): Boolean;
+
+{ File handle utilities }
+function GetFileHandle(var f: File): THandle;
+function GetFileHandle(var f: Text): THandle;
+
+{ Path utilities }
+function SetDirSeparators(const FileName: AnsiString): AnsiString;
+function ExtractRelativePath(const BaseName, DestName: AnsiString): AnsiString;
+
+{ String memory management }
+function NewStr(const S: AnsiString): PString;
+procedure DisposeStr(S: PString);
+procedure DisposeStr(S: PShortString);
+
+{ File assignment }
+procedure AssignFile(var f: Text; const FileName: AnsiString);
+
+{ File date functions }
+function FileGetDate(Handle: LongInt): LongInt;
+procedure FileSetDate(Handle: LongInt; Age: LongInt);
+
+{ File name comparison }
+function AnsiCompareFileName(const S1, S2: AnsiString): LongInt;
 
 implementation
 
@@ -830,6 +855,14 @@ begin
     end;
 end;
 
+function BoolToStr(B: Boolean; const TrueS, FalseS: AnsiString): AnsiString;
+begin
+    if B then
+        Result := TrueS
+    else
+        Result := FalseS;
+end;
+
 function PadLeft(const S: AnsiString; ATotalWidth: SizeInt; PaddingChar: AnsiChar): AnsiString;
 var
     pad_len: SizeInt;
@@ -896,6 +929,20 @@ end;
 function StringOfChar(C: AnsiChar; Count: Integer): AnsiString; overload;
 var
     i: Integer;
+begin
+    if Count <= 0 then
+    begin
+        Result := '';
+        exit;
+    end;
+    SetLength(Result, Count);
+    for i := 1 to Count do
+        Result[i] := C;
+end;
+
+function StringOfChar(C: AnsiChar; Count: SizeInt): AnsiString; overload;
+var
+    i: SizeInt;
 begin
     if Count <= 0 then
     begin
@@ -1079,13 +1126,27 @@ begin
 end;
 
 function TStringHelper.Trim: AnsiString;
-const
-    DefaultTrimChars: set of AnsiChar = [' ', #9, #10, #13];
+var
+    start_pos: Integer;
+    end_pos: Integer;
 begin
-    Result := Trim(DefaultTrimChars);
+    start_pos := 1;
+    end_pos := Length(Self);
+    while (start_pos <= end_pos) and
+          ((Self[start_pos] = ' ') or (Self[start_pos] = #9) or
+           (Self[start_pos] = #10) or (Self[start_pos] = #13)) do
+        Inc(start_pos);
+    while (end_pos >= start_pos) and
+          ((Self[end_pos] = ' ') or (Self[end_pos] = #9) or
+           (Self[end_pos] = #10) or (Self[end_pos] = #13)) do
+        Dec(end_pos);
+    if end_pos < start_pos then
+        Result := ''
+    else
+        Result := Copy(Self, start_pos, end_pos - start_pos + 1);
 end;
 
-function TStringHelper.Trim(const TrimChars: set of AnsiChar): AnsiString;
+function TStringHelper.Trim(const TrimChars: TSysCharSet): AnsiString;
 var
     start_pos: Integer;
     end_pos: Integer;
@@ -1834,6 +1895,70 @@ begin
         Supports := False
     else
         Supports := Instance.GetInterface(IID, Intf);
+end;
+
+function GetFileHandle(var f: File): THandle;
+begin
+    GetFileHandle := 0;
+end;
+
+function GetFileHandle(var f: Text): THandle;
+begin
+    GetFileHandle := 0;
+end;
+
+function SetDirSeparators(const FileName: AnsiString): AnsiString;
+var
+    i: Integer;
+begin
+    SetDirSeparators := FileName;
+    for i := 1 to Length(SetDirSeparators) do
+    begin
+        if SetDirSeparators[i] = '\' then
+            SetDirSeparators[i] := '/';
+    end;
+end;
+
+function ExtractRelativePath(const BaseName, DestName: AnsiString): AnsiString;
+begin
+    ExtractRelativePath := DestName;
+end;
+
+function NewStr(const S: AnsiString): PString;
+begin
+    New(NewStr);
+    NewStr^ := S;
+end;
+
+procedure DisposeStr(S: PString);
+begin
+    if S <> nil then
+        Dispose(S);
+end;
+
+procedure DisposeStr(S: PShortString);
+begin
+    if S <> nil then
+        Dispose(S);
+end;
+
+procedure AssignFile(var f: Text; const FileName: AnsiString);
+begin
+    Assign(f, FileName);
+end;
+
+function FileGetDate(Handle: LongInt): LongInt;
+begin
+    FileGetDate := 0;
+end;
+
+procedure FileSetDate(Handle: LongInt; Age: LongInt);
+begin
+end;
+
+function AnsiCompareFileName(const S1, S2: AnsiString): LongInt;
+begin
+    AnsiCompareFileName := CompareText(S1, S2);
 end;
 
 end.

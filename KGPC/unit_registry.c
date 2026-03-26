@@ -15,6 +15,7 @@ static int count = 0;
  * With MAX_UNIT_NAMES=256, we need 256/64=4 uint64_t per unit. */
 #define DEP_WORDS ((MAX_UNIT_NAMES + 63) / 64)
 static unsigned long long deps[MAX_UNIT_NAMES][DEP_WORDS];
+static unsigned long long iface_deps[MAX_UNIT_NAMES][DEP_WORDS];
 
 int unit_registry_add(const char *name)
 {
@@ -61,11 +62,31 @@ void unit_registry_add_dep(int unit_idx, int dep_idx)
     deps[unit_idx][dep_idx / 64] |= (1ULL << (dep_idx % 64));
 }
 
+void unit_registry_add_iface_dep(int unit_idx, int dep_idx)
+{
+    if (unit_idx <= 0 || unit_idx >= MAX_UNIT_NAMES) return;
+    if (dep_idx <= 0 || dep_idx >= MAX_UNIT_NAMES) return;
+    iface_deps[unit_idx][dep_idx / 64] |= (1ULL << (dep_idx % 64));
+    unit_registry_add_dep(unit_idx, dep_idx);
+}
+
 int unit_registry_is_dep(int unit_idx, int dep_idx)
 {
     if (unit_idx <= 0 || unit_idx >= MAX_UNIT_NAMES) return 0;
     if (dep_idx <= 0 || dep_idx >= MAX_UNIT_NAMES) return 0;
     return (deps[unit_idx][dep_idx / 64] & (1ULL << (dep_idx % 64))) != 0;
+}
+
+int unit_registry_is_iface_dep(int unit_idx, int dep_idx)
+{
+    if (unit_idx <= 0 || unit_idx >= MAX_UNIT_NAMES) return 0;
+    if (dep_idx <= 0 || dep_idx >= MAX_UNIT_NAMES) return 0;
+    return (iface_deps[unit_idx][dep_idx / 64] & (1ULL << (dep_idx % 64))) != 0;
+}
+
+int unit_registry_count(void)
+{
+    return count;
 }
 
 void unit_registry_reset(void)
@@ -76,5 +97,6 @@ void unit_registry_reset(void)
         registry[i] = NULL;
     }
     memset(deps, 0, sizeof(deps));
+    memset(iface_deps, 0, sizeof(iface_deps));
     count = 0;
 }

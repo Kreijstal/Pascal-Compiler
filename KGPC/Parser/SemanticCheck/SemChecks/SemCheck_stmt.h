@@ -20,4 +20,9 @@ int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 /* Semantic check on a function statement (no side effects allowed) */
 int semcheck_func_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev);
 
+/* Try to convert a record expression to a target type via := operator */
+int semcheck_try_record_conversion_expression(SymTab_t *symtab,
+    struct Expression **expr_slot, struct Expression *target_expr,
+    KgpcType *target_type, KgpcType **source_type, int *source_owned);
+
 #endif

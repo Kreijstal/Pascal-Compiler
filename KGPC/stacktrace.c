@@ -74,6 +74,7 @@ void install_stack_trace_handler(void)
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
     sigaction(SIGABRT, &sa, NULL);
+    sigaction(SIGALRM, &sa, NULL);
 }
 
 #else

@@ -1367,7 +1367,7 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
     );
     combinator_t* inherited_expr = seq(new_combinator(), PASCAL_T_FUNC_CALL,
         token(create_keyword_parser("inherited", PASCAL_T_IDENTIFIER)),
-        optional(token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER))),
+        optional(token(pascal_identifier(PASCAL_T_IDENTIFIER))),
         optional(inherited_arg_list),
         NULL
     );
@@ -1419,6 +1419,16 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         NULL
     ), build_array_or_pointer_chain);
 
+    // specialize TypeName<T> as a bare expression factor (no args required)
+    // Used for: specialize Type<T>.Method(args) where . and () are infix/postfix operators
+    // e.g. specialize HashListTemplated<Control>.Find(h, key, hash, link)
+    combinator_t* specialize_bare = seq(new_combinator(), PASCAL_T_CONSTRUCTED_TYPE,
+        token(keyword_ci("specialize")),
+        token(pascal_qualified_identifier(PASCAL_T_IDENTIFIER)),
+        type_arg_list,
+        NULL
+    );
+
     combinator_t *factor = multi(new_combinator(), PASCAL_T_NONE,
         token(anonymous_function(PASCAL_T_ANONYMOUS_FUNCTION, p, stmt_parser)),  // Anonymous functions
         token(anonymous_procedure(PASCAL_T_ANONYMOUS_PROCEDURE, p, stmt_parser)), // Anonymous procedures
@@ -1436,6 +1446,7 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         typecast_with_suffixes,                   // Type casts with suffixes (e.g., shortstring(x)[1])
         specialize_typecast_with_suffixes,        // specialize T<T>(x) with suffixes
         specialize_typecast,                      // specialize T<T>(x) without suffixes
+        specialize_bare,                          // specialize T<T> (member access/calls via infix operators)
         typecast_any_with_suffixes,               // Identifier casts with suffixes (e.g., PAnsiChar(x)^)
         typecast,                                 // Type casts Integer(x) - try before func_call
         array_access,                             // Array access (supports pointer dereference)
@@ -1522,16 +1533,27 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
     expr_altern(*p, 3, PASCAL_T_ROR, token(keyword_ci("ror")));
 
     // Precedence 4: Unary operators (highest precedence for regular operators)
+    // Use expr_insert for the first operator and expr_altern for the rest,
+    // so they share a single list entry. Multiple expr_insert calls at the same
+    // prec would push each other backwards, causing later prec levels to be
+    // inserted between them and breaking precedence ordering.
     expr_insert(*p, 4, PASCAL_T_NEG, EXPR_PREFIX, ASSOC_NONE, token(match("-")));
-    expr_insert(*p, 4, PASCAL_T_POS, EXPR_PREFIX, ASSOC_NONE, token(match("+")));
-    expr_insert(*p, 4, PASCAL_T_NOT, EXPR_PREFIX, ASSOC_NONE, token(keyword_ci("not")));
-    expr_insert(*p, 4, PASCAL_T_ADDR, EXPR_PREFIX, ASSOC_NONE, token(match("@")));
+    expr_altern(*p, 4, PASCAL_T_POS, token(match("+")));
+    expr_altern(*p, 4, PASCAL_T_NOT, token(keyword_ci("not")));
+    expr_altern(*p, 4, PASCAL_T_ADDR, token(match("@")));
 
     // Field width operator for formatted output: expression:width
     // Precedence 0 (same as relational) so that `x:Width-2` parses as `x:(Width-2)`
     // rather than `(x:Width) - 2`. Multiple colons like `x:10:2` work via left-assoc.
-    if (!skip_relational)
-        expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(match(":")));
+    // Guard: `:` must NOT be followed by `=` (to avoid consuming the `:=` assignment operator)
+    if (!skip_relational) {
+        combinator_t* field_width_op = seq(new_combinator(), PASCAL_T_NONE,
+            match(":"),
+            pnot(match("=")),
+            NULL
+        );
+        expr_altern(*p, 0, PASCAL_T_FIELD_WIDTH, token(field_width_op));
+    }
 
     // Precedence 5: Member access (highest precedence for infix)
     combinator_t* member_access_op = seq(new_combinator(), PASCAL_T_NONE,
@@ -1554,14 +1576,14 @@ static void init_pascal_expression_parser_ex(combinator_t** p, combinator_t** st
         );
         combinator_t* postfix_call = map(postfix_call_args, wrap_call_suffix);
         expr_insert(*p, 7, PASCAL_T_FUNC_CALL, EXPR_POSTFIX, ASSOC_LEFT, postfix_call);
-        
+
         combinator_t* postfix_index = between(
             token(match("[")),
             token(match("]")),
             sep_by(lazy(p), token(match(",")))
         );
         combinator_t* postfix_array = map(postfix_index, wrap_array_suffix);
-        expr_insert(*p, 7, PASCAL_T_ARRAY_ACCESS, EXPR_POSTFIX, ASSOC_LEFT, postfix_array);
+        expr_altern(*p, 7, PASCAL_T_ARRAY_ACCESS, postfix_array);
     }
 }
 

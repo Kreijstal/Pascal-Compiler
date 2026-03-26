@@ -14,6 +14,8 @@
 #include <execinfo.h>
 #endif
 
+/* Forward declarations for unresolved method stubs — implementation after includes. */
+
 #include "codegen.h"
 #include "codegen_expression.h"
 #include "register_types.h"
@@ -30,6 +32,7 @@
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
@@ -45,6 +48,48 @@ extern const char *kgpc_getenv(const char *name);
 static inline int codegen_node_is_record_type(HashNode_t *node)
 {
     return hashnode_is_record(node);
+}
+
+/* Collect method labels that need stubs (referenced via @MethodName but
+ * body not available in the compilation unit).  Emitted as .weak stubs
+ * in the final pass so they don't conflict with real definitions. */
+static ListNode_t *g_unresolved_method_stubs = NULL;
+
+void codegen_add_unresolved_method_stub(const char *label)
+{
+    if (label == NULL) return;
+    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next)
+        if (n->cur != NULL && strcmp((const char *)n->cur, label) == 0)
+            return;
+    char *dup = strdup(label);
+    if (dup != NULL) {
+        ListNode_t *node = calloc(1, sizeof(ListNode_t));
+        if (node != NULL) {
+            node->cur = dup;
+            if (g_unresolved_method_stubs == NULL)
+                g_unresolved_method_stubs = node;
+            else
+                PushListNodeBack(g_unresolved_method_stubs, node);
+        } else {
+            free(dup);
+        }
+    }
+}
+
+void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms)
+{
+    (void)out;
+    (void)emitted_subprograms;
+    /* Stubs removed: unresolved method references should produce linker
+     * errors so that codegen bugs are caught instead of hidden. */
+    ListNode_t *cur = g_unresolved_method_stubs;
+    while (cur != NULL) {
+        ListNode_t *next = cur->next;
+        free(cur->cur);
+        free(cur);
+        cur = next;
+    }
+    g_unresolved_method_stubs = NULL;
 }
 
 /* Helper function to get RecordType from HashNode */
@@ -63,7 +108,7 @@ static struct Expression *codegen_unwrap_typecast_call_expr(struct Expression *e
         return NULL;
 
     HashNode_t *type_node = NULL;
-    if (FindIdent(&type_node, symtab, id) < 0 ||
+    if (FindSymbol(&type_node, symtab, id) == 0 ||
         type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
         return NULL;
 
@@ -101,7 +146,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
     if (expr->type == EXPR_VAR_ID && symtab != NULL && expr->expr_data.id != NULL)
     {
         HashNode_t *var_node = NULL;
-        if (FindIdent(&var_node, symtab, expr->expr_data.id) >= 0 && var_node != NULL)
+        if (FindSymbol(&var_node, symtab, expr->expr_data.id) != 0 && var_node != NULL)
         {
             struct RecordType *rec = codegen_get_record_type_from_node(var_node);
             if (rec != NULL)
@@ -123,7 +168,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
         if (target_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, target_id) >= 0 && type_node != NULL)
+            if (FindSymbol(&type_node, symtab, target_id) != 0 && type_node != NULL)
             {
                 struct RecordType *rec = codegen_get_record_type_from_node(type_node);
                 if (rec != NULL)
@@ -146,7 +191,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
         if (call_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, call_id) >= 0 && type_node != NULL)
+            if (FindSymbol(&type_node, symtab, call_id) != 0 && type_node != NULL)
             {
                 struct RecordType *rec = codegen_get_record_type_from_node(type_node);
                 if (rec != NULL)
@@ -184,7 +229,7 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
                     if (field->type_id != NULL)
                     {
                         HashNode_t *type_node = NULL;
-                        if (FindIdent(&type_node, symtab, field->type_id) >= 0 &&
+                        if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
                             type_node != NULL)
                         {
                             struct RecordType *rec = codegen_get_record_type_from_node(type_node);
@@ -212,14 +257,14 @@ static struct RecordType *codegen_expr_record_type(const struct Expression *expr
     if (expr->pointer_subtype_id != NULL && symtab != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, symtab, expr->pointer_subtype_id) >= 0 && target_node != NULL)
+        if (FindSymbol(&target_node, symtab, expr->pointer_subtype_id) != 0 && target_node != NULL)
             return codegen_get_record_type_from_node(target_node);
     }
 
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL && symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, symtab, expr->expr_data.id) >= 0 && node != NULL)
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 && node != NULL)
         {
             struct RecordType *record = codegen_get_record_type_from_node(node);
             if (record != NULL)
@@ -243,7 +288,7 @@ static int codegen_expr_is_type_identifier(const struct Expression *expr, CodeGe
         return 0;
 
     HashNode_t *node = NULL;
-    if (FindIdent(&node, ctx->symtab, expr->expr_data.id) < 0 || node == NULL)
+    if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) == 0 || node == NULL)
         return 0;
     return node->hash_type == HASHTYPE_TYPE;
 }
@@ -254,7 +299,7 @@ static struct RecordType *codegen_lookup_named_record_type(CodeGenContext *ctx, 
 
     if (ctx == NULL || ctx->symtab == NULL || type_name == NULL)
         return NULL;
-    if (FindIdent(&node, ctx->symtab, (char *)type_name) < 0 || node == NULL)
+    if (FindSymbol(&node, ctx->symtab, (char *)type_name) == 0 || node == NULL)
         return NULL;
     if (node->type == NULL)
         return NULL;
@@ -286,15 +331,8 @@ static int codegen_expr_needs_class_method_vmt_self(const struct Expression *exp
 static int codegen_call_requires_class_method_vmt_self(const struct Expression *call_expr,
     CodeGenContext *ctx)
 {
-    HashNode_t *resolved = NULL;
-    const char *lookup_name = NULL;
-    const char *method_name = NULL;
-    const char *sep = NULL;
     const char *owner_class_name = NULL;
-    char parsed_class[128];
-    char parsed_method[128];
-    size_t class_len = 0;
-    size_t method_len = 0;
+    const char *method_name = NULL;
     struct RecordType *owner_record = NULL;
     struct RecordType *check_record = NULL;
     const char *check_class = NULL;
@@ -302,46 +340,18 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
     if (call_expr == NULL || call_expr->type != EXPR_FUNCTION_CALL)
         return 0;
 
-    resolved = call_expr->expr_data.function_call_data.resolved_func;
-    if (resolved != NULL && resolved->owner_class != NULL && resolved->method_name != NULL)
-    {
-        owner_class_name = resolved->owner_class;
-        owner_record = codegen_lookup_named_record_type(ctx, owner_class_name);
-        if (owner_record == NULL || !record_type_is_class(owner_record))
-            return 0;
-        return from_cparser_is_method_nonstatic_class_method(
-            resolved->owner_class, resolved->method_name);
-    }
+    /* Use cached method identity from semantic checker (preferred). */
+    owner_class_name = call_expr->expr_data.function_call_data.cached_owner_class;
+    method_name = call_expr->expr_data.function_call_data.cached_method_name;
 
-    lookup_name = call_expr->expr_data.function_call_data.mangled_id;
-    if (lookup_name == NULL)
-        lookup_name = call_expr->expr_data.function_call_data.id;
-    method_name = call_expr->expr_data.function_call_data.id;
-    if (lookup_name == NULL)
-        lookup_name = method_name;
-
-    if (lookup_name != NULL)
+    /* Fallback: try deprecated resolved_func if cached fields not set. */
+    if (owner_class_name == NULL || method_name == NULL)
     {
-        sep = strstr(lookup_name, "__");
-        if (sep != NULL && sep != lookup_name)
+        HashNode_t *resolved = call_expr->expr_data.function_call_data.resolved_func;
+        if (resolved != NULL)
         {
-            class_len = (size_t)(sep - lookup_name);
-            if (class_len >= sizeof(parsed_class))
-                class_len = sizeof(parsed_class) - 1;
-            memcpy(parsed_class, lookup_name, class_len);
-            parsed_class[class_len] = '\0';
-            owner_class_name = parsed_class;
-
-            sep += 2;
-            while (sep[method_len] != '\0' && sep[method_len] != '_' &&
-                   method_len + 1 < sizeof(parsed_method))
-            {
-                parsed_method[method_len] = sep[method_len];
-                method_len++;
-            }
-            parsed_method[method_len] = '\0';
-            if (parsed_method[0] != '\0')
-                method_name = parsed_method;
+            owner_class_name = resolved->owner_class;
+            method_name = resolved->method_name;
         }
     }
 
@@ -353,6 +363,8 @@ static int codegen_call_requires_class_method_vmt_self(const struct Expression *
             return 1;
     }
 
+    /* Fall back to self_class_name for inherited/virtual calls. */
+    method_name = call_expr->expr_data.function_call_data.id;
     check_class = call_expr->expr_data.function_call_data.self_class_name;
     check_record = codegen_lookup_named_record_type(ctx, check_class);
     while (check_class != NULL && method_name != NULL)
@@ -515,7 +527,7 @@ static int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, 
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL && node->type != NULL)
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
             if (kgpc_type_is_shortstring(node->type))
                 return 1;
@@ -548,7 +560,7 @@ static int codegen_expr_is_char_array_like_ctx(const struct Expression *expr, Co
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL && node->type != NULL)
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
             if (kgpc_type_is_array(node->type))
             {
@@ -665,7 +677,7 @@ static int codegen_get_char_array_length(const struct Expression *expr, CodeGenC
         else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL &&
+            if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL &&
                 node->type != NULL && kgpc_type_is_array(node->type) &&
                 node->type->info.array_info.element_type != NULL &&
                 node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
@@ -714,7 +726,7 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
     if (base_type == NULL && base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 && node != NULL)
             base_type = node->type;
     }
 
@@ -756,7 +768,7 @@ static int codegen_self_param_is_class(Tree_t *formal_arg_decl, CodeGenContext *
     if (type == NULL && ctx != NULL && ctx->symtab != NULL && type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, ctx->symtab, type_id) == 0 &&
+        if (FindSymbol(&type_node, ctx->symtab, type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
             type = type_node->type;
     }
@@ -967,7 +979,7 @@ static int formal_decl_expects_wide_string(Tree_t *decl, SymTab_t *symtab)
         if (symtab != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, type_id) >= 0 &&
+            if (FindSymbol(&type_node, symtab, type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL &&
                 kgpc_type_is_wide_string(type_node->type))
             {
@@ -1110,7 +1122,7 @@ static int codegen_param_expected_type(Tree_t *decl, SymTab_t *symtab)
         return SHORTSTRING_TYPE;
 
     if (type_id != NULL && symtab != NULL &&
-        FindIdent(&type_node, symtab, type_id) >= 0 && type_node != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 && type_node != NULL &&
         type_node->type != NULL)
     {
         int resolved = codegen_tag_from_kgpc(type_node->type);
@@ -1141,12 +1153,16 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         }
         struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->storage_size > 0)
+        {
             return (int)alias->storage_size;
+        }
         if (decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
         {
             long long size = kgpc_type_sizeof(decl->tree_data.var_decl_data.cached_kgpc_type);
             if (size > 0)
+            {
                 return (int)size;
+            }
         }
     }
 
@@ -1154,7 +1170,7 @@ static int codegen_param_real_storage_size(Tree_t *decl, SymTab_t *symtab)
         symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) == 0 &&
+        if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
             long long size = kgpc_type_sizeof(type_node->type);
@@ -1270,7 +1286,7 @@ static int codegen_expr_real_storage_size(const struct Expression *expr, CodeGen
         expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) == 0 &&
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->type != NULL)
             type = node->type;
     }
@@ -1756,7 +1772,7 @@ static int formal_decl_is_char_set(Tree_t *decl, SymTab_t *symtab)
     if (decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) >= 0 &&
+        if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
             if (type_node->type->kind == TYPE_KIND_PRIMITIVE &&
@@ -1778,7 +1794,15 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
     {
         struct Array *arr = &decl->tree_data.arr_decl_data;
         if (arr->is_shortstring && arr->e_range >= arr->s_range && arr->e_range >= 0)
-            return arr->e_range - arr->s_range + 1;
+        {
+            int size = arr->e_range - arr->s_range + 1;
+            /* A plain 'ShortString' type is 256 bytes (array[0..255] of Char).
+             * If the bounds indicate a very small size (e.g. e_range=0 from
+             * uninitialized/default values), use the standard 256. */
+            if (size < 2)
+                return 256;
+            return size;
+        }
     }
 
     if (decl->type == TREE_VAR_DECL)
@@ -1786,7 +1810,11 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
         struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
         if (alias != NULL && alias->is_shortstring &&
             alias->array_end >= alias->array_start && alias->array_end >= 0)
-            return alias->array_end - alias->array_start + 1;
+        {
+            int size = alias->array_end - alias->array_start + 1;
+            if (size >= 2) return size;
+            return 256;
+        }
 
         KgpcType *cached = decl->tree_data.var_decl_data.cached_kgpc_type;
         if (cached != NULL)
@@ -1794,7 +1822,11 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
             struct TypeAlias *cached_alias = kgpc_type_get_type_alias(cached);
             if (cached_alias != NULL && cached_alias->is_shortstring &&
                 cached_alias->array_end >= cached_alias->array_start && cached_alias->array_end >= 0)
-                return cached_alias->array_end - cached_alias->array_start + 1;
+            {
+                int size = cached_alias->array_end - cached_alias->array_start + 1;
+                if (size >= 2) return size;
+                return 256;
+            }
             if (kgpc_type_is_array(cached))
             {
                 int start = 0;
@@ -1808,7 +1840,7 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
         if (decl->tree_data.var_decl_data.type_id != NULL && symtab != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, decl->tree_data.var_decl_data.type_id) >= 0 &&
+            if (FindSymbol(&type_node, symtab, decl->tree_data.var_decl_data.type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 struct TypeAlias *type_alias = kgpc_type_get_type_alias(type_node->type);
@@ -1855,24 +1887,43 @@ ListNode_t *codegen_emit_is_expr(struct Expression *expr, ListNode_t *inst_list,
     const char *target_label = NULL;
     Register_t *target_typeinfo_reg = NULL;
 
-    /* Support dynamic class-reference variables on RHS (Obj is ObjType). */
+    /* Support dynamic class-reference variables on RHS (Obj is ObjType).
+     * This also handles bare field names in FPC RTL method bodies that
+     * bypass semcheck — codegen_get_nonlocal resolves them as Self.field. */
     if (ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.is_data.target_record_type == NULL &&
         expr->expr_data.is_data.target_type_id != NULL)
     {
         HashNode_t *target_node = NULL;
-        if (FindIdent(&target_node, ctx->symtab, expr->expr_data.is_data.target_type_id) >= 0 &&
-            target_node != NULL && target_node->hash_type == HASHTYPE_VAR)
+        int found = FindSymbol(&target_node, ctx->symtab,
+                               expr->expr_data.is_data.target_type_id);
+        int is_dynamic_ref = (found != 0 && target_node != NULL &&
+                              target_node->hash_type == HASHTYPE_VAR);
+        /* Also treat as dynamic if the name is not in the symtab at all
+         * but we're inside a class method (bare field name). */
+        if (!is_dynamic_ref && (found == 0 || target_node == NULL) &&
+            ctx->current_subprogram_owner_class != NULL &&
+            find_label("Self") != NULL)
+            is_dynamic_ref = 1;
+        if (is_dynamic_ref)
         {
+            Register_t *class_ref_reg = NULL;
             struct Expression target_expr;
             memset(&target_expr, 0, sizeof(target_expr));
             target_expr.line_num = expr->line_num;
             target_expr.col_num = expr->col_num;
             target_expr.type = EXPR_VAR_ID;
             target_expr.expr_data.id = expr->expr_data.is_data.target_type_id;
-            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &target_typeinfo_reg);
-            if (target_typeinfo_reg == NULL)
+            inst_list = codegen_expr_with_result(&target_expr, inst_list, ctx, &class_ref_reg);
+            if (class_ref_reg == NULL)
                 return inst_list;
+            /* The field value is a class reference (VMT pointer).
+             * Extract TYPEINFO from VMT offset 56 (vTypeInfo slot). */
+            char ti_buf[128];
+            snprintf(ti_buf, sizeof(ti_buf), "\tmovq\t56(%s), %s\n",
+                     class_ref_reg->bit_64, class_ref_reg->bit_64);
+            inst_list = add_inst(inst_list, ti_buf);
+            target_typeinfo_reg = class_ref_reg;
         }
     }
 
@@ -2454,8 +2505,11 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
     if (buffer == NULL || size == 0)
         return;
     char sanitized[CODEGEN_MAX_INST_BUF];
+    const char *prefix = "__kgpc_enum_typeinfo_";
     codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
+    snprintf(buffer, size, "%s%.*s", prefix,
+        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
+        sanitized);
 }
 
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.
@@ -2736,8 +2790,7 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        int found = FindIdent(&node, ctx->symtab, expr->expr_data.id);
-        if (found >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) && node != NULL)
         {
             if (node->type != NULL)
             {
@@ -2902,7 +2955,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, expr->array_element_type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long node_size = kgpc_type_sizeof(type_node->type);
@@ -2921,7 +2974,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (ctx != NULL && ctx->symtab != NULL && expr->array_element_type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 &&
+        if (FindSymbol(&type_node, ctx->symtab, expr->array_element_type_id) != 0 &&
             type_node != NULL && type_node->type != NULL)
         {
             long long node_size = kgpc_type_sizeof(type_node->type);
@@ -2934,7 +2987,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         expr->expr_data.id != NULL)
     {
         HashNode_t *var_node = NULL;
-        if (FindIdent(&var_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&var_node, ctx->symtab, expr->expr_data.id) != 0 &&
             var_node != NULL && var_node->type != NULL &&
             kgpc_type_is_array(var_node->type))
         {
@@ -2999,7 +3052,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             ctx != NULL && ctx->symtab != NULL && pointer_expr->expr_data.id != NULL)
         {
             HashNode_t *var_node = NULL;
-            if (FindIdent(&var_node, ctx->symtab, pointer_expr->expr_data.id) == 0 &&
+            if (FindSymbol(&var_node, ctx->symtab, pointer_expr->expr_data.id) != 0 &&
                 var_node != NULL && var_node->type != NULL)
             {
                 if (kgpc_type_is_pointer(var_node->type))
@@ -3107,7 +3160,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             if (target_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, ctx->symtab, target_id) >= 0 &&
+                if (FindSymbol(&type_node, ctx->symtab, target_id) != 0 &&
                     type_node != NULL && type_node->type != NULL &&
                     kgpc_type_is_pointer(type_node->type))
                 {
@@ -3131,7 +3184,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
         if (ctx != NULL && ctx->symtab != NULL && expr->pointer_subtype_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, expr->pointer_subtype_id) >= 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, expr->pointer_subtype_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long node_size = kgpc_type_sizeof(type_node->type);
@@ -3390,7 +3443,7 @@ static int codegen_formal_is_dynamic_array(Tree_t *formal, SymTab_t *symtab)
     if (symtab != NULL && formal->tree_data.var_decl_data.type_id != NULL)
     {
         HashNode_t *type_node = NULL;
-        if (FindIdent(&type_node, symtab, formal->tree_data.var_decl_data.type_id) != -1 &&
+        if (FindSymbol(&type_node, symtab, formal->tree_data.var_decl_data.type_id) != 0 &&
             type_node != NULL && type_node->type != NULL &&
             type_node->type->kind == TYPE_KIND_ARRAY &&
             kgpc_type_is_dynamic_array(type_node->type))
@@ -3588,7 +3641,7 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
     if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
             return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
 
         codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
@@ -3768,7 +3821,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
     int result = codegen_sizeof_record_members(ctx, record->fields, &members_size, depth);
     if (result != 0)
         return result;
-    
+
     /* For classes, add 8 bytes for the VMT pointer at the beginning */
     if (record_type_is_class(record))
         *size_out = 8 + members_size;
@@ -3776,7 +3829,7 @@ static int codegen_sizeof_record(CodeGenContext *ctx, struct RecordType *record,
         *size_out = members_size;
     record->cached_size = *size_out;
     record->has_cached_size = 1;
-    
+
     return 0;
 }
 
@@ -3955,10 +4008,8 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
                 expr->expr_data.record_access_data.field_id);
     }
 
-    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
-    if (expr_record != NULL)
-        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
-
+    /* Check resolved_kgpc_type first — the semantic checker may have
+     * rewritten the type (e.g. interface identifier → TGUID). */
     KgpcType *expr_type = expr_get_kgpc_type(expr);
     if (expr_type != NULL)
     {
@@ -3969,10 +4020,14 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
             return codegen_sizeof_record(ctx, expr_type->info.points_to->info.record_info, size_out, 0);
     }
 
+    struct RecordType *expr_record = codegen_expr_record_type(expr, ctx != NULL ? ctx->symtab : NULL);
+    if (expr_record != NULL)
+        return codegen_sizeof_record(ctx, expr_record, size_out, 0);
+
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
             return codegen_sizeof_hashnode(ctx, node, size_out, 0);
     }
 
@@ -3981,7 +4036,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
         if (expr->pointer_subtype_id != NULL && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, expr->pointer_subtype_id) >= 0 && node != NULL)
+            if (FindSymbol(&node, ctx->symtab, expr->pointer_subtype_id) != 0 && node != NULL)
                 return codegen_sizeof_hashnode(ctx, node, size_out, 0);
         }
 
@@ -4002,7 +4057,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
             if (pointer_expr->pointer_subtype_id != NULL && ctx != NULL && ctx->symtab != NULL)
             {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, ctx->symtab, pointer_expr->pointer_subtype_id) >= 0 && node != NULL)
+                if (FindSymbol(&node, ctx->symtab, pointer_expr->pointer_subtype_id) != 0 && node != NULL)
                     return codegen_sizeof_hashnode(ctx, node, size_out, 0);
             }
         }
@@ -4015,7 +4070,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
             expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, expr->array_element_type_id) >= 0 && type_node != NULL)
+            if (FindSymbol(&type_node, ctx->symtab, expr->array_element_type_id) != 0 && type_node != NULL)
             {
                 elem_record = codegen_get_record_type_from_node(type_node);
                 if (elem_record == NULL && type_node->type != NULL &&
@@ -4033,7 +4088,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
                         else if (alias->target_type_id != NULL)
                         {
                             HashNode_t *target_node = NULL;
-                            if (FindIdent(&target_node, ctx->symtab, alias->target_type_id) >= 0 &&
+                            if (FindSymbol(&target_node, ctx->symtab, alias->target_type_id) != 0 &&
                                 target_node != NULL)
                             {
                                 elem_record = codegen_get_record_type_from_node(target_node);
@@ -4059,7 +4114,7 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
                 else if (field->array_element_type_id != NULL && ctx->symtab != NULL)
                 {
                     HashNode_t *field_node = NULL;
-                    if (FindIdent(&field_node, ctx->symtab, field->array_element_type_id) >= 0 &&
+                    if (FindSymbol(&field_node, ctx->symtab, field->array_element_type_id) != 0 &&
                         field_node != NULL)
                     {
                         elem_record = codegen_get_record_type_from_node(field_node);
@@ -4112,7 +4167,7 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     if (record_type == NULL && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, type_id) >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
             record_type = codegen_get_record_type_from_node(node);
     }
 
@@ -4230,13 +4285,13 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
     struct RecordType *found_record = NULL;
 
     HashTable_t *tables[2];
-    tables[0] = symtab->builtins;
+    tables[0] = symtab->builtin_scope->table;
     tables[1] = NULL;
 
-    ListNode_t *scope = symtab->stack_head;
+    ScopeNode *scope = symtab->current_scope;
     while (scope != NULL)
     {
-        tables[1] = (HashTable_t *)scope->cur;
+        tables[1] = scope->table;
         for (int t = 0; t < 2; ++t)
         {
             HashTable_t *table = tables[t];
@@ -4285,7 +4340,7 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
                 }
             }
         }
-        scope = scope->next;
+        scope = scope->parent;
     }
 
     if (found_field != NULL && out_record != NULL)
@@ -4332,7 +4387,7 @@ static long long codegen_array_elem_size_from_field(struct RecordField *field, C
         if (ctx != NULL && ctx->symtab != NULL && field->pointer_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, field->pointer_type_id) >= 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, field->pointer_type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 KgpcType *points_to = NULL;
@@ -4377,7 +4432,7 @@ static long long codegen_array_elem_size_from_field(struct RecordField *field, C
         if (ctx != NULL && ctx->symtab != NULL && field->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, field->array_element_type_id) >= 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, field->array_element_type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long elem_size = kgpc_type_sizeof(type_node->type);
@@ -4441,7 +4496,7 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
         if (ctx->symtab != NULL && field_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, field_type_id) == 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, field_type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long type_size = kgpc_type_sizeof(type_node->type);
@@ -4582,6 +4637,36 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
         }
     }
 
+    /* ShortString → AnsiString/RawByteString typecast: build_expr_tree strips
+     * EXPR_TYPECAST, so the conversion would be lost.  Detect it here and emit
+     * a call to kgpc_shortstring_to_string before the generic tree path. */
+    if (expr != NULL && expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.expr != NULL)
+    {
+        int tc_target = expr->expr_data.typecast_data.target_type;
+        struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
+        int inner_is_ss = codegen_expr_is_shortstring_value_ctx(tc_inner, ctx);
+        if (inner_is_ss && tc_target == STRING_TYPE)
+        {
+            /* Evaluate the inner ShortString expression to get a pointer to
+             * the length-prefixed data, then convert it to a heap AnsiString. */
+            Register_t *ss_reg = NULL;
+            inst_list = codegen_expr_tree_value(tc_inner, inst_list, ctx, &ss_reg);
+            if (ss_reg != NULL)
+            {
+                inst_list = codegen_promote_shortstring_reg(inst_list, ctx, ss_reg);
+                if (out_reg != NULL)
+                    *out_reg = ss_reg;
+                else
+                    free_reg(get_reg_stack(), ss_reg);
+            }
+            else if (out_reg != NULL)
+            {
+                *out_reg = NULL;
+            }
+            return inst_list;
+        }
+    }
 
     codegen_begin_expression(ctx);
 
@@ -4760,7 +4845,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         if (var_node == NULL && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *sym_node = NULL;
-            if (FindIdent(&sym_node, ctx->symtab, inner->expr_data.id) >= 0 &&
+            if (FindSymbol(&sym_node, ctx->symtab, inner->expr_data.id) != 0 &&
                 sym_node != NULL && sym_node->mangled_id != NULL)
             {
                 var_node = find_label(sym_node->mangled_id);
@@ -4796,7 +4881,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
             if (ctx != NULL && ctx->symtab != NULL)
             {
                 HashNode_t *node = NULL;
-                if (FindIdent(&node, ctx->symtab, inner->expr_data.id) >= 0 &&
+                if (FindSymbol(&node, ctx->symtab, inner->expr_data.id) != 0 &&
                     node != NULL && node->hash_type == HASHTYPE_CONST &&
                     node->const_string_value != NULL &&
                     !(node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE))
@@ -4821,7 +4906,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
             }
 
             int offset = 0;
-            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset);
+            inst_list = codegen_get_nonlocal(inst_list, inner->expr_data.id, &offset, ctx);
             snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset, current_non_local_reg64(), target_reg->bit_64);
             return add_inst(inst_list, buffer);
         }
@@ -4900,7 +4985,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         record_expr->expr_data.id != NULL && ctx->symtab != NULL)
     {
         HashNode_t *symbol = NULL;
-        if (FindIdent(&symbol, ctx->symtab, record_expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&symbol, ctx->symtab, record_expr->expr_data.id) != 0 &&
             symbol != NULL && symbol->hash_type == HASHTYPE_TYPE)
         {
             is_type_ref = 1;
@@ -5831,7 +5916,7 @@ static int codegen_expr_is_byref_var_id(const struct Expression *expr, CodeGenCo
         return 0;
 
     HashNode_t *symbol = NULL;
-    if (FindIdent(&symbol, ctx->symtab, expr->expr_data.id) < 0 || symbol == NULL)
+    if (FindSymbol(&symbol, ctx->symtab, expr->expr_data.id) == 0 || symbol == NULL)
         return 0;
 
     return symbol->is_var_parameter;
@@ -5972,7 +6057,7 @@ static int codegen_resolve_is_array(struct Expression *array_expr, CodeGenContex
     if (!base_is_array && ctx->symtab != NULL && array_expr->type == EXPR_VAR_ID)
     {
         HashNode_t *array_node = NULL;
-        if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&array_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
             array_node != NULL && hashnode_is_array(array_node))
         {
             base_is_array = 1;
@@ -6017,7 +6102,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
             if (ctx != NULL && ctx->symtab != NULL && record_field->type_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, ctx->symtab, record_field->type_id) >= 0 &&
+                if (FindSymbol(&type_node, ctx->symtab, record_field->type_id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     record_field_type = type_node->type;
@@ -6050,7 +6135,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
                  ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *var_node = NULL;
-            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                 var_node != NULL && var_node->type != NULL)
             {
                 if (kgpc_type_is_string(var_node->type))
@@ -6099,7 +6184,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
                      array_expr->expr_data.id != NULL)
             {
                 HashNode_t *var_node = NULL;
-                if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+                if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                     var_node != NULL && var_node->type != NULL &&
                     kgpc_type_is_wide_string(var_node->type))
                 {
@@ -6118,7 +6203,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
             ctx != NULL && ctx->symtab != NULL && array_expr->expr_data.id != NULL)
         {
             HashNode_t *var_node = NULL;
-            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                 var_node != NULL)
             {
                 base_type = var_node->type;
@@ -6211,7 +6296,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
         if (array_expr->array_element_type_id != NULL)
         {
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, ctx->symtab, array_expr->array_element_type_id) >= 0 &&
+            if (FindSymbol(&type_node, ctx->symtab, array_expr->array_element_type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL)
             {
                 long long node_size = kgpc_type_sizeof(type_node->type);
@@ -6222,7 +6307,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
         if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
         {
             HashNode_t *array_node = NULL;
-            if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+            if (FindSymbol(&array_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                 array_node != NULL && array_node->type != NULL &&
                 kgpc_type_is_array(array_node->type))
             {
@@ -6236,7 +6321,7 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
         array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
     {
         HashNode_t *array_node = NULL;
-        if (FindIdent(&array_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+        if (FindSymbol(&array_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
             array_node != NULL && array_node->type != NULL &&
             kgpc_type_is_array(array_node->type))
         {
@@ -6366,7 +6451,7 @@ static ListNode_t *codegen_emit_linearized_array_address(struct Expression *base
     if (base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL && base_expr->expr_data.id != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, base_expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
             node != NULL && node->type != NULL)
             array_type = node->type;
     }
@@ -6570,7 +6655,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             if (ctx != NULL && ctx->symtab != NULL && record_field->type_id != NULL)
             {
                 HashNode_t *type_node = NULL;
-                if (FindIdent(&type_node, ctx->symtab, record_field->type_id) >= 0 &&
+                if (FindSymbol(&type_node, ctx->symtab, record_field->type_id) != 0 &&
                     type_node != NULL && type_node->type != NULL)
                 {
                     record_field_type = type_node->type;
@@ -6601,7 +6686,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                  ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *var_node = NULL;
-            if (FindIdent(&var_node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            if (FindSymbol(&var_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                 var_node != NULL && var_node->type != NULL)
             {
                 if (kgpc_type_is_string(var_node->type))
@@ -6655,7 +6740,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
                 {
                     HashNode_t *dbg_node = NULL;
-                    if (FindIdent(&dbg_node, ctx->symtab, array_expr->expr_data.id) == 0 &&
+                    if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                         dbg_node != NULL && dbg_node->type != NULL)
                     {
                         fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
@@ -6720,7 +6805,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (array_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 && node != NULL)
+        if (FindSymbol(&node, ctx->symtab, array_expr->expr_data.id) != 0 && node != NULL)
         {
             if (node->type != NULL)
             {
@@ -6798,7 +6883,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            if (FindSymbol(&node, ctx->symtab, array_expr->expr_data.id) != 0 &&
                 node != NULL && node->type != NULL)
                 indexable_type = node->type;
         }
@@ -6872,7 +6957,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
             ctx != NULL && ctx->symtab != NULL && ptr_expr->expr_data.id != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, ptr_expr->expr_data.id) >= 0 && node != NULL)
+            if (FindSymbol(&node, ctx->symtab, ptr_expr->expr_data.id) != 0 && node != NULL)
                 ptr_type = node->type;
         }
         if (ptr_type == NULL && ptr_expr != NULL && ptr_expr->type == EXPR_RECORD_ACCESS)
@@ -6887,7 +6972,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                     else if (field->pointer_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
                     {
                         HashNode_t *type_node = NULL;
-                        if (FindIdent(&type_node, ctx->symtab, field->pointer_type_id) >= 0 &&
+                        if (FindSymbol(&type_node, ctx->symtab, field->pointer_type_id) != 0 &&
                             type_node != NULL && type_node->type != NULL)
                         {
                             if (kgpc_type_is_shortstring(type_node->type))
@@ -6916,7 +7001,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                 if (!shortstring_index && field->type_id != NULL && ctx != NULL && ctx->symtab != NULL)
                 {
                     HashNode_t *type_node = NULL;
-                    if (FindIdent(&type_node, ctx->symtab, field->type_id) >= 0 &&
+                    if (FindSymbol(&type_node, ctx->symtab, field->type_id) != 0 &&
                         type_node != NULL)
                     {
                         if (type_node->type != NULL && kgpc_type_is_pointer(type_node->type))
@@ -6956,7 +7041,7 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                                 else if (alias->pointer_type_id != NULL)
                                 {
                                     HashNode_t *sub_node = NULL;
-                                    if (FindIdent(&sub_node, ctx->symtab, alias->pointer_type_id) >= 0 &&
+                                    if (FindSymbol(&sub_node, ctx->symtab, alias->pointer_type_id) != 0 &&
                                         sub_node != NULL && sub_node->type != NULL)
                                     {
                                         if (kgpc_type_is_shortstring(sub_node->type))
@@ -7830,8 +7915,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (right_expr != NULL && right_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            int found = FindIdent(&node, ctx->symtab, right_expr->expr_data.id);
-            if (found >= 0 && node != NULL &&
+            if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) && node != NULL &&
                 node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
                 node->const_set_size > 0)
             {
@@ -7928,9 +8012,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         char done_label[32];
         gen_label(true_label, sizeof(true_label), ctx);
         gen_label(done_label, sizeof(done_label), ctx);
-        long long right_real_size = (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE)) ?
-            codegen_expr_real_storage_size(right_expr, ctx) : 0;
-
         const char *left_name = register_name_for_type(left_reg, REAL_TYPE);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm1\n", left_name);
         inst_list = add_inst(inst_list, buffer);
@@ -7940,7 +8021,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             right_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
         {
             HashNode_t *right_node = NULL;
-            if (FindIdent(&right_node, ctx->symtab, right_expr->expr_data.id) == 0 &&
+            if (FindSymbol(&right_node, ctx->symtab, right_expr->expr_data.id) != 0 &&
                 right_node != NULL && right_node->type != NULL)
             {
                 int right_declared_tag = codegen_tag_from_kgpc(right_node->type);
@@ -7955,18 +8036,11 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (right_expr != NULL && expr_has_type_tag(right_expr, REAL_TYPE) &&
             !right_declared_integer_like)
         {
-            if (right_real_size == 4)
-            {
-                snprintf(buffer, sizeof(buffer), "\tmovd\t%s, %%xmm0\n", right_reg->bit_32);
-                inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tcvtss2sd\t%xmm0, %xmm0\n");
-            }
-            else
-            {
-                const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
-                inst_list = add_inst(inst_list, buffer);
-            }
+            /* Values in GP registers are always promoted to double (64-bit),
+             * even when the declared type is Single. Use movq, not movd. */
+            const char *right_name = register_name_for_type(right_reg, REAL_TYPE);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", right_name);
+            inst_list = add_inst(inst_list, buffer);
         }
         else
         {
@@ -8150,7 +8224,7 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
         if (!is_char_set_in && right_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
         {
             HashNode_t *node = NULL;
-            if (FindIdent(&node, ctx->symtab, right_expr->expr_data.id) >= 0 && node != NULL &&
+            if (FindSymbol(&node, ctx->symtab, right_expr->expr_data.id) != 0 && node != NULL &&
                 node->hash_type == HASHTYPE_CONST && node->const_set_value != NULL &&
                 node->const_set_size > 4) /* 32-byte char set */
             {
@@ -8225,7 +8299,8 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
 }
 
 /* Code generation for non-local variable access */
-ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset)
+ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offset,
+    CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -8235,10 +8310,170 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     assert(var_id != NULL);
     assert(offset != NULL);
 
-    char buffer[100];
+    char buffer[128];
     StackNode_t *var = find_label(var_id);
 
     if(var == NULL) {
+        /* If we're inside a nonstatic class method, the bare name may be a field
+         * of the owning class that semcheck didn't rewrite to Self.field (e.g.
+         * because the method body came from an AST cache and bypassed semcheck).
+         * Resolve it as Self + field_offset. */
+        if (ctx != NULL && ctx->current_subprogram_owner_class != NULL &&
+            ctx->symtab != NULL)
+        {
+            StackNode_t *self_slot = find_label("Self");
+            if (self_slot != NULL)
+            {
+                struct RecordType *class_record = NULL;
+                HashNode_t *class_node = NULL;
+                if (FindSymbol(&class_node, ctx->symtab,
+                        (char *)ctx->current_subprogram_owner_class) != 0 &&
+                    class_node != NULL)
+                {
+                    class_record = get_record_type_from_node(class_node);
+                }
+                /* If short name lookup fails, try the full dotted class path
+                 * (e.g. "HeapInc.ThreadState" for nested class types). */
+                if (class_record == NULL &&
+                    ctx->current_subprogram_owner_class_full != NULL)
+                {
+                    class_node = NULL;
+                    if (FindSymbol(&class_node, ctx->symtab,
+                            (char *)ctx->current_subprogram_owner_class_full) != 0 &&
+                        class_node != NULL)
+                    {
+                        class_record = get_record_type_from_node(class_node);
+                    }
+                }
+                if (class_record != NULL)
+                {
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (resolve_record_field(ctx->symtab, class_record, var_id,
+                            &field_desc, &field_offset, 0, 1) == 0 &&
+                        field_desc != NULL)
+                    {
+                        /* Load Self pointer, then add field offset. */
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tmovq\t-%d(%%rbp), %s\n",
+                            self_slot->offset, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        if (field_offset != 0)
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\taddq\t$%lld, %s\n",
+                                field_offset, current_non_local_reg64());
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        return inst_list;
+                    }
+
+                    /* Check if the bare name is a method of the owning class.
+                     * This handles @MethodName references in cached method bodies. */
+                    const char *method_label = NULL;
+                    for (ListNode_t *mn = class_record->methods; mn != NULL; mn = mn->next)
+                    {
+                        if (mn->cur == NULL)
+                            continue;
+                        struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                        if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                        {
+                            if (mi->resolved_mangled_id != NULL)
+                                method_label = mi->resolved_mangled_id;
+                            else if (mi->mangled_name != NULL)
+                                method_label = mi->mangled_name;
+                            break;
+                        }
+                    }
+                    /* Also search parent classes for inherited methods. */
+                    if (method_label == NULL)
+                    {
+                        struct RecordType *search_record = class_record;
+                        while (method_label == NULL && search_record != NULL &&
+                               search_record->parent_class_name != NULL)
+                        {
+                            HashNode_t *parent_node = NULL;
+                            if (FindSymbol(&parent_node, ctx->symtab,
+                                    search_record->parent_class_name) != 0 &&
+                                parent_node != NULL)
+                            {
+                                search_record = get_record_type_from_node(parent_node);
+                            }
+                            else
+                                break;
+                            if (search_record == NULL)
+                                break;
+                            for (ListNode_t *mn = search_record->methods; mn != NULL; mn = mn->next)
+                            {
+                                if (mn->cur == NULL)
+                                    continue;
+                                struct MethodInfo *mi = (struct MethodInfo *)mn->cur;
+                                if (mi->name != NULL && pascal_identifier_equals(mi->name, var_id))
+                                {
+                                    if (mi->resolved_mangled_id != NULL)
+                                        method_label = mi->resolved_mangled_id;
+                                    else if (mi->mangled_name != NULL)
+                                        method_label = mi->mangled_name;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    /* If not found in MethodInfo lists, try the symbol table.
+                     * Methods may be registered under "ClassName.MethodName"
+                     * or "ClassName__MethodName" (mangled form). */
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s.%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        HashNode_t *method_node = NULL;
+                        if (FindSymbol(&method_node, ctx->symtab, qualified) != 0 &&
+                            method_node != NULL &&
+                            (method_node->hash_type == HASHTYPE_PROCEDURE ||
+                             method_node->hash_type == HASHTYPE_FUNCTION))
+                        {
+                            if (method_node->mangled_id != NULL)
+                                method_label = method_node->mangled_id;
+                            else
+                                method_label = qualified;
+                        }
+                    }
+                    if (method_label == NULL)
+                    {
+                        char qualified[256];
+                        snprintf(qualified, sizeof(qualified), "%s__%s",
+                            ctx->current_subprogram_owner_class, var_id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, qualified);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                method_label = cand->mangled_id;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                    }
+                    if (method_label != NULL)
+                    {
+                        /* Record this method label so we can emit a weak
+                         * stub in the final pass if no real definition
+                         * appears in the assembly output. */
+                        codegen_add_unresolved_method_stub(method_label);
+                        *offset = 0;
+                        snprintf(buffer, sizeof(buffer),
+                            "\tleaq\t%s(%%rip), %s\n",
+                            method_label, current_non_local_reg64());
+                        inst_list = add_inst(inst_list, buffer);
+                        return inst_list;
+                    }
+                }
+            }
+        }
+
         /* Fallback for unit/global symbols that are not represented as stack labels. */
         *offset = 0;
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", var_id,
@@ -8279,14 +8514,14 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     {
         /* Get formal parameters from the KgpcType.
          * This avoids use-after-free bugs by not relying on HashNode pointers
-         * that may point to freed memory after PopScope. */
+         * that may point to freed memory after leaving a semantic scope. */
         formal_args = proc_type->info.proc_info.params;
         CODEGEN_DEBUG("DEBUG: Using formal_args from KgpcType: %p\n", formal_args);
     }
     else if (procedure_name != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *proc_node = NULL;
-        if (FindIdent(&proc_node, ctx->symtab, procedure_name) == 0 &&
+        if (FindSymbol(&proc_node, ctx->symtab, procedure_name) != 0 &&
             proc_node != NULL && proc_node->type != NULL &&
             proc_node->type->kind == TYPE_KIND_PROCEDURE)
         {
@@ -8384,7 +8619,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     else if (procedure_name != NULL && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *proc_node = NULL;
-        if (FindIdent(&proc_node, ctx->symtab, procedure_name) == 0 &&
+        if (FindSymbol(&proc_node, ctx->symtab, procedure_name) != 0 &&
             proc_node != NULL && proc_node->type != NULL &&
             proc_node->type->kind == TYPE_KIND_PROCEDURE &&
             proc_node->type->info.proc_info.definition != NULL)
@@ -8531,7 +8766,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         /* Sqr / Abs: the semcheck rewrites these builtins to call
          * kgpc_sqr_int32/int64/real or kgpc_abs_int/longint/real based on the
          * argument type.  When the FPC RTL system unit is loaded,
-         * FindIdent("Sqr"/"Abs") may resolve to the ValReal overload, causing
+         * FindSymbol("Sqr"/"Abs") may resolve to the ValReal overload, causing
          * codegen_param_expected_type to return REAL_TYPE even for integer
          * arguments.  Override expected_type from the mangled call target. */
         if (call_mangled != NULL)
@@ -8586,7 +8821,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             !formal_is_open_array && !is_array_param)
         {
             HashNode_t *arg_node = NULL;
-            if (FindIdent(&arg_node, ctx->symtab, arg_expr->expr_data.id) == 0 &&
+            if (FindSymbol(&arg_node, ctx->symtab, arg_expr->expr_data.id) != 0 &&
                 arg_node != NULL && arg_node->type != NULL)
             {
                 int resolved = codegen_tag_from_kgpc(arg_node->type);
@@ -8747,7 +8982,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         use_address = 1;
 
                     HashNode_t *arg_symbol = NULL;
-                    if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                    if (FindSymbol(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) != 0 &&
                         arg_symbol != NULL && arg_symbol->is_var_parameter)
                     {
                         use_address = 0;
@@ -9204,7 +9439,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         if (arg_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
                         {
                             HashNode_t *arg_symbol = NULL;
-                            if (FindIdent(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) >= 0 &&
+                            if (FindSymbol(&arg_symbol, ctx->symtab, arg_expr->expr_data.id) != 0 &&
                                 arg_symbol != NULL && arg_symbol->is_var_parameter)
                             {
                                 arg_is_var_param = 1;
@@ -9215,7 +9450,16 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                          * BUT only if Self was not already loaded by value (i.e., not a var param).
                          * For non-methods with var parameters, don't dereference. */
                         int should_dereference = 0;
-                        if (is_class_method && arg_num == 0 && !arg_is_var_param)
+                        int called_is_method = 0;
+                        if (procedure_name != NULL && ctx->symtab != NULL)
+                        {
+                            HashNode_t *called_func = NULL;
+                            if (FindSymbol(&called_func, ctx->symtab, procedure_name) != 0 &&
+                                called_func != NULL && called_func->owner_class != NULL)
+                                called_is_method = 1;
+                        }
+                        if (is_class_method && arg_num == 0 && !arg_is_var_param &&
+                            called_is_method)
                         {
                             /* Class method Self from local variable: dereference to get instance pointer */
                             should_dereference = 1;
@@ -9226,18 +9470,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             should_dereference = 1;
                         }
                         else if (arg_num == 0 && is_var_param && !arg_is_var_param &&
-                                 procedure_name != NULL && ctx->symtab != NULL)
+                                 called_is_method)
                         {
                             /* Self parameter for a method call from outside a class method context.
                              * The formal Self parameter is a var param, but for a global/static
                              * class/interface variable, codegen_address_for_expr emits leaq (address
                              * of the variable), so we need to dereference to get the object pointer. */
-                            HashNode_t *called_func = NULL;
-                            if (FindIdent(&called_func, ctx->symtab, procedure_name) >= 0 &&
-                                called_func != NULL && called_func->owner_class != NULL)
-                            {
-                                should_dereference = 1;
-                            }
+                            should_dereference = 1;
                         }
                         /* else: var parameter of class type OR argument is already a var param:
                          * codegen_address_for_expr already loaded the value, don't dereference again */
@@ -9422,6 +9661,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (record_size == 0)
                     record_size = 1;
 
+
                 if (record_size > INT_MAX)
                 {
                     codegen_report_error(ctx,
@@ -9438,7 +9678,48 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
 
                 Register_t *src_reg = NULL;
-                if (codegen_expr_is_addressable(arg_expr))
+
+                /* Check if this is an interface type identifier used as a
+                 * GUID argument (e.g. Supports(Obj, IObserver, I)).
+                 * If so, load __kgpc_guid_<Name> directly instead of going
+                 * through codegen_address_for_expr which would emit a
+                 * reference to the bare interface label. */
+                int is_iface_guid_arg = 0;
+                if (record_size == 16 && arg_expr->type == EXPR_VAR_ID &&
+                    codegen_expr_is_addressable(arg_expr) &&
+                    ctx != NULL && ctx->symtab != NULL) {
+                    ListNode_t *all_idents = FindAllIdents(ctx->symtab, arg_expr->expr_data.id);
+                    for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
+                        HashNode_t *cand = (HashNode_t *)id_node->cur;
+                        if (cand == NULL) continue;
+                        struct RecordType *cand_rec = codegen_get_record_type_from_node(cand);
+                        if (cand_rec == NULL && cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_POINTER &&
+                            cand->type->info.points_to != NULL &&
+                            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
+                            cand_rec = cand->type->info.points_to->info.record_info;
+                        if (cand_rec != NULL && cand_rec->is_interface) {
+                            is_iface_guid_arg = 1;
+                            break;
+                        }
+                    }
+                    if (all_idents != NULL) DestroyList(all_idents);
+                }
+
+                if (is_iface_guid_arg) {
+                    src_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (src_reg == NULL) {
+                        codegen_report_error(ctx,
+                            "ERROR: Failed to allocate register for interface GUID argument.");
+                        return inst_list;
+                    }
+                    char guid_buf[512];
+                    snprintf(guid_buf, sizeof(guid_buf),
+                        "\tleaq\t__kgpc_guid_%s(%%rip), %s\n",
+                        arg_expr->expr_data.id, src_reg->bit_64);
+                    inst_list = add_inst(inst_list, guid_buf);
+                }
+                else if (codegen_expr_is_addressable(arg_expr))
                 {
                     inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
                     if (codegen_had_error(ctx) || src_reg == NULL)
@@ -9664,6 +9945,25 @@ pass_value_arg:
                 {
                     Register_t *value_reg = NULL;
                     inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &value_reg);
+                    if (codegen_had_error(ctx) || value_reg == NULL)
+                    {
+                        if (arg_infos != NULL)
+                            free(arg_infos);
+                        return inst_list;
+                    }
+                    top_reg = value_reg;
+                }
+                else if (arg_expr->type == EXPR_TYPECAST &&
+                    arg_expr->expr_data.typecast_data.expr != NULL &&
+                    arg_expr->expr_data.typecast_data.target_type == STRING_TYPE &&
+                    codegen_expr_is_shortstring_value_ctx(
+                        arg_expr->expr_data.typecast_data.expr, ctx))
+                {
+                    /* ShortString to AnsiString typecast: build_expr_tree
+                     * strips EXPR_TYPECAST nodes, losing the conversion.
+                     * Use codegen_expr_tree_value which handles this. */
+                    Register_t *value_reg = NULL;
+                    inst_list = codegen_expr_tree_value(arg_expr, inst_list, ctx, &value_reg);
                     if (codegen_had_error(ctx) || value_reg == NULL)
                     {
                         if (arg_infos != NULL)
@@ -10041,7 +10341,13 @@ pass_value_arg:
         int expected_real_size = (arg_infos != NULL) ? arg_infos[i].expected_real_size : 0;
         int actual_type = (arg_infos != NULL && arg_infos[i].expr != NULL)
             ? expr_get_type_tag(arg_infos[i].expr) : UNKNOWN_TYPE;
-        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE);
+        int is_ptr_like = (arg_infos != NULL && arg_infos[i].is_pointer_like);
+        /* When an argument is passed by reference (var/out/array), the value
+         * stored in the spill slot is a pointer (address), not the underlying
+         * integer value.  Sign-extending a 64-bit pointer via movslq would
+         * truncate it, so suppress the sign-extension for pointer-like args. */
+        int needs_int_to_long = (expected_type == LONGINT_TYPE && actual_type == INT_TYPE
+                                 && !is_ptr_like);
         int pass_on_stack = (arg_infos != NULL && arg_infos[i].pass_via_stack);
 
         int reg_index = arg_start_index + i;

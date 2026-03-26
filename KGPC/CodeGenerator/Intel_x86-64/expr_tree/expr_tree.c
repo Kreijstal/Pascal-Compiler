@@ -25,6 +25,60 @@
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
 
+static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
+    int *int_offsets, int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_expr_arg_int", 8);
+        int_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        StackNode_t *slot = add_l_t_bytes("__intf_expr_arg_xmm", 16);
+        xmm_offsets[i] = slot != NULL ? slot->offset : 0;
+        if (slot != NULL && reg != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
+static ListNode_t *codegen_restore_call_arg_regs_expr(ListNode_t *inst_list,
+    const int *int_offsets, const int *xmm_offsets)
+{
+    char buffer[128];
+    for (int i = 0; i < kgpc_max_int_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg64(i);
+        if (reg != NULL && int_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", int_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    for (int i = 0; i < kgpc_max_sse_arg_regs(); i++)
+    {
+        const char *reg = current_arg_reg_xmm(i);
+        if (reg != NULL && xmm_offsets[i] > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovdqu\t-%d(%%rbp), %s\n", xmm_offsets[i], reg);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+    return inst_list;
+}
+
 static int expr_tree_tag_from_kgpc(const KgpcType *type)
 {
     if (type == NULL)
@@ -51,8 +105,11 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
     if (buffer == NULL || size == 0)
         return;
     char sanitized[CODEGEN_MAX_INST_BUF];
+    const char *prefix = "__kgpc_enum_typeinfo_";
     codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "__kgpc_enum_typeinfo_%s", sanitized);
+    snprintf(buffer, size, "%s%.*s", prefix,
+        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
+        sanitized);
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
@@ -145,7 +202,7 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
 
         HashNode_t *node = NULL;
         if (!use_value &&
-            FindIdent(&node, ctx->symtab, array_expr->expr_data.id) >= 0 &&
+            FindSymbol(&node, ctx->symtab, array_expr->expr_data.id) != 0 &&
             node != NULL && node->is_var_parameter)
         {
             use_value = 1;
@@ -336,7 +393,7 @@ static int leaf_expr_requires_reference_value(struct Expression *expr, CodeGenCo
     StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
     HashNode_t *symbol_node = NULL;
     if (ctx->symtab != NULL)
-        FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+        FindSymbol(&symbol_node, ctx->symtab, expr->expr_data.id);
 
     int treat_as_reference = 0;
     if (stack_node != NULL && stack_node->is_reference)
@@ -376,7 +433,7 @@ static int expr_effective_storage_type(const struct Expression *expr, CodeGenCon
     if (expr != NULL && ctx != NULL && ctx->symtab != NULL && expr->type == EXPR_VAR_ID)
     {
         HashNode_t *sym_node = NULL;
-        if (FindIdent(&sym_node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
             sym_node != NULL && sym_node->type != NULL)
         {
             int sym_tag = expr_tree_tag_from_kgpc(sym_node->type);
@@ -543,7 +600,7 @@ static int expr_is_single_real_with_symtab(const struct Expression *expr, SymTab
             if (pascal_identifier_equals(field->type_id, "Single"))
                 return 1;
             HashNode_t *type_node = NULL;
-            if (FindIdent(&type_node, symtab, field->type_id) == 0 &&
+            if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
                 type_node != NULL && type_node->type != NULL &&
                 kgpc_type_equals_tag(type_node->type, REAL_TYPE) &&
                 kgpc_type_sizeof(type_node->type) == 4)
@@ -564,8 +621,9 @@ static ListNode_t *emit_store_to_stack(ListNode_t *inst_list, const Register_t *
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
-    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
-        use_qword = 0;
+    /* Note: do NOT downgrade to 32-bit for Single locals here.
+     * This function spills register values that may have already been
+     * promoted to double (via cvtss2sd), so the full 64 bits must be saved. */
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;
@@ -584,8 +642,9 @@ static ListNode_t *emit_load_from_stack(ListNode_t *inst_list, const Register_t 
 
     int use_qword = (expr != NULL && expr_uses_qword_kgpctype(expr)) ||
         codegen_type_uses_qword(type_tag);
-    if (type_tag == REAL_TYPE && expr_is_single_real_local(expr))
-        use_qword = 0;
+    /* Note: do NOT downgrade to 32-bit for Single locals here.
+     * This function reloads spilled register values that may have already been
+     * promoted to double (via cvtss2sd), so the full 64 bits must be loaded. */
     const char *reg_name = use_qword ? reg->bit_64 : reg->bit_32;
     if (reg_name == NULL)
         return inst_list;
@@ -1505,7 +1564,7 @@ static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGe
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->type != NULL && kgpc_type_is_array(node->type))
         {
             KgpcType *elem = kgpc_type_get_array_element_type(node->type);
@@ -1942,6 +2001,17 @@ ListNode_t *gencode_sign_term(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         snprintf(buffer, sizeof(buffer), "\tneg%s\t%s\n",
             use_qword ? "q" : "l", dest);
         inst_list = add_inst(inst_list, buffer);
+        /* After 32-bit negation, sign-extend to 64 bits so the value is
+         * correct when later used in a 64-bit context (e.g. passed as Int64
+         * argument via movq). Writing a 32-bit register zeroes the upper
+         * half, so negl of a positive value leaves e.g. 0x00000000FFFFFFFC
+         * instead of the expected 0xFFFFFFFFFFFFFFFC for -4. */
+        if (!use_qword)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                target_reg->bit_32, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
     }
 
     return inst_list;
@@ -1971,6 +2041,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
+            expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition;
+            const char *alias = def->tree_data.subprogram_data.cname_override;
+            if (alias != NULL && alias[0] != '\0')
+                func_mangled_name = alias;
+            else if (def->tree_data.subprogram_data.mangled_id != NULL &&
+                     def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                func_mangled_name = def->tree_data.subprogram_data.mangled_id;
+        }
         CODEGEN_DEBUG("DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
             func_mangled_name ? func_mangled_name : "NULL",
             expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
@@ -2032,15 +2114,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             /* First try lookup by id (short name like "Foo") */
             if (expr->expr_data.function_call_data.id != NULL &&
-                FindIdent(&func_node, ctx->symtab,
-                    expr->expr_data.function_call_data.id) >= 0 && func_node != NULL)
+                FindSymbol(&func_node, ctx->symtab,
+                    expr->expr_data.function_call_data.id) != 0 && func_node != NULL)
             {
                 func_type = func_node->type;
             }
             /* If not found, try the mangled name (e.g., "TDoubleHelper__Foo_r_i") */
             else if (expr->expr_data.function_call_data.mangled_id != NULL &&
-                FindIdent(&func_node, ctx->symtab,
-                    expr->expr_data.function_call_data.mangled_id) >= 0 && func_node != NULL)
+                FindSymbol(&func_node, ctx->symtab,
+                    expr->expr_data.function_call_data.mangled_id) != 0 && func_node != NULL)
             {
                 func_type = func_node->type;
             }
@@ -2104,19 +2186,15 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         int is_constructor = 0;
         Register_t *constructor_instance_reg = NULL;
         StackNode_t *constructor_instance_slot = NULL;
-        
+
         if (func_mangled_name != NULL)
         {
             /* Check if name contains __create (may be followed by type suffix like __create_u) */
-            /* Use case-insensitive search since mangled names are now lowercased */
             const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
             if (create_pos != NULL)
                 is_constructor = 1;
             else if (pascal_identifier_equals(func_mangled_name, "Create"))
                 is_constructor = 1;
-            
-            CODEGEN_DEBUG("DEBUG Constructor Check: func_mangled_name=%s, is_constructor=%d\n",
-                func_mangled_name, is_constructor);
         }
 
         /* Record static factories (e.g., TGUID.Create) can also be named Create
@@ -2226,7 +2304,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
                 {
                     HashNode_t *class_node = NULL;
-                    if (FindIdent(&class_node, ctx->symtab, class_expr->expr_data.id) >= 0 &&
+                    if (FindSymbol(&class_node, ctx->symtab, class_expr->expr_data.id) != 0 &&
                         class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
                         class_node->type != NULL)
                     {
@@ -2247,7 +2325,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 const char *owner_id = ctx->current_subprogram_owner_class;
 
                 HashNode_t *owner_node = NULL;
-                if (FindIdent(&owner_node, ctx->symtab, owner_id) >= 0 &&
+                if (FindSymbol(&owner_node, ctx->symtab, owner_id) != 0 &&
                     owner_node != NULL && owner_node->type != NULL)
                 {
                     if (owner_node->type->kind == TYPE_KIND_RECORD)
@@ -2366,15 +2444,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             }
                         }
                     }
+
+                    inst_list = codegen_emit_interface_vtable_slot_init(
+                        inst_list, ctx, class_record, class_record->type_id,
+                        constructor_instance_reg);
+
                 }
             }
         }
-        
+
         /* Pass arguments, shifted by hidden return pointer and/or static link */
         int arg_start_index = (has_record_return ? 1 : 0) +
             (should_pass_static_link ? 1 : 0);
         int self_index = -1;
-        
+
         /* For constructors, we need to:
          * 1. Skip the first argument in the list (class type)
          * 2. Shift register allocation by 1 to make room for Self */
@@ -2414,6 +2497,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         const char *proc_name_hint = expr->expr_data.function_call_data.id;
         const char *mangled_name_hint = expr->expr_data.function_call_data.mangled_id;
         if (proc_name_hint == NULL)
+            proc_name_hint = mangled_name_hint;
+        /* When the semantic checker rewrote the call to a different runtime
+         * function (is_call_info_valid=1, call_kgpc_type=NULL), using the
+         * original Pascal id (e.g. "UpCase") for the fallback FindSymbol
+         * lookup in codegen_pass_arguments would find the wrong overload
+         * (e.g. the string UpCase) and incorrectly promote char args to
+         * strings.  Use the mangled name instead so the lookup either finds
+         * the correct C runtime entry or finds nothing — in both cases no
+         * spurious char-to-string conversion is inserted. */
+        if (func_type == NULL &&
+            expr->expr_data.function_call_data.is_call_info_valid &&
+            mangled_name_hint != NULL)
             proc_name_hint = mangled_name_hint;
 
         if (is_constructor && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
@@ -2611,6 +2706,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 inst_list = add_inst(inst_list, buffer);
             }
         }
+        else if (expr->expr_data.function_call_data.is_interface_call &&
+                 expr->expr_data.function_call_data.vmt_index >= 0)
+        {
+            int self_arg_index = has_record_return ? 1 : 0;
+            inst_list = codegen_emit_interface_dispatch(
+                inst_list, ctx, current_arg_reg64(self_arg_index),
+                expr->expr_data.function_call_data.self_class_name,
+                expr->expr_data.function_call_data.vmt_index,
+                "intf_expr", "__intf_expr_target", 1,
+                codegen_spill_call_arg_regs_expr,
+                codegen_restore_call_arg_regs_expr);
+        }
         else if (expr->expr_data.function_call_data.is_virtual_call &&
                  expr->expr_data.function_call_data.vmt_index >= 0)
         {
@@ -2650,122 +2757,38 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         else
         {
             /* Normal function call */
-            const char *call_target = expr->expr_data.function_call_data.mangled_id;
-            if (call_target == NULL || call_target[0] == '\0')
+            char *owned_call_target = NULL;
+            const char *call_target = codegen_resolve_function_call_target(
+                ctx, expr, &owned_call_target);
+
+            /* If the call target resolves to a type (not a procedure), this is
+             * a typecast that the semcheck didn't rewrite (e.g., from cached
+             * unit ASTs).  Treat it as a no-op: evaluate the argument and use
+             * its value directly. */
+            if (call_target != NULL && ctx != NULL && ctx->symtab != NULL)
             {
-                HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
-                if (resolved != NULL && resolved->mangled_id != NULL &&
-                    resolved->mangled_id[0] != '\0')
+                HashNode_t *target_sym = NULL;
+                if (FindSymbol(&target_sym, ctx->symtab, call_target) != 0 &&
+                    target_sym != NULL && target_sym->hash_type == HASHTYPE_TYPE &&
+                    (target_sym->type == NULL ||
+                     target_sym->type->kind != TYPE_KIND_PROCEDURE))
                 {
-                    call_target = resolved->mangled_id;
-                }
-                else if (resolved != NULL && resolved->type != NULL &&
-                         resolved->type->kind == TYPE_KIND_PROCEDURE)
-                {
-                    Tree_t *def = resolved->type->info.proc_info.definition;
-                    if (def != NULL)
+                    /* Typecast: just evaluate the single argument */
+                    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+                    if (args != NULL && args->cur != NULL)
                     {
-                        const char *alias = def->tree_data.subprogram_data.cname_override;
-                        if (alias != NULL && alias[0] != '\0')
-                            call_target = alias;
-                        else if (def->tree_data.subprogram_data.mangled_id != NULL &&
-                                 def->tree_data.subprogram_data.mangled_id[0] != '\0')
-                            call_target = def->tree_data.subprogram_data.mangled_id;
-                    }
-                }
-            }
-            if ((call_target == NULL || call_target[0] == '\0') &&
-                ctx != NULL && ctx->symtab != NULL &&
-                expr->expr_data.function_call_data.id != NULL)
-            {
-                HashNode_t *sym = NULL;
-                if (FindIdent(&sym, ctx->symtab,
-                        expr->expr_data.function_call_data.id) == 0 &&
-                    sym != NULL)
-                {
-                    if (sym->mangled_id != NULL && sym->mangled_id[0] != '\0')
-                    {
-                        call_target = sym->mangled_id;
-                    }
-                    else if (sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE)
-                    {
-                        Tree_t *def = sym->type->info.proc_info.definition;
-                        if (def != NULL)
+                        struct Expression *arg_expr = (struct Expression *)args->cur;
+                        expr_node_t *arg_tree = build_expr_tree(arg_expr);
+                        if (arg_tree != NULL)
                         {
-                            const char *alias = def->tree_data.subprogram_data.cname_override;
-                            if (alias != NULL && alias[0] != '\0')
-                                call_target = alias;
-                            else if (def->tree_data.subprogram_data.mangled_id != NULL &&
-                                     def->tree_data.subprogram_data.mangled_id[0] != '\0')
-                                call_target = def->tree_data.subprogram_data.mangled_id;
+                            inst_list = gencode_expr_tree(arg_tree, inst_list, ctx, target_reg);
+                            free_expr_tree(arg_tree);
                         }
                     }
+                    return inst_list;
                 }
             }
-            char *computed_mangled = NULL;
-            if ((call_target == NULL || call_target[0] == '\0') &&
-                expr->expr_data.function_call_data.call_kgpc_type != NULL &&
-                expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
-            {
-                Tree_t *def = expr->expr_data.function_call_data.call_kgpc_type
-                    ->info.proc_info.definition;
-                int is_external = 0;
-                if (def != NULL)
-                {
-                    is_external = def->tree_data.subprogram_data.cname_flag != 0 ||
-                        def->tree_data.subprogram_data.cname_override != NULL;
-                }
-                if (!is_external && expr->expr_data.function_call_data.id != NULL)
-                {
-                    computed_mangled = MangleFunctionName(
-                        expr->expr_data.function_call_data.id,
-                        expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.params,
-                        ctx->symtab);
-                    if (computed_mangled != NULL && computed_mangled[0] != '\0')
-                        call_target = computed_mangled;
-                }
-            }
-            if ((call_target == NULL || call_target[0] == '\0') &&
-                ctx != NULL && ctx->symtab != NULL &&
-                expr->expr_data.function_call_data.id != NULL)
-            {
-                int arg_count = ListLength(expr->expr_data.function_call_data.args_expr);
-                ListNode_t *candidates = FindAllIdents(ctx->symtab,
-                    expr->expr_data.function_call_data.id);
-                HashNode_t *unique = NULL;
-                int matches = 0;
-                for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
-                {
-                    HashNode_t *node = (HashNode_t *)cur->cur;
-                    if (node == NULL || node->type == NULL ||
-                        node->type->kind != TYPE_KIND_PROCEDURE)
-                        continue;
-                    ListNode_t *params = node->type->info.proc_info.params;
-                    if (ListLength(params) != arg_count)
-                        continue;
-                    unique = node;
-                    matches++;
-                    if (matches > 1)
-                        break;
-                }
-                if (matches == 1 && unique != NULL)
-                {
-                    if (unique->mangled_id != NULL && unique->mangled_id[0] != '\0')
-                        call_target = unique->mangled_id;
-                    else
-                    {
-                        computed_mangled = MangleFunctionName(
-                            unique->id, unique->type->info.proc_info.params, ctx->symtab);
-                        if (computed_mangled != NULL && computed_mangled[0] != '\0')
-                            call_target = computed_mangled;
-                    }
-                }
-                if (candidates != NULL)
-                    DestroyList(candidates);
-            }
-            if (call_target == NULL)
-                call_target = expr->expr_data.function_call_data.id;
-            
+
             if (call_target != NULL)
             {
                 CallerSaveState caller_state;
@@ -2780,8 +2803,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 snprintf(buffer, sizeof(buffer), "\t# ERROR: function call with NULL target\n");
                 inst_list = add_inst(inst_list, buffer);
             }
-            if (computed_mangled != NULL)
-                free(computed_mangled);
         }
         
         inst_list = codegen_cleanup_call_stack(inst_list, ctx);
@@ -2873,10 +2894,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                             use_qword = 1;
                     }
                 }
-                if (use_qword)
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
-                else
-                    snprintf(buffer, sizeof(buffer), "\tmovl\t%%eax, %s\n", target_reg->bit_32);
+                /* Always use movq for function return values on x86-64.
+                 * movl truncates pointers and 64-bit values; movq is always safe. */
+                (void)use_qword;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", target_reg->bit_64);
             }
             inst_list = add_inst(inst_list, buffer);
         }
@@ -2909,9 +2930,91 @@ cleanup_constructor:
         const char *proc_label = expr->expr_data.addr_of_proc_data.proc_mangled_id;
         if (proc_label == NULL)
             proc_label = expr->expr_data.addr_of_proc_data.proc_id;
+        if (ctx != NULL && ctx->symtab != NULL &&
+            ctx->current_subprogram_owner_class != NULL &&
+            expr->expr_data.addr_of_proc_data.proc_id != NULL &&
+            proc_label != NULL && strchr(proc_label, '_') == NULL)
+        {
+            const char *impl_target = codegen_find_class_method_impl_id(
+                ctx->symtab, NULL, ctx->current_subprogram_owner_class, NULL,
+                expr->expr_data.addr_of_proc_data.proc_id);
+            if (impl_target != NULL)
+                proc_label = impl_target;
+            else
+            {
+                char base_name[512];
+                HashNode_t *prefix_match = NULL;
+                snprintf(base_name, sizeof(base_name), "%s__%s",
+                    ctx->current_subprogram_owner_class,
+                    expr->expr_data.addr_of_proc_data.proc_id);
+                if (FindIdentByPrefix(&prefix_match, ctx->symtab, base_name) != 0 &&
+                    prefix_match != NULL)
+                {
+                    const char *emit_target = codegen_subprogram_emission_symbol(prefix_match);
+                    if (emit_target != NULL && emit_target[0] != '\0')
+                        proc_label = emit_target;
+                    else if (prefix_match->mangled_id != NULL && prefix_match->mangled_id[0] != '\0')
+                        proc_label = prefix_match->mangled_id;
+                }
+            }
+        }
         assert(proc_label != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
+        /* If the proc_label is a bare method name (no mangled_id), try to
+         * resolve it in the current class context via the symbol table.
+         * This handles @MethodName inside class methods from cached units. */
+        char *resolved_label = NULL;
+        if (expr->expr_data.addr_of_proc_data.proc_mangled_id == NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            /* Try to find as a standalone function first */
+            HashNode_t *sym = NULL;
+            if (FindSymbol(&sym, ctx->symtab, proc_label) != 0 && sym != NULL &&
+                sym->mangled_id != NULL && sym->type != NULL &&
+                sym->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                proc_label = sym->mangled_id;
+            }
+            else
+            {
+                /* Try class-qualified: look for ClassName__MethodName */
+                const char *owner = ctx->current_subprogram_owner_class;
+                if (owner == NULL)
+                {
+                    HashNode_t *self_node = NULL;
+                    if (FindSymbol(&self_node, ctx->symtab, "Self") != 0 &&
+                        self_node != NULL)
+                        owner = self_node->owner_class;
+                }
+                if (owner != NULL)
+                {
+                    int needed = snprintf(NULL, 0, "%s__%s",
+                        owner, proc_label) + 1;
+                    resolved_label = malloc(needed);
+                    if (resolved_label != NULL)
+                    {
+                        snprintf(resolved_label, needed, "%s__%s",
+                            owner, proc_label);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, resolved_label);
+                        int found = 0;
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                proc_label = cand->mangled_id;
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                        if (!found) { free(resolved_label); resolved_label = NULL; }
+                    }
+                }
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
+        if (resolved_label != NULL) free(resolved_label);
         return add_inst(inst_list, buffer);
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
@@ -2949,7 +3052,7 @@ cleanup_constructor:
     {
         /* Check if this is a string constant reference (but not a procedure address constant) */
         HashNode_t *node = NULL;
-        if (FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
             node != NULL && node->hash_type == HASHTYPE_CONST &&
             node->const_string_value != NULL &&
             /* Skip if this is a procedure address constant - those use const_string_value
@@ -3129,7 +3232,7 @@ cleanup_constructor:
         StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
-            FindIdent(&symbol_node, ctx->symtab, expr->expr_data.id);
+            FindSymbol(&symbol_node, ctx->symtab, expr->expr_data.id);
 
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
@@ -3146,6 +3249,32 @@ cleanup_constructor:
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                 symbol_node->mangled_id, target_reg->bit_64);
             return add_inst(inst_list, buffer);
+        }
+        /* Bare method name used as a procedural reference (e.g., @SetStatus
+         * inside a class method).  The symtab might not have a procedure
+         * entry for the bare name; try class-qualified lookup. */
+        if (stack_node == NULL && symbol_node == NULL &&
+            buf_leaf[0] != '$' && ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *owner = ctx->current_subprogram_owner_class;
+            if (owner != NULL)
+            {
+                char qual_name[512];
+                snprintf(qual_name, sizeof(qual_name), "%s__%s", owner, expr->expr_data.id);
+                ListNode_t *candidates = FindAllIdents(ctx->symtab, qual_name);
+                for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                    HashNode_t *cand = (HashNode_t *)c->cur;
+                    if (cand != NULL && cand->mangled_id != NULL &&
+                        cand->type != NULL &&
+                        cand->type->kind == TYPE_KIND_PROCEDURE) {
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                            cand->mangled_id, target_reg->bit_64);
+                        if (candidates != NULL) DestroyList(candidates);
+                        return add_inst(inst_list, buffer);
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
         }
 
         /* Check if this is a procedure address constant - need leaq to get the label address */
@@ -3698,7 +3827,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
                 int found = (ctx != NULL && ctx->symtab != NULL &&
-                    FindIdent(&node, ctx->symtab, expr->expr_data.id) >= 0 &&
+                    FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
 
                 /* If FindIdent returned a function but there's a const with the same
@@ -3710,10 +3839,10 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 {
                     /* Check user scope for a constant with the same name */
                     HashNode_t *user_const = NULL;
-                    ListNode_t *scope = ctx->symtab->stack_head;
+                    ScopeNode *scope = ctx->symtab->current_scope;
                     while (scope != NULL && user_const == NULL)
                     {
-                        ListNode_t *all = FindAllIdentsInTable((HashTable_t *)scope->cur,
+                        ListNode_t *all = FindAllIdentsInTable(scope->table,
                             expr->expr_data.id);
                         for (ListNode_t *a = all; a != NULL; a = a->next)
                         {
@@ -3725,15 +3854,15 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             }
                         }
                         DestroyList(all);
-                        scope = scope->next;
+                        scope = scope->parent;
                     }
                     if (user_const != NULL)
                     {
                         node = user_const;
                     }
-                    else if (ctx->symtab->builtins != NULL)
+                    else if (ctx->symtab->builtin_scope->table != NULL)
                     {
-                        HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtins,
+                        HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtin_scope->table,
                             expr->expr_data.id);
                         if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
                             node = builtin_node;
@@ -3901,6 +4030,52 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         }
                     }
 
+                    /* Bare method name used as a value (e.g. @SetStatus
+                     * inside a class method from a cached unit).  Try
+                     * class-qualified lookup: OwnerClass__MethodName. */
+                    int resolved_as_method = 0;
+                    if (ctx != NULL && ctx->symtab != NULL)
+                    {
+                        const char *method_owner = ctx->current_subprogram_owner_class;
+                        /* If owner_class is not set (cached unit methods), try to
+                         * extract the class name from the mangled subprogram id.
+                         * Mangled names have the form "classname__methodname_params". */
+                        char extracted_owner[256];
+                        if (method_owner == NULL && ctx->current_subprogram_mangled != NULL)
+                        {
+                            const char *dunder = strstr(ctx->current_subprogram_mangled, "__");
+                            if (dunder != NULL)
+                            {
+                                size_t len = (size_t)(dunder - ctx->current_subprogram_mangled);
+                                if (len > 0 && len < sizeof(extracted_owner))
+                                {
+                                    memcpy(extracted_owner, ctx->current_subprogram_mangled, len);
+                                    extracted_owner[len] = '\0';
+                                    method_owner = extracted_owner;
+                                }
+                            }
+                        }
+                        if (method_owner != NULL)
+                        {
+                        char qual_name[512];
+                        snprintf(qual_name, sizeof(qual_name), "%s__%s",
+                            method_owner, expr->expr_data.id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, qual_name);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE) {
+                                snprintf(buffer, buf_len, "%s(%%rip)", cand->mangled_id);
+                                resolved_as_method = 1;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL) DestroyList(candidates);
+                        }
+                    }
+                    if (resolved_as_method) break;
+
                     const char *var_name = expr != NULL ? expr->expr_data.id : "<unknown>";
                     size_t name_len = var_name != NULL ? strlen(var_name) : 0;
                     int is_vmt_label = (name_len > 4 && strcmp(var_name + name_len - 4, "_VMT") == 0);
@@ -3946,7 +4121,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                     else
                     {
-                        inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset);
+                        inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
                         snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
                     }
                 }
@@ -4350,6 +4525,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     assert(0 && "Bad addop type!");
                     break;
             }
+            /* Sign-extend 32-bit result to 64-bit so negative values are
+               correctly represented when stored into 64-bit slots. */
+            if (!use_qword_op && left_reg != NULL &&
+                !is_unsigned_integer_type(expr_get_type_tag(expr)))
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                    left_reg->bit_32, left_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
 
             break;
             }
@@ -4458,6 +4642,16 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 int err = 0;
                 inst_list = emit_alu_op_with_large_imm(inst_list, ctx, "imul", arith_suffix, op_right, op_left, &err);
                 if (err) break;
+                /* Sign-extend 32-bit result to 64-bit so negative values are
+                   correctly represented when stored into 64-bit slots (e.g.
+                   passing Integer result as SizeInt/Int64 function argument). */
+                if (!use_qword_op && left_reg != NULL &&
+                    !is_unsigned_integer_type(expr_get_type_tag(expr)))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n",
+                        left_reg->bit_32, left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
             else if(type == AND)
             {

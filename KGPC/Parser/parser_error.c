@@ -349,7 +349,7 @@ int print_source_context_from_buffer(const char *buffer, size_t length,
                 ++idx;
             current_line = directive_line;
             if (directive_file[0] != '\0') {
-                strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                memcpy(current_file, directive_file, sizeof(current_file) - 1);
                 current_file[sizeof(current_file) - 1] = '\0';
             }
             continue;
@@ -436,9 +436,12 @@ int print_source_context_at_offset(const char *buffer, size_t length,
                                    int source_offset, int error_line, int error_col,
                                    int num_context_lines)
 {
-    /* If no valid offset, fall back to line-based search */
+    /* If no valid offset, return 0 so the caller can try a file-based
+     * fallback.  Line-number search in preprocessed buffers is unreliable
+     * when #line directives make line numbers from different include files
+     * overlap (e.g. fpcdefs.inc line 363 vs nutils.pas line 363). */
     if (source_offset < 0 || (size_t)source_offset >= length)
-        return print_source_context_from_buffer(buffer, length, error_line, error_col, num_context_lines);
+        return 0;
 
     if (buffer == NULL || length == 0)
         return 0;
@@ -488,7 +491,7 @@ int print_source_context_at_offset(const char *buffer, size_t length,
             }
             current_line_at_offset = directive_line + lines_after_directive;
             if (directive_file[0] != '\0') {
-                strncpy(current_file, directive_file, sizeof(current_file) - 1);
+                memcpy(current_file, directive_file, sizeof(current_file) - 1);
                 current_file[sizeof(current_file) - 1] = '\0';
             }
             break;
