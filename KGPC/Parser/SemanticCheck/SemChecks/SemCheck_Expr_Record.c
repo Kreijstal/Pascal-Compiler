@@ -498,8 +498,8 @@ ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
 
     /* Guard against runaway traversal (cyclic or unexpectedly deep hierarchies).
      * Use a visited set of RecordType* pointers to detect cycles explicitly. */
-    const int max_visited = 100;
-    struct RecordType *visited[100];
+#define MAX_HIERARCHY_DEPTH 100
+    struct RecordType *visited[MAX_HIERARCHY_DEPTH];
     int visited_count = 0;
 
     while (current != NULL)
@@ -518,12 +518,12 @@ ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
                 current->type_id != NULL ? current->type_id : "(null)");
             break;
         }
-        if (visited_count >= max_visited)
+        if (visited_count >= MAX_HIERARCHY_DEPTH)
         {
             fprintf(stderr,
                 "semcheck_collect_hierarchy_method_overloads: reached max hierarchy depth (%d) "
                 "when walking record hierarchy; candidate overload list may be incomplete.\n",
-                max_visited);
+                MAX_HIERARCHY_DEPTH);
             break;
         }
         visited[visited_count++] = current;
