@@ -3673,6 +3673,41 @@ int semcheck_funccall(int *type_return,
                 }
                 if (mangled_method_name != NULL)
                     method_candidates = FindAllIdents(symtab, mangled_method_name);
+                /* Collect overloads from parent classes as well.
+                 * Overloads may be split across multiple hierarchy levels
+                 * (e.g. find(ShortString) on TBase, find(Word,Pointer) on TDerived). */
+                if (owner_record != NULL && id != NULL)
+                {
+                    ListNode_t *hierarchy_candidates =
+                        semcheck_collect_hierarchy_method_overloads(
+                            symtab, owner_record, id);
+                    if (hierarchy_candidates != NULL)
+                    {
+                        if (method_candidates != NULL)
+                        {
+                            ListNode_t *hc = hierarchy_candidates;
+                            while (hc != NULL)
+                            {
+                                ListNode_t *next = hc->next;
+                                hc->next = NULL;
+                                int dup = 0;
+                                for (ListNode_t *c = method_candidates; c != NULL; c = c->next)
+                                {
+                                    if (c->cur == hc->cur) { dup = 1; break; }
+                                }
+                                if (!dup)
+                                    method_candidates = PushListNodeBack(method_candidates, hc);
+                                else
+                                    free(hc);
+                                hc = next;
+                            }
+                        }
+                        else
+                        {
+                            method_candidates = hierarchy_candidates;
+                        }
+                    }
+                }
                 if (method_node == NULL && method_candidates != NULL)
                 {
                     for (ListNode_t *cur = method_candidates; cur != NULL; cur = cur->next)
