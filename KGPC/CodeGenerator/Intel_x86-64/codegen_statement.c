@@ -3192,6 +3192,36 @@ static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, Cod
     return inst_list;
 }
 
+static ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, int dest_size, Register_t *src_reg)
+{
+    char buffer[128];
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+    free_arg_regs();
+    return inst_list;
+}
+
 /* Assign a static array value (copy all elements) */
 static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
@@ -3233,16 +3263,7 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         if (dest_size <= 1)
             dest_size = 256;
 
-        char buffer[128];
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", dest_size);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
-        free_arg_regs();
+        inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_reg, dest_size, src_reg);
 
         free_reg(get_reg_stack(), dest_reg);
         free_reg(get_reg_stack(), src_reg);
@@ -9334,7 +9355,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         {
             Register_t *dest_addr = NULL;
             Register_t *src_addr = NULL;
-            char short_buf[128];
             int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
             if (array_size <= 1)
             {
@@ -9362,15 +9382,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
-            snprintf(short_buf, sizeof(short_buf), "\tmovq\t%s, %%rdi\n", dest_addr->bit_64);
-            inst_list = add_inst(inst_list, short_buf);
-            snprintf(short_buf, sizeof(short_buf), "\tmovq\t$%d, %%rsi\n", array_size);
-            inst_list = add_inst(inst_list, short_buf);
-            snprintf(short_buf, sizeof(short_buf), "\tmovq\t%s, %%rdx\n", src_addr->bit_64);
-            inst_list = add_inst(inst_list, short_buf);
-            inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
-            free_arg_regs();
+            inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_addr, array_size, src_addr);
             free_reg(get_reg_stack(), dest_addr);
             free_reg(get_reg_stack(), src_addr);
             return inst_list;
@@ -9631,16 +9643,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     /* Dest is ShortString — use shortstring-to-shortstring copy
                      * which preserves the length byte.
                      * kgpc_shortstring_to_shortstring(dest, dest_size, src) */
-                    char buffer[128];
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", array_size);
-                    inst_list = add_inst(inst_list, buffer);
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
-                    free_arg_regs();
+                    inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
                 }
             }
             else
@@ -10425,16 +10428,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, arr_size);
                 else if (codegen_expr_is_shortstring_value_local(assign_expr))
                 {
-                    char buf2[128];
-                    snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdi\n", addr_reload->bit_64);
-                    inst_list = add_inst(inst_list, buf2);
-                    snprintf(buf2, sizeof(buf2), "\tmovq\t$%d, %%rsi\n", arr_size);
-                    inst_list = add_inst(inst_list, buf2);
-                    snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                    inst_list = add_inst(inst_list, buf2);
-                    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
-                    free_arg_regs();
+                    inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reload, arr_size, value_reg);
                 }
                 else
                     inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, arr_size);
@@ -10467,16 +10461,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
             else if (codegen_expr_is_shortstring_value_local(assign_expr))
             {
-                char buf2[128];
-                snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdi\n", addr_reload->bit_64);
-                inst_list = add_inst(inst_list, buf2);
-                snprintf(buf2, sizeof(buf2), "\tmovq\t$%d, %%rsi\n", array_size);
-                inst_list = add_inst(inst_list, buf2);
-                snprintf(buf2, sizeof(buf2), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-                inst_list = add_inst(inst_list, buf2);
-                inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
-                free_arg_regs();
+                inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reload, array_size, value_reg);
             }
             else
             {
