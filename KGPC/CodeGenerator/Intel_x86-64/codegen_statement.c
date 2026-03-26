@@ -5548,6 +5548,11 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
         /* Nested dynamic array: SetLength(arr[i], n) where arr[i] is itself a dynamic array */
         array_id = "__nested_dynarray__";
     }
+    else if (array_expr != NULL && codegen_expr_is_addressable(array_expr))
+    {
+        /* Accept addressable expressions such as SetLength(p^, n). */
+        array_id = "__addressable_dynarray__";
+    }
 
     if (array_id == NULL)
     {
@@ -8304,6 +8309,8 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
         if (first_expr != NULL && (expr_has_type_tag(first_expr, TEXT_TYPE)))
         {
             file_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (file_reg == NULL)
+                file_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
             if (file_reg != NULL)
             {
                 Register_t *addr_reg = NULL;
@@ -11177,6 +11184,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
     KgpcType *array_type = collection->resolved_kgpc_type;
     int is_enum_domain = 0;
     int is_set_collection = (array_type != NULL && kgpc_type_is_set(array_type));
+    long long enum_domain_lower = 0;
     int enum_domain_upper = -1;
 
     if (collection->type == EXPR_VAR_ID && collection->expr_data.id != NULL)
@@ -11191,8 +11199,23 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             if (enum_count > 0)
             {
                 is_enum_domain = 1;
+                enum_domain_lower = 0;
                 enum_domain_upper = enum_count - 1;
                 array_type = collection_node->type;
+            }
+            else if (collection_node->type->type_alias != NULL &&
+                collection_node->type->type_alias->is_range &&
+                collection_node->type->type_alias->range_known)
+            {
+                long long lower = collection_node->type->type_alias->range_start;
+                long long upper = collection_node->type->type_alias->range_end;
+                if (upper >= lower && lower >= INT_MIN && upper <= INT_MAX)
+                {
+                    is_enum_domain = 1;
+                    enum_domain_lower = lower;
+                    enum_domain_upper = (int)upper;
+                    array_type = collection_node->type;
+                }
             }
         }
     }
@@ -11934,7 +11957,8 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             return inst_list;
         }
 
-        snprintf(buffer, sizeof(buffer), "\tmovl\t$0, -%d(%%rbp)\n", index_slot->offset);
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, -%d(%%rbp)\n",
+            enum_domain_lower, index_slot->offset);
         inst_list = add_inst(inst_list, buffer);
         inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);
 
