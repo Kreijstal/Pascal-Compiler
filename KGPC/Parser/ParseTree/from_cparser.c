@@ -17843,9 +17843,14 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                 destroy_type_info_contents(&type_info);
                             }
 
-                            /* Append the return type to the mangled name to
-                             * disambiguate overloads (e.g. variant__op_assign_byte
-                             * vs variant__op_assign_real). */
+                            /* Keep the base name (TypeName__op_suffix) as the
+                             * symbol table id so FindAllIdents can find all
+                             * overloads.  The full suffixed name goes into
+                             * mangled_id for unique assembly labels. */
+                            size_t base_id_len = strlen(param_type_id) + strlen(encoded_op) + 3;
+                            char *base_id = (char *)malloc(base_id_len);
+                            if (base_id != NULL)
+                                snprintf(base_id, base_id_len, "%s__%s", param_type_id, encoded_op);
                             const char *ret_suffix = return_type_id;
                             if (ret_suffix == NULL) ret_suffix = result_var_name_method;
                             if (ret_suffix != NULL) {
@@ -17855,9 +17860,6 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                     snprintf(new_name, new_len, "%s_%s", mangled_name, ret_suffix);
                                     free(mangled_name);
                                     mangled_name = new_name;
-                                    if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
-                                        fprintf(stderr, "[Operator] Standalone operator (with rettype): %s\n", mangled_name);
-                                    }
                                 }
                             }
 
@@ -17881,11 +17883,24 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                 body_cursor = body_cursor->next;
                             }
 
-                            /* Create the function tree with local declarations */
+                            /* Create the function tree: use base_id as the
+                             * symbol table key; store the full suffixed name
+                             * as mangled_id for unique assembly labels. */
                             ListNode_t *op_var_decls = list_builder_finish(&op_var_builder);
                             ListNode_t *op_label_decls = list_builder_finish(&op_label_builder);
-                            Tree_t *tree = mk_function(method_node->line, mangled_name, params, op_const_decls,
+                            Tree_t *tree = mk_function(method_node->line,
+                                base_id != NULL ? base_id : mangled_name,
+                                params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
+                            if (tree != NULL) {
+                                tree->tree_data.subprogram_data.mangled_id = mangled_name;
+                                tree->tree_data.subprogram_data.is_operator = 1;
+                            } else
+                                free(mangled_name);
+                            if (base_id != NULL && tree != NULL)
+                                ; /* base_id ownership transferred to mk_function */
+                            else if (base_id != NULL && tree == NULL)
+                                free(base_id);
                             if (tree != NULL && method_node->index >= 0)
                                 tree->source_index = method_node->index + g_source_offset;
                             if (tree != NULL && result_var_name_method != NULL) {
@@ -18972,15 +18987,27 @@ static Tree_t *convert_function(ast_t *func_node) {
         cur = cur->next;
     }
 
-    /* Now that the return type is parsed, build the final mangled name for
-     * standalone operators: ParamType__op_suffix_ReturnType.  This avoids
-     * name collisions when the same param type maps to many return types,
-     * e.g. variant__op_assign_byte vs variant__op_assign_real. */
+    /* Build operator names: the base name (TypeName__op_suffix) goes into id
+     * so FindAllIdents can find all overloads.  The full suffixed name (with
+     * param types and return type) goes into mangled_id for unique asm labels,
+     * avoiding collisions between overloads with same params but different
+     * return types (e.g. Tconstexprint__op_assign returning qword vs int64). */
+    char *operator_mangled_id = NULL;
     if (deferred_encoded_op != NULL && deferred_param_type_id != NULL) {
         const char *ret_suffix = return_type_id;
         if (ret_suffix == NULL) ret_suffix = result_var_name;
-        /* For binary operators, include second param type to disambiguate from
-         * unary operators with the same name (e.g. binary - vs unary -). */
+
+        /* Set id to the base name: TypeName__op_suffix */
+        size_t base_len = strlen(deferred_param_type_id) + strlen(deferred_encoded_op) + 3;
+        char *base_name = (char *)malloc(base_len);
+        if (base_name != NULL) {
+            snprintf(base_name, base_len, "%s__%s",
+                deferred_param_type_id, deferred_encoded_op);
+            free(id);
+            id = base_name;
+        }
+
+        /* Build the full suffixed name for mangled_id */
         size_t name_len = strlen(deferred_param_type_id) + strlen(deferred_encoded_op) + 3
             + (ret_suffix != NULL ? strlen(ret_suffix) + 1 : 0)
             + (deferred_second_param_type_id != NULL ? strlen(deferred_second_param_type_id) + 1 : 0);
@@ -19001,11 +19028,7 @@ static Tree_t *convert_function(ast_t *func_node) {
                 snprintf(mangled_name, name_len, "%s__%s",
                     deferred_param_type_id, deferred_encoded_op);
             }
-            if (kgpc_getenv("KGPC_DEBUG_OPERATOR") != NULL) {
-                fprintf(stderr, "[Operator] Standalone operator: %s\n", mangled_name);
-            }
-            free(id);
-            id = mangled_name;
+            operator_mangled_id = mangled_name;
         }
         free(deferred_encoded_op);
         deferred_encoded_op = NULL;
@@ -19278,6 +19301,10 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
     if (tree != NULL && is_standalone_operator)
         tree->tree_data.subprogram_data.is_operator = 1;
+    if (tree != NULL && operator_mangled_id != NULL)
+        tree->tree_data.subprogram_data.mangled_id = operator_mangled_id;
+    else if (operator_mangled_id != NULL)
+        free(operator_mangled_id);
     return tree;
 }
 
