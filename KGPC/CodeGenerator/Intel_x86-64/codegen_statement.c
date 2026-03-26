@@ -1976,6 +1976,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         *out_reg = addr_reg;
         goto cleanup;
     }
+    else if (expr->type == EXPR_ARRAY_LITERAL)
+    {
+        /* Array literals are materialized into a temporary stack slot by
+         * codegen_expr_with_result, which returns a register pointing to
+         * the data.  Use that address directly instead of falling through
+         * to codegen_evaluate_expr/build_expr_tree which cannot handle
+         * compound expressions. */
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
         struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
@@ -3140,6 +3150,50 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
             }
         }
 
+        /* For pointer dereference destinations (ptr^), extract the array
+         * type from the pointer's pointee.  This handles typed constant
+         * arrays assigned through pointer indirection. */
+        if (num_elements <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+        {
+            KgpcType *deref_type = dest_expr->resolved_kgpc_type;
+            /* Try the inner pointer expression's pointee type */
+            if (deref_type == NULL || !kgpc_type_is_array(deref_type))
+            {
+                struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+                if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+                {
+                    KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                        ptr_expr->resolved_kgpc_type, ctx->symtab);
+                    if (pointee != NULL && kgpc_type_is_array(pointee))
+                        deref_type = pointee;
+                }
+                /* Also check pointer_subtype_id on the inner expression */
+                if ((deref_type == NULL || !kgpc_type_is_array(deref_type)) &&
+                    ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+                    ctx->symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                        type_node != NULL && type_node->type != NULL &&
+                        kgpc_type_is_array(type_node->type))
+                    {
+                        deref_type = type_node->type;
+                    }
+                }
+            }
+            if (deref_type != NULL && kgpc_type_is_array(deref_type))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(deref_type, &start, &end) == 0 &&
+                    end >= start)
+                {
+                    num_elements = (long long)end - (long long)start + 1;
+                }
+            }
+        }
+
         if (num_elements <= 0)
         {
             struct RecordField *field = codegen_lookup_record_field(dest_expr);
@@ -3155,10 +3209,61 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
                 }
             }
         }
+
+        /* Last resort: derive element count from source array literal.
+         * Typed constant arrays (e.g. `const foo: array[0..N] of Rec = (...)`)
+         * may have unresolved bounds on the destination when the type comes from
+         * a cross-unit declaration.  The source literal knows its own length. */
+        if (num_elements <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->expr_data.array_literal_data.element_count > 0)
+        {
+            num_elements = src_expr->expr_data.array_literal_data.element_count;
+        }
     }
 
     long long element_size = expr_get_array_element_size(dest_expr, ctx);
-    
+
+    /* For pointer dereference destinations, extract element size from
+     * the pointer's pointee array type. */
+    if (element_size <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+        KgpcType *arr_type = NULL;
+        if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+        {
+            KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                ptr_expr->resolved_kgpc_type, ctx->symtab);
+            if (pointee != NULL && kgpc_type_is_array(pointee))
+                arr_type = pointee;
+        }
+        if (arr_type == NULL && ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+            ctx->symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_array(type_node->type))
+            {
+                arr_type = type_node->type;
+            }
+        }
+        if (arr_type != NULL)
+        {
+            long long elem_size = kgpc_type_get_array_element_size(arr_type);
+            if (elem_size <= 0)
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arr_type,
+                    ctx->symtab);
+                if (elem_type != NULL)
+                    elem_size = kgpc_type_sizeof(elem_type);
+            }
+            if (elem_size > 0)
+                element_size = elem_size;
+        }
+    }
+
     if (element_size <= 0)
     {
         if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
@@ -3211,6 +3316,20 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
             }
         }
 
+        /* Fall back to the source array literal's element size when the
+         * destination type information is incomplete (cross-unit typed consts). */
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->array_element_size > 0)
+        {
+            element_size = src_expr->array_element_size;
+        }
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            element_size = expr_get_array_element_size(src_expr, ctx);
+        }
+
         if (element_size <= 0)
         {
             codegen_report_error(ctx,
@@ -3232,6 +3351,20 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
                 array_size = total_size;
                 num_elements = 1;
                 element_size = total_size;
+            }
+        }
+
+        /* Last resort: use sizeof the destination's resolved type directly.
+         * This handles pointer dereference destinations (ptr^) where the
+         * pointee is a fixed-size type (e.g. char array behind PChar). */
+        if (array_size <= 0 && dest_expr->resolved_kgpc_type != NULL)
+        {
+            long long type_size = kgpc_type_sizeof(dest_expr->resolved_kgpc_type);
+            if (type_size > 0)
+            {
+                array_size = type_size;
+                num_elements = 1;
+                element_size = type_size;
             }
         }
 
@@ -5504,14 +5637,35 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                         fallback_size = kgpc_type_sizeof(elem_type);
                 }
             }
-            KGPC_COMPILER_HARD_ASSERT(fallback_size > 0,
-                "array expression is missing element-size metadata in SetLength");
+            /* With-stack lookup: for unresolved variables in `with` blocks */
+            if (fallback_size <= 0 && ctx != NULL && ctx->with_depth > 0 &&
+                array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+            {
+                struct RecordField *with_field = codegen_lookup_with_field(ctx,
+                    array_expr->expr_data.id, NULL);
+                if (with_field != NULL)
+                {
+                    long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
+                    if (elem_size > 0)
+                        fallback_size = elem_size;
+                }
+            }
+            if (fallback_size <= 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: array expression is missing element-size metadata in SetLength.");
+                return inst_list;
+            }
             if (fallback_size <= INT_MAX && (element_size <= 0 || fallback_size > element_size))
                 element_size = (int)fallback_size;
         }
-        KGPC_COMPILER_HARD_ASSERT(element_size > 0,
-            "unable to resolve SetLength field-array element size (field=%s)",
-            (field != NULL && field->name != NULL) ? field->name : "<unknown>");
+        if (element_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: unable to resolve SetLength field-array element size (field=%s).",
+                (field != NULL && field->name != NULL) ? field->name : "<unknown>");
+            return inst_list;
+        }
     }
     else
     {
