@@ -3150,6 +3150,50 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
             }
         }
 
+        /* For pointer dereference destinations (ptr^), extract the array
+         * type from the pointer's pointee.  This handles typed constant
+         * arrays assigned through pointer indirection. */
+        if (num_elements <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+        {
+            KgpcType *deref_type = dest_expr->resolved_kgpc_type;
+            /* Try the inner pointer expression's pointee type */
+            if (deref_type == NULL || !kgpc_type_is_array(deref_type))
+            {
+                struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+                if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+                {
+                    KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                        ptr_expr->resolved_kgpc_type, ctx->symtab);
+                    if (pointee != NULL && kgpc_type_is_array(pointee))
+                        deref_type = pointee;
+                }
+                /* Also check pointer_subtype_id on the inner expression */
+                if ((deref_type == NULL || !kgpc_type_is_array(deref_type)) &&
+                    ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+                    ctx->symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                        type_node != NULL && type_node->type != NULL &&
+                        kgpc_type_is_array(type_node->type))
+                    {
+                        deref_type = type_node->type;
+                    }
+                }
+            }
+            if (deref_type != NULL && kgpc_type_is_array(deref_type))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(deref_type, &start, &end) == 0 &&
+                    end >= start)
+                {
+                    num_elements = (long long)end - (long long)start + 1;
+                }
+            }
+        }
+
         if (num_elements <= 0)
         {
             struct RecordField *field = codegen_lookup_record_field(dest_expr);
@@ -3179,7 +3223,47 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     }
 
     long long element_size = expr_get_array_element_size(dest_expr, ctx);
-    
+
+    /* For pointer dereference destinations, extract element size from
+     * the pointer's pointee array type. */
+    if (element_size <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+        KgpcType *arr_type = NULL;
+        if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+        {
+            KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                ptr_expr->resolved_kgpc_type, ctx->symtab);
+            if (pointee != NULL && kgpc_type_is_array(pointee))
+                arr_type = pointee;
+        }
+        if (arr_type == NULL && ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+            ctx->symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_array(type_node->type))
+            {
+                arr_type = type_node->type;
+            }
+        }
+        if (arr_type != NULL)
+        {
+            long long elem_size = kgpc_type_get_array_element_size(arr_type);
+            if (elem_size <= 0)
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arr_type,
+                    ctx->symtab);
+                if (elem_type != NULL)
+                    elem_size = kgpc_type_sizeof(elem_type);
+            }
+            if (elem_size > 0)
+                element_size = elem_size;
+        }
+    }
+
     if (element_size <= 0)
     {
         if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
@@ -3267,6 +3351,20 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
                 array_size = total_size;
                 num_elements = 1;
                 element_size = total_size;
+            }
+        }
+
+        /* Last resort: use sizeof the destination's resolved type directly.
+         * This handles pointer dereference destinations (ptr^) where the
+         * pointee is a fixed-size type (e.g. char array behind PChar). */
+        if (array_size <= 0 && dest_expr->resolved_kgpc_type != NULL)
+        {
+            long long type_size = kgpc_type_sizeof(dest_expr->resolved_kgpc_type);
+            if (type_size > 0)
+            {
+                array_size = type_size;
+                num_elements = 1;
+                element_size = type_size;
             }
         }
 
