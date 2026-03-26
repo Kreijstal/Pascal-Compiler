@@ -346,7 +346,7 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
 /* Collect all method overloads across the full class hierarchy.
  * Walks from start_record up through parent classes, collecting
  * all overloads of the named method into a single list.
- * Detects cyclic hierarchies explicitly and logs a warning. */
+ * Detects cyclic hierarchies explicitly and enforces a hard depth bound. */
 ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
     struct RecordType *start_record, const char *method_name);
 

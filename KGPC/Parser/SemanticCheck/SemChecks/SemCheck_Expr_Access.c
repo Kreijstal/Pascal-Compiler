@@ -2610,7 +2610,7 @@ int semcheck_funccall(int *type_return,
                                 all_methods, args_given, symtab,
                                 &call_stub, max_scope_lev, 0);
 
-                            if (overload_status == 0 && best_candidate != NULL && num_best >= 1)
+                            if (overload_status == 0 && best_candidate != NULL && num_best == 1)
                             {
                                 method_node = best_candidate;
                                 early_overload_resolved = 1;
@@ -5393,9 +5393,9 @@ int semcheck_funccall(int *type_return,
     /* When inside a class method, the early resolution (semcheck_find_class_method)
      * may have correctly resolved an inherited parent-class overload that
      * FindAllIdents(id) above cannot see — only the child-class forward declaration
-     * is in scope.  Ensure the early-resolved candidate is in the list so the
-     * final overload resolution can consider it.  Prepend (rather than append)
-     * to preserve its priority from earlier resolution. */
+     * is in scope. Ensure the early-resolved candidate is in the list so the
+     * final overload resolution can consider it. Prepend it to preserve the
+     * earlier class-aware priority. */
     if (expr->expr_data.function_call_data.resolved_func != NULL)
     {
         HashNode_t *early_resolved = expr->expr_data.function_call_data.resolved_func;
@@ -5421,7 +5421,6 @@ int semcheck_funccall(int *type_return,
             }
             else
             {
-                /* overload_candidates was NULL — create a new list with early-resolved */
                 overload_candidates = CreateListNode(early_resolved, LIST_UNSPECIFIED);
             }
         }
