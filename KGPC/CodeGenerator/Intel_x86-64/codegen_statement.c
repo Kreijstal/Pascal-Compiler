@@ -107,6 +107,8 @@ static int codegen_statement_return_storage_size(KgpcType *return_type)
 }
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/HashTable/HashTable.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 
@@ -861,6 +863,105 @@ static StackNode_t *codegen_alloc_record_ctor_temp(long long size)
     char label[32];
     snprintf(label, sizeof(label), "record_ctor_%lu", codegen_next_record_ctor_temp_id());
     return add_l_x(label, (int)size);
+}
+
+static ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
+    ListNode_t *inst_list, CodeGenContext *ctx, struct Expression *target_expr,
+    struct Expression *method_expr)
+{
+    if (stmt == NULL || ctx == NULL || ctx->symtab == NULL ||
+        target_expr == NULL || method_expr == NULL)
+        return inst_list;
+
+    struct Expression *method_clone = clone_expression(method_expr);
+    if (method_clone == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to clone TP-style New/Dispose method expression.");
+        return inst_list;
+    }
+
+    char *method_name = NULL;
+    ListNode_t *method_args = NULL;
+    if (method_clone->type == EXPR_FUNCTION_CALL)
+    {
+        const char *fn_id = method_clone->expr_data.function_call_data.id;
+        if (fn_id != NULL)
+            method_name = strdup(fn_id);
+        method_args = method_clone->expr_data.function_call_data.args_expr;
+        method_clone->expr_data.function_call_data.args_expr = NULL;
+    }
+    else if (method_clone->type == EXPR_VAR_ID)
+    {
+        if (method_clone->expr_data.id != NULL)
+            method_name = strdup(method_clone->expr_data.id);
+    }
+
+    destroy_expr(method_clone);
+    if (method_name == NULL)
+    {
+        if (method_args != NULL)
+            DestroyList(method_args);
+        codegen_report_error(ctx, "ERROR: Unsupported TP-style New/Dispose method expression.");
+        return inst_list;
+    }
+
+    size_t placeholder_len = strlen(method_name) + 3;
+    char *placeholder_name = (char *)malloc(placeholder_len);
+    if (placeholder_name == NULL)
+    {
+        free(method_name);
+        if (method_args != NULL)
+            DestroyList(method_args);
+        codegen_report_error(ctx, "ERROR: Unable to allocate TP-style New/Dispose placeholder.");
+        return inst_list;
+    }
+    snprintf(placeholder_name, placeholder_len, "__%s", method_name);
+
+    struct Expression *receiver = mk_pointer_deref(stmt->line_num, clone_expression(target_expr));
+    if (receiver == NULL)
+    {
+        free(placeholder_name);
+        free(method_name);
+        if (method_args != NULL)
+            DestroyList(method_args);
+        codegen_report_error(ctx, "ERROR: Unable to create TP-style New/Dispose receiver.");
+        return inst_list;
+    }
+
+    ListNode_t *call_args = CreateListNode(receiver, LIST_EXPR);
+    if (call_args == NULL)
+    {
+        destroy_expr(receiver);
+        free(placeholder_name);
+        free(method_name);
+        if (method_args != NULL)
+            DestroyList(method_args);
+        codegen_report_error(ctx, "ERROR: Unable to allocate TP-style New/Dispose args.");
+        return inst_list;
+    }
+    call_args->next = method_args;
+
+    struct Statement *call_stmt = mk_procedurecall(stmt->line_num, placeholder_name, call_args);
+    if (call_stmt == NULL)
+    {
+        DestroyList(call_args);
+        free(method_name);
+        codegen_report_error(ctx, "ERROR: Unable to create TP-style New/Dispose call.");
+        return inst_list;
+    }
+    call_stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
+    call_stmt->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+
+    if (semcheck_stmt(ctx->symtab, call_stmt, INT_MAX) != 0)
+    {
+        destroy_stmt(call_stmt);
+        codegen_report_error(ctx, "ERROR: Failed to semcheck TP-style New/Dispose fallback call.");
+        return inst_list;
+    }
+
+    inst_list = codegen_stmt(call_stmt, inst_list, ctx, ctx->symtab);
+    destroy_stmt(call_stmt);
+    return inst_list;
 }
 
 static StackNode_t *codegen_alloc_incdec_temp(int size)
@@ -7990,7 +8091,15 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
         return inst_list;
 
     ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next != NULL)
+    struct Expression *method_expr = NULL;
+    if (args_expr != NULL && args_expr->next != NULL)
+    {
+        if (args_expr->next->next == NULL)
+            method_expr = (struct Expression *)args_expr->next->cur;
+        else
+            args_expr = NULL;
+    }
+    if (args_expr == NULL)
     {
         fprintf(stderr, "ERROR: New expects exactly one argument.\n");
         return inst_list;
@@ -8045,6 +8154,11 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
     free_reg(get_reg_stack(), addr_reg);
     free_reg(get_reg_stack(), size_reg);
     free_arg_regs();
+
+    if (method_expr != NULL && !codegen_had_error(ctx))
+        inst_list = codegen_emit_new_dispose_method_fallback(stmt, inst_list, ctx,
+            target_expr, method_expr);
+
     return inst_list;
 }
 
@@ -8054,13 +8168,29 @@ static ListNode_t *codegen_builtin_dispose(struct Statement *stmt, ListNode_t *i
         return inst_list;
 
     ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next != NULL)
+    struct Expression *method_expr = NULL;
+    if (args_expr != NULL && args_expr->next != NULL)
+    {
+        if (args_expr->next->next == NULL)
+            method_expr = (struct Expression *)args_expr->next->cur;
+        else
+            args_expr = NULL;
+    }
+    if (args_expr == NULL)
     {
         fprintf(stderr, "ERROR: Dispose expects exactly one argument.\n");
         return inst_list;
     }
 
     struct Expression *target_expr = (struct Expression *)args_expr->cur;
+
+    if (method_expr != NULL)
+    {
+        inst_list = codegen_emit_new_dispose_method_fallback(stmt, inst_list, ctx,
+            target_expr, method_expr);
+        if (codegen_had_error(ctx))
+            return inst_list;
+    }
 
     Register_t *addr_reg = NULL;
     inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
@@ -11872,7 +12002,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         free_reg(get_reg_stack(), obj_reload_reg);
 
         // Load index into register
-        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *idx_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (idx_reg == NULL) {
             free_reg(get_reg_stack(), fitems_reg);
             codegen_pop_loop(ctx);
@@ -12178,7 +12308,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         // Load index (as 64-bit to use as offset)
-        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *idx_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (idx_reg == NULL) {
             codegen_report_error(ctx, "ERROR: Unable to allocate register for string index");
             free_reg(get_reg_stack(), base_reg);
@@ -12420,10 +12550,10 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             codegen_report_error(ctx, "ERROR: Unable to allocate register for set for-in index");
             return inst_list;
         }
-        byte_index_reg = get_free_reg(get_reg_stack(), &inst_list);
-        bit_reg = get_free_reg(get_reg_stack(), &inst_list);
-        byte_val_reg = get_free_reg(get_reg_stack(), &inst_list);
-        mask_reg = get_free_reg(get_reg_stack(), &inst_list);
+        byte_index_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        bit_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        byte_val_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        mask_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (byte_index_reg == NULL || bit_reg == NULL || byte_val_reg == NULL || mask_reg == NULL) {
             if (mask_reg) free_reg(get_reg_stack(), mask_reg);
             if (byte_val_reg) free_reg(get_reg_stack(), byte_val_reg);
