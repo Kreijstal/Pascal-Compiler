@@ -8906,7 +8906,18 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     assert(offset != NULL);
 
     char buffer[128];
-    StackNode_t *var = find_label(var_id);
+    int scope_depth = 0;
+    StackNode_t *var = find_label_with_depth(var_id, &scope_depth);
+
+    if (var == NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *sym_node = NULL;
+        if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
+            sym_node != NULL && sym_node->mangled_id != NULL)
+        {
+            var = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+        }
+    }
 
     if(var == NULL) {
         /* If we're inside a nonstatic class method, the bare name may be a field
@@ -9078,8 +9089,41 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     }
 
     *offset = var->offset;
-    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", current_non_local_reg64());
-    inst_list = add_inst(inst_list, buffer);
+    if (var->is_static)
+    {
+        const char *label = (var->static_label != NULL) ? var->static_label : var->label;
+        *offset = 0;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+            current_non_local_reg64());
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (scope_depth <= 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rbp, %s\n", current_non_local_reg64());
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+        if (frame_reg != NULL)
+        {
+            if (strcmp(frame_reg->bit_64, current_non_local_reg64()) != 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    frame_reg->bit_64, current_non_local_reg64());
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            codegen_report_error(ctx,
+                "ERROR: Failed to acquire static link for non-local variable %s.",
+                var_id);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %s\n",
+                current_non_local_reg64());
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
     CODEGEN_DEBUG("DEBUG: Non-local access generated\n");
     #ifdef DEBUG_CODEGEN

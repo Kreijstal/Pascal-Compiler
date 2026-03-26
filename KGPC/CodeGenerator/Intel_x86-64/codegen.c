@@ -54,6 +54,20 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
     const char *iface_symbol, const char *impl_symbol);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
+static int codegen_runtime_owns_exported_symbol(const char *symbol)
+{
+    if (symbol == NULL)
+        return 0;
+
+    return strcmp(symbol, "FPC_SYSCALL0") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL1") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL2") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL3") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL4") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL5") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL6") == 0;
+}
+
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
 {
     if (cand == NULL)
@@ -6807,6 +6821,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     proc = &proc_tree->tree_data.subprogram_data;
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
 
+    if (codegen_runtime_owns_exported_symbol(sub_id) ||
+        codegen_runtime_owns_exported_symbol(proc->cname_override))
+    {
+        return;
+    }
+
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
@@ -7052,6 +7072,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
+
+    if (codegen_runtime_owns_exported_symbol(sub_id) ||
+        codegen_runtime_owns_exported_symbol(func->cname_override))
+    {
+        return;
+    }
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
