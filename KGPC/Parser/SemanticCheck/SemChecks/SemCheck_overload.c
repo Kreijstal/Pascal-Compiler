@@ -970,11 +970,16 @@ static int semcheck_overload_symbol_is_assign_operator(HashNode_t *cand)
     return 0;
 }
 
+/* Check whether an operator := conversion exists between actual and formal
+ * types, in either direction.  Handles both "assign to record from actual"
+ * (formal is record) and "assign from record to formal" (actual is record,
+ * e.g. Tconstexprint → qword). */
 static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
     KgpcType *actual_kgpc, KgpcType *formal_kgpc, int actual_tag)
 {
-    if (symtab == NULL || formal_kgpc == NULL ||
-        !semcheck_overload_type_is_recordish(formal_kgpc))
+    int formal_is_record = (formal_kgpc != NULL && semcheck_overload_type_is_recordish(formal_kgpc));
+    int actual_is_record = (actual_kgpc != NULL && semcheck_overload_type_is_recordish(actual_kgpc));
+    if (symtab == NULL || (!formal_is_record && !actual_is_record))
         return 0;
 
     int actual_owned = 0;
@@ -988,6 +993,11 @@ static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
     if (actual_kgpc == NULL)
         return 0;
 
+    /* When only the actual side is a record, formal_kgpc may be a primitive
+     * type (e.g. qword) that semcheck_overload_record_type_id_from_kgpc
+     * cannot name.  The operator lookup still works via the source (actual
+     * record) name — the score function checks the operator's return type
+     * against formal_kgpc directly. */
     const char *target_type_id = semcheck_overload_record_type_id_from_kgpc(formal_kgpc);
     const char *source_type_id = semcheck_overload_record_type_id_from_kgpc(actual_kgpc);
     int found = 0;
