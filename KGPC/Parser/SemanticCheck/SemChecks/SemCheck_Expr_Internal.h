@@ -266,6 +266,8 @@ char *semcheck_dup_function_call_target_symbol(HashNode_t *target);
 
 /* Set function call target on expression */
 void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *target);
+void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
+    SymTab_t *symtab);
 
 /* Set call KgpcType on function call expression */
 void semcheck_expr_set_call_kgpc_type(struct Expression *expr, KgpcType *type,

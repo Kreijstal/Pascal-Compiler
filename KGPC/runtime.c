@@ -2850,34 +2850,46 @@ static void kgpc_string_set_insert(const void *value)
 {
     if (value == NULL || value == KGPC_STRING_TOMBSTONE)
         return;
-    if (kgpc_string_set_cap == 0)
-        kgpc_string_set_grow(1024);
-    if (kgpc_string_set_cap == 0)
-        return;
-    if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
-        kgpc_string_set_grow(kgpc_string_set_cap * 2);
-    if (kgpc_string_set_cap == 0)
-        return;
-
-    size_t mask = kgpc_string_set_cap - 1;
-    size_t idx = kgpc_hash_ptr(value) & mask;
-    size_t first_tombstone = (size_t)-1;
     for (;;)
     {
-        void *entry = kgpc_string_set_slots[idx];
-        if (entry == NULL)
+        if (kgpc_string_set_cap == 0)
+            kgpc_string_set_grow(1024);
+        if (kgpc_string_set_cap == 0)
+            return;
+        if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
+            kgpc_string_set_grow(kgpc_string_set_cap * 2);
+        if (kgpc_string_set_cap == 0)
+            return;
+
+        size_t mask = kgpc_string_set_cap - 1;
+        size_t idx = kgpc_hash_ptr(value) & mask;
+        size_t first_tombstone = (size_t)-1;
+        for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
         {
-            if (first_tombstone != (size_t)-1)
-                idx = first_tombstone;
-            kgpc_string_set_slots[idx] = (void *)value;
+            void *entry = kgpc_string_set_slots[idx];
+            if (entry == NULL)
+            {
+                if (first_tombstone != (size_t)-1)
+                    idx = first_tombstone;
+                kgpc_string_set_slots[idx] = (void *)value;
+                kgpc_string_set_count += 1;
+                return;
+            }
+            if (entry == value)
+                return;
+            if (entry == KGPC_STRING_TOMBSTONE && first_tombstone == (size_t)-1)
+                first_tombstone = idx;
+            idx = (idx + 1) & mask;
+        }
+
+        if (first_tombstone != (size_t)-1)
+        {
+            kgpc_string_set_slots[first_tombstone] = (void *)value;
             kgpc_string_set_count += 1;
             return;
         }
-        if (entry == value)
-            return;
-        if (entry == KGPC_STRING_TOMBSTONE && first_tombstone == (size_t)-1)
-            first_tombstone = idx;
-        idx = (idx + 1) & mask;
+
+        kgpc_string_set_grow(kgpc_string_set_cap * 2);
     }
 }
 
@@ -2887,7 +2899,7 @@ static void kgpc_string_set_remove(const void *value)
         return;
     size_t mask = kgpc_string_set_cap - 1;
     size_t idx = kgpc_hash_ptr(value) & mask;
-    for (;;)
+    for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
     {
         void *entry = kgpc_string_set_slots[idx];
         if (entry == NULL)
@@ -2897,6 +2909,8 @@ static void kgpc_string_set_remove(const void *value)
             kgpc_string_set_slots[idx] = KGPC_STRING_TOMBSTONE;
             if (kgpc_string_set_count > 0)
                 kgpc_string_set_count -= 1;
+            if (kgpc_string_set_count == 0)
+                memset(kgpc_string_set_slots, 0, kgpc_string_set_cap * sizeof(void *));
             return;
         }
         idx = (idx + 1) & mask;
@@ -2913,7 +2927,7 @@ static int kgpc_string_is_managed(const char *value)
         return 0;
     size_t mask = kgpc_string_set_cap - 1;
     size_t idx = kgpc_hash_ptr(value) & mask;
-    for (;;)
+    for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
     {
         void *entry = kgpc_string_set_slots[idx];
         if (entry == NULL)
@@ -2922,6 +2936,7 @@ static int kgpc_string_is_managed(const char *value)
             return 1;
         idx = (idx + 1) & mask;
     }
+    return 0;
 }
 
 static KgpcStringHeader *kgpc_string_header(const char *value)
@@ -6071,6 +6086,24 @@ void kgpc_str_int64_shortstring(int64_t value, char *target)
     kgpc_string_release(result);
 }
 
+void kgpc_str_int64_bounded_shortstring(int64_t value, char *target, int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
+    kgpc_string_release(result);
+}
+
 void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
 {
     if (target == NULL)
@@ -6089,6 +6122,29 @@ void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
     kgpc_string_release(result);
 }
 
+void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width, char *target,
+    int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
+    kgpc_string_release(result);
+}
+
 void kgpc_str_real_shortstring(double value, char *target)
 {
     if (target == NULL)
@@ -6100,6 +6156,24 @@ void kgpc_str_real_shortstring(double value, char *target)
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
+    kgpc_string_release(result);
+}
+
+void kgpc_str_real_bounded_shortstring(double value, char *target, int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
     kgpc_string_release(result);
 }
 
@@ -6118,6 +6192,31 @@ void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precisio
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width, char *target,
+    int64_t precision_and_max)
+{
+    if (target == NULL)
+        return;
+
+    int64_t precision = (int32_t)(precision_and_max & 0xffffffffu);
+    int64_t max_length = (uint32_t)((uint64_t)precision_and_max >> 32);
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
     free(result);
 }
 

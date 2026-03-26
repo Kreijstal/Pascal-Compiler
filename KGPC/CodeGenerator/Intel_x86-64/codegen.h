@@ -180,6 +180,8 @@ ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
     CodegenCallArgRestoreFn restore_fn);
 const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     const struct Expression *expr, char **owned_target_out);
+KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
+    const struct Expression *expr, HashNode_t **resolved_node_out);
 
 /*
  * Compiler invariant policy:
