@@ -973,8 +973,12 @@ static int semcheck_overload_symbol_is_assign_operator(HashNode_t *cand)
 static int semcheck_overload_has_record_assign_conversion(SymTab_t *symtab,
     KgpcType *actual_kgpc, KgpcType *formal_kgpc, int actual_tag)
 {
-    if (symtab == NULL || formal_kgpc == NULL ||
-        !semcheck_overload_type_is_recordish(formal_kgpc))
+    /* Check both directions: formal is record (assign to record from
+     * actual), or actual is record (assign from record to formal).
+     * The latter handles Tconstexprint → qword via operator :=. */
+    int formal_is_record = (formal_kgpc != NULL && semcheck_overload_type_is_recordish(formal_kgpc));
+    int actual_is_record = (actual_kgpc != NULL && semcheck_overload_type_is_recordish(actual_kgpc));
+    if (symtab == NULL || (!formal_is_record && !actual_is_record))
         return 0;
 
     int actual_owned = 0;
