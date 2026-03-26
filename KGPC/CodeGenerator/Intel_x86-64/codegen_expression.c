@@ -5109,7 +5109,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         return inst_list;
     }
 
-    char buffer[64];
+    char buffer[256];
     if (inner->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(inner->expr_data.id);
