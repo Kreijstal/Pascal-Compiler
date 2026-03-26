@@ -1776,6 +1776,8 @@ static int semcheck_try_module_property_assignment(SymTab_t *symtab,
 static int semcheck_convert_property_assignment_to_setter(SymTab_t *symtab,
     struct Statement *stmt, struct Expression *lhs, HashNode_t *setter_node,
     int max_scope_lev);
+static struct Statement *transform_two_arg_new_dispose(struct Statement *stmt,
+    int *is_dispose);
 static int semcheck_mangled_suffix_matches_untyped(const char *candidate_suffix,
     const char *call_suffix);
 static HashNode_t *semcheck_find_untyped_mangled_match(ListNode_t *candidates,
@@ -3465,6 +3467,51 @@ static int semcheck_builtin_dispose(SymTab_t *symtab, struct Statement *stmt, in
 /* Semantic check on a normal statement */
 int semcheck_stmt(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
+    if (stmt != NULL && stmt->type == STMT_PROCEDURE_CALL)
+    {
+        int is_dispose = 0;
+        struct Statement *extra_stmt = transform_two_arg_new_dispose(stmt, &is_dispose);
+        if (extra_stmt != NULL)
+        {
+            struct Statement *base_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
+            ListNode_t *first = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+            ListNode_t *second = (ListNode_t *)calloc(1, sizeof(ListNode_t));
+            if (base_stmt == NULL || first == NULL || second == NULL)
+            {
+                if (base_stmt != NULL)
+                    free(base_stmt);
+                if (first != NULL)
+                    free(first);
+                if (second != NULL)
+                    free(second);
+                destroy_stmt(extra_stmt);
+                semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index,
+                    "Error on line %d, unable to allocate statement nodes for New/Dispose transform.\n",
+                    stmt->line_num);
+                return 1;
+            }
+
+            *base_stmt = *stmt;
+            first->type = LIST_STMT;
+            second->type = LIST_STMT;
+            if (is_dispose)
+            {
+                first->cur = extra_stmt;
+                second->cur = base_stmt;
+            }
+            else
+            {
+                first->cur = base_stmt;
+                second->cur = extra_stmt;
+            }
+            first->next = second;
+            second->next = NULL;
+
+            stmt->type = STMT_COMPOUND_STATEMENT;
+            stmt->stmt_data.compound_statement = first;
+        }
+    }
+
     int ret = semcheck_stmt_main(symtab, stmt, max_scope_lev);
     if (ret > 0 && kgpc_getenv("KGPC_DEBUG_ERRORS") != NULL && stmt != NULL)
     {
