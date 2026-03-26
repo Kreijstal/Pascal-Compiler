@@ -2096,41 +2096,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
          * IMPORTANT: If is_call_info_valid is true, respect that even if call_kgpc_type is NULL.
          * This allows builtins (like UpCase(char)) to signal that no formal parameter
          * conversion is needed by setting is_call_info_valid=1 with call_kgpc_type=NULL. */
-        struct KgpcType *func_type = NULL;
         HashNode_t *func_node = NULL;
-        if (expr->expr_data.function_call_data.is_call_info_valid)
+        struct KgpcType *func_type = codegen_resolve_function_call_type(ctx, expr, &func_node);
+        if (expr->expr_data.function_call_data.is_call_info_valid &&
+            func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
         {
-            func_type = expr->expr_data.function_call_data.call_kgpc_type;
-            if (func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
-                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=1 but call_kgpc_type is NULL for id='%s'\n",
-                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
-            }
+            fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=1 but call_kgpc_type is NULL for id='%s'\n",
+                expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
         }
-        else if (ctx != NULL && ctx->symtab != NULL)
+        else if (!expr->expr_data.function_call_data.is_call_info_valid &&
+                 func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
         {
-            if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
-                fprintf(stderr, "[CodeGen] expr_tree: is_call_info_valid=0 for id='%s', doing symbol lookup\n",
-                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)");
-            }
-            /* First try lookup by id (short name like "Foo") */
-            if (expr->expr_data.function_call_data.id != NULL &&
-                FindSymbol(&func_node, ctx->symtab,
-                    expr->expr_data.function_call_data.id) != 0 && func_node != NULL)
-            {
-                func_type = func_node->type;
-            }
-            /* If not found, try the mangled name (e.g., "TDoubleHelper__Foo_r_i") */
-            else if (expr->expr_data.function_call_data.mangled_id != NULL &&
-                FindSymbol(&func_node, ctx->symtab,
-                    expr->expr_data.function_call_data.mangled_id) != 0 && func_node != NULL)
-            {
-                func_type = func_node->type;
-            }
-            if (func_type == NULL && kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
-                fprintf(stderr, "[CodeGen] expr_tree: func_type lookup FAILED for id='%s' mangled='%s'\n",
-                    expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
-                    expr->expr_data.function_call_data.mangled_id ? expr->expr_data.function_call_data.mangled_id : "(null)");
-            }
+            fprintf(stderr, "[CodeGen] expr_tree: func_type lookup FAILED for id='%s' mangled='%s'\n",
+                expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "(null)",
+                expr->expr_data.function_call_data.mangled_id ? expr->expr_data.function_call_data.mangled_id : "(null)");
         }
         
         /* Check if the function being called requires a static link.
@@ -2243,10 +2222,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
         {
-            long long sret_size = 0;
-            KgpcType *return_type = expr_get_kgpc_type(expr);
-            if (return_type != NULL)
-                sret_size = kgpc_type_sizeof(return_type);
+            long long sret_size = codegen_expr_sret_size(expr);
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
             sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);

@@ -8,6 +8,7 @@
     Part of the SemCheck module split from SemCheck_expr.c.
 */
 
+#include <limits.h>
 #include "SemCheck_Expr_Internal.h"
 
 static const char *semcheck_type_alias_name(KgpcType *type)
@@ -501,6 +502,85 @@ void semcheck_set_function_call_target(struct Expression *expr, HashNode_t *targ
     expr->expr_data.function_call_data.cached_method_name =
         target->method_name ? strdup(target->method_name) : NULL;
     expr->expr_data.function_call_data.is_call_info_valid = 1;
+}
+
+void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
+    SymTab_t *symtab)
+{
+    HashNode_t *exact_target = NULL;
+    ListNode_t *candidates = NULL;
+    int best_unit_index = INT_MAX;
+
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL ||
+        expr->expr_data.function_call_data.mangled_id == NULL)
+    {
+        return;
+    }
+
+    if (expr->expr_data.function_call_data.id != NULL)
+    {
+        candidates = FindAllIdents(symtab, expr->expr_data.function_call_data.id);
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            const char *target_symbol = NULL;
+            char *owned_target_symbol = NULL;
+            int candidate_unit_index = 0;
+
+            if (candidate == NULL || candidate->type == NULL ||
+                candidate->type->kind != TYPE_KIND_PROCEDURE)
+                continue;
+
+            target_symbol = candidate->mangled_id;
+            if (target_symbol == NULL || target_symbol[0] == '\0')
+            {
+                owned_target_symbol = semcheck_dup_function_call_target_symbol(candidate);
+                target_symbol = owned_target_symbol;
+            }
+            if (target_symbol == NULL ||
+                strcmp(target_symbol, expr->expr_data.function_call_data.mangled_id) != 0)
+            {
+                free(owned_target_symbol);
+                continue;
+            }
+            free(owned_target_symbol);
+
+            if (candidate->source_unit_index > 0)
+            {
+                candidate_unit_index = candidate->source_unit_index;
+            }
+            else if (candidate->type->info.proc_info.definition != NULL)
+            {
+                candidate_unit_index = candidate->type->info.proc_info.definition
+                    ->tree_data.subprogram_data.source_unit_index;
+            }
+
+            if (exact_target == NULL || candidate_unit_index < best_unit_index)
+            {
+                exact_target = candidate;
+                best_unit_index = candidate_unit_index;
+            }
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+    }
+
+    if (exact_target == NULL &&
+        (FindSymbol(&exact_target, symtab,
+            expr->expr_data.function_call_data.mangled_id) == 0 ||
+         exact_target == NULL || exact_target->type == NULL ||
+         exact_target->type->kind != TYPE_KIND_PROCEDURE))
+    {
+        return;
+    }
+
+    if (expr->expr_data.function_call_data.call_kgpc_type == exact_target->type &&
+        expr->expr_data.function_call_data.call_hash_type == exact_target->hash_type)
+    {
+        return;
+    }
+
+    semcheck_set_function_call_target(expr, exact_target);
 }
 
 void set_hash_meta(HashNode_t *node, int mutating)

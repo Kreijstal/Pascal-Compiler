@@ -2352,7 +2352,15 @@ skip_scoped_enum_resolution:
         
         /* Check if the "unit name" identifier exists in symbol table */
         int find_result = FindSymbol(&unit_check, symtab, unit_id);
-        if (!unit_is_qualifier)
+        /* Only look for a preferred type when the identifier is not a known
+         * variable — otherwise a local variable like `hmodule` whose name
+         * collides with a type (HMODULE) would be misresolved as a scoped
+         * enum qualifier instead of a record/class field access. */
+        if (!unit_is_qualifier &&
+            !(find_result &&
+              (unit_check->hash_type == HASHTYPE_VAR ||
+               unit_check->hash_type == HASHTYPE_ARRAY ||
+               unit_check->hash_type == HASHTYPE_FUNCTION_RETURN)))
             preferred_type = semcheck_find_preferred_type_node(symtab, unit_id);
         if (!unit_is_qualifier && !find_result && unit_registry_contains(unit_id))
         {
@@ -3906,6 +3914,11 @@ SKIP_SELF_FIELD_REWRITE:
                         expr->expr_data.function_call_data.placeholder_method_name = strdup(field_id);
                     expr->expr_data.function_call_data.mangled_id = NULL;
                     expr->expr_data.function_call_data.resolved_func = NULL;
+                    if (method_owner_record != NULL && method_owner_record->type_id != NULL)
+                        expr->expr_data.function_call_data.cached_owner_class =
+                            strdup(method_owner_record->type_id);
+                    if (field_id != NULL)
+                        expr->expr_data.function_call_data.cached_method_name = strdup(field_id);
 
                     /* For static methods:
                      * - If receiver is a type identifier (TypeName.Method), pass it as first arg

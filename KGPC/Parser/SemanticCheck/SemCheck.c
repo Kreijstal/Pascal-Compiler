@@ -18783,14 +18783,22 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
      * convert_method_impl (e.g. "TOuter.TInner__DoWork").  This is needed
      * so that semcheck_get_current_method_owner can walk up to outer classes
      * when resolving class vars / consts in nested object methods. */
-    if (subprogram->tree_data.subprogram_data.mangled_id != NULL)
+    /* Operator functions set mangled_id in from_cparser.c to include the
+     * return type suffix for unique assembly labels.  Preserve it instead
+     * of overwriting with MangleFunctionName (which only uses param types
+     * and would collide for overloads differing only in return type). */
+    int keep_existing_mangled = (subprogram->tree_data.subprogram_data.is_operator &&
+                                 subprogram->tree_data.subprogram_data.mangled_id != NULL);
+    if (!keep_existing_mangled && subprogram->tree_data.subprogram_data.mangled_id != NULL)
     {
         free(subprogram->tree_data.subprogram_data.mangled_id);
         subprogram->tree_data.subprogram_data.mangled_id = NULL;
     }
 
     const char *predeclare_name = subprogram->tree_data.subprogram_data.cname_override;
-    if (predeclare_name != NULL) {
+    if (keep_existing_mangled) {
+        /* Operator mangled_id already set — keep it */
+    } else if (predeclare_name != NULL) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(predeclare_name);
     } else if (subprogram->tree_data.subprogram_data.cname_flag) {
         subprogram->tree_data.subprogram_data.mangled_id = strdup(subprogram->tree_data.subprogram_data.id);
