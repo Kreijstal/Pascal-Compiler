@@ -5351,6 +5351,34 @@ int semcheck_funccall(int *type_return,
         goto skip_overload_resolution;
     }
 
+    if (overload_candidates == NULL &&
+        expr->expr_data.function_call_data.is_method_call_placeholder &&
+        expr->expr_data.function_call_data.cached_owner_class != NULL &&
+        expr->expr_data.function_call_data.cached_method_name != NULL)
+    {
+        const char *owner_class = expr->expr_data.function_call_data.cached_owner_class;
+        const char *method_name = expr->expr_data.function_call_data.cached_method_name;
+        size_t owner_len = strlen(owner_class);
+        size_t method_len = strlen(method_name);
+        char *candidate_name = (char *)malloc(owner_len + 2 + method_len + 1);
+        if (candidate_name != NULL)
+        {
+            snprintf(candidate_name, owner_len + 2 + method_len + 1, "%s__%s",
+                owner_class, method_name);
+            overload_candidates = FindAllIdents(symtab, candidate_name);
+            if (overload_candidates != NULL)
+            {
+                if (mangled_name != NULL)
+                    free(mangled_name);
+                mangled_name = candidate_name;
+            }
+            else
+            {
+                free(candidate_name);
+            }
+        }
+    }
+
     if (id != NULL && overload_candidates == NULL) {
         overload_candidates = FindAllIdents(symtab, id);
     }

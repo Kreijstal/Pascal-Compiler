@@ -3914,6 +3914,11 @@ SKIP_SELF_FIELD_REWRITE:
                         expr->expr_data.function_call_data.placeholder_method_name = strdup(field_id);
                     expr->expr_data.function_call_data.mangled_id = NULL;
                     expr->expr_data.function_call_data.resolved_func = NULL;
+                    if (method_owner_record != NULL && method_owner_record->type_id != NULL)
+                        expr->expr_data.function_call_data.cached_owner_class =
+                            strdup(method_owner_record->type_id);
+                    if (field_id != NULL)
+                        expr->expr_data.function_call_data.cached_method_name = strdup(field_id);
 
                     /* For static methods:
                      * - If receiver is a type identifier (TypeName.Method), pass it as first arg
