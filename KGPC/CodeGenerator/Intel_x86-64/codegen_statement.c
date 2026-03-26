@@ -5504,14 +5504,35 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
                         fallback_size = kgpc_type_sizeof(elem_type);
                 }
             }
-            KGPC_COMPILER_HARD_ASSERT(fallback_size > 0,
-                "array expression is missing element-size metadata in SetLength");
+            /* With-stack lookup: for unresolved variables in `with` blocks */
+            if (fallback_size <= 0 && ctx != NULL && ctx->with_depth > 0 &&
+                array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+            {
+                struct RecordField *with_field = codegen_lookup_with_field(ctx,
+                    array_expr->expr_data.id, NULL);
+                if (with_field != NULL)
+                {
+                    long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
+                    if (elem_size > 0)
+                        fallback_size = elem_size;
+                }
+            }
+            if (fallback_size <= 0)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: array expression is missing element-size metadata in SetLength.");
+                return inst_list;
+            }
             if (fallback_size <= INT_MAX && (element_size <= 0 || fallback_size > element_size))
                 element_size = (int)fallback_size;
         }
-        KGPC_COMPILER_HARD_ASSERT(element_size > 0,
-            "unable to resolve SetLength field-array element size (field=%s)",
-            (field != NULL && field->name != NULL) ? field->name : "<unknown>");
+        if (element_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: unable to resolve SetLength field-array element size (field=%s).",
+                (field != NULL && field->name != NULL) ? field->name : "<unknown>");
+            return inst_list;
+        }
     }
     else
     {

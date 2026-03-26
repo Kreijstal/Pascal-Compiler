@@ -189,9 +189,9 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
 static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx);
 static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
     const char *field_id, struct RecordType **out_record);
-static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
+struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
     const char *field_id, struct RecordType **out_record);
-static long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
+long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
 static int codegen_get_indexable_element_size(struct Expression *array_expr,
     CodeGenContext *ctx, long long *out_size);
 static int codegen_collect_nested_array_access_chain(struct Expression *expr,
@@ -3337,12 +3337,52 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (!expects_array_metadata)
         return -1;
 
-    /* Hard invariant: metadata gaps must be fixed at source, not silently defaulted. */
-    KGPC_COMPILER_HARD_ASSERT(expr->array_element_size > 0,
-        "unable to determine array element size (expr_type=%d elem_tag=%d elem_type_id=%s)",
-        expr->type, expr->array_element_type,
-        expr->array_element_type_id != NULL ? expr->array_element_type_id : "<null>");
-    return expr->array_element_size;
+    /* Last-resort with-stack lookup: the base expression might be a variable from
+     * an enclosing `with` block that semcheck didn't resolve. */
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->with_depth > 0)
+    {
+        struct RecordField *with_field = codegen_lookup_with_field(ctx,
+            expr->expr_data.id, NULL);
+        if (with_field != NULL)
+        {
+            long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
+            if (elem_size > 0)
+                return elem_size;
+        }
+    }
+
+    /* For EXPR_ARRAY_ACCESS base in EXPR_VAR_ID, try with-stack on the inner base */
+    if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        const struct Expression *inner_base = expr->expr_data.array_access_data.array_expr;
+        if (inner_base != NULL && inner_base->type == EXPR_VAR_ID &&
+            inner_base->expr_data.id != NULL && ctx != NULL && ctx->with_depth > 0)
+        {
+            struct RecordField *with_field = codegen_lookup_with_field(ctx,
+                inner_base->expr_data.id, NULL);
+            if (with_field != NULL)
+            {
+                long long elem_size = codegen_array_elem_size_from_field(with_field, ctx);
+                if (elem_size > 0)
+                    return elem_size;
+            }
+        }
+    }
+
+    if (expr->array_element_size > 0)
+        return expr->array_element_size;
+
+    /* When semcheck was skipped for imported bodies, element metadata may be missing.
+     * Report as a recoverable error rather than crashing the compiler. */
+    if (ctx != NULL)
+    {
+        codegen_report_error(ctx,
+            "ERROR: Unable to determine array element size (expr_type=%d elem_tag=%d elem_type_id=%s).",
+            expr->type, expr->array_element_type,
+            expr->array_element_type_id != NULL ? expr->array_element_type_id : "<null>");
+    }
+    return CODEGEN_POINTER_SIZE_BYTES; /* best-effort: assume pointer-sized elements */
 }
 
 /* Check if expression is signed, working with KgpcType */
@@ -4497,7 +4537,7 @@ static struct RecordField *codegen_find_unique_record_field(SymTab_t *symtab,
     return found_field;
 }
 
-static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
+struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
     const char *field_id, struct RecordType **out_record)
 {
     if (ctx == NULL || field_id == NULL || ctx->with_depth <= 0)
@@ -4521,7 +4561,7 @@ static struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
     return NULL;
 }
 
-static long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx)
+long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx)
 {
     if (field == NULL)
         return -1;
@@ -6221,6 +6261,58 @@ static int codegen_resolve_is_array(struct Expression *array_expr, CodeGenContex
             base_is_array = 1;
     }
 
+    /* With-stack lookup: when semcheck was skipped (e.g. imported bodies),
+     * variables inside `with Record do` blocks remain as unresolved EXPR_VAR_ID.
+     * Check if the variable name matches a field in any enclosing with-context record. */
+    if (!base_is_array && array_expr->type == EXPR_VAR_ID &&
+        array_expr->expr_data.id != NULL && ctx->with_depth > 0)
+    {
+        struct RecordField *with_field = codegen_lookup_with_field(ctx,
+            array_expr->expr_data.id, NULL);
+        if (with_field != NULL && with_field->is_array)
+            base_is_array = 1;
+    }
+
+    /* Implicit Self field lookup: in unchecked class method bodies, field references
+     * like `Args[i]` remain as EXPR_VAR_ID instead of being resolved to Self.Args.
+     * Check if the variable name is a field of the current method's owning class. */
+    if (!base_is_array && array_expr->type == EXPR_VAR_ID &&
+        array_expr->expr_data.id != NULL && ctx->symtab != NULL &&
+        ctx->current_subprogram_owner_class != NULL)
+    {
+        HashNode_t *class_node = NULL;
+        if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+            class_node != NULL && class_node->type != NULL &&
+            kgpc_type_is_record(class_node->type))
+        {
+            struct RecordType *class_record = kgpc_type_get_record(class_node->type);
+            if (class_record != NULL)
+            {
+                struct RecordField *field = codegen_lookup_record_field(class_record,
+                    array_expr->expr_data.id);
+                if (field != NULL && field->is_array)
+                    base_is_array = 1;
+            }
+        }
+    }
+
+    /* Typecast expressions: resolve via the typecast target type.
+     * e.g. TSomeArrayType(expr)[i] where TSomeArrayType is an array typedef. */
+    if (!base_is_array && array_expr->type == EXPR_TYPECAST && ctx->symtab != NULL)
+    {
+        const char *target_id = array_expr->expr_data.typecast_data.target_type_id;
+        if (target_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, target_id) != 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_array(type_node->type))
+            {
+                base_is_array = 1;
+            }
+        }
+    }
+
     return base_is_array;
 }
 
@@ -6863,6 +6955,245 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
                 array_expr->array_element_record_type != NULL)
             {
                 base_is_array = 1;
+            }
+        }
+        else if (array_expr->type == EXPR_TYPECAST && ctx != NULL && ctx->symtab != NULL)
+        {
+            /* Typecast to an array type: TSomeArrayType(expr)[i] */
+            const char *target_id = array_expr->expr_data.typecast_data.target_type_id;
+            if (target_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, ctx->symtab, target_id) != 0 &&
+                    type_node != NULL && type_node->type != NULL)
+                {
+                    if (kgpc_type_is_array(type_node->type))
+                        base_is_array = 1;
+                    else if (kgpc_type_is_string(type_node->type))
+                        base_is_string = 1;
+                    else if (kgpc_type_is_pointer(type_node->type))
+                        base_is_pointer = 1;
+                }
+            }
+        }
+    }
+
+    /* With-stack lookup: variables inside `with Record do` blocks may be unresolved
+     * EXPR_VAR_ID when semcheck was skipped for imported bodies. Check if the name
+     * matches a field in any enclosing with-context record. */
+    if (!base_is_array && !base_is_string && !base_is_pointer &&
+        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->with_depth > 0)
+    {
+        struct RecordType *with_record = NULL;
+        struct RecordField *with_field = codegen_lookup_with_field(ctx,
+            array_expr->expr_data.id, &with_record);
+        if (with_field != NULL)
+        {
+            if (with_field->is_array)
+            {
+                base_is_array = 1;
+                if (!record_field_lower_known)
+                {
+                    record_field_lower_known = 1;
+                    record_field_lower = with_field->array_start;
+                }
+                record_field = with_field;
+            }
+            else if (is_string_type(with_field->type))
+                base_is_string = 1;
+            else if (with_field->is_pointer)
+                base_is_pointer = 1;
+            else if (with_field->type_id != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *field_type_node = NULL;
+                if (FindSymbol(&field_type_node, ctx->symtab, with_field->type_id) != 0 &&
+                    field_type_node != NULL && field_type_node->type != NULL)
+                {
+                    if (kgpc_type_is_array(field_type_node->type))
+                    {
+                        base_is_array = 1;
+                        record_field_type = field_type_node->type;
+                        if (!record_field_lower_known)
+                        {
+                            record_field_lower_known = 1;
+                            record_field_lower = field_type_node->type->info.array_info.start_index;
+                        }
+                    }
+                    else if (kgpc_type_is_string(field_type_node->type))
+                        base_is_string = 1;
+                    else if (kgpc_type_is_pointer(field_type_node->type))
+                        base_is_pointer = 1;
+                }
+            }
+            if (with_field->is_array)
+                record_field = with_field;
+        }
+    }
+
+    /* Implicit Self field lookup: in unchecked class method bodies, field references
+     * like `Args[i]` remain as EXPR_VAR_ID. Check the owning class type. */
+    if (!base_is_array && !base_is_string && !base_is_pointer &&
+        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        ctx->current_subprogram_owner_class != NULL)
+    {
+        HashNode_t *class_node = NULL;
+        if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+            class_node != NULL && class_node->type != NULL &&
+            kgpc_type_is_record(class_node->type))
+        {
+            struct RecordType *class_record = kgpc_type_get_record(class_node->type);
+            if (class_record != NULL)
+            {
+                struct RecordField *field = codegen_lookup_record_field(class_record,
+                    array_expr->expr_data.id);
+                if (field != NULL)
+                {
+                    if (field->is_array)
+                    {
+                        base_is_array = 1;
+                        record_field = field;
+                        if (!record_field_lower_known)
+                        {
+                            record_field_lower_known = 1;
+                            record_field_lower = field->array_start;
+                        }
+                    }
+                    else if (is_string_type(field->type))
+                        base_is_string = 1;
+                    else if (field->is_pointer)
+                        base_is_pointer = 1;
+                    else if (field->type_id != NULL)
+                    {
+                        HashNode_t *field_type_node = NULL;
+                        if (FindSymbol(&field_type_node, ctx->symtab, field->type_id) != 0 &&
+                            field_type_node != NULL && field_type_node->type != NULL)
+                        {
+                            if (kgpc_type_is_array(field_type_node->type))
+                            {
+                                base_is_array = 1;
+                                record_field_type = field_type_node->type;
+                                if (!record_field_lower_known)
+                                {
+                                    record_field_lower_known = 1;
+                                    record_field_lower = field_type_node->type->info.array_info.start_index;
+                                }
+                            }
+                            else if (kgpc_type_is_string(field_type_node->type))
+                                base_is_string = 1;
+                            else if (kgpc_type_is_pointer(field_type_node->type))
+                                base_is_pointer = 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* EXPR_RECORD_ACCESS with unknown sub-record: try to resolve the field's record type
+     * from the symbol table and look up the accessed field within it. */
+    if (!base_is_array && !base_is_string && !base_is_pointer &&
+        array_expr->type == EXPR_RECORD_ACCESS && record_field == NULL &&
+        ctx != NULL && ctx->symtab != NULL)
+    {
+        const char *field_id = array_expr->expr_data.record_access_data.field_id;
+        struct Expression *rec_expr = array_expr->expr_data.record_access_data.record_expr;
+        if (field_id != NULL && rec_expr != NULL)
+        {
+            /* Try to get the record type from the sub-expression */
+            struct RecordType *rec_type = NULL;
+            if (rec_expr->record_type != NULL)
+                rec_type = rec_expr->record_type;
+            else if (rec_expr->type == EXPR_VAR_ID && rec_expr->expr_data.id != NULL)
+            {
+                /* Look up the variable in symtab to get its record type */
+                HashNode_t *var_node = NULL;
+                if (FindSymbol(&var_node, ctx->symtab, rec_expr->expr_data.id) != 0 &&
+                    var_node != NULL && var_node->type != NULL)
+                {
+                    if (kgpc_type_is_record(var_node->type))
+                        rec_type = kgpc_type_get_record(var_node->type);
+                    else if (kgpc_type_is_pointer(var_node->type) &&
+                             var_node->type->info.points_to != NULL &&
+                             kgpc_type_is_record(var_node->type->info.points_to))
+                        rec_type = kgpc_type_get_record(var_node->type->info.points_to);
+                }
+                /* Implicit Self: if var is "Self" and we're in a method, use the owning class */
+                if (rec_type == NULL &&
+                    pascal_identifier_equals(rec_expr->expr_data.id, "Self") &&
+                    ctx->current_subprogram_owner_class != NULL)
+                {
+                    HashNode_t *class_node = NULL;
+                    if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+                        class_node != NULL && class_node->type != NULL &&
+                        kgpc_type_is_record(class_node->type))
+                        rec_type = kgpc_type_get_record(class_node->type);
+                }
+                /* Also try with-stack for nested record access */
+                if (rec_type == NULL && ctx->with_depth > 0)
+                {
+                    struct RecordField *parent_field = codegen_lookup_with_field(ctx,
+                        rec_expr->expr_data.id, NULL);
+                    if (parent_field != NULL && parent_field->nested_record != NULL)
+                        rec_type = parent_field->nested_record;
+                    else if (parent_field != NULL && parent_field->type_id != NULL)
+                    {
+                        HashNode_t *pt_node = NULL;
+                        if (FindSymbol(&pt_node, ctx->symtab, parent_field->type_id) != 0 &&
+                            pt_node != NULL && pt_node->type != NULL &&
+                            kgpc_type_is_record(pt_node->type))
+                            rec_type = kgpc_type_get_record(pt_node->type);
+                    }
+                }
+                /* Implicit Self: if the variable name is a field of the current class,
+                 * look up its type to resolve chained access like `some_field.sub_field[i]` */
+                if (rec_type == NULL && ctx->current_subprogram_owner_class != NULL)
+                {
+                    HashNode_t *class_node = NULL;
+                    if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+                        class_node != NULL && class_node->type != NULL &&
+                        kgpc_type_is_record(class_node->type))
+                    {
+                        struct RecordType *class_record = kgpc_type_get_record(class_node->type);
+                        if (class_record != NULL)
+                        {
+                            struct RecordField *parent_field = codegen_lookup_record_field(
+                                class_record, rec_expr->expr_data.id);
+                            if (parent_field != NULL && parent_field->nested_record != NULL)
+                                rec_type = parent_field->nested_record;
+                            else if (parent_field != NULL && parent_field->type_id != NULL)
+                            {
+                                HashNode_t *ft_node = NULL;
+                                if (FindSymbol(&ft_node, ctx->symtab, parent_field->type_id) != 0 &&
+                                    ft_node != NULL && ft_node->type != NULL &&
+                                    kgpc_type_is_record(ft_node->type))
+                                    rec_type = kgpc_type_get_record(ft_node->type);
+                            }
+                        }
+                    }
+                }
+            }
+            if (rec_type != NULL)
+            {
+                struct RecordField *resolved_field = codegen_lookup_record_field(rec_type, field_id);
+                if (resolved_field != NULL)
+                {
+                    if (resolved_field->is_array)
+                    {
+                        base_is_array = 1;
+                        record_field = resolved_field;
+                        if (!record_field_lower_known)
+                        {
+                            record_field_lower_known = 1;
+                            record_field_lower = resolved_field->array_start;
+                        }
+                    }
+                    else if (is_string_type(resolved_field->type))
+                        base_is_string = 1;
+                    else if (resolved_field->is_pointer)
+                        base_is_pointer = 1;
+                }
             }
         }
     }

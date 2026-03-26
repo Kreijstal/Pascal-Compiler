@@ -104,6 +104,10 @@ ListNode_t *codegen_char_set_address(struct Expression *expr, ListNode_t *inst_l
 int codegen_sizeof_type_reference(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out);
 
+struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
+    const char *field_id, struct RecordType **out_record);
+long long codegen_array_elem_size_from_field(struct RecordField *field, CodeGenContext *ctx);
+
 ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
 ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_list,
