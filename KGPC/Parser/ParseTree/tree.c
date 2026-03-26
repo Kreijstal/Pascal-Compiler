@@ -3523,11 +3523,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         type_ref_free(alias->file_type_ref);
         alias->file_type_ref = NULL;
     }
-    if (alias->kgpc_type != NULL)
-    {
-        kgpc_type_release(alias->kgpc_type);
-        alias->kgpc_type = NULL;
-    }
+    /* kgpc_type is a borrowed reference owned by the scope's hash table.
+     * Do NOT release it here — the scope destruction handles its lifetime.
+     * Releasing it causes use-after-free when the scope is destroyed before
+     * the tree (e.g. codegen's LeaveScope runs before compilation_context_destroy). */
+    alias->kgpc_type = NULL;
     if (alias->inline_record_type != NULL)
     {
         destroy_record_type(alias->inline_record_type);
