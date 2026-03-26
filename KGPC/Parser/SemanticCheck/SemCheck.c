@@ -19297,23 +19297,42 @@ static void semcheck_resolve_calls_in_stmt(
             break;
         }
 
-        /* --- Implicit-self call path (bare MethodName in class body) --- */
-        if (owner_class == NULL)
-            break;
+        /* --- Implicit-self call path and global fallback --- */
 
         /* Strip the __ prefix if present (parser convention for Self calls). */
         const char *method_name = call_id;
         if (call_id[0] == '_' && call_id[1] == '_')
             method_name = call_id + 2;
 
-        struct RecordType *class_record =
-            semcheck_lookup_record_type(symtab, owner_class);
-        if (class_record == NULL || !record_type_is_class(class_record))
-            break;
-
+        HashNode_t *method_node = NULL;
         struct RecordType *actual_owner = NULL;
-        HashNode_t *method_node = semcheck_find_class_method(
-            symtab, class_record, method_name, &actual_owner);
+
+        /* Try owner class first (implicit-self method call). */
+        if (owner_class != NULL)
+        {
+            struct RecordType *class_record =
+                semcheck_lookup_record_type(symtab, owner_class);
+            if (class_record != NULL && record_type_is_class(class_record))
+            {
+                method_node = semcheck_find_class_method(
+                    symtab, class_record, method_name, &actual_owner);
+            }
+        }
+
+        /* Fallback: search the global symbol table for standalone procedures,
+         * builtins, and other-unit procedures. */
+        if (method_node == NULL)
+        {
+            HashNode_t *global_sym = NULL;
+            if (FindSymbol(&global_sym, symtab, method_name) != 0 &&
+                global_sym != NULL &&
+                (global_sym->hash_type == HASHTYPE_PROCEDURE ||
+                 global_sym->hash_type == HASHTYPE_FUNCTION ||
+                 global_sym->hash_type == HASHTYPE_BUILTIN_PROCEDURE))
+            {
+                method_node = global_sym;
+            }
+        }
         if (method_node == NULL)
             break;
 
@@ -19335,12 +19354,16 @@ static void semcheck_resolve_calls_in_stmt(
             stmt->stmt_data.procedure_call_data.cached_method_name =
                 strdup(method_node->method_name);
 
-        /* Check virtual dispatch. */
-        if (from_cparser_is_method_virtual_with_signature(
-                owner_class, method_name, -1, NULL) &&
-            !from_cparser_is_method_static(owner_class, method_name))
+        /* Check virtual dispatch — only when resolved via class method (not global). */
+        const char *vmt_class = (method_node->owner_class != NULL)
+            ? method_node->owner_class : owner_class;
+        if (vmt_class != NULL &&
+            from_cparser_is_method_virtual_with_signature(
+                vmt_class, method_name, -1, NULL) &&
+            !from_cparser_is_method_static(vmt_class, method_name))
         {
-            struct RecordType *walk = class_record;
+            struct RecordType *walk =
+                semcheck_lookup_record_type(symtab, vmt_class);
             while (walk != NULL)
             {
                 for (ListNode_t *me = walk->methods; me != NULL; me = me->next)
@@ -19354,7 +19377,7 @@ static void semcheck_resolve_calls_in_stmt(
                         stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
                         if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
                             stmt->stmt_data.procedure_call_data.self_class_name =
-                                strdup(owner_class);
+                                strdup(vmt_class);
                         goto implicit_self_vmt_done;
                     }
                 }
