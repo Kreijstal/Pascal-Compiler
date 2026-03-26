@@ -6086,6 +6086,24 @@ void kgpc_str_int64_shortstring(int64_t value, char *target)
     kgpc_string_release(result);
 }
 
+void kgpc_str_int64_bounded_shortstring(int64_t value, char *target, int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
+    kgpc_string_release(result);
+}
+
 void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
 {
     if (target == NULL)
@@ -6104,6 +6122,29 @@ void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
     kgpc_string_release(result);
 }
 
+void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width, char *target,
+    int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_int_to_str(value);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
+    kgpc_string_release(result);
+}
+
 void kgpc_str_real_shortstring(double value, char *target)
 {
     if (target == NULL)
@@ -6115,6 +6156,24 @@ void kgpc_str_real_shortstring(double value, char *target)
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
+    kgpc_string_release(result);
+}
+
+void kgpc_str_real_bounded_shortstring(double value, char *target, int64_t max_length)
+{
+    if (target == NULL)
+        return;
+
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_float_to_string(value, -1);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
     kgpc_string_release(result);
 }
 
@@ -6133,6 +6192,31 @@ void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precisio
 
     /* Copy to ShortString format */
     kgpc_string_to_shortstring(target, result, 256);
+    free(result);
+}
+
+void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width, char *target,
+    int64_t precision_and_max)
+{
+    if (target == NULL)
+        return;
+
+    int64_t precision = (int32_t)(precision_and_max & 0xffffffffu);
+    int64_t max_length = (uint32_t)((uint64_t)precision_and_max >> 32);
+    if (max_length < 1)
+        max_length = 1;
+    if (max_length > 256)
+        max_length = 256;
+
+    char *result = kgpc_float_to_string(value, (int)precision);
+    if (result == NULL)
+        return;
+
+    result = kgpc_apply_field_width(result, width);
+    if (result == NULL)
+        return;
+
+    kgpc_string_to_shortstring(target, result, max_length);
     free(result);
 }
 
