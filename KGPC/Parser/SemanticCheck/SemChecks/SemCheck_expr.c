@@ -413,6 +413,24 @@ struct Expression *clone_expression(const struct Expression *expr)
                 kgpc_type_retain(clone->expr_data.function_call_data.call_kgpc_type);
             clone->expr_data.function_call_data.is_call_info_valid =
                 expr->expr_data.function_call_data.is_call_info_valid;
+            clone->expr_data.function_call_data.cached_owner_class =
+                expr->expr_data.function_call_data.cached_owner_class != NULL ?
+                    strdup(expr->expr_data.function_call_data.cached_owner_class) : NULL;
+            if (expr->expr_data.function_call_data.cached_owner_class != NULL &&
+                clone->expr_data.function_call_data.cached_owner_class == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
+            clone->expr_data.function_call_data.cached_method_name =
+                expr->expr_data.function_call_data.cached_method_name != NULL ?
+                    strdup(expr->expr_data.function_call_data.cached_method_name) : NULL;
+            if (expr->expr_data.function_call_data.cached_method_name != NULL &&
+                clone->expr_data.function_call_data.cached_method_name == NULL)
+            {
+                destroy_expr(clone);
+                return NULL;
+            }
             clone->expr_data.function_call_data.is_procedural_var_call =
                 expr->expr_data.function_call_data.is_procedural_var_call;
             clone->expr_data.function_call_data.procedural_var_symbol =
