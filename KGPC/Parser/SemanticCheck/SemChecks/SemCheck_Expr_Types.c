@@ -2357,7 +2357,7 @@ skip_scoped_enum_resolution:
          * collides with a type (HMODULE) would be misresolved as a scoped
          * enum qualifier instead of a record/class field access. */
         if (!unit_is_qualifier &&
-            !(find_result && unit_check != NULL &&
+            !(find_result &&
               (unit_check->hash_type == HASHTYPE_VAR ||
                unit_check->hash_type == HASHTYPE_ARRAY ||
                unit_check->hash_type == HASHTYPE_FUNCTION_RETURN)))
