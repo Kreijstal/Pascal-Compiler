@@ -9,6 +9,145 @@
 
 #include "SemCheck_Expr_Internal.h"
 
+static const int SEMCHECK_MAX_HIERARCHY_DEPTH = 100;
+
+typedef struct SemcheckPtrSet {
+    void **slots;
+    size_t capacity;
+    size_t count;
+} SemcheckPtrSet;
+
+static size_t semcheck_ptrset_hash_ptr(const void *ptr)
+{
+    uintptr_t value = (uintptr_t)ptr;
+    value >>= 4;
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    return (size_t)value;
+}
+
+static int semcheck_ptrset_reserve(SemcheckPtrSet *set, size_t min_capacity)
+{
+    if (set == NULL)
+        return 0;
+    if (set->capacity >= min_capacity)
+        return 1;
+
+    size_t new_capacity = set->capacity > 0 ? set->capacity : 16;
+    while (new_capacity < min_capacity)
+        new_capacity <<= 1;
+
+    void **new_slots = (void **)calloc(new_capacity, sizeof(void *));
+    if (new_slots == NULL)
+        return 0;
+
+    if (set->slots != NULL)
+    {
+        for (size_t i = 0; i < set->capacity; ++i)
+        {
+            void *entry = set->slots[i];
+            if (entry == NULL)
+                continue;
+            size_t idx = semcheck_ptrset_hash_ptr(entry) & (new_capacity - 1);
+            while (new_slots[idx] != NULL)
+                idx = (idx + 1) & (new_capacity - 1);
+            new_slots[idx] = entry;
+        }
+        free(set->slots);
+    }
+
+    set->slots = new_slots;
+    set->capacity = new_capacity;
+    return 1;
+}
+
+static int semcheck_ptrset_insert(SemcheckPtrSet *set, void *ptr)
+{
+    if (set == NULL || ptr == NULL)
+        return 0;
+
+    if ((set->count + 1) * 4 >= set->capacity * 3)
+    {
+        size_t target_capacity = set->capacity > 0 ? set->capacity << 1 : 16;
+        if (!semcheck_ptrset_reserve(set, target_capacity))
+            return 0;
+    }
+    else if (set->capacity == 0)
+    {
+        if (!semcheck_ptrset_reserve(set, 16))
+            return 0;
+    }
+
+    size_t idx = semcheck_ptrset_hash_ptr(ptr) & (set->capacity - 1);
+    while (set->slots[idx] != NULL)
+    {
+        if (set->slots[idx] == ptr)
+            return 0;
+        idx = (idx + 1) & (set->capacity - 1);
+    }
+
+    set->slots[idx] = ptr;
+    set->count++;
+    return 1;
+}
+
+static int semcheck_ptrset_contains(const SemcheckPtrSet *set, const void *ptr)
+{
+    if (set == NULL || ptr == NULL || set->capacity == 0 || set->slots == NULL)
+        return 0;
+
+    size_t idx = semcheck_ptrset_hash_ptr(ptr) & (set->capacity - 1);
+    while (set->slots[idx] != NULL)
+    {
+        if (set->slots[idx] == ptr)
+            return 1;
+        idx = (idx + 1) & (set->capacity - 1);
+    }
+    return 0;
+}
+
+static void semcheck_ptrset_destroy(SemcheckPtrSet *set)
+{
+    if (set == NULL)
+        return;
+    free(set->slots);
+    set->slots = NULL;
+    set->capacity = 0;
+    set->count = 0;
+}
+
+static void semcheck_merge_candidate_lists_dedup_seen(ListNode_t **combined_head,
+    ListNode_t **combined_tail, ListNode_t *new_candidates, SemcheckPtrSet *seen)
+{
+    ListNode_t *cur = new_candidates;
+    while (cur != NULL)
+    {
+        ListNode_t *next = cur->next;
+        cur->next = NULL;
+
+        if (cur->cur != NULL && semcheck_ptrset_insert(seen, cur->cur))
+        {
+            if (*combined_tail == NULL)
+            {
+                *combined_head = cur;
+                *combined_tail = cur;
+            }
+            else
+            {
+                (*combined_tail)->next = cur;
+                *combined_tail = cur;
+            }
+        }
+        else
+        {
+            free(cur);
+        }
+
+        cur = next;
+    }
+}
+
 struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     if (node == NULL) return NULL;
@@ -431,4 +570,106 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
         current = semcheck_lookup_parent_record(symtab, current);
     }
     return NULL;
+}
+
+/* Merge new_candidates into *existing by pointer-identity dedup.
+ * Nodes from new_candidates that are already in *existing (same HashNode_t*)
+ * are freed; unique nodes are appended to *existing.
+ * After the call, new_candidates is consumed and must not be used. */
+void semcheck_merge_candidate_lists_dedup(ListNode_t **existing,
+    ListNode_t *new_candidates)
+{
+    if (new_candidates == NULL)
+        return;
+    if (existing == NULL)
+    {
+        ListNode_t *cur = new_candidates;
+        while (cur != NULL)
+        {
+            ListNode_t *next = cur->next;
+            free(cur);
+            cur = next;
+        }
+        return;
+    }
+
+    SemcheckPtrSet seen = {0};
+    ListNode_t *tail = NULL;
+
+    for (ListNode_t *cur = *existing; cur != NULL; cur = cur->next)
+    {
+        tail = cur;
+        if (cur->cur != NULL)
+            KGPC_SEMCHECK_HARD_ASSERT(
+                semcheck_ptrset_contains(&seen, cur->cur) ||
+                semcheck_ptrset_insert(&seen, cur->cur),
+                "pointer set insert failed while indexing overload candidates");
+    }
+
+    semcheck_merge_candidate_lists_dedup_seen(existing, &tail, new_candidates, &seen);
+    semcheck_ptrset_destroy(&seen);
+}
+
+/* Collect all method overloads across the full class hierarchy.
+ * For each class from start_record up through all parent classes,
+ * look up "ClassName__method_name" via FindAllIdents and merge
+ * the results into a single list. Duplicate HashNode_t pointers
+ * are skipped so that a method registered at several scope levels
+ * is only included once. */
+ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
+    struct RecordType *start_record, const char *method_name)
+{
+    if (symtab == NULL || start_record == NULL || method_name == NULL)
+        return NULL;
+
+    ListNode_t *combined = NULL;
+    ListNode_t *combined_tail = NULL;
+    SemcheckPtrSet seen = {0};
+    SemcheckPtrSet visited_records = {0};
+    struct RecordType *current = start_record;
+    int iterations = 0;
+
+    while (current != NULL)
+    {
+        iterations++;
+        KGPC_SEMCHECK_HARD_ASSERT(iterations <= SEMCHECK_MAX_HIERARCHY_DEPTH,
+            "record hierarchy traversal exceeded %d while collecting overloads for %s",
+            SEMCHECK_MAX_HIERARCHY_DEPTH, method_name != NULL ? method_name : "<unknown>");
+        KGPC_SEMCHECK_HARD_ASSERT(semcheck_ptrset_insert(&visited_records, current),
+            "cycle detected while collecting overloads for %s (record=%s)",
+            method_name != NULL ? method_name : "<unknown>",
+            current->type_id != NULL ? current->type_id : "<anonymous>");
+        if (current->type_id != NULL)
+        {
+            char mangled[256];
+            snprintf(mangled, sizeof(mangled), "%s__%s",
+                current->type_id, method_name);
+
+            ListNode_t *class_overloads = FindAllIdents(symtab, mangled);
+            semcheck_merge_candidate_lists_dedup_seen(&combined, &combined_tail,
+                class_overloads, &seen);
+        }
+
+        /* Walk type helper parent chain first, then class parent chain */
+        if (current->is_type_helper && current->helper_parent_id != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindSymbol(&parent_node, symtab, current->helper_parent_id) != 0 &&
+                parent_node != NULL)
+            {
+                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                if (parent_helper != NULL && parent_helper->is_type_helper)
+                {
+                    current = parent_helper;
+                    continue;
+                }
+            }
+        }
+
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    semcheck_ptrset_destroy(&visited_records);
+    semcheck_ptrset_destroy(&seen);
+    return combined;
 }

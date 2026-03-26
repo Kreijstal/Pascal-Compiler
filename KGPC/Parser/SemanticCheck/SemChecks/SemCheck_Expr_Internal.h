@@ -343,6 +343,19 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,
     struct RecordType **owner_out);
 
+/* Collect all method overloads across the full class hierarchy.
+ * Walks from start_record up through parent classes, collecting
+ * all overloads of the named method into a single list.
+ * Detects cyclic hierarchies explicitly and enforces a hard depth bound. */
+ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
+    struct RecordType *start_record, const char *method_name);
+
+/* Merge new_candidates into *existing by pointer-identity dedup.
+ * Nodes from new_candidates already in *existing are freed;
+ * unique nodes are appended.  After the call, new_candidates is consumed. */
+void semcheck_merge_candidate_lists_dedup(ListNode_t **existing,
+    ListNode_t *new_candidates);
+
 /* Get type name from expression (for operator overloading) */
 const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab);
 
