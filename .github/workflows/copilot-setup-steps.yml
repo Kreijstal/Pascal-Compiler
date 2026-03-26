@@ -45,7 +45,7 @@ jobs:
         run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
 
       - name: Configure FPC RTL build
-        run: meson setup build-fpc --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Dfpc_rtl_dir=./FPCSource
+        run: meson setup build --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true -Dfpc_rtl_dir=./FPCSource
 
       - name: Clone quasi-msys2
         run: |
