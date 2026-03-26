@@ -17893,7 +17893,10 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                                 params, op_const_decls,
                                 op_label_decls, op_type_decls, op_var_decls, op_nested_subs, body, return_type, return_type_id, inline_return_type, 0, 0);
                             if (tree != NULL) {
-                                tree->tree_data.subprogram_data.mangled_id = mangled_name;
+                                if (base_id != NULL)
+                                    tree->tree_data.subprogram_data.mangled_id = mangled_name;
+                                else
+                                    tree->tree_data.subprogram_data.mangled_id = strdup(tree->tree_data.subprogram_data.id);
                                 tree->tree_data.subprogram_data.is_operator = 1;
                             } else
                                 free(mangled_name);
