@@ -2860,7 +2860,6 @@ static int codegen_record_field_shortstring_capacity(const struct Expression *ex
 
     return 0;
 }
-
 static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx)
 {
     const char *expr_id = NULL;
@@ -3111,7 +3110,7 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
         codegen_is_current_return_var_id(expr, ctx))
     {
         int short_capacity = codegen_get_current_return_shortstring_capacity(ctx, ctx->symtab);
-        if (short_capacity > 1)
+        if (short_capacity > 0)
             return short_capacity;
     }
 
@@ -5128,7 +5127,23 @@ static int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, 
         return 0;
 
     KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
-    return codegen_shortstring_capacity_from_type_local(return_type);
+    if (return_type != NULL)
+    {
+        int capacity = codegen_shortstring_capacity_from_type_local(return_type);
+        if (capacity > 0)
+            return capacity;
+    }
+
+    if (func_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        const char *ret_id = func_node->type->info.proc_info.return_type_id;
+        if (ret_id == NULL && func_node->type->info.proc_info.definition != NULL)
+            ret_id = func_node->type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
+        if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+            return 256;
+    }
+
+    return 0;
 }
 
 static void codegen_get_current_return_slot_info(CodeGenContext *ctx,

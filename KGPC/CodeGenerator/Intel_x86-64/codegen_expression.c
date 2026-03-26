@@ -2964,7 +2964,7 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
-                node->const_set_size > 0)
+                node->const_set_size > 4)
             {
                 return 1;
             }
@@ -8511,6 +8511,45 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             right_is_char_set = expr_is_char_set_ctx(right_expr, ctx);
         }
 
+        if (right_const_set != NULL && right_const_set->const_set_value != NULL)
+        {
+            Register_t *set_addr_reg = NULL;
+
+            inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
+            if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
+            {
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
+            set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "const set addr");
+            if (set_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
+            char buffer_addr[96];
+            snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
+                right_const_set->const_set_label, set_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer_addr);
+
+            /* btl with memory operand handles both 4-byte small sets and 32-byte char sets. */
+            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), set_addr_reg);
+            free_reg(get_reg_stack(), left_reg);
+            free_reg(get_reg_stack(), right_reg);
+            return inst_list;
+        }
+
         if (right_is_char_set)
         {
             /* For character sets: right operand is 32-byte array, left is char value (0-255)
@@ -8523,38 +8562,14 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
             /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
-            if (right_const_set != NULL && right_const_set->const_set_value != NULL)
+            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+            if (codegen_had_error(ctx) || set_addr_reg == NULL)
             {
-                inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
-                if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
-                {
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
-                set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set const addr");
-                if (set_addr_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
-                char buffer_addr[96];
-                snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
-                    right_const_set->const_set_label, set_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer_addr);
-            }
-            else
-            {
-                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
-                if (codegen_had_error(ctx) || set_addr_reg == NULL)
-                {
-                    if (set_addr_reg != NULL)
-                        free_reg(get_reg_stack(), set_addr_reg);
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
+                if (set_addr_reg != NULL)
+                    free_reg(get_reg_stack(), set_addr_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
             }
 
             /* btl with memory operand auto-computes byte offset for any bit position */
