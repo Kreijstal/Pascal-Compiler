@@ -3337,7 +3337,7 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (!expects_array_metadata)
         return -1;
 
-    /* Last-resort with-stack lookup: the base expression might be a variable from
+    /* With-stack lookup: the base expression might be a variable from
      * an enclosing `with` block that semcheck didn't resolve. */
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
         ctx != NULL && ctx->with_depth > 0)
