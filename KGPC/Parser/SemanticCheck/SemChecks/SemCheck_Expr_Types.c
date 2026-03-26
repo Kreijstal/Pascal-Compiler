@@ -2352,7 +2352,15 @@ skip_scoped_enum_resolution:
         
         /* Check if the "unit name" identifier exists in symbol table */
         int find_result = FindSymbol(&unit_check, symtab, unit_id);
-        if (!unit_is_qualifier)
+        /* Only look for a preferred type when the identifier is not a known
+         * variable — otherwise a local variable like `hmodule` whose name
+         * collides with a type (HMODULE) would be misresolved as a scoped
+         * enum qualifier instead of a record/class field access. */
+        if (!unit_is_qualifier &&
+            !(find_result && unit_check != NULL &&
+              (unit_check->hash_type == HASHTYPE_VAR ||
+               unit_check->hash_type == HASHTYPE_ARRAY ||
+               unit_check->hash_type == HASHTYPE_FUNCTION_RETURN)))
             preferred_type = semcheck_find_preferred_type_node(symtab, unit_id);
         if (!unit_is_qualifier && !find_result && unit_registry_contains(unit_id))
         {
