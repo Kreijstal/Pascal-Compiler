@@ -19050,6 +19050,329 @@ static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int
     return return_val;
 }
 
+/* -----------------------------------------------------------------------
+ * semcheck_resolve_calls_in_stmt  — lightweight call-resolution pass
+ *
+ * When KGPC_SKIP_IMPORTED_IMPL_BODIES is active, the full semcheck_stmt
+ * is not run on imported unit method bodies.  That means procedure-call
+ * statements inside those bodies are left unresolved: no mangled_id, no
+ * is_virtual_call, no vmt_index, etc.  Codegen later fails to emit
+ * correct VMT dispatch for virtual / abstract methods.
+ *
+ * This function walks a statement tree and, for every STMT_PROCEDURE_CALL
+ * whose is_call_info_valid is still 0, performs the *minimum* resolution
+ * that codegen needs:
+ *
+ *   1.  Determine the bare method name (strip the __ prefix that the
+ *       parser adds for implicit-self calls).
+ *   2.  Look the method up in the owner class's RecordType hierarchy
+ *       (using semcheck_find_class_method, the same helper that the full
+ *       semcheck path uses).
+ *   3.  Set mangled_id, call_hash_type, call_kgpc_type, is_call_info_valid,
+ *       cached_owner_class, cached_method_name.
+ *   4.  If the method is virtual or override, set is_virtual_call,
+ *       vmt_index, self_class_name.
+ *
+ * This pass does NOT type-check expressions, resolve overloads, or report
+ * errors.  It is purely a best-effort metadata pass so that codegen can
+ * emit correct code for the common case.
+ * ----------------------------------------------------------------------- */
+
+/* Forward declaration — defined in SemCheck_Expr_Types.c */
+extern struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+
+static void semcheck_resolve_calls_in_stmt(
+    SymTab_t *symtab,
+    struct Statement *stmt,
+    const char *owner_class)
+{
+    if (stmt == NULL || symtab == NULL)
+        return;
+
+    switch (stmt->type)
+    {
+    case STMT_COMPOUND_STATEMENT:
+    {
+        ListNode_t *cur = stmt->stmt_data.compound_statement;
+        while (cur != NULL)
+        {
+            assert(cur->type == LIST_STMT);
+            struct Statement *child = (struct Statement *)cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, child, owner_class);
+            cur = cur->next;
+        }
+        break;
+    }
+    case STMT_IF_THEN:
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.if_then_data.if_stmt, owner_class);
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.if_then_data.else_stmt, owner_class);
+        break;
+    case STMT_WHILE:
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.while_data.while_stmt, owner_class);
+        break;
+    case STMT_REPEAT:
+    {
+        ListNode_t *rep_cur = stmt->stmt_data.repeat_data.body_list;
+        while (rep_cur != NULL)
+        {
+            struct Statement *s = (struct Statement *)rep_cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, s, owner_class);
+            rep_cur = rep_cur->next;
+        }
+        break;
+    }
+    case STMT_FOR:
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.for_data.do_for, owner_class);
+        break;
+    case STMT_FOR_IN:
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.for_in_data.do_stmt, owner_class);
+        break;
+    case STMT_CASE:
+    {
+        ListNode_t *branch = stmt->stmt_data.case_data.branches;
+        while (branch != NULL)
+        {
+            struct CaseBranch *cb = (struct CaseBranch *)branch->cur;
+            if (cb != NULL)
+                semcheck_resolve_calls_in_stmt(symtab, cb->stmt, owner_class);
+            branch = branch->next;
+        }
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.case_data.else_stmt, owner_class);
+        break;
+    }
+    case STMT_WITH:
+        semcheck_resolve_calls_in_stmt(symtab,
+            stmt->stmt_data.with_data.body_stmt, owner_class);
+        break;
+    case STMT_TRY_FINALLY:
+    {
+        ListNode_t *try_cur = stmt->stmt_data.try_finally_data.try_statements;
+        while (try_cur != NULL)
+        {
+            struct Statement *s = (struct Statement *)try_cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, s, owner_class);
+            try_cur = try_cur->next;
+        }
+        ListNode_t *fin_cur = stmt->stmt_data.try_finally_data.finally_statements;
+        while (fin_cur != NULL)
+        {
+            struct Statement *s = (struct Statement *)fin_cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, s, owner_class);
+            fin_cur = fin_cur->next;
+        }
+        break;
+    }
+    case STMT_TRY_EXCEPT:
+    {
+        ListNode_t *try_cur = stmt->stmt_data.try_except_data.try_statements;
+        while (try_cur != NULL)
+        {
+            struct Statement *s = (struct Statement *)try_cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, s, owner_class);
+            try_cur = try_cur->next;
+        }
+        ListNode_t *exc_cur = stmt->stmt_data.try_except_data.except_statements;
+        while (exc_cur != NULL)
+        {
+            struct Statement *s = (struct Statement *)exc_cur->cur;
+            semcheck_resolve_calls_in_stmt(symtab, s, owner_class);
+            exc_cur = exc_cur->next;
+        }
+        break;
+    }
+
+    case STMT_PROCEDURE_CALL:
+    {
+        /* Only process calls that weren't resolved by full semcheck. */
+        if (stmt->stmt_data.procedure_call_data.is_call_info_valid)
+            break;
+
+        const char *call_id = stmt->stmt_data.procedure_call_data.id;
+        if (call_id == NULL)
+            break;
+
+        /* --- Method-call-placeholder path (receiver.Method) --- */
+        if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder &&
+            stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+        {
+            const char *method_name =
+                stmt->stmt_data.procedure_call_data.placeholder_method_name;
+
+            /* The first arg is the receiver. Try to determine its class type. */
+            ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+            if (args == NULL)
+                break;
+            struct Expression *receiver = (struct Expression *)args->cur;
+            if (receiver == NULL)
+                break;
+
+            struct RecordType *receiver_record = NULL;
+            /* Case A: receiver is "Self" — use the owner class. */
+            if (receiver->type == EXPR_VAR_ID && receiver->expr_data.id != NULL &&
+                strcasecmp(receiver->expr_data.id, "Self") == 0 &&
+                owner_class != NULL)
+            {
+                receiver_record = semcheck_lookup_record_type(symtab, owner_class);
+            }
+            /* Case B: receiver is a variable — look up its type. */
+            else if (receiver->type == EXPR_VAR_ID && receiver->expr_data.id != NULL)
+            {
+                HashNode_t *recv_sym = NULL;
+                if (FindSymbol(&recv_sym, symtab, receiver->expr_data.id) != 0 &&
+                    recv_sym != NULL && recv_sym->type != NULL)
+                {
+                    KgpcType *rt = recv_sym->type;
+                    if (rt->kind == TYPE_KIND_POINTER && rt->info.points_to != NULL)
+                        rt = rt->info.points_to;
+                    if (rt->kind == TYPE_KIND_RECORD && rt->info.record_info != NULL)
+                        receiver_record = rt->info.record_info;
+                }
+            }
+
+            if (receiver_record == NULL || !record_type_is_class(receiver_record))
+                break;
+
+            struct RecordType *actual_owner = NULL;
+            HashNode_t *method_node = semcheck_find_class_method(
+                symtab, receiver_record, method_name, &actual_owner);
+            if (method_node == NULL)
+                break;
+
+            /* Set call resolution metadata. */
+            if (method_node->mangled_id != NULL)
+            {
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                stmt->stmt_data.procedure_call_data.mangled_id =
+                    strdup(method_node->mangled_id);
+            }
+            stmt->stmt_data.procedure_call_data.call_hash_type = method_node->hash_type;
+            stmt->stmt_data.procedure_call_data.call_kgpc_type = method_node->type;
+            stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+            if (method_node->owner_class != NULL)
+                stmt->stmt_data.procedure_call_data.cached_owner_class =
+                    strdup(method_node->owner_class);
+            if (method_node->method_name != NULL)
+                stmt->stmt_data.procedure_call_data.cached_method_name =
+                    strdup(method_node->method_name);
+
+            /* Check virtual dispatch. */
+            const char *check_class = receiver_record->type_id;
+            if (check_class != NULL &&
+                from_cparser_is_method_virtual_with_signature(
+                    check_class, method_name, -1, NULL) &&
+                !from_cparser_is_method_static(check_class, method_name))
+            {
+                /* Walk hierarchy for VMT index. */
+                struct RecordType *walk = receiver_record;
+                while (walk != NULL)
+                {
+                    for (ListNode_t *me = walk->methods; me != NULL; me = me->next)
+                    {
+                        struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                        if (mi != NULL && mi->name != NULL &&
+                            (mi->is_virtual || mi->is_override) &&
+                            strcasecmp(mi->name, method_name) == 0)
+                        {
+                            stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                            stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
+                            if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                                stmt->stmt_data.procedure_call_data.self_class_name =
+                                    strdup(check_class);
+                            goto placeholder_vmt_done;
+                        }
+                    }
+                    walk = (walk->parent_class_name != NULL)
+                        ? semcheck_lookup_record_type(symtab, walk->parent_class_name)
+                        : NULL;
+                }
+                placeholder_vmt_done: ;
+            }
+            break;
+        }
+
+        /* --- Implicit-self call path (bare MethodName in class body) --- */
+        if (owner_class == NULL)
+            break;
+
+        /* Strip the __ prefix if present (parser convention for Self calls). */
+        const char *method_name = call_id;
+        if (call_id[0] == '_' && call_id[1] == '_')
+            method_name = call_id + 2;
+
+        struct RecordType *class_record =
+            semcheck_lookup_record_type(symtab, owner_class);
+        if (class_record == NULL || !record_type_is_class(class_record))
+            break;
+
+        struct RecordType *actual_owner = NULL;
+        HashNode_t *method_node = semcheck_find_class_method(
+            symtab, class_record, method_name, &actual_owner);
+        if (method_node == NULL)
+            break;
+
+        /* Set call resolution metadata. */
+        if (method_node->mangled_id != NULL)
+        {
+            if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                free(stmt->stmt_data.procedure_call_data.mangled_id);
+            stmt->stmt_data.procedure_call_data.mangled_id =
+                strdup(method_node->mangled_id);
+        }
+        stmt->stmt_data.procedure_call_data.call_hash_type = method_node->hash_type;
+        stmt->stmt_data.procedure_call_data.call_kgpc_type = method_node->type;
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        if (method_node->owner_class != NULL)
+            stmt->stmt_data.procedure_call_data.cached_owner_class =
+                strdup(method_node->owner_class);
+        if (method_node->method_name != NULL)
+            stmt->stmt_data.procedure_call_data.cached_method_name =
+                strdup(method_node->method_name);
+
+        /* Check virtual dispatch. */
+        if (from_cparser_is_method_virtual_with_signature(
+                owner_class, method_name, -1, NULL) &&
+            !from_cparser_is_method_static(owner_class, method_name))
+        {
+            struct RecordType *walk = class_record;
+            while (walk != NULL)
+            {
+                for (ListNode_t *me = walk->methods; me != NULL; me = me->next)
+                {
+                    struct MethodInfo *mi = (struct MethodInfo *)me->cur;
+                    if (mi != NULL && mi->name != NULL &&
+                        (mi->is_virtual || mi->is_override) &&
+                        strcasecmp(mi->name, method_name) == 0)
+                    {
+                        stmt->stmt_data.procedure_call_data.is_virtual_call = 1;
+                        stmt->stmt_data.procedure_call_data.vmt_index = mi->vmt_index;
+                        if (stmt->stmt_data.procedure_call_data.self_class_name == NULL)
+                            stmt->stmt_data.procedure_call_data.self_class_name =
+                                strdup(owner_class);
+                        goto implicit_self_vmt_done;
+                    }
+                }
+                walk = (walk->parent_class_name != NULL)
+                    ? semcheck_lookup_record_type(symtab, walk->parent_class_name)
+                    : NULL;
+            }
+            implicit_self_vmt_done: ;
+        }
+        break;
+    }
+
+    default:
+        /* Other statement types: nothing to resolve. */
+        break;
+    }
+}
+
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)
 {
@@ -19138,7 +19461,17 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
             skip_imported_bodies)
         {
             /* Imported unit implementation bodies are not part of the consumer
-             * unit's semantic pass. Keep declarations (pass 1) but skip bodies. */
+             * unit's semantic pass.  However, codegen still compiles them and
+             * needs procedure-call metadata (mangled_id, is_virtual_call, etc.)
+             * to emit correct VMT dispatch.
+             *
+             * Run the lightweight call-resolution pass on the body's statement
+             * tree.  This sets mangled_id, is_virtual_call, vmt_index, and
+             * is_call_info_valid for procedure calls without performing full
+             * expression type-checking or overload resolution. */
+            semcheck_resolve_calls_in_stmt(symtab,
+                child->tree_data.subprogram_data.statement_list,
+                child->tree_data.subprogram_data.owner_class);
             cur = cur->next;
             continue;
         }
