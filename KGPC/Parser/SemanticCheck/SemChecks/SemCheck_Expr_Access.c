@@ -2567,6 +2567,7 @@ int semcheck_funccall(int *type_return,
                     int args_count = ListLength(args_given);
                     int expects_self = 0;
                     ListNode_t *method_params = NULL;
+                    int early_overload_resolved = 0; /* set when type-aware resolution succeeded */
 
                     /* Build the mangled method name */
                     char mangled_method_name[256];
@@ -2575,8 +2576,11 @@ int semcheck_funccall(int *type_return,
                         snprintf(mangled_method_name, sizeof(mangled_method_name), "%s__%s",
                             self_record->type_id, id);
 
-                        /* Get ALL overloads of this method */
-                        ListNode_t *all_methods = FindAllIdents(symtab, mangled_method_name);
+                        /* Get ALL overloads of this method across the class hierarchy.
+                         * Overloads may be split between child and parent classes. */
+                        ListNode_t *all_methods =
+                            semcheck_collect_hierarchy_method_overloads(
+                                symtab, self_record, id);
                         /* If not found and self_record->type_id differs from the current
                          * method owner (e.g. record has "timezone" but owner is "TTimeZone"),
                          * retry with the owner name. */
@@ -2609,6 +2613,7 @@ int semcheck_funccall(int *type_return,
                             if (overload_status == 0 && best_candidate != NULL && num_best >= 1)
                             {
                                 method_node = best_candidate;
+                                early_overload_resolved = 1;
                                 method_params = kgpc_type_get_procedure_params(best_candidate->type);
                                 /* Check if the first formal param is Self */
                                 if (method_params != NULL)
@@ -2792,7 +2797,13 @@ int semcheck_funccall(int *type_return,
                     if (method_node != NULL)
                     {
                         int method_is_overloaded = 0;
-                        if (self_record != NULL && self_record->type_id != NULL && id != NULL)
+                        /* When the early type-aware overload resolution already
+                         * picked a winner using the full class hierarchy, skip
+                         * the overloaded-method deferral.  The early resolution
+                         * is authoritative; deferring to the final resolution
+                         * loses parent-class candidates due to scope filtering. */
+                        if (!early_overload_resolved &&
+                            self_record != NULL && self_record->type_id != NULL && id != NULL)
                         {
                             char overload_name[256];
                             snprintf(overload_name, sizeof(overload_name), "%s__%s",
@@ -4449,7 +4460,9 @@ int semcheck_funccall(int *type_return,
                         /* Prefer all overloads of the resolved method for scoring.
                          * IMPORTANT: use base method key (Owner__Method), not a fully
                          * mangled signature, otherwise overload resolution sees only one
-                         * candidate and can pick wrong arity. */
+                         * candidate and can pick wrong arity.
+                         * Walk the entire class hierarchy so that overloads defined at
+                         * different levels (child + parent) are all visible. */
                         char *mangled_method_name = NULL;
                         if (effective_record->type_id != NULL && method_name != NULL)
                         {
@@ -4468,6 +4481,42 @@ int semcheck_funccall(int *type_return,
                         ListNode_t *method_candidates = NULL;
                         if (mangled_method_name != NULL)
                             method_candidates = FindAllIdents(symtab, mangled_method_name);
+
+                        /* Collect overloads from parent classes as well.
+                         * Overloads may be split across multiple hierarchy levels. */
+                        if (record_info != NULL && method_name != NULL)
+                        {
+                            ListNode_t *hierarchy_candidates =
+                                semcheck_collect_hierarchy_method_overloads(
+                                    symtab, record_info, method_name);
+                            if (hierarchy_candidates != NULL)
+                            {
+                                if (method_candidates != NULL)
+                                {
+                                    /* Merge: add hierarchy candidates not already present */
+                                    ListNode_t *hc = hierarchy_candidates;
+                                    while (hc != NULL)
+                                    {
+                                        ListNode_t *next = hc->next;
+                                        hc->next = NULL;
+                                        int dup = 0;
+                                        for (ListNode_t *c = method_candidates; c != NULL; c = c->next)
+                                        {
+                                            if (c->cur == hc->cur) { dup = 1; break; }
+                                        }
+                                        if (!dup)
+                                            method_candidates = PushListNodeBack(method_candidates, hc);
+                                        else
+                                            free(hc);
+                                        hc = next;
+                                    }
+                                }
+                                else
+                                {
+                                    method_candidates = hierarchy_candidates;
+                                }
+                            }
+                        }
 
                         /* Check if ANY overload has Self as first param (instance method).
                          * If there are mixed static/instance overloads, don't remove type arg
@@ -5353,6 +5402,31 @@ int semcheck_funccall(int *type_return,
 
     if (id != NULL && overload_candidates == NULL) {
         overload_candidates = FindAllIdents(symtab, id);
+    }
+    /* When inside a class method, the early resolution (semcheck_find_class_method)
+     * may have correctly resolved an inherited parent-class overload that
+     * FindAllIdents(id) above cannot see — only the child-class forward declaration
+     * is in scope.  Ensure the early-resolved candidate is in the list so the
+     * final overload resolution can consider it. */
+    if (overload_candidates != NULL &&
+        expr->expr_data.function_call_data.resolved_func != NULL)
+    {
+        HashNode_t *early_resolved = expr->expr_data.function_call_data.resolved_func;
+        if (early_resolved->hash_type == HASHTYPE_FUNCTION ||
+            early_resolved->hash_type == HASHTYPE_PROCEDURE)
+        {
+            int already_present = 0;
+            for (ListNode_t *c = overload_candidates; c != NULL; c = c->next)
+            {
+                if (c->cur == early_resolved) { already_present = 1; break; }
+            }
+            if (!already_present)
+            {
+                ListNode_t *node = CreateListNode(early_resolved, LIST_UNSPECIFIED);
+                if (node != NULL)
+                    overload_candidates = PushListNodeBack(overload_candidates, node);
+            }
+        }
     }
     if (!was_unit_qualified && overload_candidates != NULL)
     {

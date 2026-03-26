@@ -341,6 +341,12 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,
     struct RecordType **owner_out);
 
+/* Collect all method overloads across the full class hierarchy.
+ * Walks from start_record up through parent classes, collecting
+ * all overloads of the named method into a single list. */
+ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
+    struct RecordType *start_record, const char *method_name);
+
 /* Get type name from expression (for operator overloading) */
 const char *get_expr_type_name(struct Expression *expr, SymTab_t *symtab);
 

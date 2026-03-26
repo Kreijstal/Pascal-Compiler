@@ -1,0 +1,4 @@
+find(ShortString): hello
+5
+find(ShortString): world
+5

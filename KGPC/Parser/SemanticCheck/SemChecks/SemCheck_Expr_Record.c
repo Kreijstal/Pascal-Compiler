@@ -432,3 +432,92 @@ HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     }
     return NULL;
 }
+
+/* Collect all method overloads across the full class hierarchy.
+ * For each class from start_record up through all parent classes,
+ * look up "ClassName__method_name" via FindAllIdents and merge
+ * the results into a single list.  Duplicate HashNode_t pointers
+ * are skipped so that a method registered at several scope levels
+ * is only included once. */
+ListNode_t *semcheck_collect_hierarchy_method_overloads(SymTab_t *symtab,
+    struct RecordType *start_record, const char *method_name)
+{
+    if (symtab == NULL || start_record == NULL || method_name == NULL)
+        return NULL;
+
+    ListNode_t *combined = NULL;
+    struct RecordType *current = start_record;
+    int max_iterations = 100;
+    int iterations = 0;
+
+    while (current != NULL && iterations < max_iterations)
+    {
+        iterations++;
+        if (current->type_id != NULL)
+        {
+            char mangled[256];
+            snprintf(mangled, sizeof(mangled), "%s__%s",
+                current->type_id, method_name);
+
+            ListNode_t *class_overloads = FindAllIdents(symtab, mangled);
+            if (class_overloads != NULL)
+            {
+                /* Append only nodes not already present in combined
+                 * (same HashNode_t pointer). */
+                ListNode_t *cur = class_overloads;
+                while (cur != NULL)
+                {
+                    ListNode_t *next = cur->next;
+                    /* Detach cur from class_overloads list */
+                    cur->next = NULL;
+
+                    /* Check for duplicate */
+                    int dup = 0;
+                    for (ListNode_t *c = combined; c != NULL; c = c->next)
+                    {
+                        if (c->cur == cur->cur)
+                        {
+                            dup = 1;
+                            break;
+                        }
+                    }
+
+                    if (!dup)
+                    {
+                        /* Append to combined list */
+                        if (combined == NULL)
+                            combined = cur;
+                        else
+                            combined = PushListNodeBack(combined, cur);
+                    }
+                    else
+                    {
+                        /* Free the duplicate list node shell */
+                        free(cur);
+                    }
+                    cur = next;
+                }
+            }
+        }
+
+        /* Walk type helper parent chain first, then class parent chain */
+        if (current->is_type_helper && current->helper_parent_id != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindSymbol(&parent_node, symtab, current->helper_parent_id) != 0 &&
+                parent_node != NULL)
+            {
+                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                if (parent_helper != NULL && parent_helper->is_type_helper)
+                {
+                    current = parent_helper;
+                    continue;
+                }
+            }
+        }
+
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    return combined;
+}
