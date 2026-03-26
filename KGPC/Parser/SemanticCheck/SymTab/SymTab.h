@@ -127,6 +127,9 @@ int FindSymbol(HashNode_t ** hash_return, SymTab_t *symtab, const char *id);
 /* Returns 1 if found (hash_return set to the matching node) */
 int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
 
+/* Searches for all instances of identifiers starting with the given prefix. Returns a list of HashNode_t* or NULL if not found */
+ListNode_t *FindAllIdentsByPrefix(SymTab_t *symtab, const char *prefix);
+
 /* Searches for all instances of an identifier and returns a list of HashNode_t* */
 /* Returns NULL if not found */
 ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id);

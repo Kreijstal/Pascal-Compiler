@@ -465,6 +465,109 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
     return best;
 }
 
+ListNode_t *FindAllIdentsByPrefixInTable(HashTable_t *table, const char *prefix)
+{
+    assert(table != NULL);
+    assert(prefix != NULL);
+
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_prefix = pascal_identifier_lower_buf(prefix, stack_buf, sizeof(stack_buf));
+    if (canonical_prefix == NULL)
+        return NULL;
+
+    size_t prefix_len = strlen(canonical_prefix);
+    ListNode_t *found_list = NULL;
+    ListNode_t *found_tail = NULL;
+
+    for (int i = 0; i < TABLE_SIZE; i++)
+    {
+        ListNode_t *cur = table->table[i];
+        while (cur != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)cur->cur;
+            if (hash_node != NULL &&
+                hash_node->canonical_id != NULL &&
+                strncmp(hash_node->canonical_id, canonical_prefix, prefix_len) == 0)
+            {
+                ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
+                if (found_list == NULL)
+                {
+                    found_list = new_node;
+                    found_tail = new_node;
+                }
+                else
+                {
+                    found_tail->next = new_node;
+                    found_tail = new_node;
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    pascal_identifier_lower_buf_free(canonical_prefix, stack_buf);
+    return found_list;
+}
+
+ListNode_t *FindAllIdentsByPrefixInTableForUnit(HashTable_t *table, const char *prefix, int caller_unit_index)
+{
+    assert(table != NULL);
+    assert(prefix != NULL);
+
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_prefix = pascal_identifier_lower_buf(prefix, stack_buf, sizeof(stack_buf));
+    if (canonical_prefix == NULL)
+        return NULL;
+
+    size_t prefix_len = strlen(canonical_prefix);
+    ListNode_t *found_list = NULL;
+    ListNode_t *found_tail = NULL;
+
+    for (int i = 0; i < TABLE_SIZE; i++)
+    {
+        ListNode_t *cur = table->table[i];
+        while (cur != NULL)
+        {
+            HashNode_t *hash_node = (HashNode_t *)cur->cur;
+            if (hash_node != NULL &&
+                hash_node->canonical_id != NULL &&
+                strncmp(hash_node->canonical_id, canonical_prefix, prefix_len) == 0)
+            {
+                /* Check visibility: visible if same unit, or if source_unit_index==0 (program/builtin) */
+                int visible = 0;
+                if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
+                    visible = 1;
+                else if (caller_unit_index == 0 && hash_node->source_unit_index == 0)
+                    visible = 1;
+                else if (caller_unit_index > 0 && hash_node->source_unit_index > 0 &&
+                         unit_registry_is_dep(caller_unit_index, hash_node->source_unit_index))
+                    visible = 1;
+                else if (hash_node->source_unit_index == 0)
+                    visible = 1;
+
+                if (visible)
+                {
+                    ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
+                    if (found_list == NULL)
+                    {
+                        found_list = new_node;
+                        found_tail = new_node;
+                    }
+                    else
+                    {
+                        found_tail->next = new_node;
+                        found_tail = new_node;
+                    }
+                }
+            }
+            cur = cur->next;
+        }
+    }
+
+    pascal_identifier_lower_buf_free(canonical_prefix, stack_buf);
+    return found_list;
+}
+
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
     ListNode_t *list, *cur;

@@ -25,6 +25,7 @@ ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);  /* defined l
 /* Forward declarations for tree-walking lookups (defined at end of file) */
 static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *id);
 static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char *prefix);
+static ListNode_t *FindAllIdentsByPrefix_Tree(SymTab_t *symtab, const char *prefix);
 static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id);
 static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char *id);
 static HashNode_t *FindIdentInCurrentScope_Tree(SymTab_t *symtab, const char *id);
@@ -476,6 +477,17 @@ int FindIdentByPrefix(HashNode_t **hash_return, SymTab_t *symtab, const char *pr
     return 0;
 }
 
+ListNode_t *FindAllIdentsByPrefix(SymTab_t *symtab, const char *prefix)
+{
+    assert(symtab != NULL);
+    assert(prefix != NULL);
+
+    if (symtab->current_scope != NULL)
+        return FindAllIdentsByPrefix_Tree(symtab, prefix);
+
+    return NULL;
+}
+
 ListNode_t *FindAllIdents(SymTab_t *symtab, const char *id)
 {
     assert(symtab != NULL);
@@ -763,6 +775,31 @@ static int FindIdentByPrefix_Tree(HashNode_t **hash_return, SymTab_t *symtab, co
 
     *hash_return = NULL;
     return 0;
+}
+
+/* Tree-walking FindAllIdentsByPrefix: collect all matches from all reachable scopes */
+static ListNode_t *FindAllIdentsByPrefix_Tree(SymTab_t *symtab, const char *prefix)
+{
+    ListNode_t *all = NULL;
+    ScopeNode *scope = symtab->current_scope;
+
+    while (scope != NULL)
+    {
+        all = append_list(all, FindAllIdentsByPrefixInTable(scope->table, prefix));
+
+        if (scope->num_deps > 0)
+        {
+            for (int i = 0; i < scope->num_deps; i++)
+            {
+                all = append_list(all, FindAllIdentsByPrefixInTableForUnit(
+                    scope->dep_scopes[i]->table, prefix, symtab->current_unit_index));
+            }
+        }
+
+        scope = scope->parent;
+    }
+
+    return all;
 }
 
 /* Tree-walking FindAllIdents: collect all matches from all reachable scopes */

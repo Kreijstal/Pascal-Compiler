@@ -535,93 +535,29 @@ int semcheck_relop(int *type_return,
                             snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
                             
                             HashNode_t *operator_node = NULL;
-                            ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
+                            ListNode_t *operator_candidates = FindAllIdentsByPrefix(symtab, operator_method);
                             if (operator_candidates != NULL)
                             {
-                                KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
-                                KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
-                                HashNode_t *best_exact = NULL;
-                                int best_exact_score = -1;
-                                for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
-                                {
-                                    HashNode_t *candidate = (HashNode_t *)cur->cur;
-                                    if (candidate == NULL ||
-                                        (candidate->hash_type != HASHTYPE_FUNCTION &&
-                                         candidate->hash_type != HASHTYPE_PROCEDURE) ||
-                                        candidate->type == NULL)
-                                    {
-                                        continue;
-                                    }
-
-                                    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
-                                    if (params == NULL || params->next == NULL)
-                                        continue;
-
-                                    Tree_t *left_decl = (Tree_t *)params->cur;
-                                    Tree_t *right_decl = (Tree_t *)params->next->cur;
-                                    int owns_left = 0;
-                                    int owns_right = 0;
-                                    KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
-                                    KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
-
-                                    int score = 0;
-                                    int valid = 1;
-                                    if (left_formal != NULL && left_arg_type != NULL)
-                                    {
-                                        if (kgpc_type_equals(left_formal, left_arg_type))
-                                            score += 2;
-                                        else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
-                                            score += 1;
-                                        else
-                                            valid = 0;
-                                    }
-                                    if (valid && right_formal != NULL && right_arg_type != NULL)
-                                    {
-                                        if (kgpc_type_equals(right_formal, right_arg_type))
-                                            score += 2;
-                                        else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
-                                            score += 1;
-                                        else
-                                            valid = 0;
-                                    }
-                                    if (owns_left && left_formal != NULL)
-                                        destroy_kgpc_type(left_formal);
-                                    if (owns_right && right_formal != NULL)
-                                        destroy_kgpc_type(right_formal);
-
-                                    if (valid && score > best_exact_score)
-                                    {
-                                        best_exact = candidate;
-                                        best_exact_score = score;
-                                    }
-                                }
-                                if (best_exact != NULL)
-                                    operator_node = best_exact;
-
                                 HashNode_t *best_match = NULL;
                                 int best_rank = 0;
                                 int num_best = 0;
-                                ListNode_t *args_given = NULL;
-                                if (operator_node == NULL)
+                                ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
+                                if (args_given != NULL)
                                 {
-                                    args_given = CreateListNode(expr1, LIST_EXPR);
-                                    if (args_given != NULL)
-                                    {
-                                        args_given->next = CreateListNode(expr2, LIST_EXPR);
-                                        int resolve_status = semcheck_resolve_overload(
-                                            &best_match,
-                                            &best_rank,
-                                            &num_best,
-                                            operator_candidates,
-                                            args_given,
-                                            symtab,
-                                            expr,
-                                            max_scope_lev,
-                                            1);
-                                        if (resolve_status == 0 && best_match != NULL)
-                                            operator_node = best_match;
-                                        DestroyList(args_given);
-                                    }
+                                    args_given->next = CreateListNode(expr2, LIST_EXPR);
+                                    int resolve_status = semcheck_resolve_overload(
+                                        &best_match,
+                                        &best_rank,
+                                        &num_best,
+                                        operator_candidates,
+                                        args_given,
+                                        symtab,
+                                        expr,
+                                        max_scope_lev,
+                                        1);
+                                    if (resolve_status == 0 && best_match != NULL)
+                                        operator_node = best_match;
+                                    DestroyList(args_given);
                                 }
                                 if (operator_node == NULL)
                                 {
@@ -638,12 +574,6 @@ int semcheck_relop(int *type_return,
                                     }
                                 }
                                 DestroyList(operator_candidates);
-                            }
-                            if (operator_node == NULL &&
-                                semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
-                                operator_node != NULL)
-                            {
-                                /* fallback for return-type-disambiguated names not indexed by base id */
                             }
                             if (operator_node != NULL)
                             {
@@ -1303,6 +1233,99 @@ int semcheck_signterm(int *type_return,
     /* Checking types */
     if (*type_return == UNKNOWN_TYPE)
         return return_val;
+
+    if (*type_return == RECORD_TYPE)
+    {
+        const char *record_type_name = get_expr_type_name(sign_expr, symtab);
+        if (record_type_name != NULL)
+        {
+            const char *op_suffix = "op_sub"; /* Currently only unary minus is likely to be overloaded */
+            size_t name_len = strlen(record_type_name) + strlen(op_suffix) + 3;
+            char *operator_method = (char *)malloc(name_len);
+            if (operator_method != NULL)
+            {
+                snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
+
+                HashNode_t *operator_node = NULL;
+                ListNode_t *operator_candidates = FindAllIdentsByPrefix(symtab, operator_method);
+                if (operator_candidates != NULL)
+                {
+                    HashNode_t *best_match = NULL;
+                    int best_rank = 0;
+                    int num_best = 0;
+                    ListNode_t *args_given = CreateListNode(sign_expr, LIST_EXPR);
+                    if (args_given != NULL)
+                    {
+                        int resolve_status = semcheck_resolve_overload(
+                            &best_match,
+                            &best_rank,
+                            &num_best,
+                            operator_candidates,
+                            args_given,
+                            symtab,
+                            expr,
+                            max_scope_lev,
+                            1);
+                        if (resolve_status == 0 && best_match != NULL)
+                            operator_node = best_match;
+                        DestroyList(args_given);
+                    }
+                    if (operator_node == NULL)
+                    {
+                        for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
+                        {
+                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                            if (candidate != NULL &&
+                                (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                 candidate->hash_type == HASHTYPE_PROCEDURE))
+                            {
+                                operator_node = candidate;
+                                break;
+                            }
+                        }
+                    }
+                    DestroyList(operator_candidates);
+                }
+
+                if (operator_node != NULL && operator_node->type != NULL &&
+                    kgpc_type_is_procedure(operator_node->type))
+                {
+                    KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
+                    if (return_type != NULL)
+                    {
+                        *type_return = semcheck_tag_from_kgpc(return_type);
+
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0, sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.is_operator_call = 1;
+
+                        expr->expr_data.function_call_data.id = strdup(operator_method);
+                        if (operator_node->mangled_id != NULL)
+                            expr->expr_data.function_call_data.mangled_id = strdup(operator_node->mangled_id);
+                        else
+                            expr->expr_data.function_call_data.mangled_id = strdup(operator_method);
+
+                        expr->expr_data.function_call_data.args_expr = CreateListNode(sign_expr, LIST_EXPR);
+                        expr->expr_data.function_call_data.resolved_func = operator_node;
+                        expr->expr_data.function_call_data.call_hash_type = HASHTYPE_FUNCTION;
+                        expr->expr_data.function_call_data.call_kgpc_type = operator_node->type;
+                        kgpc_type_retain(operator_node->type);
+                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+
+                        if (expr->resolved_kgpc_type != NULL)
+                            destroy_kgpc_type(expr->resolved_kgpc_type);
+                        expr->resolved_kgpc_type = return_type;
+                        kgpc_type_retain(return_type);
+
+                        free(operator_method);
+                        return return_val;
+                    }
+                }
+                free(operator_method);
+            }
+        }
+    }
+
     if (*type_return == POINTER_TYPE || *type_return == RECORD_TYPE)
         return return_val;
     if(!is_type_ir(type_return))
@@ -1555,7 +1578,7 @@ int semcheck_addop(int *type_return,
                     snprintf(operator_method, name_len, "%s__%s", record_type_name, op_suffix);
 
                     HashNode_t *operator_node = NULL;
-                    ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
+                    ListNode_t *operator_candidates = FindAllIdentsByPrefix(symtab, operator_method);
                     if (kgpc_getenv("KGPC_DEBUG_ADDOP") != NULL)
                     {
                         fprintf(stderr,
@@ -1567,89 +1590,26 @@ int semcheck_addop(int *type_return,
                     }
                     if (operator_candidates != NULL)
                     {
-                        KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
-                        KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
-                        HashNode_t *best_exact = NULL;
-                        int best_exact_score = -1;
-                        for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
-                        {
-                            HashNode_t *candidate = (HashNode_t *)cur->cur;
-                            if (candidate == NULL ||
-                                (candidate->hash_type != HASHTYPE_FUNCTION &&
-                                 candidate->hash_type != HASHTYPE_PROCEDURE) ||
-                                candidate->type == NULL)
-                            {
-                                continue;
-                            }
-
-                            ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
-                            if (params == NULL || params->next == NULL)
-                                continue;
-
-                            Tree_t *left_decl = (Tree_t *)params->cur;
-                            Tree_t *right_decl = (Tree_t *)params->next->cur;
-                            int owns_left = 0;
-                            int owns_right = 0;
-                            KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
-                            KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
-
-                            int score = 0;
-                            int valid = 1;
-                            if (left_formal != NULL && left_arg_type != NULL)
-                            {
-                                if (kgpc_type_equals(left_formal, left_arg_type))
-                                    score += 2;
-                                else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
-                                    score += 1;
-                                else
-                                    valid = 0;
-                            }
-                            if (valid && right_formal != NULL && right_arg_type != NULL)
-                            {
-                                if (kgpc_type_equals(right_formal, right_arg_type))
-                                    score += 2;
-                                else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
-                                    score += 1;
-                                else
-                                    valid = 0;
-                            }
-                            if (owns_left && left_formal != NULL)
-                                destroy_kgpc_type(left_formal);
-                            if (owns_right && right_formal != NULL)
-                                destroy_kgpc_type(right_formal);
-
-                            if (valid && score > best_exact_score)
-                            {
-                                best_exact = candidate;
-                                best_exact_score = score;
-                            }
-                        }
-                        if (best_exact != NULL)
-                            operator_node = best_exact;
-
                         HashNode_t *best_match = NULL;
                         int best_rank = 0;
                         int num_best = 0;
-                        if (operator_node == NULL)
+                        ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
+                        if (args_given != NULL)
                         {
-                            ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
-                            if (args_given != NULL)
-                            {
-                                args_given->next = CreateListNode(expr2, LIST_EXPR);
-                                int resolve_status = semcheck_resolve_overload(
-                                    &best_match,
-                                    &best_rank,
-                                    &num_best,
-                                    operator_candidates,
-                                    args_given,
-                                    symtab,
-                                    expr,
-                                    max_scope_lev,
-                                    1);
-                                if (resolve_status == 0 && best_match != NULL)
-                                    operator_node = best_match;
-                                DestroyList(args_given);
-                            }
+                            args_given->next = CreateListNode(expr2, LIST_EXPR);
+                            int resolve_status = semcheck_resolve_overload(
+                                &best_match,
+                                &best_rank,
+                                &num_best,
+                                operator_candidates,
+                                args_given,
+                                symtab,
+                                expr,
+                                max_scope_lev,
+                                1);
+                            if (resolve_status == 0 && best_match != NULL)
+                                operator_node = best_match;
+                            DestroyList(args_given);
                         }
                         if (operator_node == NULL)
                         {
@@ -1666,49 +1626,6 @@ int semcheck_addop(int *type_return,
                             }
                         }
                         DestroyList(operator_candidates);
-                    }
-                    /* For binary operators, try exact lookup with second param type
-                     * first to distinguish from unary operators with the same name. */
-                    if (operator_node == NULL && right_type_name != NULL)
-                    {
-                        size_t exact_len = strlen(operator_method) + strlen(right_type_name) +
-                            strlen(record_type_name) + 3;
-                        char *operator_exact = (char *)malloc(exact_len);
-                        if (operator_exact != NULL)
-                        {
-                            snprintf(operator_exact, exact_len, "%s_%s_%s",
-                                operator_method, right_type_name, record_type_name);
-                            FindSymbol(&operator_node, symtab, operator_exact);
-                            free(operator_exact);
-                        }
-                    }
-                    if (operator_node == NULL &&
-                        semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 &&
-                        operator_node != NULL)
-                    {
-                        /* Verify the prefix-matched operator has the right arity
-                         * (binary operators need 2 params, not 1). */
-                        if (operator_node->type != NULL)
-                        {
-                            ListNode_t *check_params = kgpc_type_get_procedure_params(operator_node->type);
-                            int param_count = ListLength(check_params);
-                            if (param_count == 1 && expr2 != NULL)
-                            {
-                                /* Found unary but need binary — reject this match */
-                                operator_node = NULL;
-                            }
-                        }
-                    }
-                    if (operator_node == NULL)
-                    {
-                        size_t exact_len = strlen(operator_method) + strlen(record_type_name) + 2;
-                        char *operator_exact = (char *)malloc(exact_len);
-                        if (operator_exact != NULL)
-                        {
-                            snprintf(operator_exact, exact_len, "%s_%s", operator_method, record_type_name);
-                            FindSymbol(&operator_node, symtab, operator_exact);
-                            free(operator_exact);
-                        }
                     }
                     if (operator_node != NULL)
                     {
@@ -1998,13 +1915,45 @@ int semcheck_mulop(int *type_return,
                     /* Look up the operator method in the symbol table.
                      * Try exact match first, then prefix match for return-type-suffixed names. */
                     HashNode_t *operator_node = NULL;
-                    if (FindSymbol(&operator_node, symtab, operator_method) != 0 && operator_node != NULL)
+                    ListNode_t *operator_candidates = FindAllIdentsByPrefix(symtab, operator_method);
+                    if (operator_candidates != NULL)
                     {
-                        /* exact match */
-                    }
-                    else if (semcheck_find_ident_by_prefix_visible(&operator_node, symtab, operator_method) >= 0 && operator_node != NULL)
-                    {
-                        /* prefix match — return-type-disambiguated name */
+                        HashNode_t *best_match = NULL;
+                        int best_rank = 0;
+                        int num_best = 0;
+                        ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
+                        if (args_given != NULL)
+                        {
+                            args_given->next = CreateListNode(expr2, LIST_EXPR);
+                            int resolve_status = semcheck_resolve_overload(
+                                &best_match,
+                                &best_rank,
+                                &num_best,
+                                operator_candidates,
+                                args_given,
+                                symtab,
+                                expr,
+                                max_scope_lev,
+                                1);
+                            if (resolve_status == 0 && best_match != NULL)
+                                operator_node = best_match;
+                            DestroyList(args_given);
+                        }
+                        if (operator_node == NULL)
+                        {
+                            for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
+                            {
+                                HashNode_t *candidate = (HashNode_t *)cur->cur;
+                                if (candidate != NULL &&
+                                    (candidate->hash_type == HASHTYPE_FUNCTION ||
+                                     candidate->hash_type == HASHTYPE_PROCEDURE))
+                                {
+                                    operator_node = candidate;
+                                    break;
+                                }
+                            }
+                        }
+                        DestroyList(operator_candidates);
                     }
                     if (operator_node != NULL)
                     {

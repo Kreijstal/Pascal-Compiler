@@ -144,6 +144,12 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
 /* Searches for any identifier starting with the given prefix. Returns first match or NULL */
 HashNode_t *FindIdentByPrefixInTable(HashTable_t *table, const char *prefix);
 
+/* Searches for all instances of identifiers starting with the given prefix in the table. Returns a list of HashNode_t* or NULL if not found */
+ListNode_t *FindAllIdentsByPrefixInTable(HashTable_t *table, const char *prefix);
+
+/* Searches for all instances of identifiers starting with the given prefix in the table, restricted to symbols visible to caller_unit_index. */
+ListNode_t *FindAllIdentsByPrefixInTableForUnit(HashTable_t *table, const char *prefix, int caller_unit_index);
+
 /* Searches for a type identifier whose name ends with ".suffix" (case-insensitive).
  * Returns the first matching HASHTYPE_TYPE node or NULL. */
 HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix);
