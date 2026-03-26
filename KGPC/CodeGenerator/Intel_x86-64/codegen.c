@@ -95,6 +95,42 @@ int codegen_has_available_subprogram_label(const char *label)
     return codegen_list_contains_string(g_codegen_available_subprograms, label);
 }
 
+static int codegen_proc_def_has_matching_impl(SymTab_t *symtab, const Tree_t *proc_def)
+{
+    if (symtab == NULL || proc_def == NULL || proc_def->type != TREE_SUBPROGRAM)
+        return 0;
+
+    const char *proc_id = proc_def->tree_data.subprogram_data.id;
+    if (proc_id == NULL || proc_id[0] == '\0')
+        return 0;
+
+    ListNode_t *candidates = FindAllIdents(symtab, proc_id);
+    for (ListNode_t *node = candidates; node != NULL; node = node->next)
+    {
+        HashNode_t *cand = (HashNode_t *)node->cur;
+        if (cand == NULL || cand->type == NULL ||
+            cand->type->kind != TYPE_KIND_PROCEDURE ||
+            cand->type->info.proc_info.definition == NULL)
+            continue;
+
+        Tree_t *cand_def = cand->type->info.proc_info.definition;
+        if (cand_def == proc_def)
+            continue;
+        if (cand_def->tree_data.subprogram_data.statement_list == NULL)
+            continue;
+        if (cand->id != NULL && pascal_identifier_equals(cand->id, proc_id))
+        {
+            if (candidates != NULL)
+                DestroyList(candidates);
+            return 1;
+        }
+    }
+
+    if (candidates != NULL)
+        DestroyList(candidates);
+    return 0;
+}
+
 const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     const struct Expression *expr, char **owned_target_out)
 {
@@ -107,6 +143,7 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         *owned_target_out = NULL;
     if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return NULL;
+
 
     call_target = expr->expr_data.function_call_data.mangled_id;
     owner_class_name = expr->expr_data.function_call_data.cached_owner_class;
@@ -126,6 +163,18 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         {
             call_target_needs_resolution = 1;
         }
+        else if (target_node->type != NULL &&
+                 target_node->type->kind == TYPE_KIND_PROCEDURE &&
+                 target_node->type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = target_node->type->info.proc_info.definition;
+            int is_external_import =
+                (def->tree_data.subprogram_data.statement_list == NULL) &&
+                (def->tree_data.subprogram_data.cname_flag != 0 ||
+                 def->tree_data.subprogram_data.cname_override != NULL);
+            if (is_external_import)
+                call_target_needs_resolution = 1;
+        }
     }
 
     if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
@@ -137,6 +186,22 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         if (alias != NULL && alias[0] != '\0')
         {
             call_target = alias;
+            call_target_needs_resolution = 0;
+        }
+        else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                 !codegen_proc_def_has_matching_impl(ctx->symtab, def) &&
+                 def->tree_data.subprogram_data.id != NULL &&
+                 def->tree_data.subprogram_data.id[0] != '\0')
+        {
+            call_target = def->tree_data.subprogram_data.id;
+            call_target_needs_resolution = 0;
+        }
+        else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                 def->tree_data.subprogram_data.cname_flag != 0 &&
+                 def->tree_data.subprogram_data.id != NULL &&
+                 def->tree_data.subprogram_data.id[0] != '\0')
+        {
+            call_target = def->tree_data.subprogram_data.id;
             call_target_needs_resolution = 0;
         }
         else if (def->tree_data.subprogram_data.mangled_id != NULL &&
@@ -151,7 +216,8 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             method_name = def->tree_data.subprogram_data.method_name;
     }
 
-    if (call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution)
+    if ((call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution) &&
+        !expr->expr_data.function_call_data.is_call_info_valid)
     {
         HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
         if (resolved != NULL && resolved->mangled_id != NULL &&
@@ -168,6 +234,16 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
                 const char *alias = def->tree_data.subprogram_data.cname_override;
                 if (alias != NULL && alias[0] != '\0')
                     call_target = alias;
+                else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                         !codegen_proc_def_has_matching_impl(ctx->symtab, def) &&
+                         def->tree_data.subprogram_data.id != NULL &&
+                         def->tree_data.subprogram_data.id[0] != '\0')
+                    call_target = def->tree_data.subprogram_data.id;
+                else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                         def->tree_data.subprogram_data.cname_flag != 0 &&
+                         def->tree_data.subprogram_data.id != NULL &&
+                         def->tree_data.subprogram_data.id[0] != '\0')
+                    call_target = def->tree_data.subprogram_data.id;
                 else if (def->tree_data.subprogram_data.mangled_id != NULL &&
                          def->tree_data.subprogram_data.mangled_id[0] != '\0')
                     call_target = def->tree_data.subprogram_data.mangled_id;
@@ -2637,7 +2713,6 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     ListNode_t *new_node;
 
     assert(inst != NULL);
-
     new_node = CreateListNode(strdup(inst), LIST_STRING);
     if(inst_list == NULL)
     {

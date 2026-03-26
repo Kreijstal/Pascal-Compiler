@@ -18848,6 +18848,9 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL && is_varargs)
         tree->tree_data.subprogram_data.is_varargs = 1;
+    if (tree != NULL && is_external && external_alias == NULL &&
+        tree->tree_data.subprogram_data.id != NULL)
+        external_alias = strdup(tree->tree_data.subprogram_data.id);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)
@@ -19274,6 +19277,9 @@ static Tree_t *convert_function(ast_t *func_node) {
             return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);
     else if (return_type_ref != NULL)
         type_ref_free(return_type_ref);
+    if (tree != NULL && is_external && external_alias == NULL &&
+        tree->tree_data.subprogram_data.id != NULL)
+        external_alias = strdup(tree->tree_data.subprogram_data.id);
     if (tree != NULL && external_alias != NULL)
         tree->tree_data.subprogram_data.cname_override = external_alias;
     else if (external_alias != NULL)

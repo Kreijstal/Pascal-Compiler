@@ -8053,6 +8053,27 @@ proccall_parent_resolve_done:
 
     if (match_count == 1)
     {
+        int has_matching_impl = 0;
+        if (resolved_proc != NULL && overload_candidates != NULL)
+        {
+            for (ListNode_t *cand_node = overload_candidates; cand_node != NULL; cand_node = cand_node->next)
+            {
+                HashNode_t *cand = (HashNode_t *)cand_node->cur;
+                if (cand == NULL || cand == resolved_proc || cand->type == NULL ||
+                    cand->type->kind != TYPE_KIND_PROCEDURE ||
+                    cand->type->info.proc_info.definition == NULL)
+                    continue;
+                Tree_t *cand_def = cand->type->info.proc_info.definition;
+                if (cand_def->tree_data.subprogram_data.statement_list == NULL)
+                    continue;
+                if (resolved_proc->id != NULL && cand->id != NULL &&
+                    pascal_identifier_equals(cand->id, resolved_proc->id))
+                {
+                    has_matching_impl = 1;
+                    break;
+                }
+            }
+        }
         if (kgpc_getenv("KGPC_DEBUG_ASSIGN") != NULL &&
             pascal_identifier_equals(proc_id, "Assign"))
             fprintf(stderr, "[ASSIGN-RESOLVED] mangled=%s match_count=%d\n",
@@ -8079,7 +8100,37 @@ proccall_parent_resolve_done:
             /* Ensure direct calls have a concrete target name even without external alias */
             stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_proc->id);
         }
-        /* External name override for procedures handled during codegen to avoid side-effects here */
+        if (resolved_proc->type != NULL && resolved_proc->type->kind == TYPE_KIND_PROCEDURE)
+        {
+            Tree_t *proc_def = resolved_proc->type->info.proc_info.definition;
+            if (proc_def != NULL && proc_def->tree_data.subprogram_data.statement_list == NULL)
+            {
+                const char *target_name = proc_def->tree_data.subprogram_data.cname_override;
+                if (target_name == NULL || target_name[0] == '\0')
+                {
+                    if (proc_def->tree_data.subprogram_data.cname_flag)
+                        target_name = proc_def->tree_data.subprogram_data.id;
+                    else if (!has_matching_impl &&
+                             proc_def->tree_data.subprogram_data.id != NULL &&
+                             proc_def->tree_data.subprogram_data.id[0] != '\0')
+                        target_name = proc_def->tree_data.subprogram_data.id;
+                    else if (proc_def->tree_data.subprogram_data.mangled_id != NULL &&
+                             proc_def->tree_data.subprogram_data.mangled_id[0] != '\0')
+                        target_name = proc_def->tree_data.subprogram_data.mangled_id;
+                    else if (resolved_proc->mangled_id != NULL &&
+                             resolved_proc->mangled_id[0] != '\0')
+                        target_name = resolved_proc->mangled_id;
+                    else
+                        target_name = resolved_proc->id;
+                }
+                if (target_name != NULL && target_name[0] != '\0')
+                {
+                    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                        free(stmt->stmt_data.procedure_call_data.mangled_id);
+                    stmt->stmt_data.procedure_call_data.mangled_id = strdup(target_name);
+                }
+            }
+        }
         stmt->stmt_data.procedure_call_data.resolved_proc = resolved_proc;
 
         /* Populate call info to avoid use-after-free when HashNode is freed */

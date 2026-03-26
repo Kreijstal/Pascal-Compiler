@@ -277,8 +277,44 @@ static int codegen_builtin_lowhigh_bounds_from_tag(int type_tag,
     }
 }
 
-static int codegen_builtin_lowhigh_try_value(struct Expression *expr, int is_high,
+static int codegen_builtin_lowhigh_try_alias_value(struct TypeAlias *alias, int is_high,
     long long *value_out, int *use_qword_out)
+{
+    if (alias == NULL || value_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    if (alias->range_known)
+    {
+        *value_out = is_high ? alias->range_end : alias->range_start;
+        *use_qword_out =
+            (alias->range_start < INT32_MIN || alias->range_end > INT32_MAX);
+        return 1;
+    }
+
+    if (alias->is_enum && alias->enum_literals != NULL &&
+        !alias->enum_has_explicit_values)
+    {
+        int count = ListLength(alias->enum_literals);
+        if (count > 0)
+        {
+            *value_out = is_high ? (long long)count - 1 : 0;
+            *use_qword_out = 0;
+            return 1;
+        }
+    }
+
+    if (alias->is_shortstring)
+    {
+        *value_out = is_high ? alias->array_end : alias->array_start;
+        *use_qword_out = 0;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int codegen_builtin_lowhigh_try_value(struct Expression *expr, CodeGenContext *ctx,
+    int is_high, long long *value_out, int *use_qword_out)
 {
     if (expr == NULL || value_out == NULL || use_qword_out == NULL)
         return 0;
@@ -290,6 +326,21 @@ static int codegen_builtin_lowhigh_try_value(struct Expression *expr, int is_hig
     struct Expression *arg_expr = (struct Expression *)args->cur;
     if (arg_expr == NULL)
         return 0;
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        int found = FindSymbol(&type_node, ctx->symtab, arg_expr->expr_data.id);
+        if (found != 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
+            if (codegen_builtin_lowhigh_try_alias_value(type_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+        }
+    }
 
     if (arg_expr->is_array_expr && !arg_expr->array_is_dynamic &&
         arg_expr->array_upper_bound >= arg_expr->array_lower_bound)
@@ -303,35 +354,9 @@ static int codegen_builtin_lowhigh_try_value(struct Expression *expr, int is_hig
     if (arg_type != NULL)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
-        if (alias != NULL)
-        {
-            if (alias->range_known)
-            {
-                *value_out = is_high ? alias->range_end : alias->range_start;
-                *use_qword_out =
-                    (alias->range_start < INT32_MIN || alias->range_end > INT32_MAX);
-                return 1;
-            }
-
-            if (alias->is_enum && alias->enum_literals != NULL &&
-                !alias->enum_has_explicit_values)
-            {
-                int count = ListLength(alias->enum_literals);
-                if (count > 0)
-                {
-                    *value_out = is_high ? (long long)count - 1 : 0;
-                    *use_qword_out = 0;
-                    return 1;
-                }
-            }
-
-            if (alias->is_shortstring)
-            {
-                *value_out = is_high ? alias->array_end : alias->array_start;
-                *use_qword_out = 0;
-                return 1;
-            }
-        }
+        if (codegen_builtin_lowhigh_try_alias_value(alias, is_high,
+                value_out, use_qword_out))
+            return 1;
     }
 
     long long low = 0;
@@ -356,7 +381,7 @@ static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
     char buffer[128];
 
     (void)ctx;
-    if (!codegen_builtin_lowhigh_try_value(expr, is_high, &value, &use_qword))
+    if (!codegen_builtin_lowhigh_try_value(expr, ctx, is_high, &value, &use_qword))
         return NULL;
 
     if (use_qword)
@@ -2186,6 +2211,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         if (func_id != NULL &&
             expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+            expr->expr_data.function_call_data.resolved_func == NULL &&
             (pascal_identifier_equals(func_id, "Low") ||
              pascal_identifier_equals(func_id, "High")))
         {
