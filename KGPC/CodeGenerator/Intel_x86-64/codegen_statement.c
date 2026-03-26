@@ -63,6 +63,45 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
     }
     return inst_list;
 }
+
+static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+    Register_t **out_reg, const char *message);
+
+static ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
+    CodeGenContext *ctx, int compare_as_qword, long long imm_value,
+    int spill_offset)
+{
+    char buffer[128];
+
+    if (compare_as_qword && (imm_value > INT32_MAX || imm_value < INT32_MIN))
+    {
+        Register_t *imm_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (imm_reg == NULL)
+            imm_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (imm_reg == NULL)
+            return codegen_fail_register(ctx, inst_list, NULL,
+                "ERROR: Unable to allocate register for 64-bit compare immediate.");
+
+        snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n",
+            imm_value, imm_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tcmpq\t%s, -%d(%%rbp)\n",
+            imm_reg->bit_64, spill_offset);
+        inst_list = add_inst(inst_list, buffer);
+        free_reg(get_reg_stack(), imm_reg);
+        return inst_list;
+    }
+
+    if (compare_as_qword)
+        snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
+            imm_value, spill_offset);
+    else
+        snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
+            imm_value, spill_offset);
+
+    return add_inst(inst_list, buffer);
+}
+
 #include "codegen_expression.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
@@ -13184,23 +13223,10 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             free_reg(get_reg_stack(), label_reg);
                         }
                     } else if (label_expr->type == EXPR_INUM) {
-                        /* For constant labels, compare directly against the spilled value.
-                         * x86-64 cmpq only accepts sign-extended 32-bit immediates, so
-                         * values outside [-2^31, 2^31-1] must be loaded into a register. */
-                        long long case_val = label_expr->expr_data.i_num;
-                        if (selector_is_qword && (case_val > INT32_MAX || case_val < INT32_MIN)) {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", case_val);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tcmpq\t%%r11, -%d(%%rbp)\n",
-                                     selector_spill->offset);
-                        } else if (selector_is_qword) {
-                            snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
-                                     case_val, selector_spill->offset);
-                        } else {
-                            snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
-                                     case_val, selector_spill->offset);
-                        }
-                        inst_list = add_inst(inst_list, buffer);
+                        /* For constant labels, compare directly against the spilled value */
+                        inst_list = codegen_emit_cmp_spill_immediate(inst_list, ctx,
+                            selector_is_qword, label_expr->expr_data.i_num,
+                            selector_spill->offset);
                         snprintf(buffer, sizeof(buffer), "\tje\t%s\n", branch_label);
                         inst_list = add_inst(inst_list, buffer);
                     } else if (!selector_is_string) {
@@ -13230,22 +13256,10 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         int emitted_lower_cmp = 0;
                         if (range->lower != NULL) {
                             if (range->lower->type == EXPR_INUM) {
-                                /* Compare constant lower bound against spilled selector.
-                                 * Large 64-bit constants require a register intermediate. */
-                                long long lo_val = range->lower->expr_data.i_num;
-                                if (selector_is_qword && (lo_val > INT32_MAX || lo_val < INT32_MIN)) {
-                                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", lo_val);
-                                    inst_list = add_inst(inst_list, buffer);
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t%%r11, -%d(%%rbp)\n",
-                                             selector_spill->offset);
-                                } else if (selector_is_qword) {
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
-                                             lo_val, selector_spill->offset);
-                                } else {
-                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
-                                             lo_val, selector_spill->offset);
-                                }
-                                inst_list = add_inst(inst_list, buffer);
+                                /* Compare constant lower bound against spilled selector */
+                                inst_list = codegen_emit_cmp_spill_immediate(inst_list, ctx,
+                                    selector_is_qword, range->lower->expr_data.i_num,
+                                    selector_spill->offset);
                                 emitted_lower_cmp = 1;
                             } else {
                                 Register_t *lower_reg = NULL;
@@ -13273,22 +13287,10 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         int emitted_upper_cmp = 0;
                         if (range->upper != NULL) {
                             if (range->upper->type == EXPR_INUM) {
-                                /* Compare constant upper bound against spilled selector.
-                                 * Large 64-bit constants require a register intermediate. */
-                                long long hi_val = range->upper->expr_data.i_num;
-                                if (selector_is_qword && (hi_val > INT32_MAX || hi_val < INT32_MIN)) {
-                                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r11\n", hi_val);
-                                    inst_list = add_inst(inst_list, buffer);
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t%%r11, -%d(%%rbp)\n",
-                                             selector_spill->offset);
-                                } else if (selector_is_qword) {
-                                    snprintf(buffer, sizeof(buffer), "\tcmpq\t$%lld, -%d(%%rbp)\n",
-                                             hi_val, selector_spill->offset);
-                                } else {
-                                    snprintf(buffer, sizeof(buffer), "\tcmpl\t$%lld, -%d(%%rbp)\n",
-                                             hi_val, selector_spill->offset);
-                                }
-                                inst_list = add_inst(inst_list, buffer);
+                                /* Compare constant upper bound against spilled selector */
+                                inst_list = codegen_emit_cmp_spill_immediate(inst_list, ctx,
+                                    selector_is_qword, range->upper->expr_data.i_num,
+                                    selector_spill->offset);
                                 emitted_upper_cmp = 1;
                             } else {
                                 Register_t *upper_reg = NULL;

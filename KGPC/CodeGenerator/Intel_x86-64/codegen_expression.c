@@ -5011,7 +5011,7 @@ ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_re
     assert(src_reg32 != NULL);
     assert(dst_reg64 != NULL);
 
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", src_reg32, dst_reg64);
     return add_inst(inst_list, buffer);
 }
@@ -5021,7 +5021,7 @@ ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_re
     assert(src_reg32 != NULL);
     assert(dst_reg32 != NULL);
 
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src_reg32, dst_reg32);
     return add_inst(inst_list, buffer);
 }
@@ -5077,7 +5077,7 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     }
 
     long long load_size = expr_effective_size_bytes(expr);
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     if (load_size == 1)
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else if (load_size == 2)
@@ -5109,7 +5109,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         return inst_list;
     }
 
-    char buffer[256];
+    char buffer[CODEGEN_MAX_INST_BUF];
     if (inner->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(inner->expr_data.id);
