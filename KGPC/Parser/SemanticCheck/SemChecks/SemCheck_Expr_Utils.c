@@ -523,21 +523,27 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
         for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
         {
             HashNode_t *candidate = (HashNode_t *)cur->cur;
-            char *target_symbol = NULL;
+            const char *target_symbol = NULL;
+            char *owned_target_symbol = NULL;
             int candidate_unit_index = 0;
 
             if (candidate == NULL || candidate->type == NULL ||
                 candidate->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
 
-            target_symbol = semcheck_dup_function_call_target_symbol(candidate);
+            target_symbol = candidate->mangled_id;
+            if (target_symbol == NULL || target_symbol[0] == '\0')
+            {
+                owned_target_symbol = semcheck_dup_function_call_target_symbol(candidate);
+                target_symbol = owned_target_symbol;
+            }
             if (target_symbol == NULL ||
                 strcmp(target_symbol, expr->expr_data.function_call_data.mangled_id) != 0)
             {
-                free(target_symbol);
+                free(owned_target_symbol);
                 continue;
             }
-            free(target_symbol);
+            free(owned_target_symbol);
 
             if (candidate->source_unit_index > 0)
             {

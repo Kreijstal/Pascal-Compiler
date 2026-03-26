@@ -2850,34 +2850,46 @@ static void kgpc_string_set_insert(const void *value)
 {
     if (value == NULL || value == KGPC_STRING_TOMBSTONE)
         return;
-    if (kgpc_string_set_cap == 0)
-        kgpc_string_set_grow(1024);
-    if (kgpc_string_set_cap == 0)
-        return;
-    if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
-        kgpc_string_set_grow(kgpc_string_set_cap * 2);
-    if (kgpc_string_set_cap == 0)
-        return;
-
-    size_t mask = kgpc_string_set_cap - 1;
-    size_t idx = kgpc_hash_ptr(value) & mask;
-    size_t first_tombstone = (size_t)-1;
     for (;;)
     {
-        void *entry = kgpc_string_set_slots[idx];
-        if (entry == NULL)
+        if (kgpc_string_set_cap == 0)
+            kgpc_string_set_grow(1024);
+        if (kgpc_string_set_cap == 0)
+            return;
+        if ((kgpc_string_set_count + 1) * 10 >= kgpc_string_set_cap * 7)
+            kgpc_string_set_grow(kgpc_string_set_cap * 2);
+        if (kgpc_string_set_cap == 0)
+            return;
+
+        size_t mask = kgpc_string_set_cap - 1;
+        size_t idx = kgpc_hash_ptr(value) & mask;
+        size_t first_tombstone = (size_t)-1;
+        for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
         {
-            if (first_tombstone != (size_t)-1)
-                idx = first_tombstone;
-            kgpc_string_set_slots[idx] = (void *)value;
+            void *entry = kgpc_string_set_slots[idx];
+            if (entry == NULL)
+            {
+                if (first_tombstone != (size_t)-1)
+                    idx = first_tombstone;
+                kgpc_string_set_slots[idx] = (void *)value;
+                kgpc_string_set_count += 1;
+                return;
+            }
+            if (entry == value)
+                return;
+            if (entry == KGPC_STRING_TOMBSTONE && first_tombstone == (size_t)-1)
+                first_tombstone = idx;
+            idx = (idx + 1) & mask;
+        }
+
+        if (first_tombstone != (size_t)-1)
+        {
+            kgpc_string_set_slots[first_tombstone] = (void *)value;
             kgpc_string_set_count += 1;
             return;
         }
-        if (entry == value)
-            return;
-        if (entry == KGPC_STRING_TOMBSTONE && first_tombstone == (size_t)-1)
-            first_tombstone = idx;
-        idx = (idx + 1) & mask;
+
+        kgpc_string_set_grow(kgpc_string_set_cap * 2);
     }
 }
 
@@ -2887,7 +2899,7 @@ static void kgpc_string_set_remove(const void *value)
         return;
     size_t mask = kgpc_string_set_cap - 1;
     size_t idx = kgpc_hash_ptr(value) & mask;
-    for (;;)
+    for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
     {
         void *entry = kgpc_string_set_slots[idx];
         if (entry == NULL)
@@ -2897,6 +2909,8 @@ static void kgpc_string_set_remove(const void *value)
             kgpc_string_set_slots[idx] = KGPC_STRING_TOMBSTONE;
             if (kgpc_string_set_count > 0)
                 kgpc_string_set_count -= 1;
+            if (kgpc_string_set_count == 0)
+                memset(kgpc_string_set_slots, 0, kgpc_string_set_cap * sizeof(void *));
             return;
         }
         idx = (idx + 1) & mask;
@@ -2913,7 +2927,7 @@ static int kgpc_string_is_managed(const char *value)
         return 0;
     size_t mask = kgpc_string_set_cap - 1;
     size_t idx = kgpc_hash_ptr(value) & mask;
-    for (;;)
+    for (size_t probe = 0; probe < kgpc_string_set_cap; probe++)
     {
         void *entry = kgpc_string_set_slots[idx];
         if (entry == NULL)
@@ -2922,6 +2936,7 @@ static int kgpc_string_is_managed(const char *value)
             return 1;
         idx = (idx + 1) & mask;
     }
+    return 0;
 }
 
 static KgpcStringHeader *kgpc_string_header(const char *value)

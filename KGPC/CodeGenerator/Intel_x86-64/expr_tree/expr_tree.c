@@ -2222,10 +2222,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
         {
-            long long sret_size = 0;
-            KgpcType *return_type = expr_get_kgpc_type(expr);
-            if (return_type != NULL)
-                sret_size = kgpc_type_sizeof(return_type);
+            long long sret_size = codegen_expr_sret_size(expr);
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
             sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);

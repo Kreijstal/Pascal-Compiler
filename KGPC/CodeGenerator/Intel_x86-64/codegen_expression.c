@@ -131,12 +131,26 @@ static KgpcType *codegen_function_call_return_type_from_expr(
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return NULL;
 
+    if (expr->expr_data.function_call_data.mangled_id != NULL &&
+        strncmp(expr->expr_data.function_call_data.mangled_id, "kgpc_", 5) == 0 &&
+        expr->resolved_kgpc_type != NULL)
+    {
+        return expr->resolved_kgpc_type;
+    }
+
     call_type = expr->expr_data.function_call_data.call_kgpc_type;
     if (call_type == NULL &&
         expr->expr_data.function_call_data.resolved_func != NULL)
     {
         call_type = expr->expr_data.function_call_data.resolved_func->type;
     }
+
+    /* Builtin lowering sometimes rewrites a call directly to a runtime helper
+     * and clears the semantic call cache. In that case, prefer the semchecked
+     * expression result type over falling back to unrelated source-level
+     * declarations that happen to share the original identifier. */
+    if (call_type == NULL && expr->resolved_kgpc_type != NULL)
+        return expr->resolved_kgpc_type;
 
     if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
         return NULL;
@@ -572,33 +586,45 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
 {
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL && ctx != NULL)
     {
-        HashNode_t *call_node = NULL;
-        KgpcType *call_type = codegen_resolve_function_call_type(ctx, expr, &call_node);
         KgpcType *ret_type = NULL;
         const char *ret_id = NULL;
-        if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+
+        ret_type = codegen_function_call_return_type_from_expr(expr);
+        if (ret_type != NULL)
         {
-            ret_type = kgpc_type_get_return_type(call_type);
-            if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                return 1;
-            ret_id = call_type->info.proc_info.return_type_id;
-            if (ret_id == NULL && call_type->info.proc_info.definition != NULL)
-                ret_id = call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
-            if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+            if (kgpc_type_is_shortstring(ret_type) ||
+                (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
                 return 1;
         }
-        if (call_node != NULL && call_node->type != NULL &&
-            call_node->type->kind == TYPE_KIND_PROCEDURE)
+
+        if (ret_type == NULL)
         {
-            ret_type = kgpc_type_get_return_type(call_node->type);
-            if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                return 1;
-            ret_id = call_node->type->info.proc_info.return_type_id;
-            if (ret_id == NULL && call_node->type->info.proc_info.definition != NULL)
-                ret_id = call_node->type->info.proc_info.definition
-                    ->tree_data.subprogram_data.return_type_id;
-            if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
-                return 1;
+            HashNode_t *call_node = NULL;
+            KgpcType *call_type = codegen_resolve_function_call_type(ctx, expr, &call_node);
+            if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ret_type = kgpc_type_get_return_type(call_type);
+                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
+                    return 1;
+                ret_id = call_type->info.proc_info.return_type_id;
+                if (ret_id == NULL && call_type->info.proc_info.definition != NULL)
+                    ret_id = call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
+                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                    return 1;
+            }
+            if (call_node != NULL && call_node->type != NULL &&
+                call_node->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                ret_type = kgpc_type_get_return_type(call_node->type);
+                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
+                    return 1;
+                ret_id = call_node->type->info.proc_info.return_type_id;
+                if (ret_id == NULL && call_node->type->info.proc_info.definition != NULL)
+                    ret_id = call_node->type->info.proc_info.definition
+                        ->tree_data.subprogram_data.return_type_id;
+                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                    return 1;
+            }
         }
     }
 
@@ -3394,9 +3420,10 @@ static int expr_is_char_pointer(const struct Expression *expr)
     return 0;
 }
 
-int expr_returns_sret(const struct Expression *expr)
+long long codegen_expr_sret_size(const struct Expression *expr)
 {
     KgpcType *ret_type = NULL;
+    KgpcType *type = NULL;
 
     if (expr == NULL)
         return 0;
@@ -3409,9 +3436,8 @@ int expr_returns_sret(const struct Expression *expr)
             if (kgpc_type_is_shortstring(ret_type) ||
                 (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
             {
-                /* Keep caller ABI aligned with function codegen, which lowers
-                 * shortstring returns through a hidden destination pointer. */
-                return 1;
+                long long ret_size = kgpc_type_sizeof(ret_type);
+                return ret_size > 0 ? ret_size : 256;
             }
 
             if (kgpc_type_is_record(ret_type) ||
@@ -3421,10 +3447,10 @@ int expr_returns_sret(const struct Expression *expr)
             {
                 long long ret_size = kgpc_type_sizeof(ret_type);
                 if (ret_size > 0)
-                    return ret_size > 8;
+                    return ret_size;
             }
             if (kgpc_type_is_extended(ret_type))
-                return 1;
+                return 10;
             return 0;
         }
     }
@@ -3436,32 +3462,65 @@ int expr_returns_sret(const struct Expression *expr)
         {
             long long size = kgpc_type_sizeof(record_type);
             if (size > 0)
-                return size > 8;
+                return size;
         }
-        return 1;
+        return 16;
     }
 
     /* ShortStrings are passed via SRET because they're small fixed-size arrays */
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
-        return 1;
+        return 256;
 
-    KgpcType *type = expr_get_kgpc_type(expr);
+    type = expr_get_kgpc_type(expr);
     if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
         !kgpc_type_is_dynamic_array(type))
-        return 1;
+    {
+        long long size = kgpc_type_sizeof(type);
+        return size > 0 ? size : 16;
+    }
 
     /* Also check for shortstring type aliases */
     if (type != NULL && type->type_alias != NULL && type->type_alias->is_shortstring)
-        return 1;
+    {
+        long long size = kgpc_type_sizeof(type);
+        return size > 0 ? size : 256;
+    }
 
     /* Extended (10 bytes) is returned via hidden sret pointer, matching
      * the callee convention which copies the result through kgpc_move.
      * Only applies to function calls — variables are not sret. */
     if (type != NULL && kgpc_type_is_extended(type) &&
         expr->type == EXPR_FUNCTION_CALL)
-        return 1;
+        return 10;
 
     return 0;
+}
+
+int expr_returns_sret(const struct Expression *expr)
+{
+    long long sret_size = codegen_expr_sret_size(expr);
+    if (sret_size <= 0)
+        return 0;
+    if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
+    {
+        KgpcType *ret_type = codegen_function_call_return_type_from_expr(expr);
+        if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
+            return 1;
+        if (ret_type != NULL && kgpc_type_is_extended(ret_type))
+            return 1;
+    }
+    if (expr != NULL && expr_has_type_tag(expr, SHORTSTRING_TYPE))
+        return 1;
+    if (expr != NULL)
+    {
+        KgpcType *type = expr_get_kgpc_type(expr);
+        if (type != NULL && type->type_alias != NULL && type->type_alias->is_shortstring)
+            return 1;
+        if (type != NULL && kgpc_type_is_extended(type) &&
+            expr->type == EXPR_FUNCTION_CALL)
+            return 1;
+    }
+    return sret_size > 8;
 }
 
 void codegen_release_function_call_mangled_id(struct Expression *expr)

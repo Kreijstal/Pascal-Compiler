@@ -7913,7 +7913,9 @@ static ListNode_t *codegen_builtin_write_like(struct Statement *stmt, ListNode_t
                     is_char_array = 1;
                 }
             }
-            else if (expr_type == SHORTSTRING_TYPE || codegen_expr_is_shortstring_array(expr))
+            else if (expr_type == SHORTSTRING_TYPE ||
+                     codegen_expr_is_shortstring_array(expr) ||
+                     codegen_expr_is_shortstring_value_ctx(expr, ctx))
             {
                 /* Handle ShortString type - use special write function that handles length prefix.
                  * Exception: string literals are still stored as C strings even when typed as
