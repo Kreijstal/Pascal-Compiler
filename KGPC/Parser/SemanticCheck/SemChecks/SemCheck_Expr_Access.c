@@ -5360,21 +5360,28 @@ int semcheck_funccall(int *type_return,
         const char *method_name = expr->expr_data.function_call_data.cached_method_name;
         size_t owner_len = strlen(owner_class);
         size_t method_len = strlen(method_name);
-        char *candidate_name = (char *)malloc(owner_len + 2 + method_len + 1);
-        if (candidate_name != NULL)
+        size_t candidate_len = 0;
+
+        if (!(owner_len > SIZE_MAX - 2 ||
+              method_len > SIZE_MAX - owner_len - 2 - 1))
         {
-            snprintf(candidate_name, owner_len + 2 + method_len + 1, "%s__%s",
-                owner_class, method_name);
-            overload_candidates = FindAllIdents(symtab, candidate_name);
-            if (overload_candidates != NULL)
+            candidate_len = owner_len + 2 + method_len + 1;
+            char *candidate_name = (char *)malloc(candidate_len);
+            if (candidate_name != NULL)
             {
-                if (mangled_name != NULL)
-                    free(mangled_name);
-                mangled_name = candidate_name;
-            }
-            else
-            {
-                free(candidate_name);
+                snprintf(candidate_name, candidate_len, "%s__%s",
+                    owner_class, method_name);
+                overload_candidates = FindAllIdents(symtab, candidate_name);
+                if (overload_candidates != NULL)
+                {
+                    if (mangled_name != NULL)
+                        free(mangled_name);
+                    mangled_name = candidate_name;
+                }
+                else
+                {
+                    free(candidate_name);
+                }
             }
         }
     }
