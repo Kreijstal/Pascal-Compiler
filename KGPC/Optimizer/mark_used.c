@@ -483,9 +483,33 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_ADDR:
-            if (is_valid_pointer(expr->expr_data.addr_data.expr) && 
+            if (is_valid_pointer(expr->expr_data.addr_data.expr) &&
                 expr->expr_data.addr_data.expr != NULL)
-                mark_expr_calls(expr->expr_data.addr_data.expr, map);
+            {
+                struct Expression *addr_inner = expr->expr_data.addr_data.expr;
+                /* When semcheck doesn't convert @MethodName to EXPR_ADDR_OF_PROC
+                 * (e.g. unit method bodies not fully semchecked), the expression
+                 * stays as EXPR_ADDR(EXPR_VAR_ID("MethodName")).  Try to find the
+                 * named procedure/method in the subprogram map and mark it used. */
+                const char *addr_id = NULL;
+                if (addr_inner->type == EXPR_VAR_ID)
+                    addr_id = addr_inner->expr_data.id;
+                else if (addr_inner->type == EXPR_FUNCTION_CALL &&
+                         addr_inner->expr_data.function_call_data.args_expr == NULL)
+                    addr_id = addr_inner->expr_data.function_call_data.id;
+                if (addr_id != NULL)
+                {
+                    Tree_t *addr_sub = map_find(map, addr_id);
+                    if (addr_sub != NULL)
+                        mark_subprogram_recursive(addr_sub, map);
+                    /* Also mark all overloads with the same bare name in case
+                     * multiple classes define methods with this name (e.g.
+                     * TSimpleStatusThread.SetStatus and
+                     * TSimpleStatusProcThread.SetStatus). */
+                    mark_subprograms_by_id(map, addr_id);
+                }
+                mark_expr_calls(addr_inner, map);
+            }
             break;
             
         case EXPR_TYPECAST:

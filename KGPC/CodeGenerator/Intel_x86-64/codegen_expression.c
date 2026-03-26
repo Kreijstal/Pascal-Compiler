@@ -78,24 +78,10 @@ void codegen_add_unresolved_method_stub(const char *label)
 
 void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprograms)
 {
-    for (ListNode_t *n = g_unresolved_method_stubs; n != NULL; n = n->next) {
-        const char *label = (const char *)n->cur;
-        if (label == NULL) continue;
-        /* Skip if a real implementation was emitted */
-        int already_emitted = 0;
-        for (ListNode_t *s = emitted_subprograms; s != NULL; s = s->next) {
-            if (s->cur != NULL && strcmp((const char *)s->cur, label) == 0) {
-                already_emitted = 1;
-                break;
-            }
-        }
-        if (already_emitted) continue;
-        fprintf(out, "\n# Stub for unresolved method reference: %s\n", label);
-        fprintf(out, "\t.text\n");
-        fprintf(out, ".globl %s\n", label);
-        fprintf(out, "%s:\n", label);
-        fprintf(out, "\tjmp\t__kgpc_abstract_method_error\n");
-    }
+    (void)out;
+    (void)emitted_subprograms;
+    /* Stubs removed: unresolved method references should produce linker
+     * errors so that codegen bugs are caught instead of hidden. */
     ListNode_t *cur = g_unresolved_method_stubs;
     while (cur != NULL) {
         ListNode_t *next = cur->next;
