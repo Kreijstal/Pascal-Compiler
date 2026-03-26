@@ -1927,6 +1927,26 @@ int semcheck_funccall(int *type_return,
     if (expr->expr_data.function_call_data.is_method_call_placeholder && args_given != NULL)
     {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
+        /* For interface/class variables accessed via properties, the receiver
+         * expression resolves to POINTER_TYPE with record_type == NULL.
+         * Semcheck the receiver first so resolved_kgpc_type is available,
+         * then extract the record from the pointer's pointee so method
+         * dispatch can find the interface's methods. */
+        if (first_arg != NULL && first_arg->record_type == NULL)
+        {
+            if (first_arg->resolved_kgpc_type == NULL)
+            {
+                (void)semcheck_expr_with_type(NULL, symtab, first_arg, max_scope_lev, NO_MUTATE);
+            }
+            if (first_arg->resolved_kgpc_type != NULL &&
+                kgpc_type_is_pointer(first_arg->resolved_kgpc_type))
+            {
+                KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                    first_arg->resolved_kgpc_type, symtab);
+                if (pointee != NULL && kgpc_type_is_record(pointee))
+                    first_arg->record_type = kgpc_type_get_record(pointee);
+            }
+        }
         if (first_arg != NULL && first_arg->record_type != NULL &&
             !record_type_is_class(first_arg->record_type))
         {
