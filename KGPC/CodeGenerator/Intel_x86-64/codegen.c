@@ -3811,7 +3811,42 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             class_label, iface_name, vtbl_imethod->name);
                         fprintf(ctx->output_file, "\t.text\n");
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
-                        const char *self_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                        /* Determine which register holds Self.  If the method
+                         * returns a large struct (>8 bytes, SRET convention),
+                         * the hidden return pointer occupies the first arg
+                         * register and Self shifts to the second. */
+                        int method_uses_sret = 0;
+                        {
+                            char lookup_name[512];
+                            snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
+                                iface_name, vtbl_imethod->name);
+                            HashNode_t *method_sym = NULL;
+                            FindSymbol(&method_sym, symtab, lookup_name);
+                            if (method_sym == NULL) {
+                                snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
+                                    class_label, vtbl_imethod->name);
+                                FindSymbol(&method_sym, symtab, lookup_name);
+                            }
+                            if (method_sym != NULL && method_sym->type != NULL) {
+                                KgpcType *ret_type = kgpc_type_get_return_type(method_sym->type);
+                                if (ret_type != NULL) {
+                                    if (kgpc_type_is_shortstring(ret_type)) {
+                                        /* ShortString is 256 bytes — always SRET */
+                                        method_uses_sret = 1;
+                                    } else if (kgpc_type_is_record(ret_type)) {
+                                        long long ret_size = 0;
+                                        struct RecordType *ret_rec = kgpc_type_get_record(ret_type);
+                                        if (ret_rec != NULL &&
+                                            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                                                ret_rec, &ret_size) == 0 && ret_size > 8)
+                                            method_uses_sret = 1;
+                                    }
+                                }
+                            }
+                        }
+                        const char *self_reg = codegen_target_is_windows()
+                            ? (method_uses_sret ? "%rdx" : "%rcx")
+                            : (method_uses_sret ? "%rsi" : "%rdi");
                         /* Check if Self points to a VMT (raw object pointer) or
                          * an interface vtable (adjusted pointer).
                          * VMT has vInstanceSize at [0] and -vInstanceSize at [8],
