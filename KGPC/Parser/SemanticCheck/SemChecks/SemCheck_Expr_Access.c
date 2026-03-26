@@ -3392,6 +3392,7 @@ int semcheck_funccall(int *type_return,
                 return 1;
             }
             semcheck_set_function_call_target(expr, best_match);
+            semcheck_sync_function_call_target_to_mangled(expr, symtab);
         }
         else
         {
@@ -6312,6 +6313,7 @@ method_call_resolved:
             }
         }
         semcheck_set_function_call_target(expr, best_match);
+        semcheck_sync_function_call_target_to_mangled(expr, symtab);
         semcheck_mark_call_requires_static_link(best_match);
         hash_return = best_match;
         scope_return = 1; // FIXME

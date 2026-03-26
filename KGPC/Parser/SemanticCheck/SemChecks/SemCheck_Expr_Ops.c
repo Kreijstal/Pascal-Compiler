@@ -205,6 +205,7 @@ static int semcheck_try_refine_funccall_to_bool(
         free(call_expr->expr_data.function_call_data.mangled_id);
     call_expr->expr_data.function_call_data.mangled_id =
         best_match->mangled_id != NULL ? strdup(best_match->mangled_id) : strdup(best_match->id);
+    semcheck_sync_function_call_target_to_mangled(call_expr, symtab);
     semcheck_expr_set_resolved_type(call_expr, BOOL);
     {
         KgpcType *bool_type = create_primitive_type(BOOL);
