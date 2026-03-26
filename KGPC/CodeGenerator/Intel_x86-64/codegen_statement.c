@@ -1976,6 +1976,16 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
         *out_reg = addr_reg;
         goto cleanup;
     }
+    else if (expr->type == EXPR_ARRAY_LITERAL)
+    {
+        /* Array literals are materialized into a temporary stack slot by
+         * codegen_expr_with_result, which returns a register pointing to
+         * the data.  Use that address directly instead of falling through
+         * to codegen_evaluate_expr/build_expr_tree which cannot handle
+         * compound expressions. */
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
         struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
@@ -3155,6 +3165,17 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
                 }
             }
         }
+
+        /* Last resort: derive element count from source array literal.
+         * Typed constant arrays (e.g. `const foo: array[0..N] of Rec = (...)`)
+         * may have unresolved bounds on the destination when the type comes from
+         * a cross-unit declaration.  The source literal knows its own length. */
+        if (num_elements <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->expr_data.array_literal_data.element_count > 0)
+        {
+            num_elements = src_expr->expr_data.array_literal_data.element_count;
+        }
     }
 
     long long element_size = expr_get_array_element_size(dest_expr, ctx);
@@ -3209,6 +3230,20 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
                     }
                 }
             }
+        }
+
+        /* Fall back to the source array literal's element size when the
+         * destination type information is incomplete (cross-unit typed consts). */
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->array_element_size > 0)
+        {
+            element_size = src_expr->array_element_size;
+        }
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            element_size = expr_get_array_element_size(src_expr, ctx);
         }
 
         if (element_size <= 0)

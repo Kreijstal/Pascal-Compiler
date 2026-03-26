@@ -1147,6 +1147,8 @@ expr_node_t *build_expr_tree(struct Expression *expr)
         case EXPR_AS:
         case EXPR_ANONYMOUS_FUNCTION:
         case EXPR_ANONYMOUS_PROCEDURE:
+        case EXPR_RECORD_CONSTRUCTOR:
+        case EXPR_ARRAY_LITERAL:
             new_node->left_expr = NULL;
             new_node->right_expr = NULL;
             break;
@@ -2992,6 +2994,28 @@ cleanup_constructor:
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         if (resolved_label != NULL) free(resolved_label);
         return add_inst(inst_list, buffer);
+    }
+    else if (expr->type == EXPR_RECORD_CONSTRUCTOR || expr->type == EXPR_ARRAY_LITERAL)
+    {
+        /* Record constructors and array literals are compound values that need
+         * to be materialized into temporary storage.  They are not scalar
+         * expressions, so delegate to codegen_address_for_expr which already
+         * knows how to allocate a temp, fill it in and return its address. */
+        Register_t *addr_reg = NULL;
+        codegen_begin_expression(ctx);
+        inst_list = codegen_address_for_expr(expr, inst_list, ctx, &addr_reg);
+        codegen_end_expression(ctx);
+        if (addr_reg != NULL)
+        {
+            if (addr_reg != target_reg)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    addr_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+            }
+        }
+        return inst_list;
     }
     else if (expr->type == EXPR_ANONYMOUS_FUNCTION || expr->type == EXPR_ANONYMOUS_PROCEDURE)
     {
