@@ -227,6 +227,145 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
     return inst_list;
 }
 
+static int codegen_builtin_lowhigh_bounds_from_tag(int type_tag,
+    long long *low_out, long long *high_out, int *use_qword_out)
+{
+    if (low_out == NULL || high_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    switch (type_tag)
+    {
+        case BOOL:
+            *low_out = 0;
+            *high_out = 1;
+            *use_qword_out = 0;
+            return 1;
+        case CHAR_TYPE:
+        case BYTE_TYPE:
+            *low_out = 0;
+            *high_out = 255;
+            *use_qword_out = 0;
+            return 1;
+        case WORD_TYPE:
+            *low_out = 0;
+            *high_out = 65535;
+            *use_qword_out = 0;
+            return 1;
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            *low_out = -2147483648LL;
+            *high_out = 2147483647LL;
+            *use_qword_out = 0;
+            return 1;
+        case LONGWORD_TYPE:
+            *low_out = 0;
+            *high_out = 4294967295LL;
+            *use_qword_out = 1;
+            return 1;
+        case INT64_TYPE:
+            *low_out = (-9223372036854775807LL - 1);
+            *high_out = 9223372036854775807LL;
+            *use_qword_out = 1;
+            return 1;
+        case QWORD_TYPE:
+            *low_out = 0;
+            *high_out = 9223372036854775807LL;
+            *use_qword_out = 1;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_builtin_lowhigh_try_value(struct Expression *expr, int is_high,
+    long long *value_out, int *use_qword_out)
+{
+    if (expr == NULL || value_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL || args->cur == NULL)
+        return 0;
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr == NULL)
+        return 0;
+
+    if (arg_expr->is_array_expr && !arg_expr->array_is_dynamic &&
+        arg_expr->array_upper_bound >= arg_expr->array_lower_bound)
+    {
+        *value_out = is_high ? arg_expr->array_upper_bound : arg_expr->array_lower_bound;
+        *use_qword_out = 0;
+        return 1;
+    }
+
+    KgpcType *arg_type = expr_get_kgpc_type(arg_expr);
+    if (arg_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+        if (alias != NULL)
+        {
+            if (alias->range_known)
+            {
+                *value_out = is_high ? alias->range_end : alias->range_start;
+                *use_qword_out =
+                    (alias->range_start < INT32_MIN || alias->range_end > INT32_MAX);
+                return 1;
+            }
+
+            if (alias->is_enum && alias->enum_literals != NULL &&
+                !alias->enum_has_explicit_values)
+            {
+                int count = ListLength(alias->enum_literals);
+                if (count > 0)
+                {
+                    *value_out = is_high ? (long long)count - 1 : 0;
+                    *use_qword_out = 0;
+                    return 1;
+                }
+            }
+
+            if (alias->is_shortstring)
+            {
+                *value_out = is_high ? alias->array_end : alias->array_start;
+                *use_qword_out = 0;
+                return 1;
+            }
+        }
+    }
+
+    long long low = 0;
+    long long high = 0;
+    int use_qword = 0;
+    if (!codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
+            &low, &high, &use_qword))
+    {
+        return 0;
+    }
+
+    *value_out = is_high ? high : low;
+    *use_qword_out = use_qword;
+    return 1;
+}
+
+static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg, int is_high)
+{
+    long long value = 0;
+    int use_qword = 0;
+    char buffer[128];
+
+    (void)ctx;
+    if (!codegen_builtin_lowhigh_try_value(expr, is_high, &value, &use_qword))
+        return NULL;
+
+    if (use_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", value, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, %s\n", value, target_reg->bit_32);
+    return add_inst(inst_list, buffer);
+}
+
 /* Function to escape string literals for assembly .string directive */
 static char *escape_string_for_assembly(const char *input)
 {
@@ -2043,6 +2182,19 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        const char *func_id = expr->expr_data.function_call_data.id;
+
+        if (func_id != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+            (pascal_identifier_equals(func_id, "Low") ||
+             pascal_identifier_equals(func_id, "High")))
+        {
+            ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
+                target_reg, pascal_identifier_equals(func_id, "High"));
+            if (lowered != NULL)
+                return lowered;
+        }
+
         if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
             expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
@@ -2057,7 +2209,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         CODEGEN_DEBUG("DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
             func_mangled_name ? func_mangled_name : "NULL",
-            expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
+            func_id ? func_id : "NULL");
         
         if (func_mangled_name != NULL && strcmp(func_mangled_name, "__kgpc_dynarray_length") == 0)
         {
@@ -2067,8 +2219,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             return inst_list;
         }
 
-        if (expr->expr_data.function_call_data.id != NULL &&
-            strcasecmp(expr->expr_data.function_call_data.id, "SwapEndian") == 0)
+        if (func_id != NULL &&
+            strcasecmp(func_id, "SwapEndian") == 0)
         {
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
             if (args == NULL || args->cur == NULL)

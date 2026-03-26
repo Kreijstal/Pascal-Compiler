@@ -472,6 +472,8 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     CodeGenContext *ctx);
 static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx);
+static ListNode_t *codegen_builtin_prefetch(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx);
 static int codegen_expr_is_extended_storage(const struct Expression *expr);
 static ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
@@ -7779,6 +7781,36 @@ cleanup:
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_prefetch(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next != NULL || args->cur == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Prefetch expects exactly one argument.");
+        return inst_list;
+    }
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    Register_t *addr_reg = NULL;
+    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &addr_reg);
+    if (codegen_had_error(ctx) || addr_reg == NULL)
+        return inst_list;
+
+    char buffer[96];
+    const char *arg0 = current_arg_reg64(0);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", addr_reg->bit_64, arg0);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_prefetch");
+    free_arg_regs();
+    free_reg(get_reg_stack(), addr_reg);
+    return inst_list;
+}
+
 static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx, int is_increment)
 {
@@ -9247,6 +9279,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         }
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert)\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var"))
+    {
+        inst_list = codegen_builtin_prefetch(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif
         return inst_list;
     }
