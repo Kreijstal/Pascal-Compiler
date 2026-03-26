@@ -7865,13 +7865,93 @@ static ListNode_t *codegen_builtin_dispose(struct Statement *stmt, ListNode_t *i
         return inst_list;
 
     ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next != NULL)
+    if (args_expr == NULL)
     {
         fprintf(stderr, "ERROR: Dispose expects exactly one argument.\n");
         return inst_list;
     }
 
     struct Expression *target_expr = (struct Expression *)args_expr->cur;
+
+    if (args_expr->next != NULL)
+    {
+        struct Expression *method_expr = (struct Expression *)args_expr->next->cur;
+        struct Statement *dtor_stmt = NULL;
+        ListNode_t *call_args = NULL;
+        char *method_name = NULL;
+
+        if (method_expr != NULL &&
+            (method_expr->type == EXPR_FUNCTION_CALL || method_expr->type == EXPR_VAR_ID))
+        {
+            struct Expression *receiver =
+                mk_pointer_deref(stmt->line_num, clone_expression(target_expr));
+            ListNode_t *receiver_node = NULL;
+            ListNode_t *method_arg_clones = NULL;
+
+            if (receiver != NULL)
+                receiver_node = CreateListNode(receiver, LIST_EXPR);
+            if (receiver_node == NULL)
+            {
+                if (receiver != NULL)
+                    destroy_expr(receiver);
+                return inst_list;
+            }
+
+            call_args = receiver_node;
+            if (method_expr->type == EXPR_FUNCTION_CALL)
+            {
+                if (method_expr->expr_data.function_call_data.id != NULL)
+                    method_name = strdup(method_expr->expr_data.function_call_data.id);
+                method_arg_clones = codegen_clone_expr_list_local(
+                    method_expr->expr_data.function_call_data.args_expr);
+                if (method_arg_clones != NULL)
+                    receiver_node->next = method_arg_clones;
+            }
+            else if (method_expr->expr_data.id != NULL)
+            {
+                method_name = strdup(method_expr->expr_data.id);
+            }
+
+            if (method_name != NULL)
+            {
+                dtor_stmt = mk_procedurecall(stmt->line_num, method_name, call_args);
+                if (dtor_stmt != NULL && method_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    if (method_expr->expr_data.function_call_data.mangled_id != NULL)
+                    {
+                        dtor_stmt->stmt_data.procedure_call_data.mangled_id =
+                            strdup(method_expr->expr_data.function_call_data.mangled_id);
+                    }
+                    dtor_stmt->stmt_data.procedure_call_data.call_hash_type =
+                        method_expr->expr_data.function_call_data.call_hash_type;
+                    dtor_stmt->stmt_data.procedure_call_data.call_kgpc_type =
+                        method_expr->expr_data.function_call_data.call_kgpc_type;
+                    dtor_stmt->stmt_data.procedure_call_data.is_call_info_valid =
+                        method_expr->expr_data.function_call_data.is_call_info_valid;
+                    if (method_expr->expr_data.function_call_data.cached_owner_class != NULL)
+                    {
+                        dtor_stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(method_expr->expr_data.function_call_data.cached_owner_class);
+                    }
+                }
+            }
+            else
+            {
+                DestroyList(call_args);
+            }
+        }
+
+        if (dtor_stmt != NULL)
+        {
+            inst_list = codegen_proc_call(dtor_stmt, inst_list, ctx, ctx->symtab);
+            destroy_stmt(dtor_stmt);
+        }
+        else
+        {
+            fprintf(stderr, "ERROR: Dispose expects exactly one argument.\n");
+            return inst_list;
+        }
+    }
 
     Register_t *addr_reg = NULL;
     inst_list = codegen_address_for_expr(target_expr, inst_list, ctx, &addr_reg);
@@ -12184,7 +12264,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             return inst_list;
 
         Register_t *base_reg = NULL;
-        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *idx_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *byte_index_reg = NULL;
         Register_t *bit_reg = NULL;
         Register_t *byte_val_reg = NULL;
@@ -12204,10 +12284,10 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
             codegen_report_error(ctx, "ERROR: Unable to allocate register for set for-in index");
             return inst_list;
         }
-        byte_index_reg = get_free_reg(get_reg_stack(), &inst_list);
-        bit_reg = get_free_reg(get_reg_stack(), &inst_list);
-        byte_val_reg = get_free_reg(get_reg_stack(), &inst_list);
-        mask_reg = get_free_reg(get_reg_stack(), &inst_list);
+        byte_index_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        bit_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        byte_val_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        mask_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (byte_index_reg == NULL || bit_reg == NULL || byte_val_reg == NULL || mask_reg == NULL) {
             if (mask_reg) free_reg(get_reg_stack(), mask_reg);
             if (byte_val_reg) free_reg(get_reg_stack(), byte_val_reg);

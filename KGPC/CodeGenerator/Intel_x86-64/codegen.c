@@ -6381,7 +6381,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             long long computed_size = 0;
             int element_size = 0;
-            if (codegen_sizeof_type_reference(ctx, arr->type, arr->type_id,
+            if (arr->element_kgpc_type != NULL)
+            {
+                computed_size = kgpc_type_sizeof(arr->element_kgpc_type);
+                if (computed_size > 0 && computed_size <= INT_MAX)
+                    element_size = (int)computed_size;
+            }
+            if (element_size <= 0 &&
+                codegen_sizeof_type_reference(ctx, arr->type, arr->type_id,
                     record_desc, &computed_size) == 0 && computed_size > 0 &&
                 computed_size <= INT_MAX)
             {
