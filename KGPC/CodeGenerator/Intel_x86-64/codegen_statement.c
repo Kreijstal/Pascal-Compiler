@@ -2718,6 +2718,48 @@ static int codegen_shortstring_capacity_from_type_local(KgpcType *type)
     return 0;
 }
 
+static int codegen_record_field_shortstring_capacity(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_RECORD_ACCESS)
+        return 0;
+
+    struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+    if (field == NULL)
+        return 0;
+
+    int shortstring_like = (field->type == SHORTSTRING_TYPE);
+    if (!shortstring_like && expr != NULL)
+    {
+        KgpcType *expr_type = expr_get_kgpc_type(expr);
+        if (expr_type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+            if (kgpc_type_is_shortstring(expr_type) ||
+                (alias != NULL && alias->is_shortstring))
+                shortstring_like = 1;
+        }
+    }
+
+    if (!shortstring_like)
+        return 0;
+
+    if (field->type == SHORTSTRING_TYPE)
+    {
+        if (field->is_array && field->array_end >= field->array_start && field->array_end >= 0)
+            return field->array_end - field->array_start + 1;
+    }
+
+    if (ctx != NULL)
+    {
+        long long field_size = codegen_record_field_effective_size((struct Expression *)expr, ctx);
+        if (field_size > 1 && field_size <= INT_MAX)
+            return (int)field_size;
+    }
+
+    return 0;
+}
+
 static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx)
 {
     const char *expr_id = NULL;
@@ -2884,6 +2926,7 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
         {
             /* Look up the record field to check if it's a char array */
             struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+            int short_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
             if (kgpc_getenv("KGPC_DEBUG_CHARARRAY") != NULL)
             {
                 const char *fid = expr->expr_data.record_access_data.field_id;
@@ -2903,6 +2946,14 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
                  * Plain array[0..255] of AnsiChar is NOT a shortstring. */
                 if (is_shortstring_out != NULL)
                     *is_shortstring_out = (field->type == SHORTSTRING_TYPE) ? 1 : 0;
+            }
+            else if (short_capacity > 1)
+            {
+                lower = 0;
+                upper = short_capacity - 1;
+                found = 1;
+                if (is_shortstring_out != NULL)
+                    *is_shortstring_out = 1;
             }
         }
     }
@@ -2965,6 +3016,10 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
 
     if (expr != NULL)
     {
+        int record_field_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
+        if (record_field_capacity > 1)
+            return record_field_capacity;
+
         KgpcType *expr_type = expr_get_kgpc_type(expr);
         if (expr_type != NULL &&
             expr_type->kind == TYPE_KIND_PRIMITIVE &&
