@@ -3547,6 +3547,38 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     #endif
 }
 
+/* Check whether a method uses the SRET calling convention (returns a
+ * value >8 bytes via a hidden first pointer argument).  This shifts
+ * Self from the first to the second argument register. */
+static int codegen_method_uses_sret(CodeGenContext *ctx, SymTab_t *symtab,
+    const char *owner_name, const char *fallback_owner, const char *method_name)
+{
+    char lookup_name[512];
+    snprintf(lookup_name, sizeof(lookup_name), "%s__%s", owner_name, method_name);
+    HashNode_t *method_sym = NULL;
+    FindSymbol(&method_sym, symtab, lookup_name);
+    if (method_sym == NULL && fallback_owner != NULL) {
+        snprintf(lookup_name, sizeof(lookup_name), "%s__%s", fallback_owner, method_name);
+        FindSymbol(&method_sym, symtab, lookup_name);
+    }
+    if (method_sym == NULL || method_sym->type == NULL)
+        return 0;
+    KgpcType *ret_type = kgpc_type_get_return_type(method_sym->type);
+    if (ret_type == NULL)
+        return 0;
+    if (kgpc_type_is_shortstring(ret_type))
+        return 1;
+    if (kgpc_type_is_record(ret_type)) {
+        long long ret_size = 0;
+        struct RecordType *ret_rec = kgpc_type_get_record(ret_type);
+        if (ret_rec != NULL &&
+            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
+                ret_rec, &ret_size) == 0 && ret_size > 8)
+            return 1;
+    }
+    return 0;
+}
+
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     struct RecordType *record_info, const char *class_label,
     EmittedClassSet *emitted_classes)
@@ -3811,38 +3843,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                             class_label, iface_name, vtbl_imethod->name);
                         fprintf(ctx->output_file, "\t.text\n");
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
-                        /* Determine which register holds Self.  If the method
-                         * returns a large struct (>8 bytes, SRET convention),
-                         * the hidden return pointer occupies the first arg
-                         * register and Self shifts to the second. */
-                        int method_uses_sret = 0;
-                        {
-                            char lookup_name[512];
-                            snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
-                                iface_name, vtbl_imethod->name);
-                            HashNode_t *method_sym = NULL;
-                            FindSymbol(&method_sym, symtab, lookup_name);
-                            if (method_sym == NULL) {
-                                snprintf(lookup_name, sizeof(lookup_name), "%s__%s",
-                                    class_label, vtbl_imethod->name);
-                                FindSymbol(&method_sym, symtab, lookup_name);
-                            }
-                            if (method_sym != NULL && method_sym->type != NULL) {
-                                KgpcType *ret_type = kgpc_type_get_return_type(method_sym->type);
-                                if (ret_type != NULL) {
-                                    if (kgpc_type_is_shortstring(ret_type)) {
-                                        method_uses_sret = 1;
-                                    } else if (kgpc_type_is_record(ret_type)) {
-                                        long long ret_size = 0;
-                                        struct RecordType *ret_rec = kgpc_type_get_record(ret_type);
-                                        if (ret_rec != NULL &&
-                                            codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
-                                                ret_rec, &ret_size) == 0 && ret_size > 8)
-                                            method_uses_sret = 1;
-                                    }
-                                }
-                            }
-                        }
+                        /* If the method returns a large type (SRET), Self
+                         * shifts from the first to the second arg register. */
+                        int method_uses_sret = codegen_method_uses_sret(
+                            ctx, symtab, iface_name, class_label, vtbl_imethod->name);
                         const char *self_reg = codegen_target_is_windows()
                             ? (method_uses_sret ? "%rdx" : "%rcx")
                             : (method_uses_sret ? "%rsi" : "%rdi");
