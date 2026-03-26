@@ -63,6 +63,37 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
     }
     return inst_list;
 }
+
+struct Expression *clone_expression(const struct Expression *expr);
+
+static ListNode_t *codegen_clone_expr_list_local(const ListNode_t *head)
+{
+    ListNode_t *clone_head = NULL;
+    ListNode_t *clone_tail = NULL;
+
+    while (head != NULL)
+    {
+        struct Expression *expr = (struct Expression *)head->cur;
+        struct Expression *expr_clone = expr != NULL ? clone_expression(expr) : NULL;
+        ListNode_t *new_node = CreateListNode(expr_clone, LIST_EXPR);
+        if (new_node == NULL)
+        {
+            if (expr_clone != NULL)
+                destroy_expr(expr_clone);
+            if (clone_head != NULL)
+                DestroyList(clone_head);
+            return NULL;
+        }
+        if (clone_head == NULL)
+            clone_head = new_node;
+        else
+            clone_tail->next = new_node;
+        clone_tail = new_node;
+        head = head->next;
+    }
+
+    return clone_head;
+}
 #include "codegen_expression.h"
 #include "../../flags.h"
 #include "../../Parser/List/List.h"
@@ -71,6 +102,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
 #include "../../Parser/ParseTree/tree_types.h"
 #include "../../Parser/ParseTree/KgpcType.h"
 #include "../../Parser/ParseTree/type_tags.h"
+#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../identifier_utils.h"
 
 static int codegen_statement_return_storage_size(KgpcType *return_type)
@@ -7689,7 +7721,7 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
         return inst_list;
 
     ListNode_t *args_expr = stmt->stmt_data.procedure_call_data.expr_args;
-    if (args_expr == NULL || args_expr->next != NULL)
+    if (args_expr == NULL)
     {
         fprintf(stderr, "ERROR: New expects exactly one argument.\n");
         return inst_list;
@@ -7744,6 +7776,86 @@ static ListNode_t *codegen_builtin_new(struct Statement *stmt, ListNode_t *inst_
     free_reg(get_reg_stack(), addr_reg);
     free_reg(get_reg_stack(), size_reg);
     free_arg_regs();
+
+    if (args_expr->next != NULL)
+    {
+        struct Expression *method_expr = (struct Expression *)args_expr->next->cur;
+        struct Statement *ctor_stmt = NULL;
+        ListNode_t *call_args = NULL;
+        char *method_name = NULL;
+
+        if (method_expr != NULL &&
+            (method_expr->type == EXPR_FUNCTION_CALL || method_expr->type == EXPR_VAR_ID))
+        {
+            struct Expression *receiver =
+                mk_pointer_deref(stmt->line_num, clone_expression(target_expr));
+            ListNode_t *receiver_node = NULL;
+            ListNode_t *method_arg_clones = NULL;
+
+            if (receiver != NULL)
+                receiver_node = CreateListNode(receiver, LIST_EXPR);
+            if (receiver_node == NULL)
+            {
+                if (receiver != NULL)
+                    destroy_expr(receiver);
+                return inst_list;
+            }
+
+            call_args = receiver_node;
+            if (method_expr->type == EXPR_FUNCTION_CALL)
+            {
+                if (method_expr->expr_data.function_call_data.id != NULL)
+                    method_name = strdup(method_expr->expr_data.function_call_data.id);
+                method_arg_clones = codegen_clone_expr_list_local(
+                    method_expr->expr_data.function_call_data.args_expr);
+                if (method_arg_clones != NULL)
+                    receiver_node->next = method_arg_clones;
+            }
+            else if (method_expr->expr_data.id != NULL)
+            {
+                method_name = strdup(method_expr->expr_data.id);
+            }
+
+            if (method_name != NULL)
+            {
+                ctor_stmt = mk_procedurecall(stmt->line_num, method_name, call_args);
+                if (ctor_stmt != NULL && method_expr->type == EXPR_FUNCTION_CALL)
+                {
+                    if (method_expr->expr_data.function_call_data.mangled_id != NULL)
+                    {
+                        ctor_stmt->stmt_data.procedure_call_data.mangled_id =
+                            strdup(method_expr->expr_data.function_call_data.mangled_id);
+                    }
+                    ctor_stmt->stmt_data.procedure_call_data.call_hash_type =
+                        method_expr->expr_data.function_call_data.call_hash_type;
+                    ctor_stmt->stmt_data.procedure_call_data.call_kgpc_type =
+                        method_expr->expr_data.function_call_data.call_kgpc_type;
+                    ctor_stmt->stmt_data.procedure_call_data.is_call_info_valid =
+                        method_expr->expr_data.function_call_data.is_call_info_valid;
+                    if (method_expr->expr_data.function_call_data.cached_owner_class != NULL)
+                    {
+                        ctor_stmt->stmt_data.procedure_call_data.cached_owner_class =
+                            strdup(method_expr->expr_data.function_call_data.cached_owner_class);
+                    }
+                }
+            }
+            else
+            {
+                DestroyList(call_args);
+            }
+        }
+
+        if (ctor_stmt != NULL)
+        {
+            inst_list = codegen_proc_call(ctor_stmt, inst_list, ctx, ctx->symtab);
+            destroy_stmt(ctor_stmt);
+        }
+        else
+        {
+            fprintf(stderr, "ERROR: New expects exactly one argument.\n");
+        }
+    }
+
     return inst_list;
 }
 
@@ -11968,7 +12080,7 @@ static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list,
         if (!codegen_push_loop(ctx, exit_label, incr_label))
             return inst_list;
 
-        Register_t *idx_reg = get_free_reg(get_reg_stack(), &inst_list);
+        Register_t *idx_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         Register_t *loop_var_addr_reg = NULL;
         if (idx_reg == NULL) {
             codegen_pop_loop(ctx);

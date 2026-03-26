@@ -806,6 +806,8 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
 static int add_absolute_var_alias(const char *alias_label, const char *target_label);
 static int add_absolute_var_alias_with_offset(const char *alias_label, const char *target_label,
     int field_offset, int alias_size);
+static int add_absolute_static_symbol_alias(const char *alias_label, const char *target_symbol,
+    int alias_size);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -6231,7 +6233,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     absolute_target);
                             }
                             else if (absolute_base != NULL &&
-                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
+                                (add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0 ||
+                                 add_absolute_static_symbol_alias((char *)id_list->cur,
+                                     absolute_base, alloc_size) == 0))
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -6322,7 +6326,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     absolute_target);
                             }
                             else if (absolute_base != NULL &&
-                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
+                                (add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0 ||
+                                 add_absolute_static_symbol_alias((char *)id_list->cur,
+                                     absolute_base, alloc_size) == 0))
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -7979,6 +7985,50 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     alias->is_reference = target->is_reference;
     if (target->static_label != NULL)
         alias->static_label = strdup(target->static_label);
+
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
+    if (new_list_node == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    if (cur_scope->x == NULL)
+        cur_scope->x = new_list_node;
+    else
+        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+
+    return 0;
+}
+
+static int add_absolute_static_symbol_alias(const char *alias_label, const char *target_symbol,
+    int alias_size)
+{
+    if (alias_label == NULL || alias_label[0] == '\0' ||
+        target_symbol == NULL || target_symbol[0] == '\0' ||
+        alias_size <= 0)
+        return 1;
+
+    StackNode_t *alias = init_stack_node(0, (char *)alias_label, alias_size);
+    if (alias == NULL)
+        return 1;
+
+    alias->element_size = alias_size;
+    alias->is_alias = 1;
+    alias->is_static = 1;
+    alias->static_label = strdup(target_symbol);
+    if (alias->static_label == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
 
     StackScope_t *cur_scope = get_cur_scope();
     if (cur_scope == NULL)
