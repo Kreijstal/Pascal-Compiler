@@ -3201,6 +3201,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
     codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
+    codegen_vmt(ctx, symtab, tree, NULL);
 
     /* Generate code for unit subprograms */
     codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);
@@ -3711,11 +3712,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
     int free_effective_iface_names = 0;
-    if (effective_iface_count == 0 && record_type_is_class(record_info)) {
-        codegen_collect_inferred_interfaces(symtab, record_info, class_label,
-            &effective_iface_names, &effective_iface_count);
-        free_effective_iface_names = (effective_iface_names != NULL);
-    }
     long long base_instance_size = 0;
     if (effective_iface_count > 0) {
         /* First pass: emit standalone GUID constants for each interface
@@ -4051,7 +4047,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         record_info->cached_size = instance_size;
         record_info->has_cached_size = 1;
     }
-
     /* Always emit VMT for classes, even if no virtual methods.
      * FPC VMT layout (TVmt record from objpash.inc):
      *   offset 0:  vInstanceSize      (SizeInt)
@@ -4522,12 +4517,22 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     if (record == NULL || symtab == NULL || record->parent_class_name == NULL)
         return NULL;
 
+    HashNode_t *direct = NULL;
+    if (FindSymbol(&direct, symtab, record->parent_class_name) != 0 && direct != NULL) {
+        const struct RecordType *direct_record = get_record_type_from_node(direct);
+        if (direct_record == NULL && direct->type != NULL &&
+            direct->type->kind == TYPE_KIND_POINTER &&
+            direct->type->info.points_to != NULL &&
+            direct->type->info.points_to->kind == TYPE_KIND_RECORD)
+            direct_record = direct->type->info.points_to->info.record_info;
+        if (direct_record != NULL)
+            return direct_record;
+    }
+
     ListNode_t *matches = FindAllIdents(symtab, record->parent_class_name);
     if (matches == NULL)
         return NULL;
 
-    const struct RecordType *best = NULL;
-    int best_score = INT_MIN;
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
         struct RecordType *cand_record = get_record_type_from_node(cand);
@@ -4537,16 +4542,13 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
             cand->type->info.points_to != NULL &&
             cand->type->info.points_to->kind == TYPE_KIND_RECORD)
             cand_record = cand->type->info.points_to->info.record_info;
-        if (cand_record == NULL)
-            continue;
-        int score = codegen_record_candidate_score(cand_record);
-        if (best == NULL || score > best_score) {
-            best = cand_record;
-            best_score = score;
+        if (cand_record != NULL) {
+            DestroyList(matches);
+            return cand_record;
         }
     }
     DestroyList(matches);
-    return best;
+    return NULL;
 }
 
 
@@ -4698,7 +4700,8 @@ static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const char **names = NULL;
 
     const struct RecordType *parent = codegen_record_parent(record, symtab);
-    if (parent != NULL && parent->num_interfaces > 0) {
+    if (parent != NULL && parent->num_interfaces > 0 &&
+        parent->interface_names != NULL) {
         for (int i = 0; i < parent->num_interfaces; i++) {
             const char *iface = parent->interface_names[i];
             if (iface == NULL)
@@ -4720,14 +4723,15 @@ static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
         for (int b = 0; b < TABLE_SIZE; b++) {
             for (ListNode_t *node = table->table[b]; node != NULL; node = node->next) {
                 HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE)
+                    continue;
                 struct RecordType *iface_record = get_record_type_from_node(hash_node);
-                if (iface_record == NULL && hash_node != NULL && hash_node->type != NULL &&
+                if (iface_record == NULL && hash_node->type != NULL &&
                     hash_node->type->kind == TYPE_KIND_POINTER &&
                     hash_node->type->info.points_to != NULL &&
                     hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                     iface_record = hash_node->type->info.points_to->info.record_info;
-                if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE ||
-                    iface_record == NULL || !iface_record->is_interface)
+                if (iface_record == NULL || !iface_record->is_interface)
                     continue;
                 const char *iface_name = iface_record->type_id != NULL ? iface_record->type_id : hash_node->id;
                 if (iface_name == NULL)
@@ -5197,24 +5201,39 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         }
     }
 
-    /* Emit VMTs from program type declarations */
+    /* Emit VMTs from the current compilation unit/program declarations.
+     * When compiling a unit directly, it is not yet present in loaded_units,
+     * so we must emit from the current TREE_UNIT explicitly. */
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_from_type_list(ctx, symtab,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
-
-    /* Also emit VMTs for class types that exist only in the symbol table
-     * (e.g., specializations pulled in from units like FGL). */
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    else if (tree->type == TREE_UNIT)
     {
-        codegen_emit_vmts_from_hash_table(ctx, symtab, scope->table, &emitted_classes);
+        codegen_vmt_from_type_list(ctx, symtab,
+            tree->tree_data.unit_data.interface_type_decls, &emitted_classes);
+        codegen_vmt_from_type_list(ctx, symtab,
+            tree->tree_data.unit_data.implementation_type_decls, &emitted_classes);
     }
 
-    for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
+    /* Also emit VMTs for class types that exist only in the symbol table
+     * (e.g., specializations pulled in from units like FGL).
+     * Restrict this fallback to whole-program codegen. Direct unit codegen
+     * should emit from the unit's own declared types, not arbitrary symtab
+     * entries that may include incomplete or transient records. */
+    if (tree->type == TREE_PROGRAM_TYPE)
     {
-        ScopeNode *unit_scope = symtab->unit_scopes[i];
-        if (unit_scope == NULL)
-            continue;
-        codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
+        for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+        {
+            codegen_emit_vmts_from_hash_table(ctx, symtab, scope->table, &emitted_classes);
+        }
+
+        for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
+        {
+            ScopeNode *unit_scope = symtab->unit_scopes[i];
+            if (unit_scope == NULL)
+                continue;
+            codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
+        }
     }
 
     /* Emit GUID data for ALL interfaces with GUIDs found in the symbol table.
