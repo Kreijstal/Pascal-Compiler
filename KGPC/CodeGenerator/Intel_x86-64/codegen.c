@@ -320,6 +320,9 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         }
     }
 
+    if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
+        call_target = "kgpc_prefetch";
+
     if ((call_target == NULL || call_target[0] == '\0') &&
         expr->expr_data.function_call_data.call_kgpc_type != NULL &&
         expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
@@ -928,6 +931,116 @@ static inline int node_is_file_type(HashNode_t *node)
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
+}
+
+static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *type_name)
+{
+    if (symtab == NULL || type_name == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, type_name);
+    if (matches == NULL)
+        return NULL;
+
+    HashNode_t *best_node = NULL;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+            continue;
+
+        if (best_node == NULL ||
+            (best_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
+            (cand->source_unit_index > 0 && best_node->source_unit_index > 0 &&
+             cand->source_unit_index > best_node->source_unit_index) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             !best_node->unit_is_public && cand->unit_is_public) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             cand->unit_is_public == best_node->unit_is_public &&
+             !best_node->defined_in_unit && cand->defined_in_unit)) {
+            best_node = cand;
+        }
+    }
+
+    DestroyList(matches);
+    return best_node;
+}
+
+static struct RecordType *codegen_lookup_record_type_for_node(SymTab_t *symtab,
+    HashNode_t *node, const char *type_name)
+{
+    if (node == NULL)
+        return NULL;
+
+    if (node->source_unit_index > 0 && type_name != NULL)
+    {
+        const char *unit_name = unit_registry_get(node->source_unit_index);
+        if (unit_name != NULL)
+        {
+            size_t qualified_len = strlen(unit_name) + 1 + strlen(type_name) + 1;
+            char *qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+            {
+                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, type_name);
+                HashNode_t *qualified = NULL;
+                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
+                {
+                    struct RecordType *qualified_record = get_record_type_from_node(qualified);
+                    if (qualified_record != NULL)
+                    {
+                        free(qualified_id);
+                        return qualified_record;
+                    }
+                }
+                free(qualified_id);
+            }
+        }
+    }
+
+    return get_record_type_from_node(node);
+}
+
+static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
+    const char *type_name, int prefer_guid)
+{
+    if (symtab == NULL || type_name == NULL)
+        return NULL;
+
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, type_name);
+    ListNode_t *matches = FindAllIdents(symtab, type_name);
+    if (matches == NULL)
+        return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
+
+    HashNode_t *guid_node = NULL;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+            continue;
+
+        if (!prefer_guid)
+            continue;
+
+        struct RecordType *cand_record = codegen_lookup_record_type_for_node(symtab, cand, type_name);
+        if (cand_record == NULL || !cand_record->is_interface || !cand_record->has_guid)
+            continue;
+        if (cand_record->type_id != NULL &&
+            !pascal_identifier_equals(cand_record->type_id, type_name))
+            continue;
+
+        if (guid_node == NULL ||
+            (guid_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
+            (cand->source_unit_index > 0 && guid_node->source_unit_index > 0 &&
+             cand->source_unit_index > guid_node->source_unit_index) ||
+            (cand->source_unit_index == guid_node->source_unit_index &&
+             !guid_node->unit_is_public && cand->unit_is_public)) {
+            guid_node = cand;
+        }
+    }
+
+    DestroyList(matches);
+
+    if (prefer_guid && guid_node != NULL)
+        return codegen_lookup_record_type_for_node(symtab, guid_node, type_name);
+    return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
 }
 
 typedef struct EmittedClassSet
@@ -3733,33 +3846,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
              * Use FindAllIdents to handle forward-declared interfaces where
              * the forward decl (without GUID) and full decl (with GUID) are
              * separate symbol table entries.  Prefer the one with has_guid. */
-            struct RecordType *iface_record = NULL;
-            {
-                ListNode_t *all_idents = FindAllIdents(symtab, iface_name);
-                for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
-                    HashNode_t *cand = (HashNode_t *)id_node->cur;
-                    if (cand == NULL) continue;
-                    struct RecordType *cand_rec = get_record_type_from_node(cand);
-                    if (cand_rec == NULL && cand->type != NULL &&
-                        cand->type->kind == TYPE_KIND_POINTER &&
-                        cand->type->info.points_to != NULL &&
-                        cand->type->info.points_to->kind == TYPE_KIND_RECORD)
-                        cand_rec = cand->type->info.points_to->info.record_info;
-                    if (cand_rec != NULL) {
-                        uint32_t tmp_d1 = 0;
-                        uint16_t tmp_d2 = 0, tmp_d3 = 0;
-                        uint8_t tmp_d4[8] = {0};
-                        if (iface_record == NULL)
-                            iface_record = cand_rec;
-                        if (codegen_resolve_record_guid(symtab, cand_rec,
-                                &tmp_d1, &tmp_d2, &tmp_d3, tmp_d4)) {
-                            iface_record = cand_rec;
-                            break;
-                        }
-                    }
-                }
-                if (all_idents != NULL) DestroyList(all_idents);
-            }
+            struct RecordType *iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 1);
             uint32_t d1 = 0;
             uint16_t d2 = 0, d3 = 0;
             unsigned char d4[8] = {0};
@@ -3887,16 +3975,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             long long ioffset_for_this_iface = base_instance_size + vtbl_iface_slot_idx * 8;
             vtbl_iface_slot_idx++;
             /* Look up the interface record to get its method_templates */
-            HashNode_t *vtbl_iface_node = NULL;
-            struct RecordType *vtbl_iface_record = NULL;
-            if (FindSymbol(&vtbl_iface_node, symtab, iface_name) != 0 && vtbl_iface_node != NULL) {
-                vtbl_iface_record = get_record_type_from_node(vtbl_iface_node);
-                if (vtbl_iface_record == NULL && vtbl_iface_node->type != NULL &&
-                    vtbl_iface_node->type->kind == TYPE_KIND_POINTER &&
-                    vtbl_iface_node->type->info.points_to != NULL &&
-                    vtbl_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    vtbl_iface_record = vtbl_iface_node->type->info.points_to->info.record_info;
-            }
+            struct RecordType *vtbl_iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 0);
             if (vtbl_iface_record == NULL) {
                 /* No interface record — emit an empty vtable label */
                 fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
@@ -4225,16 +4305,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
             /* Look up the interface to get its method list */
-            HashNode_t *iface_node = NULL;
-            struct RecordType *iface_record = NULL;
-            if (FindSymbol(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
-                iface_record = get_record_type_from_node(iface_node);
-                if (iface_record == NULL && iface_node->type != NULL &&
-                    iface_node->type->kind == TYPE_KIND_POINTER &&
-                    iface_node->type->info.points_to != NULL &&
-                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    iface_record = iface_node->type->info.points_to->info.record_info;
-            }
+            struct RecordType *iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 0);
             if (iface_record == NULL) continue;
             /* Iterate interface method_templates directly — inherited parent
              * methods were already prepended during semcheck. */
@@ -4550,38 +4622,70 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     if (record == NULL || symtab == NULL || record->parent_class_name == NULL)
         return NULL;
 
-    HashNode_t *direct = NULL;
-    if (FindSymbol(&direct, symtab, record->parent_class_name) != 0 && direct != NULL) {
-        const struct RecordType *direct_record = get_record_type_from_node(direct);
-        if (direct_record == NULL && direct->type != NULL &&
-            direct->type->kind == TYPE_KIND_POINTER &&
-            direct->type->info.points_to != NULL &&
-            direct->type->info.points_to->kind == TYPE_KIND_RECORD)
-            direct_record = direct->type->info.points_to->info.record_info;
-        if (direct_record != NULL)
-            return direct_record;
-    }
-
     ListNode_t *matches = FindAllIdents(symtab, record->parent_class_name);
     if (matches == NULL)
         return NULL;
 
+    HashNode_t *best_node = NULL;
+    int best_score = INT_MIN;
+
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
-        struct RecordType *cand_record = get_record_type_from_node(cand);
-        /* Also check pointer-to-record (class types are often stored as pointers) */
-        if (cand_record == NULL && cand->type != NULL &&
-            cand->type->kind == TYPE_KIND_POINTER &&
-            cand->type->info.points_to != NULL &&
-            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
-            cand_record = cand->type->info.points_to->info.record_info;
-        if (cand_record != NULL) {
-            DestroyList(matches);
-            return cand_record;
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+            continue;
+
+        int score = 0;
+        if (cand->defined_in_unit)
+            score += 1000;
+        if (cand->unit_is_public)
+            score += 100;
+        if (cand->source_unit_index > 0)
+            score += 10 + cand->source_unit_index;
+
+        if (best_node == NULL || score > best_score) {
+            best_node = cand;
+            best_score = score;
         }
     }
     DestroyList(matches);
-    return NULL;
+    if (best_node == NULL)
+        return NULL;
+
+    if (best_node->source_unit_index > 0)
+    {
+        const char *unit_name = unit_registry_get(best_node->source_unit_index);
+        if (unit_name != NULL)
+        {
+            size_t qualified_len = strlen(unit_name) + 1 + strlen(record->parent_class_name) + 1;
+            char *qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+            {
+                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, record->parent_class_name);
+                HashNode_t *qualified = NULL;
+                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
+                {
+                    const struct RecordType *qualified_record = get_record_type_from_node(qualified);
+                    if (qualified_record == NULL && qualified->type != NULL &&
+                        qualified->type->kind == TYPE_KIND_POINTER &&
+                        qualified->type->info.points_to != NULL &&
+                        qualified->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        qualified_record = qualified->type->info.points_to->info.record_info;
+                    free(qualified_id);
+                    if (qualified_record != NULL)
+                        return qualified_record;
+                }
+                free(qualified_id);
+            }
+        }
+    }
+
+    const struct RecordType *best_record = get_record_type_from_node(best_node);
+    if (best_record == NULL && best_node->type != NULL &&
+        best_node->type->kind == TYPE_KIND_POINTER &&
+        best_node->type->info.points_to != NULL &&
+        best_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+        best_record = best_node->type->info.points_to->info.record_info;
+    return best_record;
 }
 
 
@@ -4617,6 +4721,8 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *cur_record = record;
     const char *cur_label = fallback_class_label;
 
+    const struct RecordType *origin_record = record;
+
     while (cur_record != NULL || cur_label != NULL) {
         const char *owner_label = cur_label;
         if (cur_record != NULL && cur_record->type_id != NULL)
@@ -4625,7 +4731,7 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
             break;
 
         const char *lookup_method_name = method_name;
-        if (cur_record != NULL && iface_name != NULL) {
+        if (cur_record != NULL && iface_name != NULL && cur_record == origin_record) {
             const char *delegate_target = codegen_find_interface_delegate_target_name(
                 cur_record, iface_name, method_name);
             if (delegate_target != NULL)
@@ -4812,83 +4918,11 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
     if (symtab == NULL || class_label == NULL || *class_label == NULL)
         return;
 
-    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, *class_label);
-    if (preferred != NULL) {
-        struct RecordType *preferred_record = get_record_type_from_node(preferred);
-        if (preferred_record == NULL && preferred->type != NULL &&
-            preferred->type->kind == TYPE_KIND_POINTER &&
-            preferred->type->info.points_to != NULL &&
-            preferred->type->info.points_to->kind == TYPE_KIND_RECORD)
-            preferred_record = preferred->type->info.points_to->info.record_info;
-        if (preferred_record != NULL) {
-            *record_info = preferred_record;
-            if (preferred_record->type_id != NULL)
-                *class_label = preferred_record->type_id;
-            else if (preferred->id != NULL)
-                *class_label = preferred->id;
-            if (preferred_record->num_interfaces > 0 ||
-                preferred_record->method_templates != NULL ||
-                preferred_record->properties != NULL ||
-                preferred_record->parent_fields_merged)
-                return;
-        }
-    }
-
-    ListNode_t *matches = FindAllIdents(symtab, *class_label);
-    if (matches == NULL)
-        return;
-
-    HashNode_t *best_node = NULL;
-    struct RecordType *best_record = NULL;
-    int best_score = INT_MIN;
-
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
-        HashNode_t *cand = (HashNode_t *)cur->cur;
-        struct RecordType *cand_record = get_record_type_from_node(cand);
-        if (cand_record == NULL)
-            continue;
-        int score = codegen_record_candidate_score(cand_record);
-        const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-        if (dbg != NULL && *class_label != NULL &&
-            (strcasecmp(*class_label, "TList") == 0 ||
-             strcasecmp(*class_label, "TStringList") == 0 ||
-             strcasecmp(*class_label, "TComponent") == 0 ||
-             strcasecmp(*class_label, "TInterfaceList") == 0)) {
-            fprintf(stderr,
-                "[KGPC] canonical candidate %s: rec=%p score=%d class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-                *class_label, (void *)cand_record, score, cand_record->is_class,
-                cand_record->is_interface,
-                cand_record->parent_class_name != NULL ? cand_record->parent_class_name : "(null)",
-                cand_record->num_interfaces, ListLength(cand_record->method_templates),
-                ListLength(cand_record->properties), cand_record->parent_fields_merged,
-                cand_record->type_id != NULL ? cand_record->type_id : "(null)");
-        }
-        if (best_node == NULL || score > best_score) {
-            best_node = cand;
-            best_record = cand_record;
-            best_score = score;
-        }
-    }
-
-    DestroyList(matches);
-
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, *class_label);
+    struct RecordType *best_record =
+        codegen_lookup_record_type_for_node(symtab, best_node, *class_label);
     if (best_record == NULL)
         return;
-
-    const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-    if (dbg != NULL && *class_label != NULL &&
-        (strcasecmp(*class_label, "TList") == 0 ||
-         strcasecmp(*class_label, "TStringList") == 0 ||
-         strcasecmp(*class_label, "TComponent") == 0 ||
-         strcasecmp(*class_label, "TInterfaceList") == 0)) {
-        fprintf(stderr,
-            "[KGPC] canonical selected %s: rec=%p score=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-            *class_label, (void *)best_record, best_score,
-            best_record->parent_class_name != NULL ? best_record->parent_class_name : "(null)",
-            best_record->num_interfaces, ListLength(best_record->method_templates),
-            ListLength(best_record->properties), best_record->parent_fields_merged,
-            best_record->type_id != NULL ? best_record->type_id : "(null)");
-    }
 
     *record_info = best_record;
     if (best_record->type_id != NULL)

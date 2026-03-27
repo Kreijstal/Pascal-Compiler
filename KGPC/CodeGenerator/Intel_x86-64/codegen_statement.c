@@ -9302,6 +9302,10 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         proc_name_hint, 0, NULL);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
+    if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
+    {
+        return codegen_builtin_prefetch(stmt, inst_list, ctx);
+    }
     if (call_target == NULL)
         call_target = "";
     snprintf(buffer, 50, "\tcall\t%s\n", call_target);
@@ -11135,8 +11139,6 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
 
-    if (proc_name == NULL || proc_name[0] == '\0' ||
-        (unmangled_name != NULL && strcmp(proc_name, unmangled_name) == 0))
     {
         struct Expression *call_expr = mk_functioncall(stmt->line_num,
             stmt->stmt_data.procedure_call_data.id != NULL ?
@@ -11172,23 +11174,18 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 &owned_call_target);
             if (resolved_call_target != NULL && resolved_call_target[0] != '\0')
             {
-                if (owned_call_target != NULL)
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
                 {
-                    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-                    {
-                        free(stmt->stmt_data.procedure_call_data.mangled_id);
-                        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-                    }
-                    stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_call_target);
-                    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-                        proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
-                    else
-                        proc_name = owned_call_target;
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                    stmt->stmt_data.procedure_call_data.mangled_id = NULL;
                 }
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_call_target);
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+                else if (owned_call_target != NULL)
+                    proc_name = owned_call_target;
                 else
-                {
                     proc_name = (char *)resolved_call_target;
-                }
             }
             if (owned_call_target != NULL)
                 free(owned_call_target);
@@ -11241,6 +11238,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
     }
+
+    if (proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var"))
+        proc_name = "kgpc_prefetch";
 // removed assert on proc_name
 // removed assert on proc_name
 // removed assert on proc_name

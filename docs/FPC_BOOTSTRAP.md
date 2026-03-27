@@ -261,7 +261,6 @@ normal path. Recent profiling on this checkout is approximately:
 The main remaining performance cost is full semantic analysis across the merged
 compiler unit graph, followed by code generation. Optimization work should
 target those hot paths directly rather than relying on a reduced-analysis mode.
-
 ### Parser Cache
 
 The AST parser cache (`kgpc_ast_cache_<hash>`) is keyed on the binary hash.

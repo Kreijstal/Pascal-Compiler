@@ -422,7 +422,23 @@ static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
 
     (void)ctx;
     if (!codegen_builtin_lowhigh_try_value(expr, ctx, is_high, &value, &use_qword))
+    {
+        if (expr != NULL && expr->expr_data.function_call_data.args_expr != NULL &&
+            expr->expr_data.function_call_data.args_expr->cur != NULL)
+        {
+            struct Expression *arg_expr =
+                (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
+            fprintf(stderr,
+                "DBG lowhigh fail name=%s arg_type=%d arg_tag=%d arg_id=%s resolved_type=%p\n",
+                is_high ? "High" : "Low",
+                arg_expr != NULL ? arg_expr->type : -1,
+                arg_expr != NULL ? expr_get_type_tag(arg_expr) : -1,
+                (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL) ?
+                    arg_expr->expr_data.id : "(non-var)",
+                (void *)(arg_expr != NULL ? expr_get_kgpc_type(arg_expr) : NULL));
+        }
         return NULL;
+    }
 
     if (use_qword)
         snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", value, target_reg->bit_64);
@@ -2956,6 +2972,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             char *owned_call_target = NULL;
             const char *call_target = codegen_resolve_function_call_target(
                 ctx, expr, &owned_call_target);
+
+            if (call_target != NULL &&
+                (pascal_identifier_equals(call_target, "Low") ||
+                 pascal_identifier_equals(call_target, "High")))
+            {
+                ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
+                    target_reg, pascal_identifier_equals(call_target, "High"));
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                if (lowered != NULL)
+                    return lowered;
+            }
 
             /* If the call target resolves to a type (not a procedure), this is
              * a typecast that the semcheck didn't rewrite (e.g., from cached
