@@ -1020,7 +1020,6 @@ static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
             return record;
     }
 
-    HashNode_t *suffix_fallback = NULL;
     int n_units = unit_registry_count();
     for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; ++i)
     {
@@ -1034,20 +1033,18 @@ static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
             return codegen_lookup_record_type_for_node(symtab, node, type_name);
         }
 
-        if (suffix_fallback == NULL)
+        node = FindTypeBySuffixInTable(unit_scope->table, type_name);
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
         {
-            node = FindTypeBySuffixInTable(unit_scope->table, type_name);
-            if (node != NULL && node->hash_type == HASHTYPE_TYPE)
-                suffix_fallback = node;
+            KGPC_COMPILER_HARD_ASSERT(0,
+                "suffix-only record type lookup for '%s' reached codegen",
+                type_name);
         }
     }
 
     HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, type_name);
     if (best_node != NULL)
         return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
-
-    if (suffix_fallback != NULL)
-        return codegen_lookup_record_type_for_node(symtab, suffix_fallback, type_name);
 
     return NULL;
 }
@@ -4585,27 +4582,6 @@ static int codegen_record_visible_field_count(const struct RecordType *record)
             count++;
     }
     return count;
-}
-
-static int codegen_record_candidate_score(const struct RecordType *record)
-{
-    if (record == NULL)
-        return INT_MIN;
-
-    int score = 0;
-    if (record->parent_fields_merged)
-        score += 10000;
-    if (record->is_class)
-        score += 1000;
-    if (record->is_interface)
-        score += 1000;
-    score += record->num_interfaces * 200;
-    score += codegen_record_visible_field_count(record) * 10;
-    score += ListLength(record->method_templates) * 2;
-    score += ListLength(record->properties);
-    if (record->parent_class_name != NULL)
-        score += 25;
-    return score;
 }
 
 static int codegen_record_is_forward_stub(const struct RecordType *record)
