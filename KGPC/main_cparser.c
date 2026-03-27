@@ -385,12 +385,17 @@ static void report_rss(const char *label)
         }
         fclose(f);
     }
-    /* Also report glibc heap stats */
+    /* mallinfo2() is a glibc extension; keep allocator stats optional. */
+#ifdef __GLIBC__
     struct mallinfo2 mi = mallinfo2();
     size_t heap_mb = (mi.arena + mi.hblkhd) / (1024 * 1024);
     size_t used_mb = (mi.uordblks + mi.hblkhd) / (1024 * 1024);
     fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)  heap=%zuMB used=%zuMB\n",
             label, rss_kb, rss_kb / 1024.0, heap_mb, used_mb);
+#else
+    fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)\n",
+            label, rss_kb, rss_kb / 1024.0);
+#endif
 #else
     (void)label;
 #endif

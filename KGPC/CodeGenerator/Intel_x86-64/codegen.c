@@ -39,6 +39,7 @@ static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
 static int codegen_list_contains_string(ListNode_t *list, const char *value);
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *iface_name, const char *method_name);
@@ -1005,41 +1006,132 @@ static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
     if (symtab == NULL || type_name == NULL)
         return NULL;
 
-    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, type_name);
+    struct RecordType *preferred = semcheck_lookup_record_type(symtab, type_name);
+    if (preferred != NULL) {
+        if (!prefer_guid)
+            return preferred;
+        uint32_t guid_d1 = 0;
+        uint16_t guid_d2 = 0;
+        uint16_t guid_d3 = 0;
+        uint8_t guid_d4[8] = {0};
+        if (codegen_resolve_record_guid(symtab, preferred,
+                &guid_d1, &guid_d2, &guid_d3, guid_d4))
+            return preferred;
+    }
+
     ListNode_t *matches = FindAllIdents(symtab, type_name);
     if (matches == NULL)
-        return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
+    {
+        HashNode_t *best_unit_node = NULL;
+        int best_unit_score = INT_MIN;
+        int n_units = unit_registry_count();
+        for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; ++i)
+        {
+            ScopeNode *unit_scope = symtab->unit_scopes[i];
+            if (unit_scope == NULL || unit_scope->table == NULL)
+                continue;
 
-    HashNode_t *guid_node = NULL;
+            HashNode_t *cand = FindIdentInTable(unit_scope->table, type_name);
+            if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+                cand = FindTypeBySuffixInTable(unit_scope->table, type_name);
+            if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+                continue;
+
+            struct RecordType *cand_record = codegen_lookup_record_type_for_node(symtab, cand, type_name);
+            if (cand_record == NULL)
+                continue;
+
+            int score = 0;
+            uint32_t guid_d1 = 0;
+            uint16_t guid_d2 = 0;
+            uint16_t guid_d3 = 0;
+            uint8_t guid_d4[8] = {0};
+            int has_resolved_guid = codegen_resolve_record_guid(symtab, cand_record,
+                &guid_d1, &guid_d2, &guid_d3, guid_d4);
+
+            if (cand_record->type_id != NULL &&
+                pascal_identifier_equals(cand_record->type_id, type_name))
+                score += 1000;
+            if (cand_record->is_interface)
+                score += 200;
+            if (prefer_guid && has_resolved_guid)
+                score += 500;
+            if (cand_record->guid_string != NULL && cand_record->guid_string[0] != '\0')
+                score += 150;
+            if (cand_record->has_guid)
+                score += 100;
+            if (cand_record->method_templates != NULL)
+                score += ListLength(cand_record->method_templates) * 10;
+            if (cand_record->methods != NULL)
+                score += ListLength(cand_record->methods) * 4;
+            if (cand_record->num_interfaces > 0)
+                score += cand_record->num_interfaces * 3;
+            score += 20 + i;
+
+            if (best_unit_node == NULL || score > best_unit_score)
+            {
+                best_unit_node = cand;
+                best_unit_score = score;
+            }
+        }
+
+        if (best_unit_node != NULL)
+            return codegen_lookup_record_type_for_node(symtab, best_unit_node, type_name);
+
+        return codegen_lookup_record_type_for_node(symtab,
+            codegen_pick_type_node_by_name(symtab, type_name), type_name);
+    }
+
+    HashNode_t *best_node = NULL;
+    int best_score = INT_MIN;
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
         if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
             continue;
 
-        if (!prefer_guid)
-            continue;
-
         struct RecordType *cand_record = codegen_lookup_record_type_for_node(symtab, cand, type_name);
-        if (cand_record == NULL || !cand_record->is_interface || !cand_record->has_guid)
-            continue;
-        if (cand_record->type_id != NULL &&
-            !pascal_identifier_equals(cand_record->type_id, type_name))
+        if (cand_record == NULL)
             continue;
 
-        if (guid_node == NULL ||
-            (guid_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
-            (cand->source_unit_index > 0 && guid_node->source_unit_index > 0 &&
-             cand->source_unit_index > guid_node->source_unit_index) ||
-            (cand->source_unit_index == guid_node->source_unit_index &&
-             !guid_node->unit_is_public && cand->unit_is_public)) {
-            guid_node = cand;
+        int score = 0;
+        uint32_t guid_d1 = 0;
+        uint16_t guid_d2 = 0;
+        uint16_t guid_d3 = 0;
+        uint8_t guid_d4[8] = {0};
+        int has_resolved_guid = codegen_resolve_record_guid(symtab, cand_record,
+            &guid_d1, &guid_d2, &guid_d3, guid_d4);
+
+        if (cand_record->type_id != NULL &&
+            pascal_identifier_equals(cand_record->type_id, type_name))
+            score += 1000;
+        if (cand_record->is_interface)
+            score += 200;
+        if (prefer_guid && has_resolved_guid)
+            score += 500;
+        if (cand_record->guid_string != NULL && cand_record->guid_string[0] != '\0')
+            score += 150;
+        if (cand_record->has_guid)
+            score += 100;
+        if (cand_record->method_templates != NULL)
+            score += ListLength(cand_record->method_templates) * 10;
+        if (cand_record->methods != NULL)
+            score += ListLength(cand_record->methods) * 4;
+        if (cand_record->num_interfaces > 0)
+            score += cand_record->num_interfaces * 3;
+        if (cand->source_unit_index > 0)
+            score += 20 + cand->source_unit_index;
+        if (cand->unit_is_public)
+            score += 5;
+        if (cand->defined_in_unit)
+            score += 2;
+
+        if (best_node == NULL || score > best_score) {
+            best_node = cand;
+            best_score = score;
         }
     }
 
     DestroyList(matches);
-
-    if (prefer_guid && guid_node != NULL)
-        return codegen_lookup_record_type_for_node(symtab, guid_node, type_name);
     return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
 }
 
