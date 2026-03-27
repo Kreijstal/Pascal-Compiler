@@ -2667,6 +2667,46 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
         sanitized);
 }
 
+static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+}
+
+static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    HashNode_t *type_node = NULL;
+    if (symtab != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 &&
+        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum)
+        {
+            codegen_enum_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+
+        if (get_record_type_from_node(type_node) != NULL)
+        {
+            codegen_record_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+    }
+
+    codegen_enum_typeinfo_label(type_id, buffer, size);
+}
+
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.
  * Returns the KgpcType if available, or creates a temporary one from legacy fields.
  * Returns NULL if type cannot be determined.
@@ -4836,7 +4876,7 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
             }
 
             char label[CODEGEN_MAX_INST_BUF];
-            codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+            codegen_typeinfo_label_for_type_id(ctx->symtab, type_id, label, sizeof(label));
             int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
             if (buf_len > 0)
             {

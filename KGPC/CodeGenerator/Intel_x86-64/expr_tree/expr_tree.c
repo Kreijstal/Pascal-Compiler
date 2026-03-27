@@ -111,6 +111,46 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
         (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
         sanitized);
 }
+
+static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+}
+
+static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    HashNode_t *type_node = NULL;
+    if (symtab != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 &&
+        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum)
+        {
+            codegen_enum_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+
+        if (hashnode_get_record_type(type_node) != NULL)
+        {
+            codegen_record_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+    }
+
+    codegen_enum_typeinfo_label(type_id, buffer, size);
+}
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
@@ -3349,7 +3389,8 @@ cleanup_constructor:
             return inst_list;
         }
         char label[CODEGEN_MAX_INST_BUF];
-        codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+        codegen_typeinfo_label_for_type_id(ctx != NULL ? ctx->symtab : NULL,
+            type_id, label, sizeof(label));
         int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         if (buf_len > 0)
         {

@@ -4458,6 +4458,39 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
+static int codegen_should_emit_plain_record_typeinfo(const struct RecordType *record_info,
+    const char *record_label)
+{
+    if (record_info == NULL || record_label == NULL || record_label[0] == '\0')
+        return 0;
+    if (record_info->type_id == NULL || record_info->type_id[0] == '\0')
+        return 0;
+    return strcmp(record_info->type_id, record_label) == 0;
+}
+
+static void codegen_emit_plain_record_typeinfo(CodeGenContext *ctx, const struct RecordType *record_info,
+    const char *record_label, EmittedClassSet *emitted_classes)
+{
+    if (ctx == NULL || ctx->output_file == NULL || record_label == NULL)
+        return;
+    if (!codegen_should_emit_plain_record_typeinfo(record_info, record_label))
+        return;
+    if (emitted_class_set_contains(emitted_classes, record_label))
+        return;
+    if (emitted_class_set_add(emitted_classes, record_label) != 0)
+        return;
+
+    fprintf(ctx->output_file, "\n# TYPEINFO/VMT stubs for record %s\n", record_label);
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", record_label);
+    fprintf(ctx->output_file, "%s_TYPEINFO:\n", record_label);
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    fprintf(ctx->output_file, ".globl %s_VMT\n", record_label);
+    fprintf(ctx->output_file, "%s_VMT:\n", record_label);
+    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_label);
+}
+
 static int codegen_record_visible_field_count(const struct RecordType *record)
 {
     int count = 0;
@@ -4906,6 +4939,11 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                 emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                 emitted_classes);
+            if (record_info != NULL && !record_type_is_class(record_info) &&
+                class_label != NULL && class_label[0] != '\0')
+            {
+                codegen_emit_plain_record_typeinfo(ctx, record_info, class_label, emitted_classes);
+            }
         }
         cur = cur->next;
     }
@@ -4953,6 +4991,11 @@ static void codegen_emit_vmts_from_hash_table(CodeGenContext *ctx, SymTab_t *sym
                     emitted_classes);
                 codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                     emitted_classes);
+                if (record_info != NULL && !record_type_is_class(record_info) &&
+                    class_label != NULL && class_label[0] != '\0')
+                {
+                    codegen_emit_plain_record_typeinfo(ctx, record_info, class_label, emitted_classes);
+                }
             }
             node = node->next;
         }
@@ -5143,7 +5186,7 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
 /* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
 static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
                                                 ListNode_t *type_decls,
-                                                const EmittedClassSet *emitted_classes)
+                                                EmittedClassSet *emitted_classes)
 {
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
@@ -5155,12 +5198,14 @@ static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
             const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
             if (alias_name != NULL && target_name != NULL) {
                 int target_emitted = emitted_class_set_contains(emitted_classes, target_name);
-                if (target_emitted) {
+                int alias_already_owned = emitted_class_set_contains(emitted_classes, alias_name);
+                if (target_emitted && !alias_already_owned) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
+                    emitted_class_set_add(emitted_classes, alias_name);
                 }
             }
         }
