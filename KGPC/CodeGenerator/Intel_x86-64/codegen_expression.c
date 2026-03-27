@@ -279,18 +279,42 @@ static StackNode_t *codegen_find_nonlocal_lexical(CodeGenContext *ctx,
     return var;
 }
 
+HashNode_t *codegen_find_owner_unit_symbol(CodeGenContext *ctx, const char *id)
+{
+    if (ctx == NULL || ctx->symtab == NULL || id == NULL)
+        return NULL;
+
+    int unit_index = ctx->symtab->current_unit_index;
+    if (unit_index <= 0 || unit_index >= SYMTAB_MAX_UNITS)
+        return NULL;
+
+    ScopeNode *unit_scope = ctx->symtab->unit_scopes[unit_index];
+    if (unit_scope == NULL || unit_scope->table == NULL)
+        return NULL;
+
+    HashNode_t *node = FindIdentInTableForUnit(unit_scope->table, (char *)id, unit_index);
+    if (node != NULL)
+        return node;
+
+    return FindIdentInTable(unit_scope->table, (char *)id);
+}
+
 static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
     const char *var_id, CodeGenContext *ctx, const HashNode_t *sym_node, int *offset)
 {
     if (ctx == NULL || ctx->symtab == NULL || ctx->comp_ctx == NULL)
         return NULL;
 
+    const HashNode_t *effective_node = sym_node;
+    if (effective_node == NULL)
+        effective_node = codegen_find_owner_unit_symbol(ctx, var_id);
+
     const Tree_t *decl = NULL;
-    if (sym_node != NULL &&
-        (sym_node->hash_type == HASHTYPE_VAR || sym_node->hash_type == HASHTYPE_ARRAY) &&
-        (sym_node->source_unit_index > 0 || sym_node->defined_in_unit))
+    if (effective_node != NULL &&
+        (effective_node->hash_type == HASHTYPE_VAR || effective_node->hash_type == HASHTYPE_ARRAY) &&
+        (effective_node->source_unit_index > 0 || effective_node->defined_in_unit))
     {
-        decl = codegen_find_var_decl_for_symbol(ctx, sym_node, var_id);
+        decl = codegen_find_var_decl_for_symbol(ctx, effective_node, var_id);
     }
     if (decl == NULL && ctx->symtab->current_unit_index > 0)
         decl = codegen_find_var_decl_for_unit(ctx, ctx->symtab->current_unit_index, var_id);

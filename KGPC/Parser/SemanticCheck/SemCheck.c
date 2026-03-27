@@ -10878,6 +10878,108 @@ static void sync_alias_array_bounds(KgpcType *kgpc_type, struct TypeAlias *alias
     }
 }
 
+static void sync_alias_range_bounds(KgpcType *kgpc_type, struct TypeAlias *alias)
+{
+    if (kgpc_type == NULL || alias == NULL)
+        return;
+    if (kgpc_type->type_alias != NULL && kgpc_type->type_alias != alias)
+    {
+        kgpc_type->type_alias->is_range = alias->is_range;
+        kgpc_type->type_alias->range_known = alias->range_known;
+        kgpc_type->type_alias->range_start = alias->range_start;
+        kgpc_type->type_alias->range_end = alias->range_end;
+    }
+}
+
+static void resolve_alias_range_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_type,
+    struct TypeAlias *alias)
+{
+    if (symtab == NULL || alias == NULL || !alias->is_range || alias->range_known)
+        return;
+
+    const char *start_str = alias->range_start_str;
+    const char *end_str = alias->range_end_str;
+    if (start_str == NULL || end_str == NULL)
+        return;
+
+    while (*start_str == ' ' || *start_str == '\t')
+        start_str++;
+    while (*end_str == ' ' || *end_str == '\t')
+        end_str++;
+
+    long long start_val = 0;
+    long long end_val = 0;
+    int start_resolved = 0;
+    int end_resolved = 0;
+
+    if (resolve_const_identifier(symtab, start_str, &start_val) == 0)
+    {
+        start_resolved = 1;
+    }
+    else
+    {
+        int tmp_val = 0;
+        if (resolve_array_bound_expr(symtab, start_str, &tmp_val) == 0)
+        {
+            start_val = tmp_val;
+            start_resolved = 1;
+        }
+        else
+        {
+            char *endptr = NULL;
+            long long parsed = strtoll(start_str, &endptr, 10);
+            if (endptr != start_str && *endptr == '\0')
+            {
+                start_val = parsed;
+                start_resolved = 1;
+            }
+        }
+    }
+
+    if (resolve_const_identifier(symtab, end_str, &end_val) == 0)
+    {
+        end_resolved = 1;
+    }
+    else
+    {
+        int tmp_val = 0;
+        if (resolve_array_bound_expr(symtab, end_str, &tmp_val) == 0)
+        {
+            end_val = tmp_val;
+            end_resolved = 1;
+        }
+        else
+        {
+            char *endptr = NULL;
+            long long parsed = strtoll(end_str, &endptr, 10);
+            if (endptr != end_str && *endptr == '\0')
+            {
+                end_val = parsed;
+                end_resolved = 1;
+            }
+        }
+    }
+
+    if (!start_resolved || !end_resolved)
+        return;
+
+    alias->range_known = 1;
+    alias->range_start = start_val;
+    alias->range_end = end_val;
+    if (alias->storage_size <= 0)
+    {
+        if (start_val >= -128 && end_val <= 127)
+            alias->storage_size = 1;
+        else if (start_val >= -32768 && end_val <= 32767)
+            alias->storage_size = 2;
+        else if (start_val >= INT32_MIN && end_val <= INT32_MAX)
+            alias->storage_size = 4;
+        else
+            alias->storage_size = 8;
+    }
+    sync_alias_range_bounds(kgpc_type, alias);
+}
+
 /* Resolves array bounds specified as constant identifiers in a KgpcType
  * This is needed because parsing happens before constants are declared */
 static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_type, struct TypeAlias *alias)
@@ -12463,6 +12565,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 {
                     resolve_array_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
                 }
+                if (alias_info->is_range)
+                {
+                    resolve_alias_range_bounds_in_kgpctype(symtab, existing_type->type, alias_info);
+                }
                 if (alias_info->is_pointer &&
                     kgpc_type_is_pointer(existing_type->type) &&
                     existing_type->type->info.points_to == NULL)
@@ -12541,6 +12647,10 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (alias_info->is_array)
                 {
                     resolve_array_bounds_in_kgpctype(symtab, kgpc_type, alias_info);
+                }
+                if (alias_info->is_range)
+                {
+                    resolve_alias_range_bounds_in_kgpctype(symtab, kgpc_type, alias_info);
                 }
             }
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD && record_info != NULL && kgpc_type->kind == TYPE_KIND_RECORD)

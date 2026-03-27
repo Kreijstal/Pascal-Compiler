@@ -1601,7 +1601,6 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
         destroy_tree(unit_tree);
         exit(1);
     }
-
     if (profile_pipeline_flag())
     {
         char stage[512];

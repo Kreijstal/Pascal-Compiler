@@ -18,7 +18,7 @@
 /*enum VarType{HASHVAR_INTEGER, HASHVAR_REAL, HASHVAR_PROCEDURE, HASHVAR_UNTYPED};
   Defined in HashTable.h */
 
-#define SYMTAB_MAX_UNITS 256
+#define SYMTAB_MAX_UNITS 1024
 
 /* ========================================================================
  * Scope tree types

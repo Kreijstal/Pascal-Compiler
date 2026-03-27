@@ -609,10 +609,11 @@ static ParseResult identifier_with_optional_subscript_fn(input_t* in, void* args
         }
         free_ast(close_res.value.ast);
         
-        // For now, we discard the size and treat string[N] as string
-        // This matches the behavior in pascal_type.c for array element types
-        free_ast(size_res.value.ast);
-        // identifier_ast remains as just the identifier
+        /* Preserve size expression so frontend can model string[N] aliases. */
+        if (identifier_ast->child == NULL)
+            identifier_ast->child = size_res.value.ast;
+        else
+            free_ast(size_res.value.ast);
     } else {
         discard_failure(open_res);
         restore_input_state(in, &subscript_state);

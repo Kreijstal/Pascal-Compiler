@@ -24,7 +24,7 @@ struct TypeRef;
 enum StmtType{STMT_VAR_ASSIGN, STMT_PROCEDURE_CALL, STMT_EXPR, STMT_COMPOUND_STATEMENT,
     STMT_LABEL, STMT_GOTO, STMT_IF_THEN, STMT_WHILE, STMT_REPEAT, STMT_FOR, STMT_FOR_VAR,
     STMT_FOR_ASSIGN_VAR, STMT_FOR_IN, STMT_ASM_BLOCK, STMT_EXIT, STMT_BREAK, STMT_CONTINUE, STMT_CASE, STMT_WITH,
-    STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_RAISE, STMT_INHERITED};
+    STMT_TRY_FINALLY, STMT_TRY_EXCEPT, STMT_ON_EXCEPTION, STMT_RAISE, STMT_INHERITED};
 
 enum TypeDeclKind { TYPE_DECL_RANGE, TYPE_DECL_RECORD, TYPE_DECL_ALIAS, TYPE_DECL_GENERIC };
 
@@ -73,6 +73,8 @@ struct TypeAlias
     int range_known;
     long long range_start;
     long long range_end;
+    char *range_start_str;      /* Symbolic lower bound (e.g. "sec_objc_class") */
+    char *range_end_str;        /* Symbolic upper bound (e.g. "sec_objc_protolist") */
     long long storage_size;
     
     /* KgpcType for this type alias - used for enums and sets to provide a shared
@@ -401,6 +403,13 @@ struct Statement
             char *exception_type_name;    /* Type name from 'on E: Exception do' (optional) */
             int has_on_clause;            /* 1 if 'on' clause present, 0 otherwise */
         } try_except_data;
+
+        struct OnException
+        {
+            char *exception_var_name;     /* Variable name from 'on E: Exception do' (optional) */
+            char *exception_type_name;    /* Type name from 'on E: Exception do' (optional) */
+            struct Statement *handler_stmt;
+        } on_exception_data;
 
         /* RAISE */
         struct Raise

@@ -3627,6 +3627,10 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
         dst->set_element_type_id = strdup(src->set_element_type_id);
     if (src->file_type_id != NULL)
         dst->file_type_id = strdup(src->file_type_id);
+    if (src->range_start_str != NULL)
+        dst->range_start_str = strdup(src->range_start_str);
+    if (src->range_end_str != NULL)
+        dst->range_end_str = strdup(src->range_end_str);
 
     if (src->target_type_ref != NULL)
         dst->target_type_ref = type_ref_clone(src->target_type_ref);
@@ -3667,6 +3671,8 @@ static void free_copied_type_alias(struct TypeAlias *alias)
     free(alias->pointer_type_id);
     free(alias->set_element_type_id);
     free(alias->file_type_id);
+    free(alias->range_start_str);
+    free(alias->range_end_str);
 
     /* Free cloned TypeRef fields */
     if (alias->target_type_ref != NULL)

@@ -1247,6 +1247,54 @@ int semcheck_funccall(int *type_return,
     id = expr->expr_data.function_call_data.id;
     args_given = expr->expr_data.function_call_data.args_expr;
 
+    /* In objfpc mode, a bare method/function name inside its own body refers
+     * to the result variable when used as a value expression. Normalize such
+     * argument expressions before overload resolution so they are not mistaken
+     * for recursive zero-argument calls. */
+    if (args_given != NULL)
+    {
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        const char *result_var = semcheck_get_current_subprogram_result_var_name();
+        const char *method_name = semcheck_get_current_subprogram_method_name();
+        const char *replacement = (result_var != NULL && result_var[0] != '\0')
+            ? result_var : "Result";
+        for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+        {
+            if (arg_cur->type != LIST_EXPR || arg_cur->cur == NULL)
+                continue;
+            struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
+            if (kgpc_getenv("KGPC_DEBUG_RESULT_NAME") != NULL &&
+                arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL &&
+                pascal_identifier_equals(arg_expr->expr_data.id, "correct_fpuregister"))
+            {
+                fprintf(stderr,
+                    "[KGPC_DEBUG_RESULT_NAME] funccall arg id=%s cur=%s result=%s method=%s\n",
+                    arg_expr->expr_data.id,
+                    cur_sub_id != NULL ? cur_sub_id : "<null>",
+                    result_var != NULL ? result_var : "<null>",
+                    method_name != NULL ? method_name : "<null>");
+            }
+            if (arg_expr->type != EXPR_VAR_ID || arg_expr->expr_data.id == NULL)
+                continue;
+            const char *arg_id = arg_expr->expr_data.id;
+            int is_result_name =
+                (cur_sub_id != NULL && pascal_identifier_equals(arg_id, cur_sub_id)) ||
+                (result_var != NULL && pascal_identifier_equals(arg_id, result_var)) ||
+                (method_name != NULL && pascal_identifier_equals(arg_id, method_name));
+            if (!is_result_name)
+                continue;
+
+            if (!pascal_identifier_equals(arg_id, replacement))
+            {
+                char *dup = strdup(replacement);
+                if (dup == NULL)
+                    return -1;
+                free(arg_expr->expr_data.id);
+                arg_expr->expr_data.id = dup;
+            }
+        }
+    }
+
     /* Handle inherited calls in expression context: resolve to parent class method.
      * E.g., T(inherited Get(Index)^) should call TFPSList.Get, not TFPGList.Get. */
     if (expr->expr_data.function_call_data.is_inherited_call && id != NULL)

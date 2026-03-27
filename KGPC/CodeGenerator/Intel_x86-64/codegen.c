@@ -2108,6 +2108,49 @@ static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab,
 static int codegen_eval_string_const_expr(struct Expression *expr, SymTab_t *symtab,
     char **out_value);
 
+static HashNode_t *codegen_find_const_eval_symbol(SymTab_t *symtab, const char *id)
+{
+    if (symtab == NULL || id == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, (char *)id) != 0 && node != NULL)
+        return node;
+
+    int unit_index = symtab->current_unit_index;
+    if (unit_index > 0 && unit_index < SYMTAB_MAX_UNITS &&
+        symtab->unit_scopes[unit_index] != NULL &&
+        symtab->unit_scopes[unit_index]->table != NULL)
+    {
+        node = FindIdentInTableForUnit(symtab->unit_scopes[unit_index]->table,
+            (char *)id, unit_index);
+        if (node != NULL)
+            return node;
+        node = FindIdentInTable(symtab->unit_scopes[unit_index]->table, (char *)id);
+        if (node != NULL)
+            return node;
+    }
+
+    ListNode_t *matches = FindAllIdents(symtab, (char *)id);
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate != NULL &&
+            (candidate->hash_type == HASHTYPE_CONST || candidate->is_constant ||
+             candidate->is_typed_const))
+        {
+            node = candidate;
+            break;
+        }
+    }
+    if (matches != NULL)
+        DestroyList(matches);
+    if (node != NULL)
+        return node;
+
+    return NULL;
+}
+
 static int codegen_eval_string_const_expr(struct Expression *expr, SymTab_t *symtab,
     char **out_value)
 {
@@ -2125,16 +2168,41 @@ static int codegen_eval_string_const_expr(struct Expression *expr, SymTab_t *sym
             *out_value = strdup(expr->expr_data.string);
             return (*out_value == NULL);
 
+        case EXPR_CHAR_CODE:
+        {
+            char *value = (char *)calloc(2, sizeof(char));
+            if (value == NULL)
+                return 1;
+            value[0] = (char)(expr->expr_data.char_code & 0xFF);
+            *out_value = value;
+            return 0;
+        }
+
         case EXPR_VAR_ID:
         {
             if (symtab == NULL || expr->expr_data.id == NULL)
                 return 1;
-            HashNode_t *node = NULL;
-            if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL ||
-                node->const_string_value == NULL)
+            HashNode_t *node = codegen_find_const_eval_symbol(symtab, expr->expr_data.id);
+            if (node == NULL)
                 return 1;
-            *out_value = strdup(node->const_string_value);
-            return (*out_value == NULL);
+            if (node->const_string_value != NULL)
+            {
+                *out_value = strdup(node->const_string_value);
+                return (*out_value == NULL);
+            }
+            KgpcType *expr_type = expr->resolved_kgpc_type;
+            if ((node->hash_type == HASHTYPE_CONST || node->is_constant) &&
+                ((node->type != NULL && kgpc_type_is_char(node->type)) ||
+                 (expr_type != NULL && kgpc_type_is_char(expr_type))))
+            {
+                char *value = (char *)calloc(2, sizeof(char));
+                if (value == NULL)
+                    return 1;
+                value[0] = (char)(node->const_int_value & 0xFF);
+                *out_value = value;
+                return 0;
+            }
+            return 1;
         }
 
         case EXPR_ADDOP:
@@ -2187,8 +2255,6 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
 
         const char *id = decl->tree_data.const_decl_data.id;
         struct Expression *value = decl->tree_data.const_decl_data.value;
-        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
-
         if (id == NULL || value == NULL)
             continue;
 
@@ -2214,26 +2280,42 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
         }
 
         long long const_value = 0;
-        if (trace_nonlocal != NULL && strcmp(trace_nonlocal, id) == 0)
-        {
-            fprintf(stderr, "[KGPC_TRACE_NONLOCAL] register const id=%s expr_type=%d\n",
-                id, value->type);
-        }
-
         if (codegen_eval_const_expr(value, symtab, &const_value))
-            PushConstOntoScope(symtab, (char *)id, const_value);
+        {
+            int pushed = 0;
+            KgpcType *value_type = (value != NULL) ? value->resolved_kgpc_type : NULL;
+            if ((value != NULL && value->type == EXPR_CHAR_CODE) ||
+                (value_type != NULL && kgpc_type_is_char(value_type)))
+            {
+                KgpcType *char_type = create_primitive_type(CHAR_TYPE);
+                if (char_type != NULL)
+                {
+                    if (PushConstOntoScope_Typed(symtab, (char *)id, const_value, char_type) == 0)
+                    {
+                        HashNode_t *const_node = NULL;
+                        if (FindSymbol(&const_node, symtab, id) != 0 && const_node != NULL &&
+                            const_node->const_string_value == NULL)
+                        {
+                            char char_string[2];
+                            char_string[0] = (char)(const_value & 0xFF);
+                            char_string[1] = '\0';
+                            const_node->const_string_value = strdup(char_string);
+                        }
+                    }
+                    destroy_kgpc_type(char_type);
+                    pushed = 1;
+                }
+            }
+            if (!pushed)
+                PushConstOntoScope(symtab, (char *)id, const_value);
+        }
         else
         {
             char *string_value = NULL;
-            if (codegen_eval_string_const_expr(value, symtab, &string_value) == 0 &&
+            int string_eval_ok = (codegen_eval_string_const_expr(value, symtab, &string_value) == 0);
+            if (string_eval_ok &&
                 string_value != NULL)
             {
-                if (trace_nonlocal != NULL && strcmp(trace_nonlocal, id) == 0)
-                {
-                    fprintf(stderr,
-                        "[KGPC_TRACE_NONLOCAL] register const string id=%s len=%zu\n",
-                        id, strlen(string_value));
-                }
                 /* String constant — register in the symbol table so the existing
                  * .LC label emission in gencode_leaf_var handles it with a unique,
                  * scope-aware label. PushStringConstOntoScope is a no-op if the
@@ -3943,8 +4025,8 @@ static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, lo
         case EXPR_VAR_ID:
             if (symtab != NULL && expr->expr_data.id != NULL)
             {
-                HashNode_t *node = NULL;
-                if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 &&
+                HashNode_t *node = codegen_find_const_eval_symbol(symtab, expr->expr_data.id);
+                if (node != NULL &&
                     node != NULL &&
                     (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
                 {
@@ -8141,6 +8223,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
+    if (func->result_var_name != NULL &&
+        !pascal_identifier_equals(func->result_var_name, func->id) &&
+        !pascal_identifier_equals(func->result_var_name, "Result"))
+    {
+        add_alias_for_return_var(return_var, func->result_var_name);
+    }
     /* For class methods, also alias the unmangled method name to the return slot */
     if (func->method_name != NULL)
     {

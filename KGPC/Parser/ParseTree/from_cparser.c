@@ -469,6 +469,8 @@ typedef struct {
     int range_known;
     long long range_start;
     long long range_end;
+    char *range_start_str;  /* Symbolic lower bound for range aliases */
+    char *range_end_str;    /* Symbolic upper bound for range aliases */
     int is_class_reference;  /* For "class of T" types */
     char *unresolved_index_type;  /* Deferred enum index type name */
 } TypeInfo;
@@ -1287,6 +1289,14 @@ static void destroy_type_info_contents(TypeInfo *info) {
     if (info->array_dim_end_str != NULL) {
         free(info->array_dim_end_str);
         info->array_dim_end_str = NULL;
+    }
+    if (info->range_start_str != NULL) {
+        free(info->range_start_str);
+        info->range_start_str = NULL;
+    }
+    if (info->range_end_str != NULL) {
+        free(info->range_end_str);
+        info->range_end_str = NULL;
     }
     if (info->record_type != NULL) {
         destroy_record_type(info->record_type);
@@ -7192,10 +7202,15 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         }
 
         if (type_info != NULL) {
+            char *lower_str = serialize_expr_to_string(spec_node->child);
+            char *upper_str = serialize_expr_to_string(spec_node->child != NULL ?
+                spec_node->child->next : NULL);
             type_info->is_range = 1;
             type_info->range_start = start_value;
             type_info->range_end = end_value;
             type_info->range_known = (have_start && have_end);
+            type_info->range_start_str = lower_str;
+            type_info->range_end_str = upper_str;
         }
 
         return UNKNOWN_TYPE;
@@ -10922,6 +10937,19 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 type_ref_from_single_name(type_info.set_element_type_id);
         }
     }
+    if (inline_alias == NULL && type_info.is_enum)
+    {
+        inline_alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+        if (inline_alias != NULL)
+        {
+            inline_alias->is_enum = 1;
+            inline_alias->base_type = ENUM_TYPE;
+            inline_alias->enum_is_scoped = type_info.enum_is_scoped;
+            inline_alias->enum_has_explicit_values = type_info.enum_has_explicit_values;
+            inline_alias->enum_literals = type_info.enum_literals;
+            type_info.enum_literals = NULL;
+        }
+    }
 
     /* Scan for external/public name modifiers (FPC bootstrap compatibility) */
     char *cname_override = NULL;
@@ -11393,6 +11421,7 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     }
 
     int actual_count = 0;
+    int is_shortstring_target = (type_info->is_shortstring != 0);
     if (is_string_initializer) {
         if (owned_string_initializer.data != NULL || owned_string_initializer.len > 0)
             actual_count = (int)owned_string_initializer.len;
@@ -11423,7 +11452,16 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
         }
     }
 
-    if (expected_count >= 0 && actual_count != expected_count) {
+    if (is_shortstring_target && expected_count > 0) {
+        int visible_capacity = expected_count - 1;
+        if (actual_count > visible_capacity) {
+            ast_string_value_reset(&owned_string_initializer);
+            fprintf(stderr,
+                    "ERROR: Const shortstring %s initializer length %d exceeds declared capacity %d.\n",
+                    *id_ptr, actual_count, visible_capacity);
+            return -1;
+        }
+    } else if (expected_count >= 0 && actual_count != expected_count) {
         ast_string_value_reset(&owned_string_initializer);
         fprintf(stderr,
                 "ERROR: Const array %s initializer count %d does not match declared range %d..%d.\n",
@@ -11557,6 +11595,16 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
             str = (const unsigned char *)owned_string_initializer.data;
         else if (string_initializer != NULL)
             str = (const unsigned char *)string_initializer;
+        if (is_shortstring_target) {
+            struct Expression *len_rhs = mk_charcode(const_decl_node->line, (unsigned int)actual_count);
+            struct Expression *len_index_expr = mk_inum(const_decl_node->line, index);
+            struct Expression *len_base_expr = mk_varid(const_decl_node->line, strdup(*id_ptr));
+            struct Expression *len_lhs = mk_arrayaccess(const_decl_node->line, len_base_expr, len_index_expr);
+            struct Statement *len_assign = mk_varassign(const_decl_node->line, const_decl_node->col,
+                len_lhs, len_rhs);
+            list_builder_append(&stmt_builder, len_assign, LIST_STMT);
+            ++index;
+        }
         for (int i = 0; i < actual_count; ++i) {
             unsigned char byte = (str != NULL) ? str[i] : 0;
             struct Expression *rhs = mk_charcode(const_decl_node->line, (unsigned int)byte);
@@ -12581,6 +12629,29 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     ast_t *interface_spec = NULL;
     ListNode_t *nested_type_sections = NULL;
     if (spec_node != NULL) {
+        const char *trace_sym = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+        if (trace_sym != NULL && id != NULL && pascal_identifier_equals(id, trace_sym))
+        {
+            ast_t *dbg = spec_node;
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] raw_type_decl id=%s spec typ=%d sym=%s child_typ=%d child_sym=%s next_typ=%d next_sym=%s\n",
+                id,
+                dbg != NULL ? dbg->typ : -1,
+                (dbg != NULL && dbg->sym != NULL && dbg->sym->name != NULL) ? dbg->sym->name : "<null>",
+                (dbg != NULL && dbg->child != NULL) ? dbg->child->typ : -1,
+                (dbg != NULL && dbg->child != NULL && dbg->child->sym != NULL && dbg->child->sym->name != NULL) ? dbg->child->sym->name : "<null>",
+                (dbg != NULL && dbg->next != NULL) ? dbg->next->typ : -1,
+                (dbg != NULL && dbg->next != NULL && dbg->next->sym != NULL && dbg->next->sym->name != NULL) ? dbg->next->sym->name : "<null>");
+            if (dbg != NULL && dbg->child != NULL)
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] raw_type_decl child child_typ=%d child_sym=%s next_typ=%d next_sym=%s\n",
+                    dbg->child->child != NULL ? dbg->child->child->typ : -1,
+                    (dbg->child->child != NULL && dbg->child->child->sym != NULL && dbg->child->child->sym->name != NULL) ? dbg->child->child->sym->name : "<null>",
+                    dbg->child->next != NULL ? dbg->child->next->typ : -1,
+                    (dbg->child->next != NULL && dbg->child->next->sym != NULL && dbg->child->next->sym->name != NULL) ? dbg->child->next->sym->name : "<null>");
+            }
+        }
         if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
             fprintf(stderr, "[KGPC] convert_type_decl spec_node typ=%d sym=%s for id=%s\n",
                 spec_node->typ,
@@ -12841,6 +12912,23 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
 
     if (decl != NULL)
     {
+        const char *trace_sym = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+        if (trace_sym != NULL && id != NULL && pascal_identifier_equals(id, trace_sym) &&
+            decl->type == TREE_TYPE_DECL &&
+            decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        {
+            struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] parse_type_decl id=%s base=%d target=%s is_array=%d [%d,%d] short=%d kgpc=%p\n",
+                id,
+                alias->base_type,
+                alias->target_type_id != NULL ? alias->target_type_id : "<null>",
+                alias->is_array,
+                alias->array_start,
+                alias->array_end,
+                alias->is_shortstring,
+                (void *)decl->tree_data.type_decl_data.kgpc_type);
+        }
         decl->tree_data.type_decl_data.kgpc_type = kgpc_type;
         if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL &&
             decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
@@ -12884,6 +12972,16 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
             type_ref_free(alias->target_type_ref);
             alias->target_type_ref = type_info.type_ref;
             type_info.type_ref = NULL;
+        }
+        if (type_info.range_start_str != NULL) {
+            free(alias->range_start_str);
+            alias->range_start_str = type_info.range_start_str;
+            type_info.range_start_str = NULL;
+        }
+        if (type_info.range_end_str != NULL) {
+            free(alias->range_end_str);
+            alias->range_end_str = type_info.range_end_str;
+            type_info.range_end_str = NULL;
         }
         if (type_info.element_type_ref != NULL) {
             type_ref_free(alias->array_element_type_ref);
@@ -17330,9 +17428,6 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         list_builder_init(&finally_builder);
         list_builder_init(&except_builder);
         
-        char *exception_var_name = NULL;
-        char *exception_type_name = NULL;
-
         ast_t *cur = stmt_node->child;
         while (cur != NULL) {
             ast_t *unwrapped = unwrap_pascal_node(cur);
@@ -17348,13 +17443,15 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                     
                     /* Check if this is an 'on' clause with exception variable */
                     if (inner_unwrapped != NULL && inner_unwrapped->typ == PASCAL_T_ON_CLAUSE) {
+                        char *exception_var_name = NULL;
+                        char *exception_type_name = NULL;
                         /* Extract exception variable and type from on clause */
                         /* Structure: on <var> [: <type>] do <stmt> */
                         ast_t *on_child = inner_unwrapped->child;
                         
                         /* First child should be the variable name */
                         if (on_child != NULL && on_child->typ == PASCAL_T_IDENTIFIER) {
-                            if (exception_var_name == NULL && on_child->sym != NULL)
+                            if (on_child->sym != NULL)
                                 exception_var_name = strdup(on_child->sym->name);
                             on_child = on_child->next;
                         }
@@ -17366,7 +17463,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                             
                             /* Look for the type identifier */
                             if (type_node->typ == PASCAL_T_IDENTIFIER) {
-                                if (exception_type_name == NULL && type_node->sym != NULL)
+                                if (type_node->sym != NULL)
                                     exception_type_name = strdup(type_node->sym->name);
                             }
                             on_child = on_child->next;
@@ -17382,9 +17479,18 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                         /* Convert the statement */
                         if (on_child != NULL) {
                             struct Statement *inner_stmt = convert_statement(unwrap_pascal_node(on_child));
-                            if (inner_stmt != NULL)
-                                list_builder_append(target, inner_stmt, LIST_STMT);
+                            if (inner_stmt != NULL) {
+                                struct Statement *on_stmt = mk_on_exception(stmt_node->line,
+                                    exception_var_name, exception_type_name, inner_stmt);
+                                list_builder_append(target, on_stmt, LIST_STMT);
+                                exception_var_name = NULL;
+                                exception_type_name = NULL;
+                            }
                         }
+                        if (exception_var_name != NULL)
+                            free(exception_var_name);
+                        if (exception_type_name != NULL)
+                            free(exception_type_name);
                     } else {
                         struct Statement *inner_stmt = convert_statement(inner_unwrapped);
                         if (inner_stmt != NULL)
@@ -17417,7 +17523,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
 
         if (finally_stmts != NULL)
             return mk_tryfinally(stmt_node->line, try_stmts, finally_stmts);
-        return mk_tryexcept(stmt_node->line, try_stmts, except_stmts, exception_var_name, exception_type_name);
+        return mk_tryexcept(stmt_node->line, try_stmts, except_stmts, NULL, NULL);
     }
     case PASCAL_T_RAISE_STMT: {
         struct Expression *exc_expr = convert_expression(unwrap_pascal_node(stmt_node->child));

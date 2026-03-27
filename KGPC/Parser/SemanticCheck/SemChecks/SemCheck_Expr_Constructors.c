@@ -308,6 +308,17 @@ int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
                  * Allow both literal chars and char-typed variables/expressions. */
                 compatible = 1;
             }
+            else if (expected_element_kgpc != NULL &&
+                     kgpc_type_is_shortstring(expected_element_kgpc) &&
+                     actual_element_kgpc != NULL &&
+                     (kgpc_type_is_string(actual_element_kgpc) ||
+                      kgpc_type_is_shortstring(actual_element_kgpc) ||
+                      kgpc_type_is_char(actual_element_kgpc)))
+            {
+                /* Open-array parameters of shortstring aliases (e.g. array of
+                 * TIDString) accept ordinary string and char expressions. */
+                compatible = 1;
+            }
             else if (expected_element_kgpc != NULL && actual_element_kgpc != NULL &&
                      are_types_compatible_for_assignment(expected_element_kgpc,
                          actual_element_kgpc, symtab))
@@ -389,7 +400,8 @@ int semcheck_prepare_array_literal_argument(Tree_t *formal_decl, struct Expressi
     {
         return 0;
     }
-    if (expected_type_id != NULL && symtab != NULL)
+    if (formal_decl->type == TREE_VAR_DECL &&
+        expected_type_id != NULL && symtab != NULL)
     {
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, expected_type_id);
         if (type_node != NULL)

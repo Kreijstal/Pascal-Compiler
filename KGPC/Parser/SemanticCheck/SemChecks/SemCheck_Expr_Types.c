@@ -76,6 +76,10 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
 {
     if (symtab == NULL || id == NULL)
         return 0;
+    const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+    int trace_id = (trace_nonlocal != NULL && id != NULL &&
+        (strcmp(trace_nonlocal, "1") == 0 ||
+         pascal_identifier_equals(id, trace_nonlocal)));
 
     for (ScopeNode *cur_scope = symtab->current_scope; cur_scope != NULL; cur_scope = cur_scope->parent)
     {
@@ -92,6 +96,15 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
                     node->hash_type != HASHTYPE_PROCEDURE &&
                     node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
                 {
+                    if (trace_id)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_TRACE_NONLOCAL] semcheck_has_value_ident id=%s hit=%s hash=%d unit=%d\n",
+                            id,
+                            node->id != NULL ? node->id : "<null>",
+                            node->hash_type,
+                            node->source_unit_index);
+                    }
                     DestroyList(matches);
                     return 1;
                 }
@@ -112,6 +125,15 @@ static int semcheck_has_value_ident(SymTab_t *symtab, const char *id)
                 node->hash_type != HASHTYPE_PROCEDURE &&
                 node->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
             {
+                if (trace_id)
+                {
+                    fprintf(stderr,
+                        "[KGPC_TRACE_NONLOCAL] semcheck_has_value_ident builtin id=%s hit=%s hash=%d unit=%d\n",
+                        id,
+                        node->id != NULL ? node->id : "<null>",
+                        node->hash_type,
+                        node->source_unit_index);
+                }
                 DestroyList(builtin_matches);
                 return 1;
             }
@@ -2422,10 +2444,24 @@ skip_scoped_enum_resolution:
             {
                 field_node = FindIdentInTable(symtab->unit_scopes[unit_idx]->table, field_id);
             }
+            if (field_node == NULL)
+            {
+                for (ScopeNode *cur_scope = symtab->current_scope;
+                     cur_scope != NULL; cur_scope = cur_scope->parent)
+                {
+                    HashNode_t *candidate = FindIdentInTableForUnit(
+                        cur_scope->table, field_id, unit_idx);
+                    if (candidate != NULL && candidate->source_unit_index == unit_idx)
+                    {
+                        field_node = candidate;
+                        break;
+                    }
+                }
+            }
             /* No fallback to FindSymbol — if the unit's own table doesn't
              * have the identifier, it's genuinely not exported by that unit.
-             * Falling back to the scope chain would find symbols from other
-             * units, which is exactly the wrong-unit bug we're preventing. */
+             * The filtered scope-chain search above only accepts symbols
+             * whose source_unit_index matches the explicit unit qualifier. */
             if (field_node != NULL)
             {
                 /* Found the field as a direct identifier - transform the expression */
@@ -2757,6 +2793,19 @@ skip_scoped_enum_resolution:
         semcheck_is_unit_name(record_expr->expr_data.id) &&
         !semcheck_has_value_ident(symtab, record_expr->expr_data.id))
     {
+        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+        int trace_unit_case = (trace_nonlocal != NULL &&
+            record_expr->expr_data.id != NULL &&
+            (strcmp(trace_nonlocal, "1") == 0 ||
+             pascal_identifier_equals(record_expr->expr_data.id, trace_nonlocal)));
+        if (trace_unit_case)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] semcheck unit-branch unit=%s field=%s line=%d\n",
+                record_expr->expr_data.id,
+                field_id != NULL ? field_id : "<null>",
+                expr->line_num);
+        }
         if (kgpc_getenv("KGPC_DEBUG_RECORD_ACCESS") != NULL)
         {
             fprintf(stderr,
@@ -2765,8 +2814,31 @@ skip_scoped_enum_resolution:
                 field_id != NULL ? field_id : "(null)");
         }
         HashNode_t *unit_sym = NULL;
-        if (FindSymbol(&unit_sym, symtab, field_id) != 0 && unit_sym != NULL)
+        int unit_idx = unit_registry_add(record_expr->expr_data.id);
+        if (unit_idx > 0 && unit_idx < SYMTAB_MAX_UNITS &&
+            symtab->unit_scopes[unit_idx] != NULL)
         {
+            unit_sym = FindIdentInTable(symtab->unit_scopes[unit_idx]->table, field_id);
+        }
+        if (trace_unit_case)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] semcheck unit-branch lookup unit=%s idx=%d hit=%s hash=%d\n",
+                record_expr->expr_data.id,
+                unit_idx,
+                unit_sym != NULL && unit_sym->id != NULL ? unit_sym->id : "<null>",
+                unit_sym != NULL ? unit_sym->hash_type : -1);
+        }
+        if (unit_sym == NULL &&
+            FindSymbol(&unit_sym, symtab, field_id) != 0 && unit_sym != NULL)
+        {
+            if (trace_unit_case)
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] semcheck unit-branch fallback hit=%s hash=%d\n",
+                    unit_sym->id != NULL ? unit_sym->id : "<null>",
+                    unit_sym->hash_type);
+            }
             /* Transform EXPR_RECORD_ACCESS into EXPR_VAR_ID for the resolved identifier */
             char *saved_field_id = strdup(field_id);
             destroy_expr(record_expr);

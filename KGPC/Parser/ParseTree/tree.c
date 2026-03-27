@@ -924,6 +924,16 @@ void stmt_print(struct Statement *stmt, FILE *f, int num_indent)
             list_print(stmt->stmt_data.try_except_data.except_statements, f, num_indent + 1);
             break;
 
+        case STMT_ON_EXCEPTION:
+            fprintf(f, "[ON_EXCEPTION:%s:%s]:\n",
+                stmt->stmt_data.on_exception_data.exception_var_name != NULL ?
+                    stmt->stmt_data.on_exception_data.exception_var_name : "<none>",
+                stmt->stmt_data.on_exception_data.exception_type_name != NULL ?
+                    stmt->stmt_data.on_exception_data.exception_type_name : "<none>");
+            if (stmt->stmt_data.on_exception_data.handler_stmt != NULL)
+                stmt_print(stmt->stmt_data.on_exception_data.handler_stmt, f, num_indent + 1);
+            break;
+
         case STMT_RAISE:
             fprintf(f, "[RAISE]:\n");
             if (stmt->stmt_data.raise_data.exception_expr != NULL)
@@ -1605,6 +1615,15 @@ void destroy_stmt(struct Statement *stmt)
               free(stmt->stmt_data.try_except_data.exception_var_name);
           if (stmt->stmt_data.try_except_data.exception_type_name != NULL)
               free(stmt->stmt_data.try_except_data.exception_type_name);
+          break;
+
+        case STMT_ON_EXCEPTION:
+          if (stmt->stmt_data.on_exception_data.exception_var_name != NULL)
+              free(stmt->stmt_data.on_exception_data.exception_var_name);
+          if (stmt->stmt_data.on_exception_data.exception_type_name != NULL)
+              free(stmt->stmt_data.on_exception_data.exception_type_name);
+          if (stmt->stmt_data.on_exception_data.handler_stmt != NULL)
+              destroy_stmt(stmt->stmt_data.on_exception_data.handler_stmt);
           break;
 
         case STMT_RAISE:
@@ -2514,6 +2533,8 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->range_known = 0;
     alias->range_start = 0;
     alias->range_end = 0;
+    alias->range_start_str = NULL;
+    alias->range_end_str = NULL;
     alias->storage_size = 0;
     new_tree->tree_data.type_decl_data.defined_in_unit = 0;
     new_tree->tree_data.type_decl_data.unit_is_public = 0;
@@ -2964,6 +2985,23 @@ struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *
     new_stmt->stmt_data.try_except_data.exception_var_name = exception_var_name;
     new_stmt->stmt_data.try_except_data.exception_type_name = exception_type_name;
     new_stmt->stmt_data.try_except_data.has_on_clause = (exception_var_name != NULL || exception_type_name != NULL) ? 1 : 0;
+
+    return new_stmt;
+}
+
+struct Statement *mk_on_exception(int line_num, char *exception_var_name,
+                                  char *exception_type_name, struct Statement *handler_stmt)
+{
+    struct Statement *new_stmt = (struct Statement *)calloc(1, sizeof(struct Statement));
+    assert(new_stmt != NULL);
+
+    new_stmt->line_num = line_num;
+    new_stmt->col_num = 0;
+    new_stmt->source_index = -1;
+    new_stmt->type = STMT_ON_EXCEPTION;
+    new_stmt->stmt_data.on_exception_data.exception_var_name = exception_var_name;
+    new_stmt->stmt_data.on_exception_data.exception_type_name = exception_type_name;
+    new_stmt->stmt_data.on_exception_data.handler_stmt = handler_stmt;
 
     return new_stmt;
 }
@@ -3528,6 +3566,16 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         type_ref_free(alias->file_type_ref);
         alias->file_type_ref = NULL;
     }
+    if (alias->range_start_str != NULL)
+    {
+        free(alias->range_start_str);
+        alias->range_start_str = NULL;
+    }
+    if (alias->range_end_str != NULL)
+    {
+        free(alias->range_end_str);
+        alias->range_end_str = NULL;
+    }
     /* kgpc_type is a borrowed reference owned by the scope's hash table.
      * Do NOT release it here — the scope destruction handles its lifetime.
      * Releasing it causes use-after-free when the scope is destroyed before
@@ -3546,5 +3594,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     alias->range_known = 0;
     alias->range_start = 0;
     alias->range_end = 0;
+    alias->range_start_str = NULL;
+    alias->range_end_str = NULL;
     alias->storage_size = 0;
 }

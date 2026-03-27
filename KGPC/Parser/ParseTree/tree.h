@@ -320,6 +320,9 @@ struct Statement *mk_tryfinally(int line_num, ListNode_t *try_stmts, ListNode_t 
 struct Statement *mk_tryexcept(int line_num, ListNode_t *try_stmts, ListNode_t *except_stmts,
                                char *exception_var_name, char *exception_type_name);
 
+struct Statement *mk_on_exception(int line_num, char *exception_var_name,
+                                  char *exception_type_name, struct Statement *handler_stmt);
+
 struct Statement *mk_raise(int line_num, struct Expression *expr);
 
 struct Statement *mk_inherited(int line_num, struct Expression *expr);

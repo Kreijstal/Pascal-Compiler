@@ -3955,48 +3955,42 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
         case STMT_TRY_EXCEPT:
             return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.try_statements, max_scope_lev);
-            
-            /* If there's an 'on E: Exception do' clause, create a local scope for the exception variable */
-            if (stmt->stmt_data.try_except_data.has_on_clause && 
-                stmt->stmt_data.try_except_data.exception_var_name != NULL) {
-                
-                /* Push a new scope for the exception variable */
-                EnterScope(symtab, 0);
-                
-                /* Add the exception variable to the symbol table */
-                char *var_name = stmt->stmt_data.try_except_data.exception_var_name;
-                char *type_name = stmt->stmt_data.try_except_data.exception_type_name;
-                
-                /* Look up the type if specified, otherwise use NULL (defaults to integer) */
+            return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            break;
+
+        case STMT_ON_EXCEPTION:
+            if (stmt->stmt_data.on_exception_data.exception_var_name != NULL) {
+                char *var_name = stmt->stmt_data.on_exception_data.exception_var_name;
+                char *type_name = stmt->stmt_data.on_exception_data.exception_type_name;
                 KgpcType *var_kgpc_type = NULL;
+
+                EnterScope(symtab, 0);
+
                 if (type_name != NULL) {
                     HashNode_t *type_node = NULL;
                     if (FindSymbol(&type_node, symtab, type_name) != 0 && type_node != NULL) {
                         if (type_node->hash_type == HASHTYPE_TYPE) {
                             var_kgpc_type = type_node->type;
                         } else {
-                            fprintf(stderr, "Error: '%s' is not a type at line %d\n", 
+                            fprintf(stderr, "Error: '%s' is not a type at line %d\n",
                                     type_name, stmt->line_num);
                             return_val++;
                         }
                     } else {
-                        fprintf(stderr, "Error: Unknown exception type '%s' at line %d\n", 
+                        fprintf(stderr, "Error: Unknown exception type '%s' at line %d\n",
                                 type_name, stmt->line_num);
                         return_val++;
                     }
                 }
-                
-                /* Push the exception variable onto the scope (NULL type defaults to integer) */
+
                 PushVarOntoScope_Typed(symtab, var_name, var_kgpc_type);
-                
-                /* Semantic check the except statements in the new scope */
-                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
-                
-                /* Pop the scope */
+                if (stmt->stmt_data.on_exception_data.handler_stmt != NULL)
+                    return_val += semcheck_stmt_main(symtab,
+                        stmt->stmt_data.on_exception_data.handler_stmt, max_scope_lev);
                 LeaveScope(symtab);
-            } else {
-                /* No exception variable - just check the except statements normally */
-                return_val += semcheck_statement_list_nodes(symtab, stmt->stmt_data.try_except_data.except_statements, max_scope_lev);
+            } else if (stmt->stmt_data.on_exception_data.handler_stmt != NULL) {
+                return_val += semcheck_stmt_main(symtab,
+                    stmt->stmt_data.on_exception_data.handler_stmt, max_scope_lev);
             }
             break;
 
@@ -5868,6 +5862,39 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
     proc_id = stmt->stmt_data.procedure_call_data.id;
     args_given = stmt->stmt_data.procedure_call_data.expr_args;
+
+    if (args_given != NULL)
+    {
+        const char *cur_sub_id = semcheck_get_current_subprogram_id();
+        const char *result_var = semcheck_get_current_subprogram_result_var_name();
+        const char *method_name = semcheck_get_current_subprogram_method_name();
+        const char *replacement = (result_var != NULL && result_var[0] != '\0')
+            ? result_var : "Result";
+        for (ListNode_t *arg_cur = args_given; arg_cur != NULL; arg_cur = arg_cur->next)
+        {
+            if (arg_cur->type != LIST_EXPR || arg_cur->cur == NULL)
+                continue;
+            struct Expression *arg_expr = (struct Expression *)arg_cur->cur;
+            if (arg_expr->type != EXPR_VAR_ID || arg_expr->expr_data.id == NULL)
+                continue;
+            const char *arg_id = arg_expr->expr_data.id;
+            int is_result_name =
+                (cur_sub_id != NULL && pascal_identifier_equals(arg_id, cur_sub_id)) ||
+                (result_var != NULL && pascal_identifier_equals(arg_id, result_var)) ||
+                (method_name != NULL && pascal_identifier_equals(arg_id, method_name));
+            if (!is_result_name)
+                continue;
+
+            if (!pascal_identifier_equals(arg_id, replacement))
+            {
+                char *dup = strdup(replacement);
+                if (dup == NULL)
+                    return 1;
+                free(arg_expr->expr_data.id);
+                arg_expr->expr_data.id = dup;
+            }
+        }
+    }
 
     /* If this is a method call placeholder with a type identifier receiver,
      * resolve it to the class method immediately to avoid type-helper detours. */

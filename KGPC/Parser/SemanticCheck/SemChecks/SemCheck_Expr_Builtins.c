@@ -220,6 +220,111 @@ static HashNode_t *semcheck_find_exact_qualified_type_node_local(SymTab_t *symta
     return semcheck_find_preferred_type_node_with_ref(symtab, &temp_ref, NULL);
 }
 
+static HashNode_t *semcheck_lookup_type_node_relaxed_local(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *raw_name, const char *base_name)
+{
+    HashNode_t *type_node = NULL;
+    if (type_ref != NULL)
+        type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
+    if (type_node == NULL && raw_name != NULL)
+        type_node = semcheck_find_preferred_type_node(symtab, raw_name);
+    if (type_node == NULL && base_name != NULL && base_name != raw_name)
+        type_node = semcheck_find_preferred_type_node(symtab, base_name);
+
+    if (type_node == NULL && raw_name != NULL)
+    {
+        HashNode_t *fallback = NULL;
+        if (FindSymbol(&fallback, symtab, raw_name) != 0 &&
+            fallback != NULL && fallback->hash_type == HASHTYPE_TYPE)
+            type_node = fallback;
+    }
+    if (type_node == NULL && base_name != NULL && base_name != raw_name)
+    {
+        HashNode_t *fallback = NULL;
+        if (FindSymbol(&fallback, symtab, base_name) != 0 &&
+            fallback != NULL && fallback->hash_type == HASHTYPE_TYPE)
+            type_node = fallback;
+    }
+    return type_node;
+}
+
+static int semcheck_try_fold_length_type_identifier_local(SymTab_t *symtab,
+    struct Expression *arg_expr, long long *length_out)
+{
+    if (symtab == NULL || arg_expr == NULL || length_out == NULL)
+        return 0;
+    if (arg_expr->type != EXPR_VAR_ID && arg_expr->type != EXPR_RECORD_ACCESS)
+        return 0;
+
+    char *qualified_name = NULL;
+    QualifiedIdent *type_id_ref = NULL;
+    TypeRef *type_ref = NULL;
+    const char *raw_name = NULL;
+
+    if (arg_expr->type == EXPR_VAR_ID)
+        raw_name = arg_expr->expr_data.id;
+    else
+    {
+        qualified_name = build_qualified_identifier_from_expr_local(arg_expr);
+        raw_name = qualified_name;
+    }
+
+    if (arg_expr->id_ref != NULL)
+        type_id_ref = qualified_ident_clone(arg_expr->id_ref);
+    if (type_id_ref == NULL)
+        type_id_ref = build_qualified_ident_from_expr_local(arg_expr);
+    if (type_id_ref == NULL && qualified_name != NULL)
+        type_id_ref = qualified_ident_from_dotted(qualified_name);
+    if (type_id_ref != NULL)
+        type_ref = type_ref_create(type_id_ref, NULL, 0);
+
+    const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
+                                               : semcheck_base_type_name(raw_name);
+    HashNode_t *type_node = semcheck_lookup_type_node_relaxed_local(symtab, type_ref,
+        raw_name, base_name);
+
+    int folded = 0;
+    if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = get_type_alias_from_node(type_node);
+        if (alias != NULL)
+        {
+            if (alias->is_shortstring)
+            {
+                long long len = alias->array_end;
+                if (len < 0)
+                    len = 0;
+                *length_out = len;
+                folded = 1;
+            }
+            else if (alias->is_array && !alias->is_open_array &&
+                     alias->array_end >= alias->array_start)
+            {
+                *length_out = (long long)alias->array_end - (long long)alias->array_start + 1LL;
+                folded = 1;
+            }
+        }
+
+        if (!folded && type_node->type != NULL && kgpc_type_is_array(type_node->type))
+        {
+            int start = 0;
+            int end = -1;
+            kgpc_type_get_array_bounds(type_node->type, &start, &end);
+            if (end >= start)
+            {
+                *length_out = (long long)end - (long long)start + 1LL;
+                folded = 1;
+            }
+        }
+    }
+
+    if (qualified_name != NULL)
+        free(qualified_name);
+    if (type_ref != NULL)
+        type_ref_free(type_ref);
+    return folded;
+}
+
 /*===========================================================================
  * String/Character Builtins
  *===========================================================================*/
@@ -562,6 +667,14 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
     }
 
     struct Expression *arg_expr = (struct Expression *)args->cur;
+    long long type_length = 0;
+    if (semcheck_try_fold_length_type_identifier_local(symtab, arg_expr, &type_length))
+    {
+        semcheck_replace_call_with_integer_literal(expr, type_length);
+        *type_return = LONGINT_TYPE;
+        return 0;
+    }
+
     KgpcType *arg_kgpc_type = NULL;
     int error_count = semcheck_expr_with_type(&arg_kgpc_type, symtab, arg_expr, max_scope_lev, NO_MUTATE);
 
@@ -2673,16 +2786,33 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         const char *raw_name = type_name;
         const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
                                                    : semcheck_base_type_name(raw_name);
-        HashNode_t *type_node = NULL;
-        if (type_ref != NULL)
-            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
-        if (type_node == NULL)
-            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
-        if (type_node == NULL && base_name != NULL && base_name != raw_name)
-            type_node = semcheck_find_preferred_type_node(symtab, base_name);
+        HashNode_t *type_node = semcheck_lookup_type_node_relaxed_local(symtab, type_ref,
+            raw_name, base_name);
+        const char *trace_sym = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+        if (trace_sym != NULL && raw_name != NULL &&
+            pascal_identifier_equals(raw_name, trace_sym))
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] sem_lowhigh arg=%s is_high=%d type_node=%p hash_type=%d base=%s type_ref=%p\n",
+                raw_name, is_high, (void *)type_node,
+                type_node != NULL ? type_node->hash_type : -1,
+                base_name != NULL ? base_name : "<null>", (void *)type_ref);
+        }
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *alias = get_type_alias_from_node(type_node);
+            if (trace_sym != NULL && raw_name != NULL &&
+                pascal_identifier_equals(raw_name, trace_sym))
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] sem_lowhigh alias short=%d array=%d range=%d [%lld,%lld] target=%s\n",
+                    alias != NULL ? alias->is_shortstring : -1,
+                    alias != NULL ? alias->is_array : -1,
+                    alias != NULL ? alias->range_known : -1,
+                    alias != NULL ? alias->range_start : 0LL,
+                    alias != NULL ? alias->range_end : 0LL,
+                    (alias != NULL && alias->target_type_id != NULL) ? alias->target_type_id : "<null>");
+            }
             long long low = 0;
             long long high = 0;
             int have_bounds = 0;
@@ -2973,13 +3103,8 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
         const char *raw_name = qualified_name;
         const char *base_name = (type_ref != NULL) ? type_ref_base_name(type_ref)
                                                    : semcheck_base_type_name(raw_name);
-        HashNode_t *type_node = NULL;
-        if (type_ref != NULL)
-            type_node = semcheck_find_exact_qualified_type_node_local(symtab, type_ref->name);
-        if (type_node == NULL && raw_name != NULL)
-            type_node = semcheck_find_preferred_type_node(symtab, raw_name);
-        if (type_node == NULL && base_name != NULL && base_name != raw_name)
-            type_node = semcheck_find_preferred_type_node(symtab, base_name);
+        HashNode_t *type_node = semcheck_lookup_type_node_relaxed_local(symtab, type_ref,
+            raw_name, base_name);
 
         if (type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {

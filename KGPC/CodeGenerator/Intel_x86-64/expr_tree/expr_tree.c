@@ -4296,6 +4296,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
+                if (!found && ctx != NULL)
+                {
+                    node = codegen_find_owner_unit_symbol(ctx, expr->expr_data.id);
+                    found = (node != NULL);
+                }
                 const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
                 if (trace_nonlocal != NULL && expr->expr_data.id != NULL &&
                     strcmp(trace_nonlocal, expr->expr_data.id) == 0)

@@ -52,6 +52,38 @@ void semcheck_set_pointer_info(struct Expression *expr, int subtype, const char 
  * Array Info Helpers
  *===========================================================================*/
 
+static struct RecordType *semcheck_array_element_record_from_kgpc(
+    SymTab_t *symtab, KgpcType *element_type)
+{
+    if (element_type == NULL)
+        return NULL;
+    if (element_type->kind == TYPE_KIND_RECORD)
+        return kgpc_type_get_record(element_type);
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(element_type);
+    if (alias != NULL)
+    {
+        if (alias->inline_record_type != NULL)
+            return alias->inline_record_type;
+        if (alias->target_type_id != NULL)
+            return semcheck_lookup_record_type(symtab, alias->target_type_id);
+        if (alias->alias_name != NULL)
+            return semcheck_lookup_record_type(symtab, alias->alias_name);
+    }
+
+    if (semcheck_tag_from_kgpc(element_type) == RECORD_TYPE)
+    {
+        if (element_type->kind == TYPE_KIND_POINTER &&
+            element_type->info.points_to != NULL &&
+            element_type->info.points_to->kind == TYPE_KIND_RECORD)
+        {
+            return element_type->info.points_to->info.record_info;
+        }
+    }
+
+    return NULL;
+}
+
 void semcheck_clear_array_info(struct Expression *expr)
 {
     if (expr == NULL)
@@ -93,10 +125,8 @@ void semcheck_set_array_info_from_kgpctype(struct Expression *expr, SymTab_t *sy
     if (element_type != NULL)
     {
         expr->array_element_type = semcheck_tag_from_kgpc(element_type);
-        if (element_type->kind == TYPE_KIND_RECORD)
-            expr->array_element_record_type = kgpc_type_get_record(element_type);
-        else
-            expr->array_element_record_type = NULL;
+        expr->array_element_record_type =
+            semcheck_array_element_record_from_kgpc(symtab, element_type);
     }
     else
     {
@@ -441,15 +471,14 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
                 else
                     expr->array_element_type_id = strdup("PAnsiChar");
             }
-            if (elem_type->kind == TYPE_KIND_RECORD)
+            expr->array_element_record_type =
+                semcheck_array_element_record_from_kgpc(symtab, elem_type);
+            if (expr->array_element_type_id == NULL &&
+                expr->array_element_record_type != NULL &&
+                expr->array_element_record_type->type_id != NULL)
             {
-                expr->array_element_record_type = kgpc_type_get_record(elem_type);
-                if (expr->array_element_type_id == NULL &&
-                    expr->array_element_record_type != NULL &&
-                    expr->array_element_record_type->type_id != NULL)
-                {
-                    expr->array_element_type_id = strdup(expr->array_element_record_type->type_id);
-                }
+                expr->array_element_type_id =
+                    strdup(expr->array_element_record_type->type_id);
             }
         }
         else if (node->type->info.array_info.element_type_id != NULL)
@@ -558,5 +587,41 @@ void semcheck_set_array_info_from_hashnode(struct Expression *expr, SymTab_t *sy
     else
     {
         expr->array_element_record_type = get_record_type_from_node(node);
+    }
+
+    if (expr->array_element_record_type == NULL &&
+        expr->array_element_type == RECORD_TYPE &&
+        expr->expr_data.id != NULL &&
+        symtab != NULL)
+    {
+        HashNode_t *self_node = NULL;
+        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        {
+            struct RecordType *self_record = get_record_type_from_node(self_node);
+            if (self_record != NULL)
+            {
+                struct RecordType *field_owner = NULL;
+                struct RecordField *field_desc =
+                    semcheck_find_class_field_including_hidden(symtab, self_record,
+                        expr->expr_data.id, &field_owner);
+                if (field_desc != NULL)
+                {
+                    if (field_desc->array_element_record != NULL)
+                        expr->array_element_record_type = field_desc->array_element_record;
+                    if (expr->array_element_record_type == NULL &&
+                        field_desc->array_element_kgpc_type != NULL)
+                    {
+                        expr->array_element_record_type =
+                            semcheck_array_element_record_from_kgpc(symtab,
+                                field_desc->array_element_kgpc_type);
+                    }
+                    if (expr->array_element_record_type == NULL &&
+                        field_desc->nested_record != NULL)
+                    {
+                        expr->array_element_record_type = field_desc->nested_record;
+                    }
+                }
+            }
+        }
     }
 }

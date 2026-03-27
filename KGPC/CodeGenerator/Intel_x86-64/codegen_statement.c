@@ -377,6 +377,7 @@ static int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_
     return 31;
 }
 static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
+static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 static int codegen_expr_is_shortstring_array(const struct Expression *expr);
@@ -1139,6 +1140,18 @@ static int expr_is_static_array_like(const struct Expression *expr, CodeGenConte
         return 0;
     if (codegen_expr_is_shortstring_value_local(expr))
         return 0;
+
+    /* Pointer variables may point to arrays, but assigning the pointer itself
+     * is not a static-array copy. Leave pointer-deref cases to normal array
+     * handling lower in the pipeline. */
+    if (expr->type != EXPR_POINTER_DEREF)
+    {
+        KgpcType *resolved_type = expr_get_kgpc_type(expr);
+        if (resolved_type != NULL && kgpc_type_is_pointer(resolved_type))
+            return 0;
+        if (expr_get_type_tag(expr) == POINTER_TYPE)
+            return 0;
+    }
 
     if (expr->is_array_expr)
         return 1;
@@ -4961,6 +4974,16 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
         return NULL;
     if (context_expr->record_type != NULL)
         return context_expr->record_type;
+    KgpcType *expr_type = expr_get_kgpc_type(context_expr);
+    if (expr_type != NULL)
+    {
+        if (kgpc_type_is_record(expr_type))
+            return kgpc_type_get_record(expr_type);
+        if (kgpc_type_is_pointer(expr_type) &&
+            expr_type->info.points_to != NULL &&
+            kgpc_type_is_record(expr_type->info.points_to))
+            return kgpc_type_get_record(expr_type->info.points_to);
+    }
     if (context_expr->type == EXPR_VAR_ID && context_expr->expr_data.id != NULL)
     {
         HashNode_t *var_node = NULL;
@@ -5007,6 +5030,37 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
             HashNode_t *type_node = NULL;
             if (FindSymbol(&type_node, symtab, call_id) != 0 && type_node != NULL)
                 return get_record_type_from_node(type_node);
+        }
+    }
+    if (context_expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(context_expr);
+        if (field != NULL)
+        {
+            if (field->nested_record != NULL)
+                return field->nested_record;
+            if (field->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
+                    type_node != NULL)
+                {
+                    struct RecordType *rec = get_record_type_from_node(type_node);
+                    if (rec != NULL)
+                        return rec;
+                }
+            }
+            if (field->pointer_type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, symtab, field->pointer_type_id) != 0 &&
+                    type_node != NULL)
+                {
+                    struct RecordType *rec = get_record_type_from_node(type_node);
+                    if (rec != NULL)
+                        return rec;
+                }
+            }
         }
     }
     if (context_expr->pointer_subtype_id != NULL)
@@ -5948,6 +6002,9 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             break;
         case STMT_TRY_EXCEPT:
             inst_list = codegen_try_except(stmt, inst_list, ctx, symtab);
+            break;
+        case STMT_ON_EXCEPTION:
+            inst_list = codegen_on_exception(stmt, inst_list, ctx, symtab);
             break;
         case STMT_RAISE:
             inst_list = codegen_raise(stmt, inst_list, ctx, symtab);
@@ -13674,50 +13731,52 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
-    /* If there's an 'on E: Exception do' clause, add the exception variable to the stack */
-    StackNode_t *exception_var_node = NULL;
-    if (stmt->stmt_data.try_except_data.has_on_clause && 
-        stmt->stmt_data.try_except_data.exception_var_name != NULL) {
-        
-        /* Push a new scope for the exception variable on the symbol table.
-         * Also add the variable to the stack manager's current scope so
-         * find_label resolves to the correct stack offset.  After the handler,
-         * remove it from the stack manager so lookups of the same name fall
-         * back to any outer variable. */
-        EnterScope(symtab, 0);
+    if (except_stmts != NULL)
+        inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
+    else
+        inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
 
-        /* Add the exception variable to the stack manager (8 bytes for pointer) */
-        exception_var_node = add_l_x(stmt->stmt_data.try_except_data.exception_var_name, 8);
-        
-        /* Generate code to store the current exception into the variable */
+    snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    return inst_list;
+}
+
+static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+{
+    StackNode_t *exception_var_node = NULL;
+    char buffer[CODEGEN_MAX_INST_BUF];
+    char *var_name = stmt->stmt_data.on_exception_data.exception_var_name;
+    const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+
+    if (var_name != NULL) {
+        EnterScope(symtab, 0);
+        exception_var_node = add_l_x(var_name, 8);
+
+        if (trace_nonlocal != NULL && pascal_identifier_equals(trace_nonlocal, var_name)) {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] on_exception bind symbol=%s offset=%d stmt_type=%d\n",
+                var_name,
+                exception_var_node != NULL ? exception_var_node->offset : -1,
+                stmt->stmt_data.on_exception_data.handler_stmt != NULL ?
+                    stmt->stmt_data.on_exception_data.handler_stmt->type : -1);
+        }
+
         if (exception_var_node != NULL) {
             snprintf(buffer, sizeof(buffer), "\tmovq\tkgpc_current_exception(%%rip), %%rax\n");
             inst_list = add_inst(inst_list, buffer);
             snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, -%d(%%rbp)\n", exception_var_node->offset);
             inst_list = add_inst(inst_list, buffer);
         }
-        
-        /* Generate the except statements with the exception variable in scope */
-        if (except_stmts != NULL)
-            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
-        else
-            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
-        
-        /* Remove the exception variable from the stack manager so outer
-         * variables with the same name are visible again, then pop the
-         * symbol table scope. */
-        remove_last_l_x(stmt->stmt_data.try_except_data.exception_var_name);
-        LeaveScope(symtab);
-    } else {
-        /* No exception variable - just generate the except statements normally */
-        if (except_stmts != NULL)
-            inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
-        else
-            inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
     }
 
-    snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
-    inst_list = add_inst(inst_list, buffer);
+    if (stmt->stmt_data.on_exception_data.handler_stmt != NULL)
+        inst_list = codegen_stmt(stmt->stmt_data.on_exception_data.handler_stmt, inst_list, ctx, symtab);
+
+    if (var_name != NULL) {
+        remove_last_l_x(var_name);
+        LeaveScope(symtab);
+    }
 
     return inst_list;
 }

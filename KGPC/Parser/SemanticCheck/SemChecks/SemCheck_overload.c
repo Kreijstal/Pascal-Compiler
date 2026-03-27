@@ -54,10 +54,16 @@ static int semcheck_array_elem_legacy_tag(KgpcType *type)
 {
     if (type == NULL)
         return UNKNOWN_TYPE;
+    if (kgpc_type_is_shortstring(type))
+        return SHORTSTRING_TYPE;
+    if (type->type_alias != NULL && type->type_alias->is_shortstring)
+        return SHORTSTRING_TYPE;
     if (type->kind == TYPE_KIND_PRIMITIVE)
         return type->info.primitive_type_tag;
     if (type->kind == TYPE_KIND_ARRAY)
     {
+        if (type->type_alias != NULL && type->type_alias->is_shortstring)
+            return SHORTSTRING_TYPE;
         if (type->info.array_info.start_index == 0 &&
             type->info.array_info.end_index == 255)
         {
@@ -2469,6 +2475,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             formal_elem->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
                         {
                             rank = 1;
+                        }
+                        if (rank < 0)
+                        {
+                            if (arg_is_literal &&
+                                arg_elem_tag == STRING_TYPE &&
+                                formal_elem_tag == SHORTSTRING_TYPE)
+                            {
+                                /* FPC accepts string literals in open-array
+                                 * parameters of shortstring aliases such as
+                                 * array of TIDString. */
+                                rank = 1;
+                            }
                         }
                         if (rank < 0)
                         {

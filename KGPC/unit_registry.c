@@ -3,16 +3,16 @@
 */
 #include "unit_registry.h"
 #include "identifier_utils.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define MAX_UNIT_NAMES 256
+#define MAX_UNIT_NAMES 1024
 
 static const char *registry[MAX_UNIT_NAMES]; /* index 0 unused (means "no unit") */
 static int count = 0;
 
-/* Dependency tracking: deps[i] is a bitmask of unit indices that unit i uses.
- * With MAX_UNIT_NAMES=256, we need 256/64=4 uint64_t per unit. */
+/* Dependency tracking: deps[i] is a bitmask of unit indices that unit i uses. */
 #define DEP_WORDS ((MAX_UNIT_NAMES + 63) / 64)
 static unsigned long long deps[MAX_UNIT_NAMES][DEP_WORDS];
 static unsigned long long iface_deps[MAX_UNIT_NAMES][DEP_WORDS];
