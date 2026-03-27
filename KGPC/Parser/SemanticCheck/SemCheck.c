@@ -3685,6 +3685,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
     int best_is_forward_stub = 1;
     int debug_tsize = (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL && rendered != NULL &&
                        pascal_identifier_equals(rendered, "TSize"));
+    int debug_textended = (kgpc_getenv("KGPC_DEBUG_T80") != NULL && lookup_id != NULL &&
+                           pascal_identifier_equals(lookup_id, "TExtended80Rec"));
     ListNode_t *cur = matches;
     while (cur != NULL)
     {
@@ -3708,12 +3710,14 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
             {
                 const char *unit_name = unit_registry_get(node->source_unit_index);
                 int allowed = (unit_name == NULL) ? 1 : semcheck_is_unit_name(unit_name);
-                if (kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL && lookup_id != NULL)
+                if ((kgpc_getenv("KGPC_DEBUG_MISSING_TYPE") != NULL && lookup_id != NULL) ||
+                    debug_textended)
                 {
                     if (pascal_identifier_equals(lookup_id, "TFloatFormatProfile") ||
                         pascal_identifier_equals(lookup_id, "TFloatSpecial") ||
                         pascal_identifier_equals(lookup_id, "TDIY_FP_Power_of_10") ||
                         pascal_identifier_equals(lookup_id, "pshortstring") ||
+                        pascal_identifier_equals(lookup_id, "TExtended80Rec") ||
                         pascal_identifier_equals(lookup_id, "T"))
                     {
                         fprintf(stderr,
@@ -3753,12 +3757,13 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 node->source_unit_index == effective_unit_index)
                 same_unit = 1;
 
-            if (debug_tsize || (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
+            if (debug_tsize || debug_textended || (kgpc_getenv("KGPC_DEBUG_TSIZE") != NULL &&
                 lookup_id != NULL && pascal_identifier_equals(lookup_id, "TSize")))
             {
                 const char *uname = unit_registry_get(node->source_unit_index);
-                fprintf(stderr, "[TSIZE] candidate id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
+                fprintf(stderr, "[TYPELOOKUP] candidate lookup='%s' id='%s' defined_in_unit=%d source_unit_idx=%d(%s) "
                     "unit_rank=%d scope_level=%d same_unit=%d forward_stub=%d effective_unit=%d scope_unit=%d type=%p kind=%d\n",
+                    lookup_id ? lookup_id : "<null>",
                     node->id ? node->id : "<null>", node->defined_in_unit,
                     node->source_unit_index, uname ? uname : "?",
                     unit_rank, scope_level, same_unit, is_forward_stub, effective_unit_index,
@@ -3794,8 +3799,8 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
                 take = 1;
             }
 
-            if (debug_tsize)
-                fprintf(stderr, "[TSIZE]   take=%d\n", take);
+            if (debug_tsize || debug_textended)
+                fprintf(stderr, "[TYPELOOKUP]   take=%d\n", take);
 
             if (take)
             {
@@ -3808,9 +3813,10 @@ static HashNode_t *semcheck_find_preferred_type_node_ref_internal(SymTab_t *symt
         }
         cur = cur->next;
     }
-    if (debug_tsize && best != NULL)
+    if ((debug_tsize || debug_textended) && best != NULL)
     {
-        fprintf(stderr, "[TSIZE] WINNER id='%s' defined_in_unit=%d source_unit_idx=%d kind=%d",
+        fprintf(stderr, "[TYPELOOKUP] WINNER lookup='%s' id='%s' defined_in_unit=%d source_unit_idx=%d kind=%d",
+            lookup_id ? lookup_id : "<null>",
             best->id ? best->id : "<null>", best->defined_in_unit,
             best->source_unit_index, best->type ? best->type->kind : -1);
         if (best->type != NULL && best->type->kind == TYPE_KIND_RECORD)
@@ -5814,6 +5820,12 @@ static int resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name
     }
 
     return 0;
+}
+
+int semcheck_resolve_range_bounds_for_type(SymTab_t *symtab, const char *type_name,
+    long long *out_low, long long *out_high)
+{
+    return resolve_range_bounds_for_type(symtab, type_name, out_low, out_high);
 }
 
 static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
@@ -12214,6 +12226,22 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                     tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
                 }
             }
+            const char *trace_sym = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+            if (trace_sym != NULL &&
+                tree->tree_data.type_decl_data.id != NULL &&
+                pascal_identifier_equals(tree->tree_data.type_decl_data.id, trace_sym))
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] sem_type_decl id=%s alias target=%s is_array=%d [%d,%d] short=%d kgpc=%p kind=%d\n",
+                    tree->tree_data.type_decl_data.id,
+                    alias_info->target_type_id != NULL ? alias_info->target_type_id : "<null>",
+                    alias_info->is_array,
+                    alias_info->array_start,
+                    alias_info->array_end,
+                    alias_info->is_shortstring,
+                    (void *)kgpc_type,
+                    kgpc_type != NULL ? kgpc_type->kind : -1);
+            }
         }
 
         /* Check if this type was already pre-declared by predeclare_types().
@@ -16886,6 +16914,55 @@ next_identifier:
             continue;
         }
 
+        if (tree->type == TREE_VAR_DECL &&
+            tree->tree_data.var_decl_data.inline_type_alias != NULL &&
+            tree->tree_data.var_decl_data.inline_type_alias->is_enum &&
+            tree->tree_data.var_decl_data.inline_type_alias->enum_literals != NULL)
+        {
+            struct TypeAlias *inline_alias = tree->tree_data.var_decl_data.inline_type_alias;
+            if (inline_alias->kgpc_type == NULL)
+            {
+                inline_alias->kgpc_type = create_primitive_type(ENUM_TYPE);
+                if (inline_alias->kgpc_type != NULL)
+                    kgpc_type_set_type_alias(inline_alias->kgpc_type, inline_alias);
+            }
+            if (inline_alias->kgpc_type != NULL)
+            {
+                int ordinal = 0;
+                for (ListNode_t *lit = inline_alias->enum_literals; lit != NULL; lit = lit->next)
+                {
+                    const char *literal_name = (const char *)lit->cur;
+                    if (literal_name == NULL)
+                    {
+                        ++ordinal;
+                        continue;
+                    }
+                    HashNode_t *existing_lit = NULL;
+                    if (FindIdentInCurrentScope(symtab, literal_name) == NULL)
+                    {
+                        if (PushConstOntoScope_Typed(symtab, (char *)literal_name, ordinal,
+                                inline_alias->kgpc_type) > 0)
+                        {
+                            semcheck_error_with_context_at(tree->line_num, 0, tree->source_index,
+                                "Error on line %d, redeclaration of enum literal %s!\n",
+                                tree->line_num, literal_name);
+                            ++return_val;
+                        }
+                        else if (FindSymbol(&existing_lit, symtab, literal_name) != 0 &&
+                                 existing_lit != NULL)
+                        {
+                            mark_hashnode_unit_info(symtab, existing_lit,
+                                tree->tree_data.var_decl_data.defined_in_unit,
+                                tree->tree_data.var_decl_data.unit_is_public);
+                            mark_hashnode_source_unit(existing_lit,
+                                tree->tree_data.var_decl_data.source_unit_index);
+                        }
+                    }
+                    ++ordinal;
+                }
+            }
+        }
+
         if (tree->type == TREE_VAR_DECL && tree->tree_data.var_decl_data.initializer != NULL)
         {
             struct Statement *init_stmt = tree->tree_data.var_decl_data.initializer;
@@ -17704,6 +17781,31 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         !subprogram->tree_data.subprogram_data.defined_in_unit);
     subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
 
+    /* Nested local functions inside methods still need the enclosing method's
+     * owner metadata so semcheck/codegen can resolve implicit class fields via
+     * Self. Preserve lexical nesting semantics above, then inherit owner info. */
+    if (subprogram->tree_data.subprogram_data.owner_class == NULL &&
+        max_scope_lev > 0 &&
+        prev_current_subprogram != NULL &&
+        prev_owner != NULL)
+    {
+        const char *inherit_owner = prev_current_subprogram->tree_data.subprogram_data.owner_class;
+        const char *inherit_owner_full = prev_current_subprogram->tree_data.subprogram_data.owner_class_full;
+        const char *inherit_owner_outer = prev_current_subprogram->tree_data.subprogram_data.owner_class_outer;
+
+        if (inherit_owner == NULL)
+            inherit_owner = prev_owner;
+        if (inherit_owner_full == NULL)
+            inherit_owner_full = prev_owner;
+
+        if (inherit_owner != NULL)
+            subprogram->tree_data.subprogram_data.owner_class = strdup(inherit_owner);
+        if (inherit_owner_full != NULL)
+            subprogram->tree_data.subprogram_data.owner_class_full = strdup(inherit_owner_full);
+        if (inherit_owner_outer != NULL)
+            subprogram->tree_data.subprogram_data.owner_class_outer = strdup(inherit_owner_outer);
+    }
+
     char *id_to_use_for_lookup;
     sub_type = subprogram->tree_data.subprogram_data.sub_type;
     assert(sub_type == TREE_SUBPROGRAM_PROC || sub_type == TREE_SUBPROGRAM_FUNC);
@@ -18498,8 +18600,20 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     {
         HashNode_t *self_node = NULL;
         const char *owner_id = semcheck_get_current_method_owner();
+        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
         struct RecordType *owner_record = NULL;
         int self_is_var_param = 0;
+        if (trace_nonlocal != NULL &&
+            subprogram->tree_data.subprogram_data.id != NULL)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] self-inject subprogram=%s owner_ctx=%s owner_class=%s nesting=%d\n",
+                subprogram->tree_data.subprogram_data.id,
+                owner_id != NULL ? owner_id : "<null>",
+                subprogram->tree_data.subprogram_data.owner_class != NULL ?
+                    subprogram->tree_data.subprogram_data.owner_class : "<null>",
+                subprogram->tree_data.subprogram_data.nesting_level);
+        }
         if (owner_id != NULL)
         {
             HashNode_t *owner_node = semcheck_find_owner_record_type_node(symtab, owner_id);
@@ -18562,6 +18676,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                     PushVarOntoScope_Typed(symtab, "Self", self_type);
                     if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
                         self_node->is_var_parameter = self_is_var_param;
+                    if (trace_nonlocal != NULL)
+                    {
+                        fprintf(stderr,
+                            "[KGPC_TRACE_NONLOCAL] self-inject pushed Self for subprogram=%s type=%s is_var=%d\n",
+                            subprogram->tree_data.subprogram_data.id != NULL ?
+                                subprogram->tree_data.subprogram_data.id : "<null>",
+                            kgpc_type_to_string(self_type),
+                            self_is_var_param);
+                    }
                 }
                 else if (self_node->type == NULL || !kgpc_type_equals(self_node->type, self_type))
                 {
@@ -18572,6 +18695,15 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 }
                 if (self_node != NULL)
                     self_node->is_var_parameter = self_is_var_param;
+                if (trace_nonlocal != NULL)
+                {
+                    fprintf(stderr,
+                        "[KGPC_TRACE_NONLOCAL] self-inject final Self node=%p type=%s is_var=%d\n",
+                        (void *)self_node,
+                        self_node != NULL && self_node->type != NULL ?
+                            kgpc_type_to_string(self_node->type) : "<null>",
+                        self_is_var_param);
+                }
                 destroy_kgpc_type(self_type);
             }
         }

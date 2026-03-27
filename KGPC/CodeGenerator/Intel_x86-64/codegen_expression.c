@@ -5502,6 +5502,44 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     }
     else if (inner->type == EXPR_RECORD_ACCESS)
     {
+        struct Expression *record_expr = inner->expr_data.record_access_data.record_expr;
+        const char *field_id = inner->expr_data.record_access_data.field_id;
+        if (record_expr != NULL &&
+            record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            field_id != NULL &&
+            ctx != NULL &&
+            ctx->symtab != NULL &&
+            semcheck_is_unit_name(record_expr->expr_data.id))
+        {
+            int unit_idx = unit_registry_add(record_expr->expr_data.id);
+            HashNode_t *field_node = NULL;
+            if (unit_idx > 0 && unit_idx < SYMTAB_MAX_UNITS &&
+                ctx->symtab->unit_scopes[unit_idx] != NULL)
+            {
+                field_node = FindIdentInTable(
+                    ctx->symtab->unit_scopes[unit_idx]->table, field_id);
+            }
+
+            if (field_node != NULL &&
+                (field_node->hash_type == HASHTYPE_PROCEDURE ||
+                 field_node->hash_type == HASHTYPE_FUNCTION))
+            {
+                const char *emit_target = codegen_subprogram_emission_symbol(field_node);
+                if (emit_target == NULL || emit_target[0] == '\0')
+                    emit_target = field_node->mangled_id;
+                if (emit_target == NULL || emit_target[0] == '\0')
+                    emit_target = field_node->id;
+
+                if (emit_target != NULL && emit_target[0] != '\0')
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        emit_target, target_reg->bit_64);
+                    return add_inst(inst_list, buffer);
+                }
+            }
+        }
+
         Register_t *addr_reg = NULL;
         inst_list = codegen_record_field_address(inner, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -5548,6 +5586,27 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
     if (record_expr == NULL)
         return inst_list;
+
+    {
+        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+        if (trace_nonlocal != NULL &&
+            record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            (strcmp(trace_nonlocal, "1") == 0 ||
+             pascal_identifier_equals(record_expr->expr_data.id, trace_nonlocal)))
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] record_access base=%s field=%s base_type=%d resolved_kgpc=%s subprogram=%s\n",
+                record_expr->expr_data.id,
+                expr->expr_data.record_access_data.field_id != NULL
+                    ? expr->expr_data.record_access_data.field_id : "<null>",
+                record_expr->type,
+                record_expr->resolved_kgpc_type != NULL
+                    ? kgpc_type_to_string(record_expr->resolved_kgpc_type) : "<null>",
+                (ctx != NULL && ctx->current_subprogram_id != NULL)
+                    ? ctx->current_subprogram_id : "<null>");
+        }
+    }
 
     /* Check if this is a class field access. Classes are pointers, so we need to load
      * the instance pointer from variable storage for VAR_ID expressions. */
@@ -5645,11 +5704,59 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     return inst_list;
 }
 
+static HashNode_t *codegen_find_unit_qualified_symbol(CodeGenContext *ctx,
+    const char *unit_id, const char *field_id)
+{
+    if (ctx == NULL || ctx->symtab == NULL || unit_id == NULL || field_id == NULL)
+        return NULL;
+
+    int unit_idx = unit_registry_add(unit_id);
+    HashNode_t *field_node = NULL;
+    if (unit_idx > 0 && unit_idx < SYMTAB_MAX_UNITS &&
+        ctx->symtab->unit_scopes[unit_idx] != NULL)
+    {
+        field_node = FindIdentInTable(ctx->symtab->unit_scopes[unit_idx]->table, field_id);
+        if (field_node != NULL)
+            return field_node;
+    }
+
+    for (ScopeNode *cur_scope = ctx->symtab->current_scope;
+         cur_scope != NULL; cur_scope = cur_scope->parent)
+    {
+        HashNode_t *candidate = FindIdentInTableForUnit(cur_scope->table, field_id, unit_idx);
+        if (candidate != NULL && candidate->source_unit_index == unit_idx)
+            return candidate;
+    }
+
+    return NULL;
+}
+
 ListNode_t *codegen_record_access(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg)
 {
     if (expr == NULL || ctx == NULL || target_reg == NULL)
         return inst_list;
+
+    {
+        struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
+        const char *field_id = expr->expr_data.record_access_data.field_id;
+        if (record_expr != NULL &&
+            record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            field_id != NULL &&
+            semcheck_is_unit_name(record_expr->expr_data.id))
+        {
+            HashNode_t *field_node = codegen_find_unit_qualified_symbol(
+                ctx, record_expr->expr_data.id, field_id);
+            if (field_node != NULL && field_node->hash_type == HASHTYPE_CONST)
+            {
+                char buffer[96];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                    field_node->const_int_value, target_reg->bit_64);
+                return add_inst(inst_list, buffer);
+            }
+        }
+    }
 
     if (expr_has_type_tag(expr, RECORD_TYPE))
     {
@@ -9214,15 +9321,58 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     char buffer[128];
     int scope_depth = 0;
     HashNode_t *sym_node = NULL;
+    const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+    int trace_this_symbol = 0;
+    if (trace_nonlocal != NULL && var_id != NULL)
+    {
+        if (strcmp(trace_nonlocal, "1") == 0 ||
+            pascal_identifier_equals(trace_nonlocal, var_id))
+            trace_this_symbol = 1;
+    }
+    if (trace_this_symbol)
+    {
+        fprintf(stderr,
+            "[KGPC_TRACE_NONLOCAL] enter symbol=%s subprogram=%s owner_class=%s current_unit=%d with_depth=%d\n",
+            var_id,
+            (ctx != NULL && ctx->current_subprogram_id != NULL)
+                ? ctx->current_subprogram_id : "<null>",
+            (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
+                ? ctx->current_subprogram_owner_class : "<null>",
+            (ctx != NULL && ctx->symtab != NULL) ? ctx->symtab->current_unit_index : -1,
+            ctx != NULL ? ctx->with_depth : -1);
+    }
     StackNode_t *var = codegen_find_nonlocal_lexical(ctx, var_id, &scope_depth, &sym_node);
+    if (trace_this_symbol)
+    {
+        fprintf(stderr,
+            "[KGPC_TRACE_NONLOCAL] lexical symbol=%s found=%d depth=%d sym_node=%s unit=%d defined_in_unit=%d\n",
+            var_id,
+            var != NULL ? 1 : 0,
+            scope_depth,
+            (sym_node != NULL && sym_node->id != NULL) ? sym_node->id : "<null>",
+            sym_node != NULL ? sym_node->source_unit_index : -1,
+            sym_node != NULL ? sym_node->defined_in_unit : -1);
+    }
 
     if(var == NULL) {
         ListNode_t *resolved = codegen_try_emit_nonlocal_global(inst_list, var_id, ctx,
             sym_node, offset);
+        if (trace_this_symbol)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] global symbol=%s resolved=%d offset=%d\n",
+                var_id, resolved != NULL ? 1 : 0, offset != NULL ? *offset : -1);
+        }
         if (resolved != NULL)
             return resolved;
 
         resolved = codegen_try_emit_nonlocal_class_var(inst_list, var_id, ctx, offset);
+        if (trace_this_symbol)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] classvar symbol=%s resolved=%d offset=%d\n",
+                var_id, resolved != NULL ? 1 : 0, offset != NULL ? *offset : -1);
+        }
         if (resolved != NULL)
             return resolved;
 
@@ -9378,9 +9528,76 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
             }
         }
 
+        /* Bare name inside a WITH block that semcheck did not rewrite to a
+         * record access. Resolve it against the active WITH context stack. */
+        if (ctx != NULL && ctx->symtab != NULL && ctx->with_depth > 0)
+        {
+            for (int i = ctx->with_depth; i > 0; --i)
+            {
+                struct RecordType *with_record = ctx->with_stack[i - 1].record_type;
+                struct Expression *with_expr = ctx->with_stack[i - 1].context_expr;
+                struct RecordField *field_desc = NULL;
+                long long field_offset = 0;
+                if (trace_this_symbol)
+                {
+                    fprintf(stderr,
+                        "[KGPC_TRACE_NONLOCAL] with[%d] record=%s expr_type=%d\n",
+                        i - 1,
+                        (with_record != NULL && with_record->type_id != NULL)
+                            ? with_record->type_id : "<null>",
+                        with_expr != NULL ? with_expr->type : -1);
+                }
+                if (with_record == NULL || with_expr == NULL)
+                    continue;
+                if (resolve_record_field(ctx->symtab, with_record, var_id,
+                        &field_desc, &field_offset, 0, 1) != 0 ||
+                    field_desc == NULL)
+                    continue;
+
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(with_expr, inst_list, ctx, &addr_reg);
+                if (addr_reg == NULL)
+                    return inst_list;
+
+                if (record_type_is_class(with_record))
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                if (field_offset != 0)
+                {
+                    snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n",
+                        field_offset, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                *offset = 0;
+                if (strcmp(addr_reg->bit_64, current_non_local_reg64()) != 0)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                        addr_reg->bit_64, current_non_local_reg64());
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+        }
+
         codegen_report_error(ctx,
             "ERROR: Unresolved non-local symbol %s reached codegen fallback.",
             var_id);
+        if (trace_this_symbol)
+        {
+            fprintf(stderr,
+                "[KGPC_TRACE_NONLOCAL] unresolved symbol=%s subprogram=%s owner_class=%s\n",
+                var_id,
+                (ctx != NULL && ctx->current_subprogram_id != NULL)
+                    ? ctx->current_subprogram_id : "<null>",
+                (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
+                    ? ctx->current_subprogram_owner_class : "<null>");
+        }
         assert(!"unresolved non-local symbol reached codegen fallback");
         return inst_list;
     }
@@ -9588,7 +9805,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         }
         
         CODEGEN_DEBUG("DEBUG: arg_expr at %p, type %d\n", arg_expr, arg_expr->type);
-
         Tree_t *formal_arg_decl = NULL;
         if(formal_args != NULL && !(skip_formal_for_self && arg_num == 0))
         {
@@ -9607,6 +9823,23 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 return inst_list;
             }
             formal_arg_decl = (Tree_t *)formal_args->cur;
+        }
+        {
+            const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+            if (trace_nonlocal != NULL && arg_expr != NULL &&
+                arg_expr->type == EXPR_VAR_ID &&
+                arg_expr->expr_data.id != NULL &&
+                (strcmp(trace_nonlocal, "1") == 0 ||
+                 pascal_identifier_equals(arg_expr->expr_data.id, trace_nonlocal)))
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] pass_arg callee=%s arg_num=%d arg_id=%s formal_type=%d call_expr_type=%d\n",
+                    procedure_name != NULL ? procedure_name : "<null>",
+                    arg_num,
+                    arg_expr->expr_data.id,
+                    formal_arg_decl != NULL ? formal_arg_decl->type : -1,
+                    call_expr != NULL ? call_expr->type : -1);
+            }
         }
 
         int is_self_param = 0;

@@ -2105,6 +2105,74 @@ static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t
 
 static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab,
     long long *out_value);
+static int codegen_eval_string_const_expr(struct Expression *expr, SymTab_t *symtab,
+    char **out_value);
+
+static int codegen_eval_string_const_expr(struct Expression *expr, SymTab_t *symtab,
+    char **out_value)
+{
+    if (out_value == NULL)
+        return 1;
+    *out_value = NULL;
+    if (expr == NULL)
+        return 1;
+
+    switch (expr->type)
+    {
+        case EXPR_STRING:
+            if (expr->expr_data.string == NULL)
+                return 1;
+            *out_value = strdup(expr->expr_data.string);
+            return (*out_value == NULL);
+
+        case EXPR_VAR_ID:
+        {
+            if (symtab == NULL || expr->expr_data.id == NULL)
+                return 1;
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL ||
+                node->const_string_value == NULL)
+                return 1;
+            *out_value = strdup(node->const_string_value);
+            return (*out_value == NULL);
+        }
+
+        case EXPR_ADDOP:
+            if (expr->expr_data.addop_data.addop_type != PLUS)
+                return 1;
+            break;
+
+        default:
+            return 1;
+    }
+
+    char *left = NULL;
+    char *right = NULL;
+    if (codegen_eval_string_const_expr(expr->expr_data.addop_data.left_expr, symtab, &left) != 0)
+        return 1;
+    if (codegen_eval_string_const_expr(expr->expr_data.addop_data.right_term, symtab, &right) != 0)
+    {
+        free(left);
+        return 1;
+    }
+
+    size_t left_len = strlen(left);
+    size_t right_len = strlen(right);
+    char *combined = malloc(left_len + right_len + 1);
+    if (combined == NULL)
+    {
+        free(left);
+        free(right);
+        return 1;
+    }
+
+    memcpy(combined, left, left_len);
+    memcpy(combined + left_len, right, right_len + 1);
+    free(left);
+    free(right);
+    *out_value = combined;
+    return 0;
+}
 
 static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
 {
@@ -2119,6 +2187,7 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
 
         const char *id = decl->tree_data.const_decl_data.id;
         struct Expression *value = decl->tree_data.const_decl_data.value;
+        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
 
         if (id == NULL || value == NULL)
             continue;
@@ -2145,17 +2214,74 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
         }
 
         long long const_value = 0;
+        if (trace_nonlocal != NULL && strcmp(trace_nonlocal, id) == 0)
+        {
+            fprintf(stderr, "[KGPC_TRACE_NONLOCAL] register const id=%s expr_type=%d\n",
+                id, value->type);
+        }
+
         if (codegen_eval_const_expr(value, symtab, &const_value))
             PushConstOntoScope(symtab, (char *)id, const_value);
-        else if (value->type == EXPR_STRING && value->expr_data.string != NULL)
+        else
         {
-            /* String constant — register in the symbol table so the existing
-             * .LC label emission in gencode_leaf_var handles it with a unique,
-             * scope-aware label.  PushStringConstOntoScope is a no-op if the
-             * identifier already exists (e.g. from semcheck). */
-            PushStringConstOntoScope(symtab, (char *)id, value->expr_data.string);
+            char *string_value = NULL;
+            if (codegen_eval_string_const_expr(value, symtab, &string_value) == 0 &&
+                string_value != NULL)
+            {
+                if (trace_nonlocal != NULL && strcmp(trace_nonlocal, id) == 0)
+                {
+                    fprintf(stderr,
+                        "[KGPC_TRACE_NONLOCAL] register const string id=%s len=%zu\n",
+                        id, strlen(string_value));
+                }
+                /* String constant — register in the symbol table so the existing
+                 * .LC label emission in gencode_leaf_var handles it with a unique,
+                 * scope-aware label. PushStringConstOntoScope is a no-op if the
+                 * identifier already exists (e.g. from semcheck). */
+                PushStringConstOntoScope(symtab, (char *)id, string_value);
+                free(string_value);
+            }
         }
     }
+}
+
+static void codegen_register_inline_var_enum_literals(Tree_t *decl, SymTab_t *symtab)
+{
+    if (decl == NULL || symtab == NULL || decl->type != TREE_VAR_DECL)
+        return;
+
+    struct TypeAlias *alias = decl->tree_data.var_decl_data.inline_type_alias;
+    if (alias == NULL || !alias->is_enum || alias->enum_literals == NULL)
+        return;
+
+    KgpcType *enum_type = alias->kgpc_type;
+    int created_enum_type = 0;
+    if (enum_type == NULL)
+    {
+        enum_type = create_primitive_type(ENUM_TYPE);
+        created_enum_type = (enum_type != NULL);
+    }
+
+    if (enum_type == NULL)
+        return;
+
+    int ordinal = 0;
+    for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++ordinal)
+    {
+        const char *literal_name = (const char *)lit->cur;
+        if (literal_name == NULL)
+            continue;
+
+        /* Inline enum literals belong to the local declaration scope. They must
+         * shadow nonlocal methods/types with the same name, so only suppress the
+         * insertion if the current scope already has an exact symbol. */
+        HashNode_t *existing = FindIdentInCurrentScope(symtab, literal_name);
+        if (existing == NULL)
+            PushConstOntoScope_Typed(symtab, strdup(literal_name), ordinal, enum_type);
+    }
+
+    if (created_enum_type)
+        kgpc_type_release(enum_type);
 }
 
 static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param)
@@ -2205,6 +2331,8 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
                 }
             }
         }
+
+        codegen_register_inline_var_enum_literals(decl, symtab);
 
         if (decl_type != NULL)
             destroy_kgpc_type(decl_type);

@@ -24,6 +24,10 @@
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
+#include "../../../Parser/SemanticCheck/SemCheck.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 
 static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
@@ -109,6 +113,7 @@ static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *typ
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../../Parser/SemanticCheck/NameMangling.h"
+#include "../codegen_statement.h"
 
 
 /* Cached getenv() — defined in SemCheck.c */
@@ -116,6 +121,120 @@ extern const char *kgpc_getenv(const char *name);
 #ifndef CODEGEN_POINTER_SIZE_BYTES
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
+
+static unsigned long codegen_newfunc_temp_counter(void)
+{
+    static unsigned long counter = 0;
+    return ++counter;
+}
+
+static ListNode_t *codegen_builtin_new_function_call(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL || target_reg == NULL)
+        return NULL;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->cur == NULL)
+        return NULL;
+
+    struct Expression *type_arg = (struct Expression *)args->cur;
+    struct Expression *method_expr = (args->next != NULL) ? (struct Expression *)args->next->cur : NULL;
+    KgpcType *ptr_type = type_arg != NULL ? type_arg->resolved_kgpc_type : NULL;
+
+    if (ptr_type == NULL && type_arg != NULL)
+    {
+        const char *type_name = NULL;
+        if (type_arg->type == EXPR_VAR_ID)
+            type_name = type_arg->expr_data.id;
+        else if (type_arg->type == EXPR_FUNCTION_CALL)
+            type_name = type_arg->expr_data.function_call_data.id;
+
+        if (type_name != NULL)
+        {
+            HashNode_t *type_node = semcheck_find_preferred_type_node(ctx->symtab, type_name);
+            if (type_node != NULL)
+                ptr_type = type_node->type;
+        }
+    }
+
+    if (ptr_type == NULL || !kgpc_type_is_pointer(ptr_type) || ptr_type->info.points_to == NULL)
+        return NULL;
+
+    long long alloc_size = kgpc_type_sizeof(ptr_type->info.points_to);
+    if (alloc_size <= 0)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to determine size for New function target.");
+        return inst_list;
+    }
+
+    char temp_name[64];
+    snprintf(temp_name, sizeof(temp_name), "__newfunc_ptr_%lu", codegen_newfunc_temp_counter());
+    StackNode_t *temp_slot = add_l_t_bytes(temp_name, 8);
+    if (temp_slot == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate temporary for New function result.");
+        return inst_list;
+    }
+
+    PushVarOntoScope_Typed(ctx->symtab, strdup(temp_name), ptr_type);
+
+    struct Expression *target_expr = mk_varid(expr->line_num, strdup(temp_name));
+    if (target_expr == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to create temporary target for New function.");
+        return inst_list;
+    }
+    ListNode_t *stmt_args = CreateListNode(target_expr, LIST_EXPR);
+    if (stmt_args == NULL)
+    {
+        destroy_expr(target_expr);
+        codegen_report_error(ctx, "ERROR: Unable to allocate argument list for New function.");
+        return inst_list;
+    }
+    if (method_expr != NULL)
+    {
+        struct Expression *method_clone = clone_expression(method_expr);
+        ListNode_t *method_node = method_clone != NULL ? CreateListNode(method_clone, LIST_EXPR) : NULL;
+        if (method_node == NULL)
+        {
+            if (method_clone != NULL)
+                destroy_expr(method_clone);
+            DestroyList(stmt_args);
+            codegen_report_error(ctx, "ERROR: Unable to clone constructor for New function.");
+            return inst_list;
+        }
+        stmt_args->next = method_node;
+    }
+
+    struct Statement *new_stmt = mk_procedurecall(expr->line_num, strdup("New"), stmt_args);
+    if (new_stmt == NULL)
+    {
+        DestroyList(stmt_args);
+        codegen_report_error(ctx, "ERROR: Unable to create New function lowering statement.");
+        return inst_list;
+    }
+
+    if (semcheck_stmt(ctx->symtab, new_stmt, INT_MAX) != 0)
+    {
+        destroy_stmt(new_stmt);
+        codegen_report_error(ctx, "ERROR: Failed to semcheck New function lowering.");
+        return inst_list;
+    }
+
+    inst_list = codegen_stmt(new_stmt, inst_list, ctx, ctx->symtab);
+    destroy_stmt(new_stmt);
+
+    if (!codegen_had_error(ctx))
+    {
+        char buffer[96];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, target_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    return inst_list;
+}
 
 static int expr_tree_node_is_wide_string(expr_node_t *node)
 {
@@ -330,9 +449,46 @@ static int codegen_builtin_lowhigh_try_value(struct Expression *expr, CodeGenCon
             type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
         {
             struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
+            if (type_alias == NULL && type_node->type != NULL)
+                type_alias = kgpc_type_get_type_alias(type_node->type);
             if (codegen_builtin_lowhigh_try_alias_value(type_alias, is_high,
                     value_out, use_qword_out))
                 return 1;
+            long long resolved_low = 0;
+            long long resolved_high = 0;
+            if (semcheck_resolve_range_bounds_for_type(ctx->symtab,
+                    arg_expr->expr_data.id, &resolved_low, &resolved_high))
+            {
+                *value_out = is_high ? resolved_high : resolved_low;
+                *use_qword_out =
+                    (resolved_low < INT32_MIN || resolved_high > INT32_MAX);
+                return 1;
+            }
+            if (type_node->type != NULL)
+            {
+                if (kgpc_type_is_array(type_node->type))
+                {
+                    long long low = type_node->type->info.array_info.start_index;
+                    long long high = type_node->type->info.array_info.end_index;
+                    if (high >= low)
+                    {
+                        *value_out = is_high ? high : low;
+                        *use_qword_out = (low < INT32_MIN || high > INT32_MAX);
+                        return 1;
+                    }
+                }
+                if (kgpc_type_is_shortstring(type_node->type))
+                {
+                    long long low = 0;
+                    long long high = kgpc_type_sizeof(type_node->type) - 1;
+                    if (high >= low)
+                    {
+                        *value_out = is_high ? high : low;
+                        *use_qword_out = 0;
+                        return 1;
+                    }
+                }
+            }
         }
     }
 
@@ -382,6 +538,86 @@ static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
         snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", value, target_reg->bit_64);
     else
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, %s\n", value, target_reg->bit_32);
+    return add_inst(inst_list, buffer);
+}
+
+static int codegen_lowhigh_arg_is_type_identifier(struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL)
+        return 0;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL || args->cur == NULL)
+        return 0;
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr == NULL || arg_expr->type != EXPR_VAR_ID || arg_expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *type_node = NULL;
+    if (FindSymbol(&type_node, ctx->symtab, arg_expr->expr_data.id) == 0 || type_node == NULL)
+        return 0;
+
+    return type_node->hash_type == HASHTYPE_TYPE;
+}
+
+static ListNode_t *codegen_builtin_length_type_fallback(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL || target_reg == NULL)
+        return NULL;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL || args->cur == NULL)
+        return NULL;
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr == NULL || arg_expr->type != EXPR_VAR_ID || arg_expr->expr_data.id == NULL)
+        return NULL;
+
+    HashNode_t *type_node = NULL;
+    if (FindSymbol(&type_node, ctx->symtab, arg_expr->expr_data.id) == 0 ||
+        type_node == NULL || type_node->hash_type != HASHTYPE_TYPE)
+        return NULL;
+
+    long long length_value = -1;
+    struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
+    if (type_alias == NULL && type_node->type != NULL)
+        type_alias = kgpc_type_get_type_alias(type_node->type);
+    if (kgpc_getenv("KGPC_TRACE_NONLOCAL") != NULL)
+    {
+        fprintf(stderr,
+            "[KGPC_TRACE_NONLOCAL] length_type arg=%s kgpc=%s alias_short=%d alias_range=[%lld,%lld] sizeof=%lld is_short=%d is_array=%d\n",
+            arg_expr->expr_data.id,
+            type_node->type != NULL ? kgpc_type_to_string(type_node->type) : "<null>",
+            type_alias != NULL ? type_alias->is_shortstring : -1,
+            type_alias != NULL ? type_alias->array_start : -1LL,
+            type_alias != NULL ? type_alias->array_end : -1LL,
+            type_node->type != NULL ? kgpc_type_sizeof(type_node->type) : -1LL,
+            type_node->type != NULL ? kgpc_type_is_shortstring(type_node->type) : 0,
+            type_node->type != NULL ? kgpc_type_is_array(type_node->type) : 0);
+    }
+
+    if (type_alias != NULL && type_alias->is_shortstring)
+        length_value = (type_alias->array_end - type_alias->array_start) + 1;
+    else if (type_node->type != NULL && kgpc_type_is_shortstring(type_node->type))
+        length_value = kgpc_type_sizeof(type_node->type);
+    else if (type_node->type != NULL && kgpc_type_is_array(type_node->type))
+    {
+        long long low = type_node->type->info.array_info.start_index;
+        long long high = type_node->type->info.array_info.end_index;
+        if (high >= low)
+            length_value = (high - low) + 1;
+    }
+
+    if (length_value < 0)
+        return NULL;
+
+    char buffer[128];
+    if (length_value > INT32_MAX || length_value < INT32_MIN)
+        snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", length_value, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, %s\n", length_value, target_reg->bit_32);
     return add_inst(inst_list, buffer);
 }
 
@@ -2204,13 +2440,56 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         const char *func_id = expr->expr_data.function_call_data.id;
 
         if (func_id != NULL &&
-            expr->expr_data.function_call_data.call_kgpc_type == NULL &&
-            expr->expr_data.function_call_data.resolved_func == NULL &&
             (pascal_identifier_equals(func_id, "Low") ||
              pascal_identifier_equals(func_id, "High")))
         {
-            ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
-                target_reg, pascal_identifier_equals(func_id, "High"));
+            char *owned_call_target = NULL;
+            const char *call_target = codegen_resolve_function_call_target(
+                ctx, expr, &owned_call_target);
+            int is_builtin_lowhigh =
+                (call_target != NULL &&
+                 (pascal_identifier_equals(call_target, "Low") ||
+                  pascal_identifier_equals(call_target, "High")));
+            int type_ident_arg = codegen_lowhigh_arg_is_type_identifier(expr, ctx);
+            if (kgpc_getenv("KGPC_TRACE_NONLOCAL") != NULL && type_ident_arg)
+            {
+                fprintf(stderr,
+                    "[KGPC_TRACE_NONLOCAL] lowhigh func=%s target=%s type_ident_arg=%d call_kgpc=%p resolved_func=%p\n",
+                    func_id,
+                    call_target != NULL ? call_target : "<null>",
+                    type_ident_arg,
+                    (void *)expr->expr_data.function_call_data.call_kgpc_type,
+                    (void *)expr->expr_data.function_call_data.resolved_func);
+            }
+            if ((call_target == NULL &&
+                 expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+                 expr->expr_data.function_call_data.resolved_func == NULL) ||
+                is_builtin_lowhigh ||
+                type_ident_arg)
+            {
+                ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
+                    target_reg, pascal_identifier_equals(func_id, "High"));
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                if (lowered != NULL)
+                    return lowered;
+            }
+            if (owned_call_target != NULL)
+                free(owned_call_target);
+        }
+
+        if (func_id != NULL && pascal_identifier_equals(func_id, "New"))
+        {
+            ListNode_t *lowered = codegen_builtin_new_function_call(
+                expr, inst_list, ctx, target_reg);
+            if (lowered != NULL)
+                return lowered;
+        }
+
+        if (func_id != NULL && pascal_identifier_equals(func_id, "Length"))
+        {
+            ListNode_t *lowered = codegen_builtin_length_type_fallback(
+                expr, inst_list, ctx, target_reg);
             if (lowered != NULL)
                 return lowered;
         }
@@ -4017,6 +4296,17 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int found = (ctx != NULL && ctx->symtab != NULL &&
                     FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
+                const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
+                if (trace_nonlocal != NULL && expr->expr_data.id != NULL &&
+                    strcmp(trace_nonlocal, expr->expr_data.id) == 0)
+                {
+                    fprintf(stderr,
+                        "[KGPC_TRACE_NONLOCAL] leaf id=%s found=%d node=%p hash_type=%d is_const=%d const_str=%p\n",
+                        expr->expr_data.id, found, (void *)node,
+                        node != NULL ? node->hash_type : -1,
+                        node != NULL ? node->is_constant : -1,
+                        node != NULL ? (void *)node->const_string_value : NULL);
+                }
 
                 /* If FindSymbol returned a callable/type-like symbol but there is a
                  * constant with the same name in the active/user scopes (or builtin
