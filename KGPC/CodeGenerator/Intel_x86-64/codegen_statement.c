@@ -9283,7 +9283,9 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         return inst_list;
     }
 
-    if (proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var"))
+    const char *builtin_id = stmt->stmt_data.procedure_call_data.id;
+    if ((proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var")) ||
+        (builtin_id != NULL && pascal_identifier_equals(builtin_id, "Prefetch")))
     {
         inst_list = codegen_builtin_prefetch(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
@@ -9300,6 +9302,10 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
         proc_name_hint, 0, NULL);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
+    if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
+    {
+        return codegen_builtin_prefetch(stmt, inst_list, ctx);
+    }
     if (call_target == NULL)
         call_target = "";
     snprintf(buffer, 50, "\tcall\t%s\n", call_target);
@@ -11022,6 +11028,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     call_args = args_expr;
     char *unmangled_name = stmt->stmt_data.procedure_call_data.id;
 
+
     /* CRITICAL FIX: Use cached information from AST instead of HashNode pointer.
      * The resolved_proc pointer may point to freed memory if the HashNode was in a scope
      * that has been popped (e.g., nested procedures' parameters/local variables).
@@ -11132,6 +11139,63 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         return codegen_builtin_proc(stmt, inst_list, ctx);
     }
 
+    {
+        struct Expression *call_expr = mk_functioncall(stmt->line_num,
+            stmt->stmt_data.procedure_call_data.id != NULL ?
+                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
+            stmt->stmt_data.procedure_call_data.expr_args);
+        if (call_expr != NULL)
+        {
+            char *owned_call_target = NULL;
+            const char *resolved_call_target = NULL;
+            if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+            {
+                call_expr->expr_data.function_call_data.mangled_id =
+                    strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+            }
+            call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
+                stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
+            call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
+            call_expr->expr_data.function_call_data.call_kgpc_type = call_kgpc_type;
+            call_expr->expr_data.function_call_data.is_call_info_valid =
+                stmt->stmt_data.procedure_call_data.is_call_info_valid;
+            call_expr->expr_data.function_call_data.is_virtual_call =
+                stmt->stmt_data.procedure_call_data.is_virtual_call;
+            call_expr->expr_data.function_call_data.is_interface_call =
+                stmt->stmt_data.procedure_call_data.is_interface_call;
+            call_expr->expr_data.function_call_data.vmt_index =
+                stmt->stmt_data.procedure_call_data.vmt_index;
+            if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+                call_expr->expr_data.function_call_data.self_class_name =
+                    strdup(stmt->stmt_data.procedure_call_data.self_class_name);
+            call_expr->expr_data.function_call_data.is_class_method_call =
+                stmt->stmt_data.procedure_call_data.is_class_method_call;
+            resolved_call_target = codegen_resolve_function_call_target(ctx, call_expr,
+                &owned_call_target);
+            if (resolved_call_target != NULL && resolved_call_target[0] != '\0')
+            {
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                {
+                    free(stmt->stmt_data.procedure_call_data.mangled_id);
+                    stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+                }
+                stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_call_target);
+                if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+                    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+                else if (owned_call_target != NULL)
+                    proc_name = owned_call_target;
+                else
+                    proc_name = (char *)resolved_call_target;
+            }
+            if (owned_call_target != NULL)
+                free(owned_call_target);
+            call_expr->expr_data.function_call_data.args_expr = NULL;
+            call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
+            call_expr->expr_data.function_call_data.resolved_func = NULL;
+            destroy_expr(call_expr);
+        }
+    }
+
     /* Deterministic external name selection (no defensive fallback):
      * If a procedure definition exists and declares an explicit external alias (cname_override),
      * prefer it as the call target unconditionally. Otherwise, rely on the call-site mangled name
@@ -11174,6 +11238,9 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
         }
     }
+
+    if (proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var"))
+        proc_name = "kgpc_prefetch";
 // removed assert on proc_name
 // removed assert on proc_name
 // removed assert on proc_name
@@ -11350,7 +11417,6 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     else if (call_hash_type == HASHTYPE_PROCEDURE)
     {
         /* DIRECT CALL LOGIC */
-
         int requires_static_link = 0;
         if (call_kgpc_type != NULL && call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             call_kgpc_type->info.proc_info.definition != NULL)
@@ -11536,6 +11602,49 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         return inst_list;
     }
     
+    if (call_hash_type == HASHTYPE_FUNCTION)
+    {
+        struct Expression *call_expr = mk_functioncall(stmt->line_num,
+            stmt->stmt_data.procedure_call_data.id != NULL ?
+                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
+            stmt->stmt_data.procedure_call_data.expr_args);
+        if (call_expr == NULL)
+            return inst_list;
+
+        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+        {
+            call_expr->expr_data.function_call_data.mangled_id =
+                strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+        }
+        call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
+            stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
+        call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
+        call_expr->expr_data.function_call_data.call_kgpc_type =
+            stmt->stmt_data.procedure_call_data.call_kgpc_type;
+        call_expr->expr_data.function_call_data.is_call_info_valid =
+            stmt->stmt_data.procedure_call_data.is_call_info_valid;
+        call_expr->expr_data.function_call_data.is_virtual_call =
+            stmt->stmt_data.procedure_call_data.is_virtual_call;
+        call_expr->expr_data.function_call_data.is_interface_call =
+            stmt->stmt_data.procedure_call_data.is_interface_call;
+        call_expr->expr_data.function_call_data.vmt_index =
+            stmt->stmt_data.procedure_call_data.vmt_index;
+        if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+            call_expr->expr_data.function_call_data.self_class_name =
+                strdup(stmt->stmt_data.procedure_call_data.self_class_name);
+        call_expr->expr_data.function_call_data.is_class_method_call =
+            stmt->stmt_data.procedure_call_data.is_class_method_call;
+
+        Register_t *discard_reg = NULL;
+        inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
+        if (discard_reg != NULL)
+            free_reg(get_reg_stack(), discard_reg);
+        call_expr->expr_data.function_call_data.args_expr = NULL;
+        call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
+        destroy_expr(call_expr);
+        return inst_list;
+    }
+
     /* If we reach here, it's a compiler bug - this should never happen.
      * In semantic checking, we should have caught any invalid procedure calls.
      * If we get here, it means:

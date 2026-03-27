@@ -724,6 +724,61 @@ KgpcType* create_record_type(struct RecordType *record_info) {
     return type;
 }
 
+KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
+{
+    if (src == NULL)
+        return NULL;
+
+    KgpcType *clone = (KgpcType *)calloc(1, sizeof(KgpcType));
+    if (clone == NULL)
+        return NULL;
+
+    clone->kind = src->kind;
+    clone->size_in_bytes = src->size_in_bytes;
+    clone->alignment_in_bytes = src->alignment_in_bytes;
+    clone->ref_count = 1;
+
+    if (src->type_alias != NULL)
+        kgpc_type_set_type_alias(clone, src->type_alias);
+
+    switch (src->kind) {
+        case TYPE_KIND_PRIMITIVE:
+            clone->info.primitive_type_tag = src->info.primitive_type_tag;
+            break;
+        case TYPE_KIND_POINTER:
+            clone->info.points_to = kgpc_type_clone_shallow_owned(src->info.points_to);
+            break;
+        case TYPE_KIND_ARRAY:
+            clone->info.array_info.element_type =
+                kgpc_type_clone_shallow_owned(src->info.array_info.element_type);
+            clone->info.array_info.start_index = src->info.array_info.start_index;
+            clone->info.array_info.end_index = src->info.array_info.end_index;
+            clone->info.array_info.element_type_id =
+                src->info.array_info.element_type_id != NULL ?
+                    strdup(src->info.array_info.element_type_id) : NULL;
+            break;
+        case TYPE_KIND_PROCEDURE:
+            clone->info.proc_info.params = CopyListShallow(src->info.proc_info.params);
+            clone->info.proc_info.owns_params = 0;
+            clone->info.proc_info.return_type =
+                kgpc_type_clone_shallow_owned(src->info.proc_info.return_type);
+            clone->info.proc_info.definition = src->info.proc_info.definition;
+            clone->info.proc_info.return_type_id =
+                src->info.proc_info.return_type_id != NULL ?
+                    strdup(src->info.proc_info.return_type_id) : NULL;
+            break;
+        case TYPE_KIND_RECORD:
+            clone->info.record_info = clone_record_type(src->info.record_info);
+            break;
+        case TYPE_KIND_ARRAY_OF_CONST:
+            clone->info.array_of_const_info.element_size =
+                src->info.array_of_const_info.element_size;
+            break;
+    }
+
+    return clone;
+}
+
 /* Create KgpcType from TypeAlias structure
  * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
  * Returns NULL if conversion fails (e.g., unresolvable type reference)

@@ -916,16 +916,28 @@ static void memo_table_destroy(memo_table_t* table) {
         return;
     }
 
+    size_t entry_count = 0;
     for (size_t i = 0; i < table->bucket_count; ++i) {
         memo_entry_t* entry = table->buckets[i];
         while (entry) {
             memo_entry_t* next = entry->next;
+            entry_count++;
             if (entry->has_result) {
                 free_parse_result_contents(&entry->result);
             }
             free(entry);
             entry = next;
         }
+    }
+
+    if (getenv("KGPC_DEBUG_RSS") != NULL) {
+        size_t bucket_bytes = table->bucket_count * sizeof(memo_entry_t*);
+        size_t entry_bytes = entry_count * sizeof(memo_entry_t);
+        fprintf(stderr, "[MEMO] destroy: %zu entries, %zu buckets, "
+                "~%.1f MB (entries) + %.1f KB (buckets)\n",
+                entry_count, table->bucket_count,
+                (double)entry_bytes / (1024.0 * 1024.0),
+                (double)bucket_bytes / 1024.0);
     }
 
     free(table->buckets);
@@ -1677,8 +1689,27 @@ ParseResult parse(input_t * in, combinator_t * comb) {
         should_memoize = false;
     }
 
+    /* Debug: check memo mode */
+    static int debug_parse_trace = -1;
+    if (debug_parse_trace < 0) {
+        debug_parse_trace = (getenv("KGPC_DEBUG_RSS") != NULL) ? 1 : 0;
+    }
+    if (debug_parse_trace && in->memo == NULL && !should_memoize && g_memo_mode != PARSER_MEMO_DISABLED) {
+        static int warned = 0;
+        if (!warned) {
+            fprintf(stderr, "[MEMO] memo SKIPPED for comb=%s memo_id=%zu thresh=%zu cached=%d mode=%d\n",
+                    comb->name ? comb->name : "(null)", comb->memo_id,
+                    ephemeral_memo_threshold, comb->cached, g_memo_mode);
+            warned = 1;
+        }
+    }
+
     if (in->memo == NULL && should_memoize) {
         in->memo = memo_table_create();
+        if (getenv("KGPC_DEBUG_RSS") != NULL) {
+            fprintf(stderr, "[MEMO] memo_table_create() called for parser=%s\n",
+                    comb->name ? comb->name : "(null)");
+        }
     }
 
     int position = in->start;
@@ -2174,6 +2205,26 @@ void parser_drain_free_list(void) {
         comb_free_list = next;
     }
     comb_free_count = 0;
+}
+
+/* Drain the AST node free list, returning memory to the OS.
+ * After calling this, future allocate_ast_node() calls will use malloc(). */
+void parser_drain_ast_free_list(void) {
+#if AST_POOLING
+    while (ast_free_list != NULL) {
+        ast_t *next = ast_free_list->next;
+        free(ast_free_list);
+        ast_free_list = next;
+    }
+#endif
+}
+
+void parser_drain_error_free_list(void) {
+    while (parse_error_free_list != NULL) {
+        ParseError *next = parse_error_free_list->cause;
+        free(parse_error_free_list);
+        parse_error_free_list = next;
+    }
 }
 
 static void free_combinator_recursive(combinator_t* comb, visited_set* visited, extra_node** extras, bool force) {
