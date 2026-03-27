@@ -33,6 +33,7 @@
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 
@@ -96,6 +97,162 @@ void codegen_emit_unresolved_method_stubs(FILE *out, ListNode_t *emitted_subprog
 static inline struct RecordType* codegen_get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
+}
+
+static int codegen_var_decl_contains_id(const Tree_t *decl, const char *var_id)
+{
+    if (decl == NULL || var_id == NULL)
+        return 0;
+
+    ListNode_t *ids = NULL;
+    if (decl->type == TREE_VAR_DECL)
+        ids = decl->tree_data.var_decl_data.ids;
+    else if (decl->type == TREE_ARR_DECL)
+        ids = decl->tree_data.arr_decl_data.ids;
+    else
+        return 0;
+
+    for (ListNode_t *cur = ids; cur != NULL; cur = cur->next)
+    {
+        const char *decl_id = (const char *)cur->cur;
+        if (decl_id != NULL && pascal_identifier_equals(decl_id, var_id))
+            return 1;
+    }
+
+    return 0;
+}
+
+static const Tree_t *codegen_find_var_decl_in_list(ListNode_t *decls, const char *var_id)
+{
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl == NULL)
+            continue;
+        if ((decl->type == TREE_VAR_DECL || decl->type == TREE_ARR_DECL) &&
+            codegen_var_decl_contains_id(decl, var_id))
+            return decl;
+    }
+
+    return NULL;
+}
+
+static const Tree_t *codegen_find_var_decl_for_symbol(CodeGenContext *ctx,
+    const HashNode_t *sym_node, const char *var_id)
+{
+    if (ctx == NULL || ctx->comp_ctx == NULL || var_id == NULL)
+        return NULL;
+
+    if (sym_node != NULL && sym_node->source_unit_index > 0)
+    {
+        LoadedUnit *loaded_unit = compilation_context_find_unit(
+            ctx->comp_ctx, sym_node->source_unit_index);
+        if (loaded_unit != NULL && loaded_unit->unit_tree != NULL &&
+            loaded_unit->unit_tree->type == TREE_UNIT)
+        {
+            Tree_t *unit = loaded_unit->unit_tree;
+            const Tree_t *decl = codegen_find_var_decl_in_list(
+                unit->tree_data.unit_data.interface_var_decls, var_id);
+            if (decl != NULL)
+                return decl;
+            return codegen_find_var_decl_in_list(
+                unit->tree_data.unit_data.implementation_var_decls, var_id);
+        }
+    }
+
+    if (ctx->comp_ctx->program != NULL &&
+        ctx->comp_ctx->program->type == TREE_PROGRAM_TYPE)
+    {
+        return codegen_find_var_decl_in_list(
+            ctx->comp_ctx->program->tree_data.program_data.var_declaration, var_id);
+    }
+
+    return NULL;
+}
+
+static const Tree_t *codegen_find_var_decl_for_unit(CodeGenContext *ctx,
+    int source_unit_index, const char *var_id)
+{
+    if (ctx == NULL || ctx->comp_ctx == NULL || source_unit_index <= 0 || var_id == NULL)
+        return NULL;
+
+    LoadedUnit *loaded_unit = compilation_context_find_unit(
+        ctx->comp_ctx, source_unit_index);
+    if (loaded_unit == NULL || loaded_unit->unit_tree == NULL ||
+        loaded_unit->unit_tree->type != TREE_UNIT)
+        return NULL;
+
+    Tree_t *unit = loaded_unit->unit_tree;
+    const Tree_t *decl = codegen_find_var_decl_in_list(
+        unit->tree_data.unit_data.interface_var_decls, var_id);
+    if (decl != NULL)
+        return decl;
+    return codegen_find_var_decl_in_list(
+        unit->tree_data.unit_data.implementation_var_decls, var_id);
+}
+
+static const char *codegen_global_access_symbol_for_decl(const Tree_t *decl,
+    const char *var_id)
+{
+    if (decl == NULL || var_id == NULL)
+        return NULL;
+
+    if (decl->type == TREE_VAR_DECL)
+    {
+        const char *alias = decl->tree_data.var_decl_data.cname_override;
+        if (alias != NULL && alias[0] != '\0')
+            return alias;
+        return var_id;
+    }
+
+    if (decl->type == TREE_ARR_DECL)
+        return var_id;
+
+    return NULL;
+}
+
+static int codegen_record_has_class_var_named(const struct RecordType *record,
+    const char *field_id)
+{
+    if (record == NULL || field_id == NULL)
+        return 0;
+
+    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_RECORD_FIELD || node->cur == NULL)
+            continue;
+        struct RecordField *field = (struct RecordField *)node->cur;
+        if (field->is_class_var == 1 && field->name != NULL &&
+            pascal_identifier_equals(field->name, field_id))
+            return 1;
+    }
+
+    return 0;
+}
+
+static const char *codegen_outer_owner_class_from_full(const char *owner_class,
+    const char *owner_class_full, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return NULL;
+    buffer[0] = '\0';
+
+    if (owner_class_full != NULL && owner_class != NULL)
+    {
+        const char *suffix = strstr(owner_class_full, owner_class);
+        if (suffix != NULL && suffix > owner_class_full && suffix[-1] == '.')
+        {
+            size_t len = (size_t)((suffix - 1) - owner_class_full);
+            if (len > 0 && len < size)
+            {
+                memcpy(buffer, owner_class_full, len);
+                buffer[len] = '\0';
+                return buffer;
+            }
+        }
+    }
+
+    return NULL;
 }
 
 static struct Expression *codegen_unwrap_typecast_call_expr(struct Expression *expr, SymTab_t *symtab)
@@ -5106,6 +5263,67 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
     char buffer[CODEGEN_MAX_INST_BUF];
     if (inner->type == EXPR_VAR_ID)
     {
+        if (ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *proc_label = NULL;
+            char *resolved_label = NULL;
+            HashNode_t *sym = NULL;
+            if (FindSymbol(&sym, ctx->symtab, inner->expr_data.id) != 0 &&
+                sym != NULL && sym->mangled_id != NULL && sym->type != NULL &&
+                sym->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                proc_label = sym->mangled_id;
+            }
+            else if (ctx->current_subprogram_owner_class != NULL)
+            {
+                const char *impl_target = codegen_find_class_method_impl_id(
+                    ctx->symtab, NULL, ctx->current_subprogram_owner_class, NULL,
+                    inner->expr_data.id);
+                if (impl_target != NULL)
+                    proc_label = impl_target;
+                else
+                {
+                    int needed = snprintf(NULL, 0, "%s__%s",
+                        ctx->current_subprogram_owner_class, inner->expr_data.id) + 1;
+                    resolved_label = malloc((size_t)needed);
+                    if (resolved_label != NULL)
+                    {
+                        snprintf(resolved_label, (size_t)needed, "%s__%s",
+                            ctx->current_subprogram_owner_class, inner->expr_data.id);
+                        ListNode_t *candidates = FindAllIdents(ctx->symtab, resolved_label);
+                        int found = 0;
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                        {
+                            HashNode_t *cand = (HashNode_t *)c->cur;
+                            if (cand != NULL && cand->mangled_id != NULL &&
+                                cand->type != NULL &&
+                                cand->type->kind == TYPE_KIND_PROCEDURE)
+                            {
+                                proc_label = cand->mangled_id;
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (candidates != NULL)
+                            DestroyList(candidates);
+                        if (!found)
+                        {
+                            free(resolved_label);
+                            resolved_label = NULL;
+                        }
+                    }
+                }
+            }
+            if (proc_label != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    proc_label, target_reg->bit_64);
+                if (resolved_label != NULL)
+                    free(resolved_label);
+                return add_inst(inst_list, buffer);
+            }
+        }
+
         StackNode_t *var_node = find_label(inner->expr_data.id);
         if (var_node == NULL && ctx != NULL && ctx->symtab != NULL)
         {
@@ -8902,10 +9120,10 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     char buffer[128];
     int scope_depth = 0;
     StackNode_t *var = find_label_with_depth(var_id, &scope_depth);
+    HashNode_t *sym_node = NULL;
 
     if (var == NULL && ctx != NULL && ctx->symtab != NULL)
     {
-        HashNode_t *sym_node = NULL;
         if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
             sym_node != NULL && sym_node->mangled_id != NULL)
         {
@@ -8914,6 +9132,70 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     }
 
     if(var == NULL) {
+        if (ctx != NULL && ctx->symtab != NULL)
+        {
+            const Tree_t *decl = NULL;
+            const char *global_symbol = NULL;
+            if (sym_node != NULL &&
+                (sym_node->hash_type == HASHTYPE_VAR ||
+                 sym_node->hash_type == HASHTYPE_ARRAY) &&
+                (sym_node->source_unit_index > 0 || sym_node->defined_in_unit))
+            {
+                decl = codegen_find_var_decl_for_symbol(ctx, sym_node, var_id);
+            }
+            if (decl == NULL && ctx->symtab->current_unit_index > 0)
+                decl = codegen_find_var_decl_for_unit(ctx, ctx->symtab->current_unit_index, var_id);
+
+            global_symbol = codegen_global_access_symbol_for_decl(decl, var_id);
+            if (global_symbol != NULL && global_symbol[0] != '\0')
+            {
+                if (sym_node != NULL)
+                    sym_node->referenced += 1;
+                *offset = 0;
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    global_symbol, current_non_local_reg64());
+                inst_list = add_inst(inst_list, buffer);
+                return inst_list;
+            }
+        }
+
+        if (ctx != NULL && ctx->symtab != NULL &&
+            ctx->current_subprogram_owner_class != NULL)
+        {
+            const char *class_labels[3] = {0};
+            char outer_class_buf[256];
+            int class_count = 0;
+
+            class_labels[class_count++] = ctx->current_subprogram_owner_class;
+            if (ctx->current_subprogram_owner_class_full != NULL)
+            {
+                const char *outer = codegen_outer_owner_class_from_full(
+                    ctx->current_subprogram_owner_class,
+                    ctx->current_subprogram_owner_class_full,
+                    outer_class_buf, sizeof(outer_class_buf));
+                if (outer != NULL && outer[0] != '\0' &&
+                    !pascal_identifier_equals(outer, ctx->current_subprogram_owner_class))
+                {
+                    class_labels[class_count++] = outer;
+                }
+            }
+
+            for (int i = 0; i < class_count; ++i)
+            {
+                struct RecordType *class_record = semcheck_lookup_record_type(
+                    ctx->symtab, class_labels[i]);
+                if (class_record != NULL &&
+                    codegen_record_has_class_var_named(class_record, var_id))
+                {
+                    *offset = 0;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        var_id, current_non_local_reg64());
+                    inst_list = add_inst(inst_list, buffer);
+                    return inst_list;
+                }
+            }
+        }
+
         /* If we're inside a nonstatic class method, the bare name may be a field
          * of the owning class that semcheck didn't rewrite to Self.field (e.g.
          * because the method body came from an AST cache and bypassed semcheck).
@@ -8924,26 +9206,15 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
             StackNode_t *self_slot = find_label("Self");
             if (self_slot != NULL)
             {
-                struct RecordType *class_record = NULL;
-                HashNode_t *class_node = NULL;
-                if (FindSymbol(&class_node, ctx->symtab,
-                        (char *)ctx->current_subprogram_owner_class) != 0 &&
-                    class_node != NULL)
-                {
-                    class_record = get_record_type_from_node(class_node);
-                }
+                struct RecordType *class_record = semcheck_lookup_record_type(
+                    ctx->symtab, ctx->current_subprogram_owner_class);
                 /* If short name lookup fails, try the full dotted class path
                  * (e.g. "HeapInc.ThreadState" for nested class types). */
                 if (class_record == NULL &&
                     ctx->current_subprogram_owner_class_full != NULL)
                 {
-                    class_node = NULL;
-                    if (FindSymbol(&class_node, ctx->symtab,
-                            (char *)ctx->current_subprogram_owner_class_full) != 0 &&
-                        class_node != NULL)
-                    {
-                        class_record = get_record_type_from_node(class_node);
-                    }
+                    class_record = semcheck_lookup_record_type(ctx->symtab,
+                        ctx->current_subprogram_owner_class_full);
                 }
                 if (class_record != NULL)
                 {
@@ -8972,6 +9243,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                     /* Check if the bare name is a method of the owning class.
                      * This handles @MethodName references in cached method bodies. */
                     const char *method_label = NULL;
+                    char method_label_buf[256];
+                    method_label_buf[0] = '\0';
                     for (ListNode_t *mn = class_record->methods; mn != NULL; mn = mn->next)
                     {
                         if (mn->cur == NULL)
@@ -8993,15 +9266,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                         while (method_label == NULL && search_record != NULL &&
                                search_record->parent_class_name != NULL)
                         {
-                            HashNode_t *parent_node = NULL;
-                            if (FindSymbol(&parent_node, ctx->symtab,
-                                    search_record->parent_class_name) != 0 &&
-                                parent_node != NULL)
-                            {
-                                search_record = get_record_type_from_node(parent_node);
-                            }
-                            else
-                                break;
+                            search_record = semcheck_lookup_record_type(ctx->symtab,
+                                search_record->parent_class_name);
                             if (search_record == NULL)
                                 break;
                             for (ListNode_t *mn = search_record->methods; mn != NULL; mn = mn->next)
@@ -9037,7 +9303,12 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                             if (method_node->mangled_id != NULL)
                                 method_label = method_node->mangled_id;
                             else
-                                method_label = qualified;
+                            {
+                                strncpy(method_label_buf, qualified,
+                                    sizeof(method_label_buf) - 1);
+                                method_label_buf[sizeof(method_label_buf) - 1] = '\0';
+                                method_label = method_label_buf;
+                            }
                         }
                     }
                     if (method_label == NULL)

@@ -57,6 +57,9 @@ static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx,
     ListNode_t *const_decls);
 static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
     SymTab_t *symtab, int source_unit_index);
+static void codegen_register_record_field_enum_literals(SymTab_t *symtab,
+    struct RecordType *record);
+static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t *symtab);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
@@ -1917,6 +1920,11 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
         if (kgpc != NULL)
         {
             PushTypeOntoScope_Typed(symtab, strdup(decl->tree_data.type_decl_data.id), kgpc);
+            if (decl->tree_data.type_decl_data.info.record != NULL)
+            {
+                codegen_register_record_field_enum_literals(symtab,
+                    decl->tree_data.type_decl_data.info.record);
+            }
             if (created_kgpc)
                 destroy_kgpc_type(kgpc);
         }
@@ -1982,6 +1990,115 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
             }
             if (created_kgpc)
                 destroy_kgpc_type(kgpc);
+        }
+    }
+}
+
+static void codegen_register_record_field_enum_literals(SymTab_t *symtab,
+    struct RecordType *record)
+{
+    if (symtab == NULL || record == NULL)
+        return;
+
+    for (ListNode_t *field_node = record->fields; field_node != NULL; field_node = field_node->next)
+    {
+        if (field_node->type == LIST_RECORD_FIELD && field_node->cur != NULL)
+        {
+            struct RecordField *field = (struct RecordField *)field_node->cur;
+            if (field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                for (ListNode_t *lit = field->enum_literals; lit != NULL; lit = lit->next, ++ordinal)
+                {
+                    const char *name = (const char *)lit->cur;
+                    HashNode_t *existing = NULL;
+                    if (name == NULL)
+                        continue;
+                    if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+                        PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+        }
+        else if (field_node->type == LIST_VARIANT_PART && field_node->cur != NULL)
+        {
+            struct VariantPart *variant = (struct VariantPart *)field_node->cur;
+            if (variant->tag_field != NULL && variant->tag_field->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                for (ListNode_t *lit = variant->tag_field->enum_literals; lit != NULL;
+                     lit = lit->next, ++ordinal)
+                {
+                    const char *name = (const char *)lit->cur;
+                    HashNode_t *existing = NULL;
+                    if (name == NULL)
+                        continue;
+                    if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+                        PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+
+            for (ListNode_t *branch_node = variant->branches; branch_node != NULL;
+                 branch_node = branch_node->next)
+            {
+                if (branch_node->type == LIST_VARIANT_BRANCH && branch_node->cur != NULL)
+                {
+                    struct VariantBranch *branch = (struct VariantBranch *)branch_node->cur;
+                    struct RecordType temp_rec;
+                    memset(&temp_rec, 0, sizeof(temp_rec));
+                    temp_rec.fields = branch->members;
+                    codegen_register_record_field_enum_literals(symtab, &temp_rec);
+                }
+            }
+        }
+    }
+}
+
+static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t *symtab)
+{
+    if (type_decls == NULL || symtab == NULL)
+        return;
+
+    for (ListNode_t *cur = type_decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+        Tree_t *decl = (Tree_t *)cur->cur;
+        if (decl->type != TREE_TYPE_DECL)
+            continue;
+        if (codegen_type_decl_suppressed(decl))
+            continue;
+
+        if (decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
+        {
+            struct TypeAlias *alias = &decl->tree_data.type_decl_data.info.alias;
+            if (alias->is_enum && alias->enum_literals != NULL)
+            {
+                KgpcType *enum_type = create_primitive_type(ENUM_TYPE);
+                int ordinal = 0;
+                for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next, ++ordinal)
+                {
+                    const char *name = (const char *)lit->cur;
+                    HashNode_t *existing = NULL;
+                    if (name == NULL)
+                        continue;
+                    if (FindSymbol(&existing, symtab, name) == 0 || existing == NULL)
+                        PushConstOntoScope_Typed(symtab, (char *)name, ordinal, enum_type);
+                }
+                if (enum_type != NULL)
+                    kgpc_type_release(enum_type);
+            }
+        }
+        else if (decl->tree_data.type_decl_data.kind == TYPE_DECL_RECORD &&
+                 decl->tree_data.type_decl_data.info.record != NULL)
+        {
+            codegen_register_record_field_enum_literals(symtab,
+                decl->tree_data.type_decl_data.info.record);
         }
     }
 }
@@ -3837,10 +3954,22 @@ static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
         return;
 
     Tree_t *unit = loaded_unit->unit_tree;
+    ScopeNode *saved_scope = symtab->current_scope;
+    int saved_unit_index = symtab->current_unit_index;
+    ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, source_unit_index);
+    if (unit_scope != NULL)
+        symtab->current_scope = unit_scope;
+    symtab->current_unit_index = source_unit_index;
+
+    codegen_register_type_enum_literals(unit->tree_data.unit_data.interface_type_decls, symtab);
+    codegen_register_type_enum_literals(unit->tree_data.unit_data.implementation_type_decls, symtab);
     codegen_register_decl_list(unit->tree_data.unit_data.interface_var_decls, symtab, 0);
     codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
     codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
     codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
+
+    symtab->current_scope = saved_scope;
+    symtab->current_unit_index = saved_unit_index;
 }
 
 void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
