@@ -2192,7 +2192,6 @@ static bool compute_packed_record_size_from_source(PascalPreprocessor *pp, const
             if (!resolve_builtin_type_size(pp, field_type, &field_size)) {
                 /* Try resolving as a type alias from const/type declarations */
                 /* For type aliases like "StringDataHeaderHashType = uint16", try const lookup */
-                int64_t alias_val;
                 bool resolved = false;
                 /* Scan source for TYPE_ALIAS = <builtin_type> pattern */
                 if (pp->current_output) {

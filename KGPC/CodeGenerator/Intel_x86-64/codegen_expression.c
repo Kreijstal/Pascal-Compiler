@@ -9064,10 +9064,13 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                          * appears in the assembly output. */
                         codegen_add_unresolved_method_stub(method_label);
                         *offset = 0;
-                        snprintf(buffer, sizeof(buffer),
-                            "\tleaq\t%s(%%rip), %s\n",
-                            method_label, current_non_local_reg64());
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            char method_buffer[384];
+                            snprintf(method_buffer, sizeof(method_buffer),
+                                "\tleaq\t%s(%%rip), %s\n",
+                                method_label, current_non_local_reg64());
+                            inst_list = add_inst(inst_list, method_buffer);
+                        }
                         return inst_list;
                     }
                 }
