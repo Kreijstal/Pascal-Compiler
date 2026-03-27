@@ -4387,25 +4387,62 @@ static int codegen_record_visible_field_count(const struct RecordType *record)
     return count;
 }
 
-static int codegen_record_candidate_score(const struct RecordType *record)
+/*
+ * Compare two record type candidates to determine which is the more
+ * "complete" definition.  When the same type name appears multiple times
+ * in the symbol table (forward declarations, partial imports from
+ * different units), we need to pick the canonical one for code emission.
+ *
+ * Returns < 0 if `a` is better, > 0 if `b` is better, 0 if equivalent.
+ *
+ * The criteria are checked in strict priority order — the first criterion
+ * that distinguishes the two candidates wins.  This avoids the fragility
+ * of magic-number scoring where weights could accidentally interact.
+ */
+static int codegen_compare_record_candidates(
+    const struct RecordType *a, const struct RecordType *b)
 {
-    if (record == NULL)
-        return INT_MIN;
+    assert(a != NULL && b != NULL);
 
-    int score = 0;
-    if (record->parent_fields_merged)
-        score += 10000;
-    if (record->is_class)
-        score += 1000;
-    if (record->is_interface)
-        score += 1000;
-    score += record->num_interfaces * 200;
-    score += codegen_record_visible_field_count(record) * 10;
-    score += ListLength(record->method_templates) * 2;
-    score += ListLength(record->properties);
-    if (record->parent_class_name != NULL)
-        score += 25;
-    return score;
+    /* 1. A record with parent fields merged is fully resolved — always prefer it. */
+    if (a->parent_fields_merged != b->parent_fields_merged)
+        return a->parent_fields_merged ? -1 : 1;
+
+    /* 2. Prefer class/interface over plain record types. */
+    int a_typed = (a->is_class || a->is_interface);
+    int b_typed = (b->is_class || b->is_interface);
+    if (a_typed != b_typed)
+        return a_typed ? -1 : 1;
+
+    /* 3. More implemented interfaces = more complete definition. */
+    if (a->num_interfaces != b->num_interfaces)
+        return (a->num_interfaces > b->num_interfaces) ? -1 : 1;
+
+    /* 4. Having a parent class name indicates a non-stub definition. */
+    int a_has_parent = (a->parent_class_name != NULL);
+    int b_has_parent = (b->parent_class_name != NULL);
+    if (a_has_parent != b_has_parent)
+        return a_has_parent ? -1 : 1;
+
+    /* 5. More visible fields = more complete definition. */
+    int a_fields = codegen_record_visible_field_count(a);
+    int b_fields = codegen_record_visible_field_count(b);
+    if (a_fields != b_fields)
+        return (a_fields > b_fields) ? -1 : 1;
+
+    /* 6. More methods = more complete definition. */
+    int a_methods = ListLength(a->method_templates);
+    int b_methods = ListLength(b->method_templates);
+    if (a_methods != b_methods)
+        return (a_methods > b_methods) ? -1 : 1;
+
+    /* 7. More properties = more complete definition. */
+    int a_props = ListLength(a->properties);
+    int b_props = ListLength(b->properties);
+    if (a_props != b_props)
+        return (a_props > b_props) ? -1 : 1;
+
+    return 0;
 }
 
 static int codegen_record_is_forward_stub(const struct RecordType *record)
@@ -4436,7 +4473,6 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
         return NULL;
 
     const struct RecordType *best = NULL;
-    int best_score = INT_MIN;
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
         struct RecordType *cand_record = get_record_type_from_node(cand);
@@ -4448,11 +4484,8 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
             cand_record = cand->type->info.points_to->info.record_info;
         if (cand_record == NULL)
             continue;
-        int score = codegen_record_candidate_score(cand_record);
-        if (best == NULL || score > best_score) {
+        if (best == NULL || codegen_compare_record_candidates(cand_record, best) < 0)
             best = cand_record;
-            best_score = score;
-        }
     }
     DestroyList(matches);
     return best;
@@ -4712,14 +4745,12 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
 
     HashNode_t *best_node = NULL;
     struct RecordType *best_record = NULL;
-    int best_score = INT_MIN;
 
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
         struct RecordType *cand_record = get_record_type_from_node(cand);
         if (cand_record == NULL)
             continue;
-        int score = codegen_record_candidate_score(cand_record);
         const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
         if (dbg != NULL && *class_label != NULL &&
             (strcasecmp(*class_label, "TList") == 0 ||
@@ -4727,18 +4758,18 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
              strcasecmp(*class_label, "TComponent") == 0 ||
              strcasecmp(*class_label, "TInterfaceList") == 0)) {
             fprintf(stderr,
-                "[KGPC] canonical candidate %s: rec=%p score=%d class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-                *class_label, (void *)cand_record, score, cand_record->is_class,
+                "[KGPC] canonical candidate %s: rec=%p class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
+                *class_label, (void *)cand_record, cand_record->is_class,
                 cand_record->is_interface,
                 cand_record->parent_class_name != NULL ? cand_record->parent_class_name : "(null)",
                 cand_record->num_interfaces, ListLength(cand_record->method_templates),
                 ListLength(cand_record->properties), cand_record->parent_fields_merged,
                 cand_record->type_id != NULL ? cand_record->type_id : "(null)");
         }
-        if (best_node == NULL || score > best_score) {
+        if (best_record == NULL ||
+            codegen_compare_record_candidates(cand_record, best_record) < 0) {
             best_node = cand;
             best_record = cand_record;
-            best_score = score;
         }
     }
 
@@ -4754,8 +4785,8 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
          strcasecmp(*class_label, "TComponent") == 0 ||
          strcasecmp(*class_label, "TInterfaceList") == 0)) {
         fprintf(stderr,
-            "[KGPC] canonical selected %s: rec=%p score=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-            *class_label, (void *)best_record, best_score,
+            "[KGPC] canonical selected %s: rec=%p parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
+            *class_label, (void *)best_record,
             best_record->parent_class_name != NULL ? best_record->parent_class_name : "(null)",
             best_record->num_interfaces, ListLength(best_record->method_templates),
             ListLength(best_record->properties), best_record->parent_fields_merged,

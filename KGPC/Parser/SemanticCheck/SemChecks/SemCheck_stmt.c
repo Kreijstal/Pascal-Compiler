@@ -3018,6 +3018,95 @@ static int semcheck_builtin_settextcodepage(SymTab_t *symtab, struct Statement *
     return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
 }
 
+/*
+ * Per-parameter penalty classification for write/writeln overload resolution.
+ * Lower penalty = better match.  Penalties are summed across all parameters
+ * to produce a total candidate penalty.
+ *
+ * The penalty tiers are:
+ *   EXACT (0)        — types match exactly
+ *   INT_PROMOTION (1) — Int ↔ LongInt interchangeable
+ *   STRING_SUBTYPE (2) — STRING_TYPE matches but UnicodeString is less preferred
+ *   FILE_SUBTYPE (3)  — FILE_TYPE matches but TypedFile doesn't match plain File
+ *   INCOMPATIBLE (1000) — no valid conversion
+ */
+enum {
+    WRITE_PENALTY_EXACT = 0,
+    WRITE_PENALTY_INT_PROMOTION = 1,
+    WRITE_PENALTY_STRING_SUBTYPE = 2,
+    WRITE_PENALTY_FILE_SUBTYPE = 3,
+    WRITE_PENALTY_INCOMPATIBLE = 1000
+};
+
+static int semcheck_write_param_penalty(Tree_t *formal_decl, int formal_type, int actual_type)
+{
+    if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
+        return WRITE_PENALTY_EXACT;
+
+    if (formal_type == actual_type)
+    {
+        /* When both are STRING_TYPE, prefer RawByteString over UnicodeString.
+         * RawByteString is FPC's catch-all byte string type; UnicodeString
+         * requires codepage conversion. */
+        if (formal_type == STRING_TYPE)
+        {
+            const char *formal_type_id = (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                ? formal_decl->tree_data.var_decl_data.type_id : NULL;
+            if (formal_type_id != NULL && strcasecmp(formal_type_id, "UnicodeString") == 0)
+                return WRITE_PENALTY_STRING_SUBTYPE;
+        }
+        /* When both are FILE_TYPE, prefer plain File over TypedFile.
+         * A TypedFile formal should not match a plain File actual. */
+        if (formal_type == FILE_TYPE)
+        {
+            const char *formal_type_id = (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                ? formal_decl->tree_data.var_decl_data.type_id : NULL;
+            if (formal_type_id != NULL && strcasecmp(formal_type_id, "TypedFile") == 0)
+                return WRITE_PENALTY_FILE_SUBTYPE;
+        }
+        return WRITE_PENALTY_EXACT;
+    }
+
+    if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+        (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
+        return WRITE_PENALTY_INT_PROMOTION;
+
+    return WRITE_PENALTY_INCOMPATIBLE;
+}
+
+/*
+ * Compute the total penalty for a write/writeln candidate by summing
+ * per-parameter penalties.  Used for both initial scoring and tie-breaking
+ * recomputation (eliminating code duplication).
+ */
+static int semcheck_write_candidate_total_penalty(HashNode_t *candidate,
+    ListNode_t *actual_args, SymTab_t *symtab, int max_scope_lev)
+{
+    assert(candidate != NULL);
+    assert(candidate->type != NULL);
+    assert(candidate->type->kind == TYPE_KIND_PROCEDURE);
+
+    ListNode_t *formal = candidate->type->info.proc_info.params;
+    ListNode_t *actual = actual_args;
+    int total = 0;
+
+    while (formal != NULL && actual != NULL)
+    {
+        Tree_t *formal_decl = (Tree_t *)formal->cur;
+        struct Expression *actual_expr = (struct Expression *)actual->cur;
+        int formal_type = resolve_param_type(formal_decl, symtab);
+        int actual_type = UNKNOWN_TYPE;
+        semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+
+        total += semcheck_write_param_penalty(formal_decl, formal_type, actual_type);
+
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    return total;
+}
+
 static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (symtab == NULL || stmt == NULL)
@@ -3070,7 +3159,7 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
     {
         int call_arg_count = ListLength(stmt->stmt_data.procedure_call_data.expr_args);
         HashNode_t *best_match = NULL;
-        int best_score = 9999;
+        int best_penalty = WRITE_PENALTY_INCOMPATIBLE + 1;
         int num_best = 0;
 
         for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
@@ -3083,64 +3172,16 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
             if (ListLength(formal_params) != call_arg_count)
                 continue;
 
-            ListNode_t *formal = formal_params;
-            ListNode_t *actual = stmt->stmt_data.procedure_call_data.expr_args;
-            int current_score = 0;
-            while (formal != NULL && actual != NULL)
+            int penalty = semcheck_write_candidate_total_penalty(candidate,
+                stmt->stmt_data.procedure_call_data.expr_args, symtab, max_scope_lev);
+
+            if (penalty < best_penalty)
             {
-                Tree_t *formal_decl = (Tree_t *)formal->cur;
-                struct Expression *actual_expr = (struct Expression *)actual->cur;
-                int formal_type = resolve_param_type(formal_decl, symtab);
-                int actual_type = UNKNOWN_TYPE;
-                semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
-
-                if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
-                    current_score += 0;
-                else if (formal_type == actual_type)
-                {
-                    /* When both are STRING_TYPE, prefer RawByteString over
-                     * UnicodeString.  RawByteString is FPC's catch-all byte
-                     * string type that any AnsiString converts to without
-                     * codepage conversion; UnicodeString requires conversion. */
-                    if (formal_type == STRING_TYPE && actual_type == STRING_TYPE)
-                    {
-                        const char *formal_type_id = NULL;
-                        if (formal_decl->type == TREE_VAR_DECL)
-                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
-                        if (formal_type_id != NULL &&
-                            strcasecmp(formal_type_id, "UnicodeString") == 0)
-                            current_score += 2;  /* penalize UnicodeString */
-                    }
-                    /* When both are FILE_TYPE, prefer the exact match:
-                     * File formal for File actual, TypedFile for TypedFile.
-                     * A TypedFile formal should not match a plain File actual. */
-                    if (formal_type == FILE_TYPE)
-                    {
-                        const char *formal_type_id = NULL;
-                        if (formal_decl->type == TREE_VAR_DECL)
-                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
-                        if (formal_type_id != NULL &&
-                            strcasecmp(formal_type_id, "TypedFile") == 0)
-                            current_score += 3;  /* penalize TypedFile when actual is plain File */
-                    }
-                }
-                else if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
-                         (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
-                    current_score += 1;
-                else
-                    current_score += 1000;
-
-                formal = formal->next;
-                actual = actual->next;
-            }
-
-            if (current_score < best_score)
-            {
-                best_score = current_score;
+                best_penalty = penalty;
                 best_match = candidate;
                 num_best = 1;
             }
-            else if (current_score == best_score)
+            else if (penalty == best_penalty)
             {
                 num_best++;
             }
@@ -3159,38 +3200,9 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
                     continue;
                 if (ListLength(c2->type->info.proc_info.params) != call_arg_count)
                     continue;
-                /* Recompute this candidate's score to check if it ties */
-                ListNode_t *f2 = c2->type->info.proc_info.params;
-                ListNode_t *a2 = stmt->stmt_data.procedure_call_data.expr_args;
-                int s2 = 0;
-                while (f2 != NULL && a2 != NULL)
-                {
-                    Tree_t *fd = (Tree_t *)f2->cur;
-                    struct Expression *ae = (struct Expression *)a2->cur;
-                    int ft = resolve_param_type(fd, symtab);
-                    int at = UNKNOWN_TYPE;
-                    semcheck_stmt_expr_tag(&at, symtab, ae, max_scope_lev, NO_MUTATE);
-                    if (ft == UNKNOWN_TYPE || at == UNKNOWN_TYPE)
-                        s2 += 0;
-                    else if (ft == at)
-                    {
-                        if (ft == STRING_TYPE)
-                        {
-                            const char *fti = (fd->type == TREE_VAR_DECL) ?
-                                fd->tree_data.var_decl_data.type_id : NULL;
-                            if (fti != NULL && strcasecmp(fti, "UnicodeString") == 0)
-                                s2 += 2;
-                        }
-                    }
-                    else if ((ft == LONGINT_TYPE && at == INT_TYPE) ||
-                             (ft == INT_TYPE && at == LONGINT_TYPE))
-                        s2 += 1;
-                    else
-                        s2 += 1000;
-                    f2 = f2->next;
-                    a2 = a2->next;
-                }
-                if (s2 == best_score && c2->mangled_id != NULL &&
+                int c2_penalty = semcheck_write_candidate_total_penalty(c2,
+                    stmt->stmt_data.procedure_call_data.expr_args, symtab, max_scope_lev);
+                if (c2_penalty == best_penalty && c2->mangled_id != NULL &&
                     strcmp(c2->mangled_id, best_match->mangled_id) != 0)
                 {
                     all_same = 0;
@@ -4073,8 +4085,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                     if (parent_method_node == NULL)
                                     {
                                         HashNode_t *best_match = NULL;
-                                        int best_rank = 0, num_best = 0;
-                                        semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                        int num_best = 0;
+                                        semcheck_resolve_overload(&best_match, &num_best,
                                             parent_candidates, self_arg, symtab, call_expr, INT_MAX, 0);
                                         if (best_match != NULL && num_best == 1)
                                             parent_method_node = best_match;
@@ -7983,7 +7995,7 @@ proccall_parent_resolve_done:
         call_stub.line_num = stmt->line_num;
         call_stub.type = EXPR_FUNCTION_CALL;
 
-        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+        int overload_status = semcheck_resolve_overload(&best_candidate, &num_best_matches,
             overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
 
         if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1)
@@ -8021,7 +8033,7 @@ proccall_parent_resolve_done:
         call_stub.line_num = stmt->line_num;
         call_stub.type = EXPR_FUNCTION_CALL;
 
-        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+        int overload_status = semcheck_resolve_overload(&best_candidate, &num_best_matches,
             overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
 
         if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1 &&

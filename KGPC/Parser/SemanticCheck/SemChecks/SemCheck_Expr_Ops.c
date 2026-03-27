@@ -14,7 +14,6 @@
 #include "SemCheck_Expr_Internal.h"
 
 int semcheck_resolve_overload(HashNode_t **best_match_out,
-    int *best_rank_out,
     int *num_best_out,
     ListNode_t *overload_candidates,
     ListNode_t *args_given,
@@ -28,6 +27,87 @@ static int semcheck_operator_lookup_unit_index(SymTab_t *symtab)
     if (symtab != NULL && symtab->current_scope != NULL && symtab->current_scope->unit_index > 0)
         return symtab->current_scope->unit_index;
     return semcheck_get_current_unit_index();
+}
+
+/*
+ * Per-operand match quality for binary operator candidate resolution.
+ * EXACT > COMPATIBLE > INCOMPATIBLE, ranked by decreasing desirability.
+ */
+typedef enum {
+    BINOP_MATCH_EXACT = 2,        /* kgpc_type_equals: types are identical */
+    BINOP_MATCH_COMPATIBLE = 1,   /* are_types_compatible_for_assignment: implicit conversion ok */
+    BINOP_MATCH_INCOMPATIBLE = 0  /* no valid conversion */
+} BinopOperandMatch;
+
+/*
+ * Find the best matching binary operator candidate from a list of overloads.
+ * Each candidate's two formal parameters are compared against the actual
+ * left/right operand types.  The candidate with the highest total match
+ * quality (sum of per-operand matches) wins.  If no candidate is valid,
+ * returns NULL.
+ */
+static HashNode_t *semcheck_find_best_binary_operator_candidate(
+    ListNode_t *candidates, KgpcType *left_arg_type, KgpcType *right_arg_type,
+    SymTab_t *symtab)
+{
+    HashNode_t *best = NULL;
+    int best_quality = -1;  /* sum of BinopOperandMatch values for the best candidate */
+
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        if (candidate == NULL ||
+            (candidate->hash_type != HASHTYPE_FUNCTION &&
+             candidate->hash_type != HASHTYPE_PROCEDURE) ||
+            candidate->type == NULL)
+            continue;
+
+        ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
+        if (params == NULL || params->next == NULL)
+            continue;
+
+        Tree_t *left_decl = (Tree_t *)params->cur;
+        Tree_t *right_decl = (Tree_t *)params->next->cur;
+        int owns_left = 0;
+        int owns_right = 0;
+        KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
+        KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
+
+        int valid = 1;
+        int quality = 0;
+
+        if (left_formal != NULL && left_arg_type != NULL)
+        {
+            if (kgpc_type_equals(left_formal, left_arg_type))
+                quality += BINOP_MATCH_EXACT;
+            else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
+                quality += BINOP_MATCH_COMPATIBLE;
+            else
+                valid = 0;
+        }
+        if (valid && right_formal != NULL && right_arg_type != NULL)
+        {
+            if (kgpc_type_equals(right_formal, right_arg_type))
+                quality += BINOP_MATCH_EXACT;
+            else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
+                quality += BINOP_MATCH_COMPATIBLE;
+            else
+                valid = 0;
+        }
+
+        if (owns_left && left_formal != NULL)
+            destroy_kgpc_type(left_formal);
+        if (owns_right && right_formal != NULL)
+            destroy_kgpc_type(right_formal);
+
+        if (valid && quality > best_quality)
+        {
+            best = candidate;
+            best_quality = quality;
+        }
+    }
+
+    return best;
 }
 
 static int semcheck_find_ident_by_prefix_visible(HashNode_t **hash_return,
@@ -190,9 +270,8 @@ static int semcheck_try_refine_funccall_to_bool(
         return 0;
 
     HashNode_t *best_match = NULL;
-    int best_rank = 0;
-    int num_best = 0;
-    int resolve_status = semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+        int num_best = 0;
+    int resolve_status = semcheck_resolve_overload(&best_match, &num_best,
         bool_candidates, call_expr->expr_data.function_call_data.args_expr,
         symtab, call_expr, max_scope_lev, 1);
     DestroyList(bool_candidates);
@@ -541,66 +620,12 @@ int semcheck_relop(int *type_return,
                             {
                                 KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
                                 KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
-                                HashNode_t *best_exact = NULL;
-                                int best_exact_score = -1;
-                                for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
-                                {
-                                    HashNode_t *candidate = (HashNode_t *)cur->cur;
-                                    if (candidate == NULL ||
-                                        (candidate->hash_type != HASHTYPE_FUNCTION &&
-                                         candidate->hash_type != HASHTYPE_PROCEDURE) ||
-                                        candidate->type == NULL)
-                                    {
-                                        continue;
-                                    }
-
-                                    ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
-                                    if (params == NULL || params->next == NULL)
-                                        continue;
-
-                                    Tree_t *left_decl = (Tree_t *)params->cur;
-                                    Tree_t *right_decl = (Tree_t *)params->next->cur;
-                                    int owns_left = 0;
-                                    int owns_right = 0;
-                                    KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
-                                    KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
-
-                                    int score = 0;
-                                    int valid = 1;
-                                    if (left_formal != NULL && left_arg_type != NULL)
-                                    {
-                                        if (kgpc_type_equals(left_formal, left_arg_type))
-                                            score += 2;
-                                        else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
-                                            score += 1;
-                                        else
-                                            valid = 0;
-                                    }
-                                    if (valid && right_formal != NULL && right_arg_type != NULL)
-                                    {
-                                        if (kgpc_type_equals(right_formal, right_arg_type))
-                                            score += 2;
-                                        else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
-                                            score += 1;
-                                        else
-                                            valid = 0;
-                                    }
-                                    if (owns_left && left_formal != NULL)
-                                        destroy_kgpc_type(left_formal);
-                                    if (owns_right && right_formal != NULL)
-                                        destroy_kgpc_type(right_formal);
-
-                                    if (valid && score > best_exact_score)
-                                    {
-                                        best_exact = candidate;
-                                        best_exact_score = score;
-                                    }
-                                }
+                                HashNode_t *best_exact = semcheck_find_best_binary_operator_candidate(
+                                    operator_candidates, left_arg_type, right_arg_type, symtab);
                                 if (best_exact != NULL)
                                     operator_node = best_exact;
 
                                 HashNode_t *best_match = NULL;
-                                int best_rank = 0;
                                 int num_best = 0;
                                 ListNode_t *args_given = NULL;
                                 if (operator_node == NULL)
@@ -611,7 +636,6 @@ int semcheck_relop(int *type_return,
                                         args_given->next = CreateListNode(expr2, LIST_EXPR);
                                         int resolve_status = semcheck_resolve_overload(
                                             &best_match,
-                                            &best_rank,
                                             &num_best,
                                             operator_candidates,
                                             args_given,
@@ -1013,13 +1037,12 @@ relop_fallback:
                             if (operator_candidates != NULL)
                             {
                                 HashNode_t *best_match = NULL;
-                                int best_rank = 0;
                                 int num_best = 0;
                                 ListNode_t *args_given = CreateListNode(expr1, LIST_EXPR);
                                 if (args_given != NULL)
                                 {
                                     args_given->next = CreateListNode(expr2, LIST_EXPR);
-                                    if (semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                    if (semcheck_resolve_overload(&best_match, &num_best,
                                             operator_candidates, args_given, symtab, expr,
                                             max_scope_lev, 1) == 0 && best_match != NULL)
                                     {
@@ -1549,66 +1572,12 @@ int semcheck_addop(int *type_return,
                     {
                         KgpcType *left_arg_type = expr1 != NULL ? expr1->resolved_kgpc_type : NULL;
                         KgpcType *right_arg_type = expr2 != NULL ? expr2->resolved_kgpc_type : NULL;
-                        HashNode_t *best_exact = NULL;
-                        int best_exact_score = -1;
-                        for (ListNode_t *cur = operator_candidates; cur != NULL; cur = cur->next)
-                        {
-                            HashNode_t *candidate = (HashNode_t *)cur->cur;
-                            if (candidate == NULL ||
-                                (candidate->hash_type != HASHTYPE_FUNCTION &&
-                                 candidate->hash_type != HASHTYPE_PROCEDURE) ||
-                                candidate->type == NULL)
-                            {
-                                continue;
-                            }
-
-                            ListNode_t *params = kgpc_type_get_procedure_params(candidate->type);
-                            if (params == NULL || params->next == NULL)
-                                continue;
-
-                            Tree_t *left_decl = (Tree_t *)params->cur;
-                            Tree_t *right_decl = (Tree_t *)params->next->cur;
-                            int owns_left = 0;
-                            int owns_right = 0;
-                            KgpcType *left_formal = resolve_type_from_vardecl(left_decl, symtab, &owns_left);
-                            KgpcType *right_formal = resolve_type_from_vardecl(right_decl, symtab, &owns_right);
-
-                            int score = 0;
-                            int valid = 1;
-                            if (left_formal != NULL && left_arg_type != NULL)
-                            {
-                                if (kgpc_type_equals(left_formal, left_arg_type))
-                                    score += 2;
-                                else if (are_types_compatible_for_assignment(left_formal, left_arg_type, symtab))
-                                    score += 1;
-                                else
-                                    valid = 0;
-                            }
-                            if (valid && right_formal != NULL && right_arg_type != NULL)
-                            {
-                                if (kgpc_type_equals(right_formal, right_arg_type))
-                                    score += 2;
-                                else if (are_types_compatible_for_assignment(right_formal, right_arg_type, symtab))
-                                    score += 1;
-                                else
-                                    valid = 0;
-                            }
-                            if (owns_left && left_formal != NULL)
-                                destroy_kgpc_type(left_formal);
-                            if (owns_right && right_formal != NULL)
-                                destroy_kgpc_type(right_formal);
-
-                            if (valid && score > best_exact_score)
-                            {
-                                best_exact = candidate;
-                                best_exact_score = score;
-                            }
-                        }
+                        HashNode_t *best_exact = semcheck_find_best_binary_operator_candidate(
+                            operator_candidates, left_arg_type, right_arg_type, symtab);
                         if (best_exact != NULL)
                             operator_node = best_exact;
 
-                        HashNode_t *best_match = NULL;
-                        int best_rank = 0;
+                                                HashNode_t *best_match = NULL;
                         int num_best = 0;
                         if (operator_node == NULL)
                         {
@@ -1618,7 +1587,6 @@ int semcheck_addop(int *type_return,
                                 args_given->next = CreateListNode(expr2, LIST_EXPR);
                                 int resolve_status = semcheck_resolve_overload(
                                     &best_match,
-                                    &best_rank,
                                     &num_best,
                                     operator_candidates,
                                     args_given,
