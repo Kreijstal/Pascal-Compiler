@@ -18454,10 +18454,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
             PushFuncRetOntoScope_Typed(symtab, subprogram->tree_data.subprogram_data.result_var_name, return_kgpc_type);
         }
 
-        /* For class methods, also add an alias using the unmangled method name.
-         * The method_name field contains the bare name (e.g., "_AddRef", "ReadNext"). */
+        /* For class/record methods (but NOT type helpers), add an alias using
+         * the unmangled method name so that FuncName.field works as result-
+         * variable field access.  Type helpers use Result for the return value
+         * and the method name should still refer to external functions. */
         const char *alias_suffix = subprogram->tree_data.subprogram_data.method_name;
-        if (alias_suffix != NULL && alias_suffix[0] != '\0')
+        int is_type_helper_method = 0;
+        if (subprogram->tree_data.subprogram_data.owner_class != NULL)
+            is_type_helper_method = from_cparser_is_type_helper(
+                subprogram->tree_data.subprogram_data.owner_class);
+        if (alias_suffix != NULL && alias_suffix[0] != '\0' && !is_type_helper_method)
         {
             size_t alias_len = strlen(alias_suffix);
             if (alias_len > 0 && alias_len < 128)
@@ -18466,8 +18472,16 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                 memcpy(alias_buf, alias_suffix, alias_len);
                 alias_buf[alias_len] = '\0';
 
+                /* Only skip if the name is already a function-return in the
+                 * current scope (to avoid duplicates).  Outer-scope entries
+                 * (like the method itself) should be shadowed by the return
+                 * variable alias. */
                 HashNode_t *suffix_check = NULL;
-                if (FindSymbol(&suffix_check, symtab, alias_buf) == 0)
+                HashTable_t *cur_tbl = symtab->current_scope->table;
+                if (cur_tbl != NULL)
+                    suffix_check = FindIdentInTable(cur_tbl, alias_buf);
+                if (suffix_check == NULL ||
+                    suffix_check->hash_type != HASHTYPE_FUNCTION_RETURN)
                     PushFuncRetOntoScope_Typed(symtab, alias_buf, return_kgpc_type);
             }
         }

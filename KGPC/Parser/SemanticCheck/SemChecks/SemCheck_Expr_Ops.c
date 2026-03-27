@@ -2401,20 +2401,40 @@ int semcheck_varid(int *type_return,
                 KgpcType *ret_type = semcheck_get_current_subprogram_return_kgpc_type(symtab, &owns_ret);
                 if (ret_type != NULL)
                 {
-                    if (semcheck_normalize_result_identifier(expr) != 0)
+                    /* Only normalize the identifier to "Result" when there is
+                     * no user-declared local variable with the same name,
+                     * otherwise the codegen would pick up the local instead of
+                     * the function return slot. */
+                    const char *norm_result_var = semcheck_get_current_subprogram_result_var_name();
+                    const char *norm_replacement = (norm_result_var != NULL && norm_result_var[0] != '\0')
+                        ? norm_result_var : "Result";
+                    int has_local_clash = 0;
+                    if (!pascal_identifier_equals(id, norm_replacement))
                     {
-                        if (owns_ret)
-                            destroy_kgpc_type(ret_type);
-                        return -1;
+                        HashNode_t *local_check = NULL;
+                        int local_scope = 0;
+                        local_check = semcheck_find_preferred_value_ident(symtab, norm_replacement, &local_scope);
+                        if (local_check != NULL && local_scope == 0 &&
+                            local_check->hash_type != HASHTYPE_FUNCTION_RETURN)
+                            has_local_clash = 1;
+                    }
+                    if (!has_local_clash)
+                    {
+                        if (semcheck_normalize_result_identifier(expr) != 0)
+                        {
+                            if (owns_ret)
+                                destroy_kgpc_type(ret_type);
+                            return -1;
+                        }
                     }
                     *type_return = semcheck_tag_from_kgpc(ret_type);
                     semcheck_expr_set_resolved_kgpc_type_shared(expr, ret_type);
                     semcheck_set_result_expr_metadata(expr, symtab, ret_type);
-                if (owns_ret)
-                    destroy_kgpc_type(ret_type);
-                return return_val;
+                    if (owns_ret)
+                        destroy_kgpc_type(ret_type);
+                    return return_val;
+                }
             }
-        }
     }
     if (kgpc_getenv("KGPC_DEBUG_EOF") != NULL && id != NULL &&
         pascal_identifier_equals(id, "EOF"))
@@ -3282,7 +3302,19 @@ resolved:;
             }
             if (_is_own_result)
             {
-                if (semcheck_normalize_result_identifier(expr) != 0)
+                /* Only normalize when no user-declared local would shadow
+                 * the function return slot. */
+                const char *_norm_rv = semcheck_get_current_subprogram_result_var_name();
+                const char *_norm_repl = (_norm_rv != NULL && _norm_rv[0] != '\0')
+                    ? _norm_rv : "Result";
+                int _has_local = 0;
+                if (!pascal_identifier_equals(id, _norm_repl))
+                {
+                    HashNode_t *_lc = semcheck_find_preferred_value_ident(symtab, _norm_repl, NULL);
+                    if (_lc != NULL && _lc->hash_type != HASHTYPE_FUNCTION_RETURN)
+                        _has_local = 1;
+                }
+                if (!_has_local && semcheck_normalize_result_identifier(expr) != 0)
                     return -1;
                 /* Treat as result variable: use the function's return type */
                 KgpcType *ret_type = kgpc_type_get_return_type(hash_return->type);

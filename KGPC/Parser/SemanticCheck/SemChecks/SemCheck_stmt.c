@@ -5887,6 +5887,31 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
 
             if (!pascal_identifier_equals(arg_id, replacement))
             {
+                /* Don't rename if the original name is a local variable or
+                 * parameter (it takes precedence over the result variable). */
+                HashNode_t *orig_check = NULL;
+                if (symtab != NULL && symtab->current_scope != NULL &&
+                    symtab->current_scope->table != NULL)
+                {
+                    orig_check = FindIdentInTable(symtab->current_scope->table, arg_id);
+                    if (orig_check != NULL &&
+                        (orig_check->hash_type == HASHTYPE_VAR ||
+                         orig_check->hash_type == HASHTYPE_ARRAY))
+                        continue;
+                }
+                /* Don't rename if a user-declared local variable with the
+                 * replacement name would shadow the function return slot. */
+                HashNode_t *local_check = NULL;
+                if (symtab != NULL && symtab->current_scope != NULL &&
+                    symtab->current_scope->table != NULL)
+                {
+                    local_check = FindIdentInTable(symtab->current_scope->table, replacement);
+                    if (local_check != NULL &&
+                        local_check->hash_type == HASHTYPE_FUNCTION_RETURN)
+                        local_check = NULL;
+                }
+                if (local_check != NULL)
+                    continue;
                 char *dup = strdup(replacement);
                 if (dup == NULL)
                     return 1;
