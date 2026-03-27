@@ -40,6 +40,9 @@ static int unsetenv(const char *name)
 #include <time.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifndef _WIN32
+#include <malloc.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -382,7 +385,12 @@ static void report_rss(const char *label)
         }
         fclose(f);
     }
-    fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)\n", label, rss_kb, rss_kb / 1024.0);
+    /* Also report glibc heap stats */
+    struct mallinfo2 mi = mallinfo2();
+    size_t heap_mb = (mi.arena + mi.hblkhd) / (1024 * 1024);
+    size_t used_mb = (mi.uordblks + mi.hblkhd) / (1024 * 1024);
+    fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)  heap=%zuMB used=%zuMB\n",
+            label, rss_kb, rss_kb / 1024.0, heap_mb, used_mb);
 #else
     (void)label;
 #endif

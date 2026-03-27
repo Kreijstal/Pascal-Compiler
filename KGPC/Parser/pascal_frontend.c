@@ -9,6 +9,9 @@
 #ifndef _WIN32
 #include <strings.h>
 #endif
+#if !defined(_WIN32) && defined(__GLIBC__)
+#include <malloc.h>
+#endif
 
 #include "ErrVars.h"
 #include "ParseTree/from_cparser.h"
@@ -813,6 +816,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 }
                 free_ast(cached_ast);
                 free(cached_pp_buf);
+                parser_drain_ast_free_list();
+#if !defined(_WIN32) && defined(__GLIBC__)
+                malloc_trim(0);
+#endif
 
                 if (out_tree != NULL)
                     *out_tree = success ? tree : NULL;
@@ -1254,6 +1261,18 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     free(buffer);
     free_input(input);
+    /* Drain AST/error free lists to return memory to the OS.
+     * Without this, pooled nodes accumulate across hundreds of units
+     * and inflate peak RSS by hundreds of MB for large compilations. */
+    parser_drain_ast_free_list();
+#if !defined(_WIN32) && defined(__GLIBC__)
+    /* Ask glibc to return freed heap pages to the OS.  Without this,
+     * fragmentation causes peak RSS to stay high even after large
+     * per-unit allocations are freed (e.g. parsing a 1 MB unit creates
+     * millions of small malloc's; after free(), those pages remain
+     * mapped). */
+    malloc_trim(0);
+#endif
     /* Don't reset file_to_parse to NULL - it's needed for semantic error reporting */
     /* file_to_parse = NULL; */
     // Don't free parser - it's cached for reuse
