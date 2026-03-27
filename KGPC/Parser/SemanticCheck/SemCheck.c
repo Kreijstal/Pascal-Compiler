@@ -234,6 +234,15 @@ int semcheck_register_source_buffer(const char *path, const char *buffer, size_t
         g_source_buffer_registry[g_source_buffer_count].global_start = global_start;
         g_source_buffer_count++;
         g_source_buffer_next_global = global_start + (int)length + 1; /* +1 to avoid overlap */
+        /* Debug: report accumulated source buffer memory */
+        if (kgpc_getenv("KGPC_DEBUG_MEMBUF") != NULL)
+        {
+            size_t total = 0;
+            for (int i = 0; i < g_source_buffer_count; i++)
+                total += g_source_buffer_registry[i].length;
+            fprintf(stderr, "[MEMBUF] source_buffer_registry: %d entries, %zu bytes (%.1f MB)\n",
+                    g_source_buffer_count, total, (double)total / (1024.0 * 1024.0));
+        }
     }
     else
     {
@@ -3992,12 +4001,20 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     {
         if (symtab->current_scope != NULL && symtab->current_scope != symtab->builtin_scope)
         {
+            KgpcType *qualified_type = NULL;
             if (node->type != NULL)
-                kgpc_type_retain(node->type);
+            {
+                qualified_type = kgpc_type_clone_shallow_owned(node->type);
+                if (qualified_type == NULL)
+                {
+                    free(qualified_id);
+                    return;
+                }
+            }
             int add_result = AddIdentToTable(symtab->current_scope->table, qualified_id,
-                NULL, HASHTYPE_TYPE, node->type);
-            if (add_result != 0 && node->type != NULL)
-                kgpc_type_release(node->type);
+                NULL, HASHTYPE_TYPE, qualified_type);
+            if (qualified_type != NULL)
+                kgpc_type_release(qualified_type);
             if (FindSymbol(&existing, symtab, qualified_id) != 0 && existing != NULL)
             {
                 existing->defined_in_unit = 1;
@@ -19125,23 +19142,12 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
     }
 
     /* Pass 2: Process full semantic checking including bodies */
-    int skip_imported_bodies = (kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL);
     cur = subprograms;
     while(cur != NULL)
     {
         assert(cur->cur != NULL);
         assert(cur->type == LIST_TREE);
         Tree_t *child = (Tree_t *)cur->cur;
-        if (child != NULL &&
-            child->tree_data.subprogram_data.defined_in_unit &&
-            child->tree_data.subprogram_data.statement_list != NULL &&
-            skip_imported_bodies)
-        {
-            /* Imported unit implementation bodies are not part of the consumer
-             * unit's semantic pass. Keep declarations (pass 1) but skip bodies. */
-            cur = cur->next;
-            continue;
-        }
         if (child != NULL &&
             child->tree_data.subprogram_data.statement_list == NULL &&
             child->tree_data.subprogram_data.cname_flag == 0 &&

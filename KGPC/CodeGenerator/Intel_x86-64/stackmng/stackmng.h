@@ -193,6 +193,7 @@ typedef struct StackScope
 {
     int t_offset, x_offset, z_offset;
     ListNode_t *t, *x, *z;
+    ListNode_t *t_tail, *x_tail, *z_tail;
 
     StackScope_t *prev_scope;
 } StackScope_t;

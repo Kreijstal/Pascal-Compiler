@@ -39,6 +39,7 @@ static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
 static int codegen_list_contains_string(ListNode_t *list, const char *value);
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *iface_name, const char *method_name);
@@ -53,6 +54,20 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
     const char *method_name, const char *class_label,
     const char *iface_symbol, const char *impl_symbol);
 static ListNode_t *g_codegen_available_subprograms = NULL;
+
+static int codegen_runtime_owns_exported_symbol(const char *symbol)
+{
+    if (symbol == NULL)
+        return 0;
+
+    return strcmp(symbol, "FPC_SYSCALL0") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL1") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL2") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL3") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL4") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL5") == 0 ||
+           strcmp(symbol, "FPC_SYSCALL6") == 0;
+}
 
 const char *codegen_subprogram_emission_symbol(HashNode_t *cand)
 {
@@ -81,6 +96,42 @@ int codegen_has_available_subprogram_label(const char *label)
     return codegen_list_contains_string(g_codegen_available_subprograms, label);
 }
 
+static int codegen_proc_def_has_matching_impl(SymTab_t *symtab, const Tree_t *proc_def)
+{
+    if (symtab == NULL || proc_def == NULL || proc_def->type != TREE_SUBPROGRAM)
+        return 0;
+
+    const char *proc_id = proc_def->tree_data.subprogram_data.id;
+    if (proc_id == NULL || proc_id[0] == '\0')
+        return 0;
+
+    ListNode_t *candidates = FindAllIdents(symtab, proc_id);
+    for (ListNode_t *node = candidates; node != NULL; node = node->next)
+    {
+        HashNode_t *cand = (HashNode_t *)node->cur;
+        if (cand == NULL || cand->type == NULL ||
+            cand->type->kind != TYPE_KIND_PROCEDURE ||
+            cand->type->info.proc_info.definition == NULL)
+            continue;
+
+        Tree_t *cand_def = cand->type->info.proc_info.definition;
+        if (cand_def == proc_def)
+            continue;
+        if (cand_def->tree_data.subprogram_data.statement_list == NULL)
+            continue;
+        if (cand->id != NULL && pascal_identifier_equals(cand->id, proc_id))
+        {
+            if (candidates != NULL)
+                DestroyList(candidates);
+            return 1;
+        }
+    }
+
+    if (candidates != NULL)
+        DestroyList(candidates);
+    return 0;
+}
+
 const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     const struct Expression *expr, char **owned_target_out)
 {
@@ -93,6 +144,7 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         *owned_target_out = NULL;
     if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
         return NULL;
+
 
     call_target = expr->expr_data.function_call_data.mangled_id;
     owner_class_name = expr->expr_data.function_call_data.cached_owner_class;
@@ -112,6 +164,18 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         {
             call_target_needs_resolution = 1;
         }
+        else if (target_node->type != NULL &&
+                 target_node->type->kind == TYPE_KIND_PROCEDURE &&
+                 target_node->type->info.proc_info.definition != NULL)
+        {
+            Tree_t *def = target_node->type->info.proc_info.definition;
+            int is_external_import =
+                (def->tree_data.subprogram_data.statement_list == NULL) &&
+                (def->tree_data.subprogram_data.cname_flag != 0 ||
+                 def->tree_data.subprogram_data.cname_override != NULL);
+            if (is_external_import)
+                call_target_needs_resolution = 1;
+        }
     }
 
     if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
@@ -123,6 +187,22 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
         if (alias != NULL && alias[0] != '\0')
         {
             call_target = alias;
+            call_target_needs_resolution = 0;
+        }
+        else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                 !codegen_proc_def_has_matching_impl(ctx->symtab, def) &&
+                 def->tree_data.subprogram_data.id != NULL &&
+                 def->tree_data.subprogram_data.id[0] != '\0')
+        {
+            call_target = def->tree_data.subprogram_data.id;
+            call_target_needs_resolution = 0;
+        }
+        else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                 def->tree_data.subprogram_data.cname_flag != 0 &&
+                 def->tree_data.subprogram_data.id != NULL &&
+                 def->tree_data.subprogram_data.id[0] != '\0')
+        {
+            call_target = def->tree_data.subprogram_data.id;
             call_target_needs_resolution = 0;
         }
         else if (def->tree_data.subprogram_data.mangled_id != NULL &&
@@ -137,7 +217,8 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             method_name = def->tree_data.subprogram_data.method_name;
     }
 
-    if (call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution)
+    if ((call_target == NULL || call_target[0] == '\0' || call_target_needs_resolution) &&
+        !expr->expr_data.function_call_data.is_call_info_valid)
     {
         HashNode_t *resolved = expr->expr_data.function_call_data.resolved_func;
         if (resolved != NULL && resolved->mangled_id != NULL &&
@@ -154,6 +235,16 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
                 const char *alias = def->tree_data.subprogram_data.cname_override;
                 if (alias != NULL && alias[0] != '\0')
                     call_target = alias;
+                else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                         !codegen_proc_def_has_matching_impl(ctx->symtab, def) &&
+                         def->tree_data.subprogram_data.id != NULL &&
+                         def->tree_data.subprogram_data.id[0] != '\0')
+                    call_target = def->tree_data.subprogram_data.id;
+                else if (def->tree_data.subprogram_data.statement_list == NULL &&
+                         def->tree_data.subprogram_data.cname_flag != 0 &&
+                         def->tree_data.subprogram_data.id != NULL &&
+                         def->tree_data.subprogram_data.id[0] != '\0')
+                    call_target = def->tree_data.subprogram_data.id;
                 else if (def->tree_data.subprogram_data.mangled_id != NULL &&
                          def->tree_data.subprogram_data.mangled_id[0] != '\0')
                     call_target = def->tree_data.subprogram_data.mangled_id;
@@ -229,6 +320,9 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             }
         }
     }
+
+    if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
+        call_target = "kgpc_prefetch";
 
     if ((call_target == NULL || call_target[0] == '\0') &&
         expr->expr_data.function_call_data.call_kgpc_type != NULL &&
@@ -806,6 +900,8 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
 static int add_absolute_var_alias(const char *alias_label, const char *target_label);
 static int add_absolute_var_alias_with_offset(const char *alias_label, const char *target_label,
     int field_offset, int alias_size);
+static int add_absolute_static_symbol_alias(const char *alias_label, const char *target_symbol,
+    int alias_size);
 static void add_result_alias_for_return_var(StackNode_t *return_var);
 static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
     CodeGenContext *ctx, StackNode_t *var_node, const char *type_name);
@@ -836,6 +932,121 @@ static inline int node_is_file_type(HashNode_t *node)
 static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
 {
     return hashnode_get_record_type(node);
+}
+
+static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *type_name)
+{
+    if (symtab == NULL || type_name == NULL)
+        return NULL;
+
+    ListNode_t *matches = FindAllIdents(symtab, type_name);
+    if (matches == NULL)
+        return NULL;
+
+    HashNode_t *best_node = NULL;
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+            continue;
+
+        if (best_node == NULL ||
+            (best_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
+            (cand->source_unit_index > 0 && best_node->source_unit_index > 0 &&
+             cand->source_unit_index > best_node->source_unit_index) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             !best_node->unit_is_public && cand->unit_is_public) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             cand->unit_is_public == best_node->unit_is_public &&
+             !best_node->defined_in_unit && cand->defined_in_unit)) {
+            best_node = cand;
+        }
+    }
+
+    DestroyList(matches);
+    return best_node;
+}
+
+static struct RecordType *codegen_lookup_record_type_for_node(SymTab_t *symtab,
+    HashNode_t *node, const char *type_name)
+{
+    if (node == NULL)
+        return NULL;
+
+    if (node->source_unit_index > 0 && type_name != NULL)
+    {
+        const char *unit_name = unit_registry_get(node->source_unit_index);
+        if (unit_name != NULL)
+        {
+            size_t qualified_len = strlen(unit_name) + 1 + strlen(type_name) + 1;
+            char *qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+            {
+                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, type_name);
+                HashNode_t *qualified = NULL;
+                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
+                {
+                    struct RecordType *qualified_record = get_record_type_from_node(qualified);
+                    if (qualified_record != NULL)
+                    {
+                        free(qualified_id);
+                        return qualified_record;
+                    }
+                }
+                free(qualified_id);
+            }
+        }
+    }
+
+    return get_record_type_from_node(node);
+}
+
+static struct RecordType *codegen_lookup_record_type_by_name(SymTab_t *symtab,
+    const char *type_name, int prefer_guid)
+{
+    if (symtab == NULL || type_name == NULL)
+        return NULL;
+
+    struct RecordType *record = semcheck_lookup_record_type(symtab, type_name);
+    if (record != NULL)
+    {
+        if (!prefer_guid)
+            return record;
+        uint32_t guid_d1 = 0;
+        uint16_t guid_d2 = 0;
+        uint16_t guid_d3 = 0;
+        uint8_t guid_d4[8] = {0};
+        if (codegen_resolve_record_guid(symtab, record,
+                &guid_d1, &guid_d2, &guid_d3, guid_d4))
+            return record;
+    }
+
+    int n_units = unit_registry_count();
+    for (int i = 1; i <= n_units && i < SYMTAB_MAX_UNITS; ++i)
+    {
+        ScopeNode *unit_scope = symtab->unit_scopes[i];
+        if (unit_scope == NULL || unit_scope->table == NULL)
+            continue;
+
+        HashNode_t *node = FindIdentInTable(unit_scope->table, type_name);
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            return codegen_lookup_record_type_for_node(symtab, node, type_name);
+        }
+
+        node = FindTypeBySuffixInTable(unit_scope->table, type_name);
+        if (node != NULL && node->hash_type == HASHTYPE_TYPE)
+        {
+            KGPC_COMPILER_HARD_ASSERT(0,
+                "suffix-only record type lookup for '%s' reached codegen",
+                type_name);
+        }
+    }
+
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, type_name);
+    if (best_node != NULL)
+        return codegen_lookup_record_type_for_node(symtab, best_node, type_name);
+
+    return NULL;
 }
 
 typedef struct EmittedClassSet
@@ -2621,7 +2832,6 @@ ListNode_t *add_inst(ListNode_t *inst_list, const char *inst)
     ListNode_t *new_node;
 
     assert(inst != NULL);
-
     new_node = CreateListNode(strdup(inst), LIST_STRING);
     if(inst_list == NULL)
     {
@@ -3110,6 +3320,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
     codegen_collect_available_subprogram_labels(tree->tree_data.unit_data.subprograms);
+    codegen_vmt(ctx, symtab, tree, NULL);
 
     /* Generate code for unit subprograms */
     codegen_subprograms(tree->tree_data.unit_data.subprograms, ctx, symtab);
@@ -3620,11 +3831,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
     int free_effective_iface_names = 0;
-    if (effective_iface_count == 0 && record_type_is_class(record_info)) {
-        codegen_collect_inferred_interfaces(symtab, record_info, class_label,
-            &effective_iface_names, &effective_iface_count);
-        free_effective_iface_names = (effective_iface_names != NULL);
-    }
     long long base_instance_size = 0;
     if (effective_iface_count > 0) {
         /* First pass: emit standalone GUID constants for each interface
@@ -3646,33 +3852,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
              * Use FindAllIdents to handle forward-declared interfaces where
              * the forward decl (without GUID) and full decl (with GUID) are
              * separate symbol table entries.  Prefer the one with has_guid. */
-            struct RecordType *iface_record = NULL;
-            {
-                ListNode_t *all_idents = FindAllIdents(symtab, iface_name);
-                for (ListNode_t *id_node = all_idents; id_node != NULL; id_node = id_node->next) {
-                    HashNode_t *cand = (HashNode_t *)id_node->cur;
-                    if (cand == NULL) continue;
-                    struct RecordType *cand_rec = get_record_type_from_node(cand);
-                    if (cand_rec == NULL && cand->type != NULL &&
-                        cand->type->kind == TYPE_KIND_POINTER &&
-                        cand->type->info.points_to != NULL &&
-                        cand->type->info.points_to->kind == TYPE_KIND_RECORD)
-                        cand_rec = cand->type->info.points_to->info.record_info;
-                    if (cand_rec != NULL) {
-                        uint32_t tmp_d1 = 0;
-                        uint16_t tmp_d2 = 0, tmp_d3 = 0;
-                        uint8_t tmp_d4[8] = {0};
-                        if (iface_record == NULL)
-                            iface_record = cand_rec;
-                        if (codegen_resolve_record_guid(symtab, cand_rec,
-                                &tmp_d1, &tmp_d2, &tmp_d3, tmp_d4)) {
-                            iface_record = cand_rec;
-                            break;
-                        }
-                    }
-                }
-                if (all_idents != NULL) DestroyList(all_idents);
-            }
+            struct RecordType *iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 1);
             uint32_t d1 = 0;
             uint16_t d2 = 0, d3 = 0;
             unsigned char d4[8] = {0};
@@ -3800,16 +3981,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             long long ioffset_for_this_iface = base_instance_size + vtbl_iface_slot_idx * 8;
             vtbl_iface_slot_idx++;
             /* Look up the interface record to get its method_templates */
-            HashNode_t *vtbl_iface_node = NULL;
-            struct RecordType *vtbl_iface_record = NULL;
-            if (FindSymbol(&vtbl_iface_node, symtab, iface_name) != 0 && vtbl_iface_node != NULL) {
-                vtbl_iface_record = get_record_type_from_node(vtbl_iface_node);
-                if (vtbl_iface_record == NULL && vtbl_iface_node->type != NULL &&
-                    vtbl_iface_node->type->kind == TYPE_KIND_POINTER &&
-                    vtbl_iface_node->type->info.points_to != NULL &&
-                    vtbl_iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    vtbl_iface_record = vtbl_iface_node->type->info.points_to->info.record_info;
-            }
+            struct RecordType *vtbl_iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 0);
             if (vtbl_iface_record == NULL) {
                 /* No interface record — emit an empty vtable label */
                 fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
@@ -3960,7 +4133,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         record_info->cached_size = instance_size;
         record_info->has_cached_size = 1;
     }
-
     /* Always emit VMT for classes, even if no virtual methods.
      * FPC VMT layout (TVmt record from objpash.inc):
      *   offset 0:  vInstanceSize      (SizeInt)
@@ -4139,16 +4311,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             const char *iface_name = record_info->interface_names[iidx];
             if (iface_name == NULL) continue;
             /* Look up the interface to get its method list */
-            HashNode_t *iface_node = NULL;
-            struct RecordType *iface_record = NULL;
-            if (FindSymbol(&iface_node, symtab, iface_name) != 0 && iface_node != NULL) {
-                iface_record = get_record_type_from_node(iface_node);
-                if (iface_record == NULL && iface_node->type != NULL &&
-                    iface_node->type->kind == TYPE_KIND_POINTER &&
-                    iface_node->type->info.points_to != NULL &&
-                    iface_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-                    iface_record = iface_node->type->info.points_to->info.record_info;
-            }
+            struct RecordType *iface_record =
+                codegen_lookup_record_type_by_name(symtab, iface_name, 0);
             if (iface_record == NULL) continue;
             /* Iterate interface method_templates directly — inherited parent
              * methods were already prepended during semcheck. */
@@ -4372,6 +4536,39 @@ static void codegen_emit_record_classvar_storage(CodeGenContext *ctx, SymTab_t *
     fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", class_label);
 }
 
+static int codegen_should_emit_plain_record_typeinfo(const struct RecordType *record_info,
+    const char *record_label)
+{
+    if (record_info == NULL || record_label == NULL || record_label[0] == '\0')
+        return 0;
+    if (record_info->type_id == NULL || record_info->type_id[0] == '\0')
+        return 0;
+    return strcmp(record_info->type_id, record_label) == 0;
+}
+
+static void codegen_emit_plain_record_typeinfo(CodeGenContext *ctx, const struct RecordType *record_info,
+    const char *record_label, EmittedClassSet *emitted_classes)
+{
+    if (ctx == NULL || ctx->output_file == NULL || record_label == NULL)
+        return;
+    if (!codegen_should_emit_plain_record_typeinfo(record_info, record_label))
+        return;
+    if (emitted_class_set_contains(emitted_classes, record_label))
+        return;
+    if (emitted_class_set_add(emitted_classes, record_label) != 0)
+        return;
+
+    fprintf(ctx->output_file, "\n# TYPEINFO/VMT stubs for record %s\n", record_label);
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl %s_TYPEINFO\n", record_label);
+    fprintf(ctx->output_file, "%s_TYPEINFO:\n", record_label);
+    fprintf(ctx->output_file, "\t.quad\t0\n");
+    fprintf(ctx->output_file, ".globl %s_VMT\n", record_label);
+    fprintf(ctx->output_file, "%s_VMT:\n", record_label);
+    fprintf(ctx->output_file, "\t.quad\t%s_TYPEINFO\n", record_label);
+}
+
 static int codegen_record_visible_field_count(const struct RecordType *record)
 {
     int count = 0;
@@ -4385,27 +4582,6 @@ static int codegen_record_visible_field_count(const struct RecordType *record)
             count++;
     }
     return count;
-}
-
-static int codegen_record_candidate_score(const struct RecordType *record)
-{
-    if (record == NULL)
-        return INT_MIN;
-
-    int score = 0;
-    if (record->parent_fields_merged)
-        score += 10000;
-    if (record->is_class)
-        score += 1000;
-    if (record->is_interface)
-        score += 1000;
-    score += record->num_interfaces * 200;
-    score += codegen_record_visible_field_count(record) * 10;
-    score += ListLength(record->method_templates) * 2;
-    score += ListLength(record->properties);
-    if (record->parent_class_name != NULL)
-        score += 25;
-    return score;
 }
 
 static int codegen_record_is_forward_stub(const struct RecordType *record)
@@ -4435,27 +4611,66 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     if (matches == NULL)
         return NULL;
 
-    const struct RecordType *best = NULL;
+    HashNode_t *best_node = NULL;
     int best_score = INT_MIN;
+
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
         HashNode_t *cand = (HashNode_t *)cur->cur;
-        struct RecordType *cand_record = get_record_type_from_node(cand);
-        /* Also check pointer-to-record (class types are often stored as pointers) */
-        if (cand_record == NULL && cand->type != NULL &&
-            cand->type->kind == TYPE_KIND_POINTER &&
-            cand->type->info.points_to != NULL &&
-            cand->type->info.points_to->kind == TYPE_KIND_RECORD)
-            cand_record = cand->type->info.points_to->info.record_info;
-        if (cand_record == NULL)
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
             continue;
-        int score = codegen_record_candidate_score(cand_record);
-        if (best == NULL || score > best_score) {
-            best = cand_record;
+
+        int score = 0;
+        if (cand->defined_in_unit)
+            score += 1000;
+        if (cand->unit_is_public)
+            score += 100;
+        if (cand->source_unit_index > 0)
+            score += 10 + cand->source_unit_index;
+
+        if (best_node == NULL || score > best_score) {
+            best_node = cand;
             best_score = score;
         }
     }
     DestroyList(matches);
-    return best;
+    if (best_node == NULL)
+        return NULL;
+
+    if (best_node->source_unit_index > 0)
+    {
+        const char *unit_name = unit_registry_get(best_node->source_unit_index);
+        if (unit_name != NULL)
+        {
+            size_t qualified_len = strlen(unit_name) + 1 + strlen(record->parent_class_name) + 1;
+            char *qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+            {
+                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, record->parent_class_name);
+                HashNode_t *qualified = NULL;
+                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
+                {
+                    const struct RecordType *qualified_record = get_record_type_from_node(qualified);
+                    if (qualified_record == NULL && qualified->type != NULL &&
+                        qualified->type->kind == TYPE_KIND_POINTER &&
+                        qualified->type->info.points_to != NULL &&
+                        qualified->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        qualified_record = qualified->type->info.points_to->info.record_info;
+                    free(qualified_id);
+                    if (qualified_record != NULL)
+                        return qualified_record;
+                }
+                free(qualified_id);
+            }
+        }
+    }
+
+    const struct RecordType *best_record = get_record_type_from_node(best_node);
+    if (best_record == NULL && best_node->type != NULL &&
+        best_node->type->kind == TYPE_KIND_POINTER &&
+        best_node->type->info.points_to != NULL &&
+        best_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+        best_record = best_node->type->info.points_to->info.record_info;
+    return best_record;
 }
 
 
@@ -4491,6 +4706,8 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *cur_record = record;
     const char *cur_label = fallback_class_label;
 
+    const struct RecordType *origin_record = record;
+
     while (cur_record != NULL || cur_label != NULL) {
         const char *owner_label = cur_label;
         if (cur_record != NULL && cur_record->type_id != NULL)
@@ -4499,7 +4716,7 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
             break;
 
         const char *lookup_method_name = method_name;
-        if (cur_record != NULL && iface_name != NULL) {
+        if (cur_record != NULL && iface_name != NULL && cur_record == origin_record) {
             const char *delegate_target = codegen_find_interface_delegate_target_name(
                 cur_record, iface_name, method_name);
             if (delegate_target != NULL)
@@ -4607,7 +4824,8 @@ static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const char **names = NULL;
 
     const struct RecordType *parent = codegen_record_parent(record, symtab);
-    if (parent != NULL && parent->num_interfaces > 0) {
+    if (parent != NULL && parent->num_interfaces > 0 &&
+        parent->interface_names != NULL) {
         for (int i = 0; i < parent->num_interfaces; i++) {
             const char *iface = parent->interface_names[i];
             if (iface == NULL)
@@ -4629,14 +4847,15 @@ static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
         for (int b = 0; b < TABLE_SIZE; b++) {
             for (ListNode_t *node = table->table[b]; node != NULL; node = node->next) {
                 HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE)
+                    continue;
                 struct RecordType *iface_record = get_record_type_from_node(hash_node);
-                if (iface_record == NULL && hash_node != NULL && hash_node->type != NULL &&
+                if (iface_record == NULL && hash_node->type != NULL &&
                     hash_node->type->kind == TYPE_KIND_POINTER &&
                     hash_node->type->info.points_to != NULL &&
                     hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                     iface_record = hash_node->type->info.points_to->info.record_info;
-                if (hash_node == NULL || hash_node->hash_type != HASHTYPE_TYPE ||
-                    iface_record == NULL || !iface_record->is_interface)
+                if (iface_record == NULL || !iface_record->is_interface)
                     continue;
                 const char *iface_name = iface_record->type_id != NULL ? iface_record->type_id : hash_node->id;
                 if (iface_name == NULL)
@@ -4684,83 +4903,11 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
     if (symtab == NULL || class_label == NULL || *class_label == NULL)
         return;
 
-    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, *class_label);
-    if (preferred != NULL) {
-        struct RecordType *preferred_record = get_record_type_from_node(preferred);
-        if (preferred_record == NULL && preferred->type != NULL &&
-            preferred->type->kind == TYPE_KIND_POINTER &&
-            preferred->type->info.points_to != NULL &&
-            preferred->type->info.points_to->kind == TYPE_KIND_RECORD)
-            preferred_record = preferred->type->info.points_to->info.record_info;
-        if (preferred_record != NULL) {
-            *record_info = preferred_record;
-            if (preferred_record->type_id != NULL)
-                *class_label = preferred_record->type_id;
-            else if (preferred->id != NULL)
-                *class_label = preferred->id;
-            if (preferred_record->num_interfaces > 0 ||
-                preferred_record->method_templates != NULL ||
-                preferred_record->properties != NULL ||
-                preferred_record->parent_fields_merged)
-                return;
-        }
-    }
-
-    ListNode_t *matches = FindAllIdents(symtab, *class_label);
-    if (matches == NULL)
-        return;
-
-    HashNode_t *best_node = NULL;
-    struct RecordType *best_record = NULL;
-    int best_score = INT_MIN;
-
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
-        HashNode_t *cand = (HashNode_t *)cur->cur;
-        struct RecordType *cand_record = get_record_type_from_node(cand);
-        if (cand_record == NULL)
-            continue;
-        int score = codegen_record_candidate_score(cand_record);
-        const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-        if (dbg != NULL && *class_label != NULL &&
-            (strcasecmp(*class_label, "TList") == 0 ||
-             strcasecmp(*class_label, "TStringList") == 0 ||
-             strcasecmp(*class_label, "TComponent") == 0 ||
-             strcasecmp(*class_label, "TInterfaceList") == 0)) {
-            fprintf(stderr,
-                "[KGPC] canonical candidate %s: rec=%p score=%d class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-                *class_label, (void *)cand_record, score, cand_record->is_class,
-                cand_record->is_interface,
-                cand_record->parent_class_name != NULL ? cand_record->parent_class_name : "(null)",
-                cand_record->num_interfaces, ListLength(cand_record->method_templates),
-                ListLength(cand_record->properties), cand_record->parent_fields_merged,
-                cand_record->type_id != NULL ? cand_record->type_id : "(null)");
-        }
-        if (best_node == NULL || score > best_score) {
-            best_node = cand;
-            best_record = cand_record;
-            best_score = score;
-        }
-    }
-
-    DestroyList(matches);
-
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, *class_label);
+    struct RecordType *best_record =
+        codegen_lookup_record_type_for_node(symtab, best_node, *class_label);
     if (best_record == NULL)
         return;
-
-    const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-    if (dbg != NULL && *class_label != NULL &&
-        (strcasecmp(*class_label, "TList") == 0 ||
-         strcasecmp(*class_label, "TStringList") == 0 ||
-         strcasecmp(*class_label, "TComponent") == 0 ||
-         strcasecmp(*class_label, "TInterfaceList") == 0)) {
-        fprintf(stderr,
-            "[KGPC] canonical selected %s: rec=%p score=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-            *class_label, (void *)best_record, best_score,
-            best_record->parent_class_name != NULL ? best_record->parent_class_name : "(null)",
-            best_record->num_interfaces, ListLength(best_record->method_templates),
-            ListLength(best_record->properties), best_record->parent_fields_merged,
-            best_record->type_id != NULL ? best_record->type_id : "(null)");
-    }
 
     *record_info = best_record;
     if (best_record->type_id != NULL)
@@ -4811,6 +4958,11 @@ static void codegen_vmt_from_type_list(CodeGenContext *ctx, SymTab_t *symtab,
                 emitted_classes);
             codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                 emitted_classes);
+            if (record_info != NULL && !record_type_is_class(record_info) &&
+                class_label != NULL && class_label[0] != '\0')
+            {
+                codegen_emit_plain_record_typeinfo(ctx, record_info, class_label, emitted_classes);
+            }
         }
         cur = cur->next;
     }
@@ -4858,6 +5010,11 @@ static void codegen_emit_vmts_from_hash_table(CodeGenContext *ctx, SymTab_t *sym
                     emitted_classes);
                 codegen_emit_record_classvar_storage(ctx, symtab, record_info, class_label,
                     emitted_classes);
+                if (record_info != NULL && !record_type_is_class(record_info) &&
+                    class_label != NULL && class_label[0] != '\0')
+                {
+                    codegen_emit_plain_record_typeinfo(ctx, record_info, class_label, emitted_classes);
+                }
             }
             node = node->next;
         }
@@ -5048,7 +5205,7 @@ static void codegen_assert_interface_impl_resolved(const char *iface_name,
 /* Helper: emit TYPEINFO/VMT aliases for type aliases pointing to class types. */
 static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
                                                 ListNode_t *type_decls,
-                                                const EmittedClassSet *emitted_classes)
+                                                EmittedClassSet *emitted_classes)
 {
     ListNode_t *cur = type_decls;
     while (cur != NULL) {
@@ -5060,12 +5217,14 @@ static void codegen_vmt_aliases_from_type_list(CodeGenContext *ctx,
             const char *target_name = type_tree->tree_data.type_decl_data.info.alias.target_type_id;
             if (alias_name != NULL && target_name != NULL) {
                 int target_emitted = emitted_class_set_contains(emitted_classes, target_name);
-                if (target_emitted) {
+                int alias_already_owned = emitted_class_set_contains(emitted_classes, alias_name);
+                if (target_emitted && !alias_already_owned) {
                     fprintf(ctx->output_file, "\n# TYPEINFO alias: %s = %s\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_TYPEINFO\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_TYPEINFO, %s_TYPEINFO\n", alias_name, target_name);
                     fprintf(ctx->output_file, "%s\t%s_VMT\n", codegen_weak_or_globl(), alias_name);
                     fprintf(ctx->output_file, "\t.set\t%s_VMT, %s_VMT\n", alias_name, target_name);
+                    emitted_class_set_add(emitted_classes, alias_name);
                 }
             }
         }
@@ -5106,24 +5265,39 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
         }
     }
 
-    /* Emit VMTs from program type declarations */
+    /* Emit VMTs from the current compilation unit/program declarations.
+     * When compiling a unit directly, it is not yet present in loaded_units,
+     * so we must emit from the current TREE_UNIT explicitly. */
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_from_type_list(ctx, symtab,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
-
-    /* Also emit VMTs for class types that exist only in the symbol table
-     * (e.g., specializations pulled in from units like FGL). */
-    for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+    else if (tree->type == TREE_UNIT)
     {
-        codegen_emit_vmts_from_hash_table(ctx, symtab, scope->table, &emitted_classes);
+        codegen_vmt_from_type_list(ctx, symtab,
+            tree->tree_data.unit_data.interface_type_decls, &emitted_classes);
+        codegen_vmt_from_type_list(ctx, symtab,
+            tree->tree_data.unit_data.implementation_type_decls, &emitted_classes);
     }
 
-    for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
+    /* Also emit VMTs for class types that exist only in the symbol table
+     * (e.g., specializations pulled in from units like FGL).
+     * Restrict this fallback to whole-program codegen. Direct unit codegen
+     * should emit from the unit's own declared types, not arbitrary symtab
+     * entries that may include incomplete or transient records. */
+    if (tree->type == TREE_PROGRAM_TYPE)
     {
-        ScopeNode *unit_scope = symtab->unit_scopes[i];
-        if (unit_scope == NULL)
-            continue;
-        codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
+        for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
+        {
+            codegen_emit_vmts_from_hash_table(ctx, symtab, scope->table, &emitted_classes);
+        }
+
+        for (int i = 0; i < SYMTAB_MAX_UNITS; i++)
+        {
+            ScopeNode *unit_scope = symtab->unit_scopes[i];
+            if (unit_scope == NULL)
+                continue;
+            codegen_emit_vmts_from_hash_table(ctx, symtab, unit_scope->table, &emitted_classes);
+        }
     }
 
     /* Emit GUID data for ALL interfaces with GUIDs found in the symbol table.
@@ -6231,7 +6405,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     absolute_target);
                             }
                             else if (absolute_base != NULL &&
-                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
+                                (add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0 ||
+                                 add_absolute_static_symbol_alias((char *)id_list->cur,
+                                     absolute_base, alloc_size) == 0))
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -6322,7 +6498,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                                     absolute_target);
                             }
                             else if (absolute_base != NULL &&
-                                add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0)
+                                (add_absolute_var_alias((char *)id_list->cur, absolute_base) == 0 ||
+                                 add_absolute_static_symbol_alias((char *)id_list->cur,
+                                     absolute_base, alloc_size) == 0))
                             {
                                 id_list = id_list->next;
                                 continue;
@@ -6375,7 +6553,14 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
 
             long long computed_size = 0;
             int element_size = 0;
-            if (codegen_sizeof_type_reference(ctx, arr->type, arr->type_id,
+            if (arr->element_kgpc_type != NULL)
+            {
+                computed_size = kgpc_type_sizeof(arr->element_kgpc_type);
+                if (computed_size > 0 && computed_size <= INT_MAX)
+                    element_size = (int)computed_size;
+            }
+            if (element_size <= 0 &&
+                codegen_sizeof_type_reference(ctx, arr->type, arr->type_id,
                     record_desc, &computed_size) == 0 && computed_size > 0 &&
                 computed_size <= INT_MAX)
             {
@@ -6794,6 +6979,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     proc = &proc_tree->tree_data.subprogram_data;
     sub_id = (proc->mangled_id != NULL) ? proc->mangled_id : proc->id;
 
+    if (codegen_runtime_owns_exported_symbol(sub_id) ||
+        codegen_runtime_owns_exported_symbol(proc->cname_override))
+    {
+        return;
+    }
+
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
@@ -7039,6 +7230,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     func = &func_tree->tree_data.subprogram_data;
     sub_id = (func->mangled_id != NULL) ? func->mangled_id : func->id;
+
+    if (codegen_runtime_owns_exported_symbol(sub_id) ||
+        codegen_runtime_owns_exported_symbol(func->cname_override))
+    {
+        return;
+    }
 
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
@@ -7443,8 +7640,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
         if (return_type != NULL && kgpc_type_is_shortstring(return_type))
         {
+            long long shortstring_size = kgpc_type_sizeof(return_type);
             has_record_return = 1;
-            record_return_size = 256;
+            record_return_size = shortstring_size > 0 ? shortstring_size : 256;
         }
     }
 
@@ -7952,9 +8150,15 @@ static void add_alias_for_return_var(StackNode_t *return_var, const char *alias_
         if (new_list_node != NULL)
         {
             if (cur_scope->x == NULL)
+            {
                 cur_scope->x = new_list_node;
+                cur_scope->x_tail = new_list_node;
+            }
             else
-                cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+            {
+                cur_scope->x_tail->next = new_list_node;
+                cur_scope->x_tail = new_list_node;
+            }
         }
     }
 }
@@ -7995,9 +8199,65 @@ static int add_absolute_var_alias(const char *alias_label, const char *target_la
     }
 
     if (cur_scope->x == NULL)
+    {
         cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
     else
-        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
+
+    return 0;
+}
+
+static int add_absolute_static_symbol_alias(const char *alias_label, const char *target_symbol,
+    int alias_size)
+{
+    if (alias_label == NULL || alias_label[0] == '\0' ||
+        target_symbol == NULL || target_symbol[0] == '\0' ||
+        alias_size <= 0)
+        return 1;
+
+    StackNode_t *alias = init_stack_node(0, (char *)alias_label, alias_size);
+    if (alias == NULL)
+        return 1;
+
+    alias->element_size = alias_size;
+    alias->is_alias = 1;
+    alias->is_static = 1;
+    alias->static_label = strdup(target_symbol);
+    if (alias->static_label == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    StackScope_t *cur_scope = get_cur_scope();
+    if (cur_scope == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    ListNode_t *new_list_node = CreateListNode(alias, LIST_UNSPECIFIED);
+    if (new_list_node == NULL)
+    {
+        destroy_stack_node(alias);
+        return 1;
+    }
+
+    if (cur_scope->x == NULL)
+    {
+        cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
+    else
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
 
     return 0;
 }
@@ -8057,9 +8317,15 @@ static int add_absolute_var_alias_with_offset(const char *alias_label, const cha
     }
 
     if (cur_scope->x == NULL)
+    {
         cur_scope->x = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
     else
-        cur_scope->x = PushListNodeBack(cur_scope->x, new_list_node);
+    {
+        cur_scope->x_tail->next = new_list_node;
+        cur_scope->x_tail = new_list_node;
+    }
 
     return 0;
 }

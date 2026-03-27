@@ -111,6 +111,46 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
         (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
         sanitized);
 }
+
+static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+}
+
+static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    HashNode_t *type_node = NULL;
+    if (symtab != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 &&
+        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum)
+        {
+            codegen_enum_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+
+        if (hashnode_get_record_type(type_node) != NULL)
+        {
+            codegen_record_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+    }
+
+    codegen_enum_typeinfo_label(type_id, buffer, size);
+}
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
@@ -225,6 +265,186 @@ static ListNode_t *codegen_builtin_dynarray_length(struct Expression *expr,
 
     free_reg(get_reg_stack(), desc_reg);
     return inst_list;
+}
+
+static int codegen_builtin_lowhigh_bounds_from_tag(int type_tag,
+    long long *low_out, long long *high_out, int *use_qword_out)
+{
+    if (low_out == NULL || high_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    switch (type_tag)
+    {
+        case BOOL:
+            *low_out = 0;
+            *high_out = 1;
+            *use_qword_out = 0;
+            return 1;
+        case CHAR_TYPE:
+        case BYTE_TYPE:
+            *low_out = 0;
+            *high_out = 255;
+            *use_qword_out = 0;
+            return 1;
+        case WORD_TYPE:
+            *low_out = 0;
+            *high_out = 65535;
+            *use_qword_out = 0;
+            return 1;
+        case INT_TYPE:
+        case LONGINT_TYPE:
+            *low_out = -2147483648LL;
+            *high_out = 2147483647LL;
+            *use_qword_out = 0;
+            return 1;
+        case LONGWORD_TYPE:
+            *low_out = 0;
+            *high_out = 4294967295LL;
+            *use_qword_out = 1;
+            return 1;
+        case INT64_TYPE:
+            *low_out = (-9223372036854775807LL - 1);
+            *high_out = 9223372036854775807LL;
+            *use_qword_out = 1;
+            return 1;
+        case QWORD_TYPE:
+            *low_out = 0;
+            *high_out = 9223372036854775807LL;
+            *use_qword_out = 1;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_builtin_lowhigh_try_alias_value(struct TypeAlias *alias, int is_high,
+    long long *value_out, int *use_qword_out)
+{
+    if (alias == NULL || value_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    if (alias->range_known)
+    {
+        *value_out = is_high ? alias->range_end : alias->range_start;
+        *use_qword_out =
+            (alias->range_start < INT32_MIN || alias->range_end > INT32_MAX);
+        return 1;
+    }
+
+    if (alias->is_enum && alias->enum_literals != NULL &&
+        !alias->enum_has_explicit_values)
+    {
+        int count = ListLength(alias->enum_literals);
+        if (count > 0)
+        {
+            *value_out = is_high ? (long long)count - 1 : 0;
+            *use_qword_out = 0;
+            return 1;
+        }
+    }
+
+    if (alias->is_shortstring)
+    {
+        *value_out = is_high ? alias->array_end : alias->array_start;
+        *use_qword_out = 0;
+        return 1;
+    }
+
+    return 0;
+}
+
+static int codegen_builtin_lowhigh_try_value(struct Expression *expr, CodeGenContext *ctx,
+    int is_high, long long *value_out, int *use_qword_out)
+{
+    if (expr == NULL || value_out == NULL || use_qword_out == NULL)
+        return 0;
+
+    ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+    if (args == NULL || args->next != NULL || args->cur == NULL)
+        return 0;
+
+    struct Expression *arg_expr = (struct Expression *)args->cur;
+    if (arg_expr == NULL)
+        return 0;
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        int found = FindSymbol(&type_node, ctx->symtab, arg_expr->expr_data.id);
+        if (found != 0 &&
+            type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+        {
+            struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
+            if (codegen_builtin_lowhigh_try_alias_value(type_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+        }
+    }
+
+    if (arg_expr->is_array_expr && !arg_expr->array_is_dynamic &&
+        arg_expr->array_upper_bound >= arg_expr->array_lower_bound)
+    {
+        *value_out = is_high ? arg_expr->array_upper_bound : arg_expr->array_lower_bound;
+        *use_qword_out = 0;
+        return 1;
+    }
+
+    KgpcType *arg_type = expr_get_kgpc_type(arg_expr);
+    if (arg_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(arg_type);
+        if (codegen_builtin_lowhigh_try_alias_value(alias, is_high,
+                value_out, use_qword_out))
+            return 1;
+    }
+
+    long long low = 0;
+    long long high = 0;
+    int use_qword = 0;
+    if (!codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
+            &low, &high, &use_qword))
+    {
+        return 0;
+    }
+
+    *value_out = is_high ? high : low;
+    *use_qword_out = use_qword;
+    return 1;
+}
+
+static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
+    ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg, int is_high)
+{
+    long long value = 0;
+    int use_qword = 0;
+    char buffer[128];
+
+    (void)ctx;
+    if (!codegen_builtin_lowhigh_try_value(expr, ctx, is_high, &value, &use_qword))
+    {
+        if (expr != NULL && expr->expr_data.function_call_data.args_expr != NULL &&
+            expr->expr_data.function_call_data.args_expr->cur != NULL)
+        {
+            struct Expression *arg_expr =
+                (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
+            fprintf(stderr,
+                "DBG lowhigh fail name=%s arg_type=%d arg_tag=%d arg_id=%s resolved_type=%p\n",
+                is_high ? "High" : "Low",
+                arg_expr != NULL ? arg_expr->type : -1,
+                arg_expr != NULL ? expr_get_type_tag(arg_expr) : -1,
+                (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL) ?
+                    arg_expr->expr_data.id : "(non-var)",
+                (void *)(arg_expr != NULL ? expr_get_kgpc_type(arg_expr) : NULL));
+        }
+        return NULL;
+    }
+
+    if (use_qword)
+        snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", value, target_reg->bit_64);
+    else
+        snprintf(buffer, sizeof(buffer), "\tmovl\t$%lld, %s\n", value, target_reg->bit_32);
+    return add_inst(inst_list, buffer);
 }
 
 /* Function to escape string literals for assembly .string directive */
@@ -2043,6 +2263,20 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
     if (expr->type == EXPR_FUNCTION_CALL)
     {
         const char *func_mangled_name = expr->expr_data.function_call_data.mangled_id;
+        const char *func_id = expr->expr_data.function_call_data.id;
+
+        if (func_id != NULL &&
+            expr->expr_data.function_call_data.call_kgpc_type == NULL &&
+            expr->expr_data.function_call_data.resolved_func == NULL &&
+            (pascal_identifier_equals(func_id, "Low") ||
+             pascal_identifier_equals(func_id, "High")))
+        {
+            ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
+                target_reg, pascal_identifier_equals(func_id, "High"));
+            if (lowered != NULL)
+                return lowered;
+        }
+
         if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
             expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
@@ -2057,7 +2291,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
         CODEGEN_DEBUG("DEBUG FUNCTION_CALL: mangled=%s, id=%s\n",
             func_mangled_name ? func_mangled_name : "NULL",
-            expr->expr_data.function_call_data.id ? expr->expr_data.function_call_data.id : "NULL");
+            func_id ? func_id : "NULL");
         
         if (func_mangled_name != NULL && strcmp(func_mangled_name, "__kgpc_dynarray_length") == 0)
         {
@@ -2067,8 +2301,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             return inst_list;
         }
 
-        if (expr->expr_data.function_call_data.id != NULL &&
-            strcasecmp(expr->expr_data.function_call_data.id, "SwapEndian") == 0)
+        if (func_id != NULL &&
+            strcasecmp(func_id, "SwapEndian") == 0)
         {
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
             if (args == NULL || args->cur == NULL)
@@ -2739,6 +2973,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             const char *call_target = codegen_resolve_function_call_target(
                 ctx, expr, &owned_call_target);
 
+            if (call_target != NULL &&
+                (pascal_identifier_equals(call_target, "Low") ||
+                 pascal_identifier_equals(call_target, "High")))
+            {
+                ListNode_t *lowered = codegen_builtin_lowhigh_fallback(expr, inst_list, ctx,
+                    target_reg, pascal_identifier_equals(call_target, "High"));
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                if (lowered != NULL)
+                    return lowered;
+            }
+
             /* If the call target resolves to a type (not a procedure), this is
              * a typecast that the semcheck didn't rewrite (e.g., from cached
              * unit ASTs).  Treat it as a no-op: evaluate the argument and use
@@ -3171,7 +3417,8 @@ cleanup_constructor:
             return inst_list;
         }
         char label[CODEGEN_MAX_INST_BUF];
-        codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+        codegen_typeinfo_label_for_type_id(ctx != NULL ? ctx->symtab : NULL,
+            type_id, label, sizeof(label));
         int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
         if (buf_len > 0)
         {
@@ -3229,10 +3476,16 @@ cleanup_constructor:
     if (expr->type == EXPR_VAR_ID)
     {
         int scope_depth = 0;
-        StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        StackNode_t *stack_node = NULL;
         HashNode_t *symbol_node = NULL;
         if (ctx != NULL && ctx->symtab != NULL)
             FindSymbol(&symbol_node, ctx->symtab, expr->expr_data.id);
+
+        /* When the leaf was already resolved to an immediate constant, there is
+         * no stack slot to find and scanning every scope becomes pathological for
+         * large typed-const initializers like the x86 instruction tables. */
+        if (buf_leaf[0] != '$')
+            stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
         /* Procedures/functions used as values (e.g. @Proc, typed proc constants).
          * Only apply when the identifier is not a local/stack variable in this scope,
@@ -3819,10 +4072,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
             #endif
             {
                 int scope_depth = 0;
-                stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
-                #ifdef DEBUG_CODEGEN
-                CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
-                #endif
+                stack_node = NULL;
 
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
@@ -3868,6 +4118,12 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             node = builtin_node;
                     }
                 }
+
+                if (!(found && node != NULL && node->hash_type == HASHTYPE_CONST))
+                    stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+                #ifdef DEBUG_CODEGEN
+                CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
+                #endif
 
                 if (found && node->hash_type == HASHTYPE_CONST)
                 {
@@ -4864,7 +5120,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     const char *bit_index = left32;
                     const char *bit_base = right32;
 
-                    if (right != NULL && right[0] == '$')
+                    if (bit_base != NULL && bit_base[0] == '$')
                     {
                         /* When loading an immediate set value, make sure not to clobber the left operand.
                          * Use %r11d if left is in %r10d, otherwise use %r10d. */
@@ -4872,7 +5128,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         /* Check if left operand is in r10 (any size: r10, r10d, r10b, r10w) */
                         if (left_reg != NULL && left_reg->reg_id == REG_R10)
                             temp_reg = "%r11d";
-                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", right, temp_reg);
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", bit_base, temp_reg);
                         inst_list = add_inst(inst_list, buffer);
                         bit_base = temp_reg;
                     }

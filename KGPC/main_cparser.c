@@ -40,6 +40,9 @@ static int unsetenv(const char *name)
 #include <time.h>
 #include <sys/stat.h>
 #include <errno.h>
+#ifndef _WIN32
+#include <malloc.h>
+#endif
 
 #ifndef PATH_MAX
 #define PATH_MAX 4096
@@ -363,6 +366,40 @@ static double g_time_codegen = 0.0;
 static unsigned g_count_parse_stdlib = 0;
 static unsigned g_count_parse_user = 0;
 static unsigned g_count_parse_units = 0;
+
+/* Report current RSS if KGPC_DEBUG_RSS is set.  Uses /proc/self/status on
+ * Linux and getrusage() elsewhere. */
+static void report_rss(const char *label)
+{
+#ifndef _WIN32
+    if (kgpc_getenv("KGPC_DEBUG_RSS") == NULL) return;
+    long rss_kb = 0;
+    FILE *f = fopen("/proc/self/status", "r");
+    if (f) {
+        char line[256];
+        while (fgets(line, sizeof(line), f)) {
+            if (strncmp(line, "VmRSS:", 6) == 0) {
+                rss_kb = atol(line + 6);
+                break;
+            }
+        }
+        fclose(f);
+    }
+    /* mallinfo2() is a glibc extension; keep allocator stats optional. */
+#ifdef __GLIBC__
+    struct mallinfo2 mi = mallinfo2();
+    size_t heap_mb = (mi.arena + mi.hblkhd) / (1024 * 1024);
+    size_t used_mb = (mi.uordblks + mi.hblkhd) / (1024 * 1024);
+    fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)  heap=%zuMB used=%zuMB\n",
+            label, rss_kb, rss_kb / 1024.0, heap_mb, used_mb);
+#else
+    fprintf(stderr, "[RSS] %-50s %ld KB (%.1f MB)\n",
+            label, rss_kb, rss_kb / 1024.0);
+#endif
+#else
+    (void)label;
+#endif
+}
 
 static uint64_t fnv1a64_bytes(const unsigned char *data, size_t len)
 {
@@ -1505,6 +1542,7 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
     if (path == NULL)
         return;
     fprintf(stderr, "Loading unit %s from %s\n", unit_name, path);
+    report_rss("before loading unit");
 
     Tree_t *unit_tree = NULL;
     double start_time = 0.0;
@@ -2124,9 +2162,11 @@ static int compile_single_program(
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
 
     debug_check_type_presence(user_tree);
+    report_rss("after loading all units");
     double combined_view_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     build_combined_program_view(&g_comp_ctx);
     emit_profile_stage("program: build combined view from loaded units", current_time_seconds() - combined_view_start);
+    report_rss("after build_combined_program_view");
     compilation_context_set_active(&g_comp_ctx);
 
     double merge_user_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
@@ -2156,6 +2196,7 @@ static int compile_single_program(
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
     SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
     emit_profile_stage("program: semantic analysis", current_time_seconds() - sem_profile_start);
+    report_rss("after semantic analysis");
 
     sem_result += frontend_errors;
 
@@ -2203,6 +2244,7 @@ static int compile_single_program(
         double codegen_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         codegen(user_tree, input_file, &ctx, symtab, &g_comp_ctx);
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
+        report_rss("after code generation");
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
         if (codegen_failed)
@@ -2709,7 +2751,6 @@ int main(int argc, char **argv)
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
         double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
@@ -2984,10 +3025,6 @@ int main(int argc, char **argv)
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    /* Note: KGPC_SKIP_IMPORTED_IMPL_BODIES can be set externally to skip
-     * semantic checking of imported unit implementation bodies.  This is
-     * safe when the program has errors (codegen is skipped anyway) and
-     * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
     SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;

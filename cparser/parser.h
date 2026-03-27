@@ -335,6 +335,8 @@ sym_t * sym_lookup(const char * name);
 void free_combinator(combinator_t* comb);
 void free_combinator_graph(combinator_t **roots, size_t count);
 void parser_drain_free_list(void);
+void parser_drain_ast_free_list(void);
+void parser_drain_error_free_list(void);
 void exception(const char * err);
 
 
