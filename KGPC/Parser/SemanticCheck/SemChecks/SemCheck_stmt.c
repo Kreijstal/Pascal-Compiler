@@ -685,6 +685,10 @@ static int semcheck_record_assign_operator_score(SymTab_t *symtab, HashNode_t *c
     if (arg_rank < 0 || ret_rank < 0 || ret_type == NULL)
         return 0;
 
+    /* Composite key: argument match is more important than return type match.
+     * kgpc_type_conversion_rank returns 0=exact, 1=promotion, 2+=conversion,
+     * so lower values are better.  The weights (8, 2) ensure argument rank
+     * always dominates return rank in the comparison (lower total = better). */
     *score_out = arg_rank * 8 + ret_rank * 2;
     if (return_type_out != NULL)
         *return_type_out = ret_type;
