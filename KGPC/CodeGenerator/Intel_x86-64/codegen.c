@@ -2616,6 +2616,71 @@ static void codegen_emit_bss_or_comm(FILE *out, const char *sym, const char *lab
     }
 }
 
+void codegen_common_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    {
+        const char *prefix = "__kgpc_enum_typeinfo_";
+        snprintf(buffer, size, "%s%.*s", prefix,
+            (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
+            sanitized);
+    }
+}
+
+void codegen_common_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+}
+
+void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    HashNode_t *type_node = NULL;
+    if (symtab != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 &&
+        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum)
+        {
+            codegen_common_enum_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+
+        if (hashnode_get_record_type(type_node) != NULL)
+        {
+            codegen_common_record_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+    }
+
+    codegen_common_enum_typeinfo_label(type_id, buffer, size);
+}
+
 static void codegen_emit_enum_typeinfo_for_alias(CodeGenContext *ctx, const char *type_name,
     struct TypeAlias *alias)
 {

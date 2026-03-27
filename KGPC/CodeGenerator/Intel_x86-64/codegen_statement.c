@@ -11006,6 +11006,57 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
 }
 
+static struct Expression *codegen_build_temp_call_expr_from_stmt(
+    const struct Statement *stmt, int call_hash_type, struct KgpcType *call_kgpc_type)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL)
+        return NULL;
+
+    struct Expression *call_expr = mk_functioncall(stmt->line_num,
+        stmt->stmt_data.procedure_call_data.id != NULL ?
+            strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
+        stmt->stmt_data.procedure_call_data.expr_args);
+    if (call_expr == NULL)
+        return NULL;
+
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        call_expr->expr_data.function_call_data.mangled_id =
+            strdup(stmt->stmt_data.procedure_call_data.mangled_id);
+    }
+    call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
+        stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
+    call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
+    call_expr->expr_data.function_call_data.call_kgpc_type = call_kgpc_type;
+    call_expr->expr_data.function_call_data.is_call_info_valid =
+        stmt->stmt_data.procedure_call_data.is_call_info_valid;
+    call_expr->expr_data.function_call_data.is_virtual_call =
+        stmt->stmt_data.procedure_call_data.is_virtual_call;
+    call_expr->expr_data.function_call_data.is_interface_call =
+        stmt->stmt_data.procedure_call_data.is_interface_call;
+    call_expr->expr_data.function_call_data.vmt_index =
+        stmt->stmt_data.procedure_call_data.vmt_index;
+    if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
+    {
+        call_expr->expr_data.function_call_data.self_class_name =
+            strdup(stmt->stmt_data.procedure_call_data.self_class_name);
+    }
+    call_expr->expr_data.function_call_data.is_class_method_call =
+        stmt->stmt_data.procedure_call_data.is_class_method_call;
+    return call_expr;
+}
+
+static void codegen_destroy_temp_call_expr(struct Expression *call_expr)
+{
+    if (call_expr == NULL)
+        return;
+
+    call_expr->expr_data.function_call_data.args_expr = NULL;
+    call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
+    call_expr->expr_data.function_call_data.resolved_func = NULL;
+    destroy_expr(call_expr);
+}
+
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -11093,44 +11144,16 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
 
     if(call_hash_type == HASHTYPE_FUNCTION)
     {
-        struct Expression *call_expr = mk_functioncall(stmt->line_num,
-            stmt->stmt_data.procedure_call_data.id != NULL ?
-                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
-            stmt->stmt_data.procedure_call_data.expr_args);
+        struct Expression *call_expr = codegen_build_temp_call_expr_from_stmt(stmt,
+            call_hash_type, stmt->stmt_data.procedure_call_data.call_kgpc_type);
         if (call_expr == NULL)
             return inst_list;
-
-        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-        {
-            call_expr->expr_data.function_call_data.mangled_id =
-                strdup(stmt->stmt_data.procedure_call_data.mangled_id);
-        }
-        call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
-            stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
-        call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
-        call_expr->expr_data.function_call_data.call_kgpc_type =
-            stmt->stmt_data.procedure_call_data.call_kgpc_type;
-        call_expr->expr_data.function_call_data.is_call_info_valid =
-            stmt->stmt_data.procedure_call_data.is_call_info_valid;
-        call_expr->expr_data.function_call_data.is_virtual_call =
-            stmt->stmt_data.procedure_call_data.is_virtual_call;
-        call_expr->expr_data.function_call_data.is_interface_call =
-            stmt->stmt_data.procedure_call_data.is_interface_call;
-        call_expr->expr_data.function_call_data.vmt_index =
-            stmt->stmt_data.procedure_call_data.vmt_index;
-        if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
-            call_expr->expr_data.function_call_data.self_class_name =
-                strdup(stmt->stmt_data.procedure_call_data.self_class_name);
-        call_expr->expr_data.function_call_data.is_class_method_call =
-            stmt->stmt_data.procedure_call_data.is_class_method_call;
 
         Register_t *discard_reg = NULL;
         inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
         if (discard_reg != NULL)
             free_reg(get_reg_stack(), discard_reg);
-        call_expr->expr_data.function_call_data.args_expr = NULL;
-        call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
-        destroy_expr(call_expr);
+        codegen_destroy_temp_call_expr(call_expr);
         return inst_list;
     }
 
@@ -11140,36 +11163,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     }
 
     {
-        struct Expression *call_expr = mk_functioncall(stmt->line_num,
-            stmt->stmt_data.procedure_call_data.id != NULL ?
-                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
-            stmt->stmt_data.procedure_call_data.expr_args);
+        struct Expression *call_expr = codegen_build_temp_call_expr_from_stmt(stmt,
+            call_hash_type, call_kgpc_type);
         if (call_expr != NULL)
         {
             char *owned_call_target = NULL;
             const char *resolved_call_target = NULL;
-            if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-            {
-                call_expr->expr_data.function_call_data.mangled_id =
-                    strdup(stmt->stmt_data.procedure_call_data.mangled_id);
-            }
-            call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
-                stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
-            call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
-            call_expr->expr_data.function_call_data.call_kgpc_type = call_kgpc_type;
-            call_expr->expr_data.function_call_data.is_call_info_valid =
-                stmt->stmt_data.procedure_call_data.is_call_info_valid;
-            call_expr->expr_data.function_call_data.is_virtual_call =
-                stmt->stmt_data.procedure_call_data.is_virtual_call;
-            call_expr->expr_data.function_call_data.is_interface_call =
-                stmt->stmt_data.procedure_call_data.is_interface_call;
-            call_expr->expr_data.function_call_data.vmt_index =
-                stmt->stmt_data.procedure_call_data.vmt_index;
-            if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
-                call_expr->expr_data.function_call_data.self_class_name =
-                    strdup(stmt->stmt_data.procedure_call_data.self_class_name);
-            call_expr->expr_data.function_call_data.is_class_method_call =
-                stmt->stmt_data.procedure_call_data.is_class_method_call;
             resolved_call_target = codegen_resolve_function_call_target(ctx, call_expr,
                 &owned_call_target);
             if (resolved_call_target != NULL && resolved_call_target[0] != '\0')
@@ -11182,17 +11181,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                 stmt->stmt_data.procedure_call_data.mangled_id = strdup(resolved_call_target);
                 if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
                     proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
-                else if (owned_call_target != NULL)
-                    proc_name = owned_call_target;
                 else
                     proc_name = (char *)resolved_call_target;
             }
             if (owned_call_target != NULL)
                 free(owned_call_target);
-            call_expr->expr_data.function_call_data.args_expr = NULL;
-            call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
-            call_expr->expr_data.function_call_data.resolved_func = NULL;
-            destroy_expr(call_expr);
+            codegen_destroy_temp_call_expr(call_expr);
         }
     }
 
@@ -11604,44 +11598,16 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
     
     if (call_hash_type == HASHTYPE_FUNCTION)
     {
-        struct Expression *call_expr = mk_functioncall(stmt->line_num,
-            stmt->stmt_data.procedure_call_data.id != NULL ?
-                strdup(stmt->stmt_data.procedure_call_data.id) : NULL,
-            stmt->stmt_data.procedure_call_data.expr_args);
+        struct Expression *call_expr = codegen_build_temp_call_expr_from_stmt(stmt,
+            call_hash_type, stmt->stmt_data.procedure_call_data.call_kgpc_type);
         if (call_expr == NULL)
             return inst_list;
-
-        if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
-        {
-            call_expr->expr_data.function_call_data.mangled_id =
-                strdup(stmt->stmt_data.procedure_call_data.mangled_id);
-        }
-        call_expr->expr_data.function_call_data.arg0_is_dynarray_descriptor =
-            stmt->stmt_data.procedure_call_data.arg0_is_dynarray_descriptor;
-        call_expr->expr_data.function_call_data.call_hash_type = call_hash_type;
-        call_expr->expr_data.function_call_data.call_kgpc_type =
-            stmt->stmt_data.procedure_call_data.call_kgpc_type;
-        call_expr->expr_data.function_call_data.is_call_info_valid =
-            stmt->stmt_data.procedure_call_data.is_call_info_valid;
-        call_expr->expr_data.function_call_data.is_virtual_call =
-            stmt->stmt_data.procedure_call_data.is_virtual_call;
-        call_expr->expr_data.function_call_data.is_interface_call =
-            stmt->stmt_data.procedure_call_data.is_interface_call;
-        call_expr->expr_data.function_call_data.vmt_index =
-            stmt->stmt_data.procedure_call_data.vmt_index;
-        if (stmt->stmt_data.procedure_call_data.self_class_name != NULL)
-            call_expr->expr_data.function_call_data.self_class_name =
-                strdup(stmt->stmt_data.procedure_call_data.self_class_name);
-        call_expr->expr_data.function_call_data.is_class_method_call =
-            stmt->stmt_data.procedure_call_data.is_class_method_call;
 
         Register_t *discard_reg = NULL;
         inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
         if (discard_reg != NULL)
             free_reg(get_reg_stack(), discard_reg);
-        call_expr->expr_data.function_call_data.args_expr = NULL;
-        call_expr->expr_data.function_call_data.call_kgpc_type = NULL;
-        destroy_expr(call_expr);
+        codegen_destroy_temp_call_expr(call_expr);
         return inst_list;
     }
 
