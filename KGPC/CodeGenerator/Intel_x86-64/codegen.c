@@ -53,6 +53,10 @@ static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
 static void codegen_assert_interface_impl_resolved(const char *iface_name,
     const char *method_name, const char *class_label,
     const char *iface_symbol, const char *impl_symbol);
+static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx,
+    ListNode_t *const_decls);
+static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
+    SymTab_t *symtab, int source_unit_index);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
@@ -1982,7 +1986,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
     }
 }
 
-static int codegen_eval_const_expr(struct Expression *expr, long long *out_value);
+static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab,
+    long long *out_value);
 
 static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
 {
@@ -2023,7 +2028,7 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
         }
 
         long long const_value = 0;
-        if (codegen_eval_const_expr(value, &const_value))
+        if (codegen_eval_const_expr(value, symtab, &const_value))
             PushConstOntoScope(symtab, (char *)id, const_value);
         else if (value->type == EXPR_STRING && value->expr_data.string != NULL)
         {
@@ -3280,6 +3285,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    ctx->comp_ctx = comp_ctx;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
@@ -3406,6 +3412,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         int prev_callee_r14 = ctx->callee_save_r14_offset;
         int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        codegen_function_locals(tree->tree_data.unit_data.interface_var_decls, ctx, symtab);
+        codegen_function_locals(tree->tree_data.unit_data.implementation_var_decls, ctx, symtab);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.interface_const_decls);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.implementation_const_decls);
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
@@ -3462,6 +3474,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         int prev_callee_r14 = ctx->callee_save_r14_offset;
         int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        codegen_function_locals(tree->tree_data.unit_data.interface_var_decls, ctx, symtab);
+        codegen_function_locals(tree->tree_data.unit_data.implementation_var_decls, ctx, symtab);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.interface_const_decls);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.implementation_const_decls);
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
@@ -3661,7 +3679,7 @@ static void codegen_emit_local_const_equivs(CodeGenContext *ctx, SymTab_t *symta
     DestroyList(emitted_symbols);
 }
 
-static int codegen_eval_const_expr(struct Expression *expr, long long *out_value)
+static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, long long *out_value)
 {
     if (expr == NULL || out_value == NULL)
         return 0;
@@ -3677,22 +3695,39 @@ static int codegen_eval_const_expr(struct Expression *expr, long long *out_value
         case EXPR_CHAR_CODE:
             *out_value = (unsigned char)(expr->expr_data.char_code & 0xFF);
             return 1;
+        case EXPR_VAR_ID:
+            if (symtab != NULL && expr->expr_data.id != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 &&
+                    node != NULL &&
+                    (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                {
+                    *out_value = node->const_int_value;
+                    return 1;
+                }
+            }
+            return 0;
         case EXPR_SIGN_TERM:
             if (expr->expr_data.sign_term != NULL)
             {
                 long long inner;
-                if (codegen_eval_const_expr(expr->expr_data.sign_term, &inner))
+                if (codegen_eval_const_expr(expr->expr_data.sign_term, symtab, &inner))
                 {
                     *out_value = -inner;
                     return 1;
                 }
             }
             return 0;
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                return codegen_eval_const_expr(expr->expr_data.typecast_data.expr, symtab, out_value);
+            return 0;
         case EXPR_ADDOP:
         {
             long long left, right;
-            if (codegen_eval_const_expr(expr->expr_data.addop_data.left_expr, &left) &&
-                codegen_eval_const_expr(expr->expr_data.addop_data.right_term, &right))
+            if (codegen_eval_const_expr(expr->expr_data.addop_data.left_expr, symtab, &left) &&
+                codegen_eval_const_expr(expr->expr_data.addop_data.right_term, symtab, &right))
             {
                 switch (expr->expr_data.addop_data.addop_type)
                 {
@@ -3715,8 +3750,8 @@ static int codegen_eval_const_expr(struct Expression *expr, long long *out_value
         case EXPR_MULOP:
         {
             long long left, right;
-            if (codegen_eval_const_expr(expr->expr_data.mulop_data.left_term, &left) &&
-                codegen_eval_const_expr(expr->expr_data.mulop_data.right_factor, &right))
+            if (codegen_eval_const_expr(expr->expr_data.mulop_data.left_term, symtab, &left) &&
+                codegen_eval_const_expr(expr->expr_data.mulop_data.right_factor, symtab, &right))
             {
                 switch (expr->expr_data.mulop_data.mulop_type)
                 {
@@ -3785,9 +3820,27 @@ static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx, ListNo
             continue;
 
         long long const_value = 0;
-        if (codegen_eval_const_expr(value, &const_value))
+        if (codegen_eval_const_expr(value, ctx != NULL ? ctx->symtab : NULL, &const_value))
             fprintf(ctx->output_file, ".equ %s, %lld\n", id, const_value);
     }
+}
+
+static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
+    SymTab_t *symtab, int source_unit_index)
+{
+    if (ctx == NULL || symtab == NULL || ctx->comp_ctx == NULL || source_unit_index <= 0)
+        return;
+
+    LoadedUnit *loaded_unit = compilation_context_find_unit(ctx->comp_ctx, source_unit_index);
+    if (loaded_unit == NULL || loaded_unit->unit_tree == NULL ||
+        loaded_unit->unit_tree->type != TREE_UNIT)
+        return;
+
+    Tree_t *unit = loaded_unit->unit_tree;
+    codegen_register_decl_list(unit->tree_data.unit_data.interface_var_decls, symtab, 0);
+    codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
+    codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
+    codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
 }
 
 void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
@@ -5778,7 +5831,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
             codegen_function_locals(unit->tree_data.unit_data.interface_var_decls, ctx, symtab);
+            codegen_function_locals(unit->tree_data.unit_data.implementation_var_decls, ctx, symtab);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.interface_const_decls);
+            codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.implementation_const_decls);
         }
     }
     codegen_function_locals(data->var_declaration, ctx, symtab);
@@ -6049,6 +6104,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.interface_var_decls, inst_list, ctx, symtab);
+            inst_list = codegen_var_initializers(unit->tree_data.unit_data.implementation_var_decls, inst_list, ctx, symtab);
         }
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
@@ -7095,6 +7151,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         (proc->owner_class != NULL && proc->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
     EnterScope(symtab, 0);
+    codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(proc->args_var, symtab, 1);
     codegen_register_decl_list(proc->declarations, symtab, 0);
@@ -7347,6 +7404,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
     EnterScope(symtab, 0);
+    codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(func->args_var, symtab, 1);
     codegen_register_decl_list(func->declarations, symtab, 0);
