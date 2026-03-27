@@ -234,6 +234,15 @@ int semcheck_register_source_buffer(const char *path, const char *buffer, size_t
         g_source_buffer_registry[g_source_buffer_count].global_start = global_start;
         g_source_buffer_count++;
         g_source_buffer_next_global = global_start + (int)length + 1; /* +1 to avoid overlap */
+        /* Debug: report accumulated source buffer memory */
+        if (kgpc_getenv("KGPC_DEBUG_MEMBUF") != NULL)
+        {
+            size_t total = 0;
+            for (int i = 0; i < g_source_buffer_count; i++)
+                total += g_source_buffer_registry[i].length;
+            fprintf(stderr, "[MEMBUF] source_buffer_registry: %d entries, %zu bytes (%.1f MB)\n",
+                    g_source_buffer_count, total, (double)total / (1024.0 * 1024.0));
+        }
     }
     else
     {
