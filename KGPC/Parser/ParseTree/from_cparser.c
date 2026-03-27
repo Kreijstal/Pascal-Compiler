@@ -1700,8 +1700,7 @@ static int is_param_modifier(const char *name) {
     return (strcasecmp(name, "const") == 0 ||
             strcasecmp(name, "var") == 0 ||
             strcasecmp(name, "out") == 0 ||
-            strcasecmp(name, "constref") == 0 ||
-            strcasecmp(name, "ref") == 0);
+            strcasecmp(name, "constref") == 0);
 }
 
 static int count_param_names_in_param(ast_t *param) {
