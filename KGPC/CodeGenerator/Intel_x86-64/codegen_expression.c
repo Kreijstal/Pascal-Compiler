@@ -255,6 +255,100 @@ static const char *codegen_outer_owner_class_from_full(const char *owner_class,
     return NULL;
 }
 
+static StackNode_t *codegen_find_nonlocal_lexical(CodeGenContext *ctx,
+    const char *var_id, int *scope_depth, HashNode_t **sym_node_out)
+{
+    if (scope_depth != NULL)
+        *scope_depth = 0;
+    if (sym_node_out != NULL)
+        *sym_node_out = NULL;
+
+    StackNode_t *var = find_label_with_depth(var_id, scope_depth);
+    if (var != NULL || ctx == NULL || ctx->symtab == NULL)
+        return var;
+
+    HashNode_t *sym_node = NULL;
+    if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
+        sym_node != NULL && sym_node->mangled_id != NULL)
+    {
+        var = find_label_with_depth(sym_node->mangled_id, scope_depth);
+    }
+
+    if (sym_node_out != NULL)
+        *sym_node_out = sym_node;
+    return var;
+}
+
+static ListNode_t *codegen_try_emit_nonlocal_global(ListNode_t *inst_list,
+    const char *var_id, CodeGenContext *ctx, const HashNode_t *sym_node, int *offset)
+{
+    if (ctx == NULL || ctx->symtab == NULL || ctx->comp_ctx == NULL)
+        return NULL;
+
+    const Tree_t *decl = NULL;
+    if (sym_node != NULL &&
+        (sym_node->hash_type == HASHTYPE_VAR || sym_node->hash_type == HASHTYPE_ARRAY) &&
+        (sym_node->source_unit_index > 0 || sym_node->defined_in_unit))
+    {
+        decl = codegen_find_var_decl_for_symbol(ctx, sym_node, var_id);
+    }
+    if (decl == NULL && ctx->symtab->current_unit_index > 0)
+        decl = codegen_find_var_decl_for_unit(ctx, ctx->symtab->current_unit_index, var_id);
+
+    const char *global_symbol = codegen_global_access_symbol_for_decl(decl, var_id);
+    if (global_symbol == NULL || global_symbol[0] == '\0')
+        return NULL;
+
+    char buffer[128];
+    *offset = 0;
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+        global_symbol, current_non_local_reg64());
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_try_emit_nonlocal_class_var(ListNode_t *inst_list,
+    const char *var_id, CodeGenContext *ctx, int *offset)
+{
+    if (ctx == NULL || ctx->symtab == NULL ||
+        ctx->current_subprogram_owner_class == NULL)
+        return NULL;
+
+    const char *class_labels[3] = {0};
+    char outer_class_buf[256];
+    int class_count = 0;
+
+    class_labels[class_count++] = ctx->current_subprogram_owner_class;
+    if (ctx->current_subprogram_owner_class_full != NULL)
+    {
+        const char *outer = codegen_outer_owner_class_from_full(
+            ctx->current_subprogram_owner_class,
+            ctx->current_subprogram_owner_class_full,
+            outer_class_buf, sizeof(outer_class_buf));
+        if (outer != NULL && outer[0] != '\0' &&
+            !pascal_identifier_equals(outer, ctx->current_subprogram_owner_class))
+        {
+            class_labels[class_count++] = outer;
+        }
+    }
+
+    for (int i = 0; i < class_count; ++i)
+    {
+        struct RecordType *class_record = semcheck_lookup_record_type(
+            ctx->symtab, class_labels[i]);
+        if (class_record != NULL &&
+            codegen_record_has_class_var_named(class_record, var_id))
+        {
+            char buffer[128];
+            *offset = 0;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                var_id, current_non_local_reg64());
+            return add_inst(inst_list, buffer);
+        }
+    }
+
+    return NULL;
+}
+
 static struct Expression *codegen_unwrap_typecast_call_expr(struct Expression *expr, SymTab_t *symtab)
 {
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL)
@@ -9119,82 +9213,18 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 
     char buffer[128];
     int scope_depth = 0;
-    StackNode_t *var = find_label_with_depth(var_id, &scope_depth);
     HashNode_t *sym_node = NULL;
-
-    if (var == NULL && ctx != NULL && ctx->symtab != NULL)
-    {
-        if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
-            sym_node != NULL && sym_node->mangled_id != NULL)
-        {
-            var = find_label_with_depth(sym_node->mangled_id, &scope_depth);
-        }
-    }
+    StackNode_t *var = codegen_find_nonlocal_lexical(ctx, var_id, &scope_depth, &sym_node);
 
     if(var == NULL) {
-        if (ctx != NULL && ctx->symtab != NULL)
-        {
-            const Tree_t *decl = NULL;
-            const char *global_symbol = NULL;
-            if (sym_node != NULL &&
-                (sym_node->hash_type == HASHTYPE_VAR ||
-                 sym_node->hash_type == HASHTYPE_ARRAY) &&
-                (sym_node->source_unit_index > 0 || sym_node->defined_in_unit))
-            {
-                decl = codegen_find_var_decl_for_symbol(ctx, sym_node, var_id);
-            }
-            if (decl == NULL && ctx->symtab->current_unit_index > 0)
-                decl = codegen_find_var_decl_for_unit(ctx, ctx->symtab->current_unit_index, var_id);
+        ListNode_t *resolved = codegen_try_emit_nonlocal_global(inst_list, var_id, ctx,
+            sym_node, offset);
+        if (resolved != NULL)
+            return resolved;
 
-            global_symbol = codegen_global_access_symbol_for_decl(decl, var_id);
-            if (global_symbol != NULL && global_symbol[0] != '\0')
-            {
-                if (sym_node != NULL)
-                    sym_node->referenced += 1;
-                *offset = 0;
-                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                    global_symbol, current_non_local_reg64());
-                inst_list = add_inst(inst_list, buffer);
-                return inst_list;
-            }
-        }
-
-        if (ctx != NULL && ctx->symtab != NULL &&
-            ctx->current_subprogram_owner_class != NULL)
-        {
-            const char *class_labels[3] = {0};
-            char outer_class_buf[256];
-            int class_count = 0;
-
-            class_labels[class_count++] = ctx->current_subprogram_owner_class;
-            if (ctx->current_subprogram_owner_class_full != NULL)
-            {
-                const char *outer = codegen_outer_owner_class_from_full(
-                    ctx->current_subprogram_owner_class,
-                    ctx->current_subprogram_owner_class_full,
-                    outer_class_buf, sizeof(outer_class_buf));
-                if (outer != NULL && outer[0] != '\0' &&
-                    !pascal_identifier_equals(outer, ctx->current_subprogram_owner_class))
-                {
-                    class_labels[class_count++] = outer;
-                }
-            }
-
-            for (int i = 0; i < class_count; ++i)
-            {
-                struct RecordType *class_record = semcheck_lookup_record_type(
-                    ctx->symtab, class_labels[i]);
-                if (class_record != NULL &&
-                    codegen_record_has_class_var_named(class_record, var_id))
-                {
-                    *offset = 0;
-                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                        var_id, current_non_local_reg64());
-                    inst_list = add_inst(inst_list, buffer);
-                    return inst_list;
-                }
-            }
-        }
+        resolved = codegen_try_emit_nonlocal_class_var(inst_list, var_id, ctx, offset);
+        if (resolved != NULL)
+            return resolved;
 
         /* If we're inside a nonstatic class method, the bare name may be a field
          * of the owning class that semcheck didn't rewrite to Self.field (e.g.

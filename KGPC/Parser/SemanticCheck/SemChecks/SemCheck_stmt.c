@@ -2030,6 +2030,17 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         FindSymbol(&existing, symtab, proc_id) != 0 && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
     {
+        /* Builtin procedure names should still win over implicit/self method
+         * visibility. For example, TFPList.Move must not shadow System.Move
+         * inside another TFPList method body. Only non-method user/global
+         * procedures should suppress builtin resolution here. */
+        if (existing->owner_class != NULL)
+            existing = NULL;
+    }
+
+    if (!force_builtin && existing != NULL &&
+        existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+    {
         return 0;
     }
 
