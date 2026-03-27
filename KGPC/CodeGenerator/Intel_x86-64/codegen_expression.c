@@ -9077,11 +9077,10 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
             }
         }
 
-        /* Fallback for unit/global symbols that are not represented as stack labels. */
-        *offset = 0;
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", var_id,
-            current_non_local_reg64());
-        inst_list = add_inst(inst_list, buffer);
+        codegen_report_error(ctx,
+            "ERROR: Unresolved non-local symbol %s reached codegen fallback.",
+            var_id);
+        assert(!"unresolved non-local symbol reached codegen fallback");
         return inst_list;
     }
 
