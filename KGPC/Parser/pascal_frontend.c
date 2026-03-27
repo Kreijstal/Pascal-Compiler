@@ -751,6 +751,12 @@ static bool source_path_is_cacheable(const char *path)
     return is_unit;
 }
 
+static void drain_parser_parse_pools(void)
+{
+    parser_drain_ast_free_list();
+    parser_drain_error_free_list();
+}
+
 bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tree, ParseError **error_out)
 {
     if (error_out != NULL)
@@ -815,8 +821,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                     success = true;
                 }
                 free_ast(cached_ast);
+                drain_parser_parse_pools();
                 free(cached_pp_buf);
-                parser_drain_ast_free_list();
 #if !defined(_WIN32) && defined(__GLIBC__)
                 malloc_trim(0);
 #endif
@@ -1223,6 +1229,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                     free_error(err);
             }
             free_ast(result.value.ast);
+            drain_parser_parse_pools();
             free_input(input);
             free(buffer);
             return false;
@@ -1257,6 +1264,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         }
 
         free_ast(result.value.ast);
+        drain_parser_parse_pools();
     }
 
     free(buffer);
@@ -1264,7 +1272,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
     /* Drain AST/error free lists to return memory to the OS.
      * Without this, pooled nodes accumulate across hundreds of units
      * and inflate peak RSS by hundreds of MB for large compilations. */
-    parser_drain_ast_free_list();
+    drain_parser_parse_pools();
 #if !defined(_WIN32) && defined(__GLIBC__)
     /* Ask glibc to return freed heap pages to the OS.  Without this,
      * fragmentation causes peak RSS to stay high even after large

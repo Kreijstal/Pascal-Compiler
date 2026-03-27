@@ -1570,17 +1570,7 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
     {
         if (track_time)
             start_time = current_time_seconds();
-        /* When KGPC_SKIP_IMPORTED_IMPL_BODIES is active, tell the converter
-         * to skip procedure/function/method bodies in the implementation
-         * section.  This avoids creating millions of Expression/Statement
-         * nodes that semcheck and codegen will never use, saving hundreds
-         * of MB of peak RSS for large compilations like pp.pas. */
-        int skip_bodies = (kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL);
-        if (skip_bodies)
-            from_cparser_set_skip_impl_bodies(1);
         bool ok = parse_pascal_file(path, &unit_tree, true);
-        if (skip_bodies)
-            from_cparser_set_skip_impl_bodies(0);
         if (track_time)
         {
             g_time_parse_units += current_time_seconds() - start_time;
@@ -2756,7 +2746,6 @@ int main(int argc, char **argv)
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
         double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        unsetenv("KGPC_SKIP_IMPORTED_IMPL_BODIES");
         SymTab_t *symtab = start_semcheck(user_tree, &sem_result);
         if (track_time)
             g_time_semantic += current_time_seconds() - sem_start;
@@ -3031,10 +3020,6 @@ int main(int argc, char **argv)
     int sem_result = 0;
     double sem_start = track_time ? current_time_seconds() : 0.0;
     double sem_profile_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-    /* Note: KGPC_SKIP_IMPORTED_IMPL_BODIES can be set externally to skip
-     * semantic checking of imported unit implementation bodies.  This is
-     * safe when the program has errors (codegen is skipped anyway) and
-     * dramatically speeds up large compilations (e.g., pp.pas with 267 units). */
     SymTab_t *symtab = start_semcheck_with_symtab(early_symtab, user_tree, &sem_result);
     if (track_time)
         g_time_semantic += current_time_seconds() - sem_start;

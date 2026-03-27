@@ -2211,15 +2211,15 @@ void parser_drain_free_list(void) {
  * After calling this, future allocate_ast_node() calls will use malloc(). */
 void parser_drain_ast_free_list(void) {
 #if AST_POOLING
-    size_t count = 0;
     while (ast_free_list != NULL) {
         ast_t *next = ast_free_list->next;
         free(ast_free_list);
         ast_free_list = next;
-        count++;
     }
-    (void)count;
 #endif
+}
+
+void parser_drain_error_free_list(void) {
     while (parse_error_free_list != NULL) {
         ParseError *next = parse_error_free_list->cause;
         free(parse_error_free_list);
