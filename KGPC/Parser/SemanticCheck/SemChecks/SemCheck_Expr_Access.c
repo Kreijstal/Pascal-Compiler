@@ -2626,7 +2626,7 @@ int semcheck_funccall(int *type_return,
                             call_stub.type = EXPR_FUNCTION_CALL;
 
                             int overload_status = semcheck_resolve_overload(
-                                &best_candidate, NULL, &num_best,
+                                &best_candidate, &num_best,
                                 all_methods, args_given, symtab,
                                 &call_stub, max_scope_lev, 0);
 
@@ -5939,7 +5939,6 @@ method_call_resolved:
     ;  /* Label for jumping here after method resolution */
 
     HashNode_t *best_match = NULL;
-    int best_score = 0;
     int num_best_matches = 0;
 
     if (mangled_name != NULL && overload_candidates != NULL)
@@ -5956,7 +5955,6 @@ method_call_resolved:
                 if (first_match == NULL)
                     first_match = candidate;
                 best_match = candidate;
-                best_score = 0;
                 num_best_matches = 1;
                 mangled_matches++;
             }
@@ -6020,7 +6018,7 @@ method_call_resolved:
         double resolve_t0 = 0.0;
         if (FUNCCALL_TIMINGS_ENABLED())
             resolve_t0 = funccall_now_ms();
-        int resolve_status = semcheck_resolve_overload(&best_match, &best_score,
+        int resolve_status = semcheck_resolve_overload(&best_match,
             &num_best_matches, overload_candidates, args_given, symtab, expr,
             max_scope_lev, prefer_non_builtin);
         if (FUNCCALL_TIMINGS_ENABLED()) {
@@ -6037,9 +6035,8 @@ method_call_resolved:
     if (best_match != NULL && overload_candidates != NULL && overload_candidates->next != NULL)
     {
         HashNode_t *override_match = NULL;
-        int override_score = 0;
         int override_count = 0;
-        int override_status = semcheck_resolve_overload(&override_match, &override_score,
+        int override_status = semcheck_resolve_overload(&override_match,
             &override_count, overload_candidates, args_given, symtab, expr,
             max_scope_lev, prefer_non_builtin);
         if (override_status == 0 && override_match != NULL && override_count == 1 &&
@@ -6051,7 +6048,6 @@ method_call_resolved:
             if (!semcheck_candidates_string_subtypes_differ(symtab, best_match, override_match))
             {
                 best_match = override_match;
-                best_score = override_score;
                 num_best_matches = override_count;
             }
         }
@@ -6104,15 +6100,13 @@ method_call_resolved:
             if (value_candidates != NULL)
             {
                 HashNode_t *value_match = NULL;
-                int value_score = 0;
                 int value_count = 0;
-                int value_status = semcheck_resolve_overload(&value_match, &value_score,
+                int value_status = semcheck_resolve_overload(&value_match,
                     &value_count, value_candidates, args_given, symtab, expr,
                     max_scope_lev, prefer_non_builtin);
                 if (value_status == 0 && value_match != NULL && value_count == 1)
                 {
                     best_match = value_match;
-                    best_score = value_score;
                     num_best_matches = value_count;
                 }
                 DestroyList(value_candidates);
@@ -6760,8 +6754,8 @@ method_call_resolved:
         const char *ambig_env = kgpc_getenv("KGPC_DEBUG_AMBIGUOUS");
         if (ambig_env != NULL && overload_candidates != NULL)
         {
-            fprintf(stderr, "[KGPC] Ambiguous call to %s, %d best matches with score %d:\n",
-                id ? id : "<unknown>", num_best_matches, best_score);
+            fprintf(stderr, "[KGPC] Ambiguous call to %s, %d best matches:\n",
+                id ? id : "<unknown>", num_best_matches);
             ListNode_t *cur = overload_candidates;
             while (cur != NULL)
             {

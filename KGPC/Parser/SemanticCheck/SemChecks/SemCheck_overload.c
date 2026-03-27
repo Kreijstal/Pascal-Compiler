@@ -2095,7 +2095,6 @@ static int semcheck_count_untyped_params(HashNode_t *candidate)
 
 
 int semcheck_resolve_overload(HashNode_t **best_match_out,
-    int *best_rank_out,
     int *num_best_out,
     ListNode_t *overload_candidates,
     ListNode_t *args_given,
@@ -2106,8 +2105,6 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 {
     if (best_match_out != NULL)
         *best_match_out = NULL;
-    if (best_rank_out != NULL)
-        *best_rank_out = 0;
     if (num_best_out != NULL)
         *num_best_out = 0;
 
@@ -3215,8 +3212,6 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
 
     if (best_match_out != NULL)
         *best_match_out = best_match;
-    if (best_rank_out != NULL)
-        *best_rank_out = 0;
     if (num_best_out != NULL)
         *num_best_out = num_best;
 
