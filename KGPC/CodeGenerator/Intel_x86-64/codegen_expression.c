@@ -2655,56 +2655,10 @@ int codegen_type_is_signed(int type_tag)
     }
 }
 
-static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
-{
-    if (buffer == NULL || size == 0)
-        return;
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    const char *prefix = "__kgpc_enum_typeinfo_";
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s%.*s", prefix,
-        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
-        sanitized);
-}
-
-static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
-{
-    if (buffer == NULL || size == 0)
-        return;
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
-}
-
 static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
     char *buffer, size_t size)
 {
-    if (buffer == NULL || size == 0)
-        return;
-    buffer[0] = '\0';
-    if (type_id == NULL || type_id[0] == '\0')
-        return;
-
-    HashNode_t *type_node = NULL;
-    if (symtab != NULL &&
-        FindSymbol(&type_node, symtab, type_id) != 0 &&
-        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
-        if (alias != NULL && alias->is_enum)
-        {
-            codegen_enum_typeinfo_label(type_id, buffer, size);
-            return;
-        }
-
-        if (get_record_type_from_node(type_node) != NULL)
-        {
-            codegen_record_typeinfo_label(type_id, buffer, size);
-            return;
-        }
-    }
-
-    codegen_enum_typeinfo_label(type_id, buffer, size);
+    codegen_common_typeinfo_label_for_type_id(symtab, type_id, buffer, size);
 }
 
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.

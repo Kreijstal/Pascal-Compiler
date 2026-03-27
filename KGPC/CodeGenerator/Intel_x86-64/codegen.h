@@ -148,6 +148,11 @@ void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size
 #include "../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../compilation_context.h"
 
+void codegen_common_enum_typeinfo_label(const char *type_id, char *buffer, size_t size);
+void codegen_common_record_typeinfo_label(const char *type_id, char *buffer, size_t size);
+void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size);
+
 typedef struct CodeGenContext CodeGenContext;
 
 static inline int codegen_align_to(int value, int alignment)

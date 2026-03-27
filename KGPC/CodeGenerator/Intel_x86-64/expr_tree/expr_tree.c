@@ -100,56 +100,10 @@ static int expr_tree_tag_from_kgpc(const KgpcType *type)
     return UNKNOWN_TYPE;
 }
 
-static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_t size)
-{
-    if (buffer == NULL || size == 0)
-        return;
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    const char *prefix = "__kgpc_enum_typeinfo_";
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s%.*s", prefix,
-        (int)((size > strlen(prefix) + 1) ? (size - strlen(prefix) - 1) : 0),
-        sanitized);
-}
-
-static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
-{
-    if (buffer == NULL || size == 0)
-        return;
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
-}
-
 static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
     char *buffer, size_t size)
 {
-    if (buffer == NULL || size == 0)
-        return;
-    buffer[0] = '\0';
-    if (type_id == NULL || type_id[0] == '\0')
-        return;
-
-    HashNode_t *type_node = NULL;
-    if (symtab != NULL &&
-        FindSymbol(&type_node, symtab, type_id) != 0 &&
-        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
-        if (alias != NULL && alias->is_enum)
-        {
-            codegen_enum_typeinfo_label(type_id, buffer, size);
-            return;
-        }
-
-        if (hashnode_get_record_type(type_node) != NULL)
-        {
-            codegen_record_typeinfo_label(type_id, buffer, size);
-            return;
-        }
-    }
-
-    codegen_enum_typeinfo_label(type_id, buffer, size);
+    codegen_common_typeinfo_label_for_type_id(symtab, type_id, buffer, size);
 }
 #include "../../../Parser/ParseTree/type_tags.h"
 #include "../../../Parser/SemanticCheck/HashTable/HashTable.h"
@@ -422,23 +376,7 @@ static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
 
     (void)ctx;
     if (!codegen_builtin_lowhigh_try_value(expr, ctx, is_high, &value, &use_qword))
-    {
-        if (expr != NULL && expr->expr_data.function_call_data.args_expr != NULL &&
-            expr->expr_data.function_call_data.args_expr->cur != NULL)
-        {
-            struct Expression *arg_expr =
-                (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
-            fprintf(stderr,
-                "DBG lowhigh fail name=%s arg_type=%d arg_tag=%d arg_id=%s resolved_type=%p\n",
-                is_high ? "High" : "Low",
-                arg_expr != NULL ? arg_expr->type : -1,
-                arg_expr != NULL ? expr_get_type_tag(arg_expr) : -1,
-                (arg_expr != NULL && arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL) ?
-                    arg_expr->expr_data.id : "(non-var)",
-                (void *)(arg_expr != NULL ? expr_get_kgpc_type(arg_expr) : NULL));
-        }
         return NULL;
-    }
 
     if (use_qword)
         snprintf(buffer, sizeof(buffer), "\tmovabsq\t$%lld, %s\n", value, target_reg->bit_64);
