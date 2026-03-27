@@ -414,43 +414,6 @@ static int semcheck_try_resolve_enum_literal_from_type_alias(SymTab_t *symtab,
         field_id, out_value, 0);
 }
 
-/*
- * Preference tier for enum type candidates.
- * When the same enum type name exists in multiple units, we prefer:
- *   1. The definition from the current compilation unit (most local)
- *   2. A definition imported from any unit (defined_in_unit flag)
- *   3. A definition from program scope (source_unit_index == 0)
- *
- * Lower tier value = better candidate.
- */
-typedef enum {
-    ENUM_PREF_SAME_UNIT = 0,   /* Best: defined in the current unit */
-    ENUM_PREF_IMPORTED_UNIT,    /* Good: imported from another unit */
-    ENUM_PREF_PROGRAM_SCOPE,    /* Acceptable: in program scope */
-    ENUM_PREF_OTHER             /* Fallback */
-} EnumCandidatePreference;
-
-static EnumCandidatePreference semcheck_enum_candidate_preference(
-    SymTab_t *symtab, HashNode_t *candidate)
-{
-    int cur_unit_idx = (symtab->current_scope != NULL)
-        ? symtab->current_scope->unit_index : 0;
-
-    /* Same unit as the current scope — highest priority. */
-    if (cur_unit_idx > 0 && candidate->source_unit_index == cur_unit_idx)
-        return ENUM_PREF_SAME_UNIT;
-
-    /* Imported from a named unit — second priority. */
-    if (candidate->defined_in_unit)
-        return ENUM_PREF_IMPORTED_UNIT;
-
-    /* Program-level scope (unit_index 0) — lowest useful priority. */
-    if (candidate->source_unit_index == 0)
-        return ENUM_PREF_PROGRAM_SCOPE;
-
-    return ENUM_PREF_OTHER;
-}
-
 static HashNode_t *semcheck_find_visible_enum_type_candidate_with_literal(SymTab_t *symtab,
     const char *type_name, const char *field_id, long long *out_value)
 {
@@ -462,7 +425,6 @@ static HashNode_t *semcheck_find_visible_enum_type_candidate_with_literal(SymTab
     ListNode_t *matches = FindAllIdents(symtab, type_name);
     HashNode_t *best = NULL;
     long long best_value = 0;
-    EnumCandidatePreference best_pref = ENUM_PREF_OTHER;
 
     for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
     {
@@ -477,13 +439,32 @@ static HashNode_t *semcheck_find_visible_enum_type_candidate_with_literal(SymTab
                 field_id, &candidate_value))
             continue;
 
-        EnumCandidatePreference pref = semcheck_enum_candidate_preference(symtab, candidate);
-
-        if (best == NULL || pref < best_pref)
+        /*
+         * Determine candidate preference using strict priority tiers:
+         *   1. Prefer candidate from the current compilation unit
+         *   2. Prefer unit-defined types
+         *   3. Prefer unit-scoped over program-scoped
+         */
         {
-            best = candidate;
-            best_value = candidate_value;
-            best_pref = pref;
+            int cur_unit_idx = (symtab->current_scope != NULL) ? symtab->current_scope->unit_index : 0;
+            int cand_is_current_unit = (cur_unit_idx > 0 && candidate->source_unit_index == cur_unit_idx);
+            int best_is_current_unit = (best != NULL && cur_unit_idx > 0 && best->source_unit_index == cur_unit_idx);
+
+            int dominated = 0;
+            if (best == NULL)
+                dominated = 0; /* first valid candidate always wins */
+            else if (cand_is_current_unit != best_is_current_unit)
+                dominated = !cand_is_current_unit;
+            else if (candidate->defined_in_unit != best->defined_in_unit)
+                dominated = !candidate->defined_in_unit;
+            else if ((candidate->source_unit_index == 0) != (best->source_unit_index == 0))
+                dominated = (candidate->source_unit_index == 0);
+
+            if (!dominated)
+            {
+                best = candidate;
+                best_value = candidate_value;
+            }
         }
     }
 

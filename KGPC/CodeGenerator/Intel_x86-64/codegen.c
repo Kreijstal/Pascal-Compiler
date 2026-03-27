@@ -53,6 +53,10 @@ static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
 static void codegen_assert_interface_impl_resolved(const char *iface_name,
     const char *method_name, const char *class_label,
     const char *iface_symbol, const char *impl_symbol);
+static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx,
+    ListNode_t *const_decls);
+static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
+    SymTab_t *symtab, int source_unit_index);
 static ListNode_t *g_codegen_available_subprograms = NULL;
 
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
@@ -934,6 +938,39 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
+/*
+ * Compare two HashNode_t type entries to determine which is the better
+ * candidate for type resolution.
+ *
+ * Returns < 0 if `a` is better, > 0 if `b` is better, 0 if equivalent.
+ *
+ * Criteria in strict priority order:
+ *   1. Prefer entries from a named unit (source_unit_index > 0)
+ *   2. Among unit entries, prefer higher unit index (later = closer scope)
+ *   3. Prefer public declarations
+ *   4. Prefer unit-defined types
+ */
+static int codegen_compare_type_nodes(const HashNode_t *a, const HashNode_t *b)
+{
+    assert(a != NULL && b != NULL);
+
+    int a_has_unit = (a->source_unit_index > 0);
+    int b_has_unit = (b->source_unit_index > 0);
+    if (a_has_unit != b_has_unit)
+        return a_has_unit ? -1 : 1;
+
+    if (a->source_unit_index != b->source_unit_index)
+        return (a->source_unit_index > b->source_unit_index) ? -1 : 1;
+
+    if (a->unit_is_public != b->unit_is_public)
+        return a->unit_is_public ? -1 : 1;
+
+    if (a->defined_in_unit != b->defined_in_unit)
+        return a->defined_in_unit ? -1 : 1;
+
+    return 0;
+}
+
 static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *type_name)
 {
     if (symtab == NULL || type_name == NULL)
@@ -948,18 +985,8 @@ static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *
         HashNode_t *cand = (HashNode_t *)cur->cur;
         if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
             continue;
-
-        if (best_node == NULL ||
-            (best_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
-            (cand->source_unit_index > 0 && best_node->source_unit_index > 0 &&
-             cand->source_unit_index > best_node->source_unit_index) ||
-            (cand->source_unit_index == best_node->source_unit_index &&
-             !best_node->unit_is_public && cand->unit_is_public) ||
-            (cand->source_unit_index == best_node->source_unit_index &&
-             cand->unit_is_public == best_node->unit_is_public &&
-             !best_node->defined_in_unit && cand->defined_in_unit)) {
+        if (best_node == NULL || codegen_compare_type_nodes(cand, best_node) < 0)
             best_node = cand;
-        }
     }
 
     DestroyList(matches);
@@ -1982,7 +2009,8 @@ static void codegen_register_local_types(ListNode_t *type_decls, SymTab_t *symta
     }
 }
 
-static int codegen_eval_const_expr(struct Expression *expr, long long *out_value);
+static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab,
+    long long *out_value);
 
 static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symtab)
 {
@@ -2023,7 +2051,7 @@ static void codegen_register_const_decls(ListNode_t *const_decls, SymTab_t *symt
         }
 
         long long const_value = 0;
-        if (codegen_eval_const_expr(value, &const_value))
+        if (codegen_eval_const_expr(value, symtab, &const_value))
             PushConstOntoScope(symtab, (char *)id, const_value);
         else if (value->type == EXPR_STRING && value->expr_data.string != NULL)
         {
@@ -3280,6 +3308,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
+    ctx->comp_ctx = comp_ctx;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
@@ -3406,6 +3435,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         int prev_callee_r14 = ctx->callee_save_r14_offset;
         int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        codegen_function_locals(tree->tree_data.unit_data.interface_var_decls, ctx, symtab);
+        codegen_function_locals(tree->tree_data.unit_data.implementation_var_decls, ctx, symtab);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.interface_const_decls);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.implementation_const_decls);
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
@@ -3462,6 +3497,12 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         int prev_callee_r14 = ctx->callee_save_r14_offset;
         int prev_callee_r15 = ctx->callee_save_r15_offset;
         push_stackscope();
+        codegen_function_locals(tree->tree_data.unit_data.interface_var_decls, ctx, symtab);
+        codegen_function_locals(tree->tree_data.unit_data.implementation_var_decls, ctx, symtab);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.interface_const_decls);
+        codegen_emit_const_decl_equivs_from_list(ctx,
+            tree->tree_data.unit_data.implementation_const_decls);
         {
             StackNode_t *rbx_slot = add_l_t_bytes("__callee_rbx", 8);
             StackNode_t *r12_slot = add_l_t_bytes("__callee_r12", 8);
@@ -3661,7 +3702,7 @@ static void codegen_emit_local_const_equivs(CodeGenContext *ctx, SymTab_t *symta
     DestroyList(emitted_symbols);
 }
 
-static int codegen_eval_const_expr(struct Expression *expr, long long *out_value)
+static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, long long *out_value)
 {
     if (expr == NULL || out_value == NULL)
         return 0;
@@ -3677,22 +3718,39 @@ static int codegen_eval_const_expr(struct Expression *expr, long long *out_value
         case EXPR_CHAR_CODE:
             *out_value = (unsigned char)(expr->expr_data.char_code & 0xFF);
             return 1;
+        case EXPR_VAR_ID:
+            if (symtab != NULL && expr->expr_data.id != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 &&
+                    node != NULL &&
+                    (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+                {
+                    *out_value = node->const_int_value;
+                    return 1;
+                }
+            }
+            return 0;
         case EXPR_SIGN_TERM:
             if (expr->expr_data.sign_term != NULL)
             {
                 long long inner;
-                if (codegen_eval_const_expr(expr->expr_data.sign_term, &inner))
+                if (codegen_eval_const_expr(expr->expr_data.sign_term, symtab, &inner))
                 {
                     *out_value = -inner;
                     return 1;
                 }
             }
             return 0;
+        case EXPR_TYPECAST:
+            if (expr->expr_data.typecast_data.expr != NULL)
+                return codegen_eval_const_expr(expr->expr_data.typecast_data.expr, symtab, out_value);
+            return 0;
         case EXPR_ADDOP:
         {
             long long left, right;
-            if (codegen_eval_const_expr(expr->expr_data.addop_data.left_expr, &left) &&
-                codegen_eval_const_expr(expr->expr_data.addop_data.right_term, &right))
+            if (codegen_eval_const_expr(expr->expr_data.addop_data.left_expr, symtab, &left) &&
+                codegen_eval_const_expr(expr->expr_data.addop_data.right_term, symtab, &right))
             {
                 switch (expr->expr_data.addop_data.addop_type)
                 {
@@ -3715,8 +3773,8 @@ static int codegen_eval_const_expr(struct Expression *expr, long long *out_value
         case EXPR_MULOP:
         {
             long long left, right;
-            if (codegen_eval_const_expr(expr->expr_data.mulop_data.left_term, &left) &&
-                codegen_eval_const_expr(expr->expr_data.mulop_data.right_factor, &right))
+            if (codegen_eval_const_expr(expr->expr_data.mulop_data.left_term, symtab, &left) &&
+                codegen_eval_const_expr(expr->expr_data.mulop_data.right_factor, symtab, &right))
             {
                 switch (expr->expr_data.mulop_data.mulop_type)
                 {
@@ -3785,9 +3843,27 @@ static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx, ListNo
             continue;
 
         long long const_value = 0;
-        if (codegen_eval_const_expr(value, &const_value))
+        if (codegen_eval_const_expr(value, ctx != NULL ? ctx->symtab : NULL, &const_value))
             fprintf(ctx->output_file, ".equ %s, %lld\n", id, const_value);
     }
+}
+
+static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
+    SymTab_t *symtab, int source_unit_index)
+{
+    if (ctx == NULL || symtab == NULL || ctx->comp_ctx == NULL || source_unit_index <= 0)
+        return;
+
+    LoadedUnit *loaded_unit = compilation_context_find_unit(ctx->comp_ctx, source_unit_index);
+    if (loaded_unit == NULL || loaded_unit->unit_tree == NULL ||
+        loaded_unit->unit_tree->type != TREE_UNIT)
+        return;
+
+    Tree_t *unit = loaded_unit->unit_tree;
+    codegen_register_decl_list(unit->tree_data.unit_data.interface_var_decls, symtab, 0);
+    codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
+    codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
+    codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
 }
 
 void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
@@ -4652,66 +4728,6 @@ static int codegen_record_visible_field_count(const struct RecordType *record)
     return count;
 }
 
-
-/*
- * Compare two record type candidates to determine which is the more
- * "complete" definition.  When the same type name appears multiple times
- * in the symbol table (forward declarations, partial imports from
- * different units), we need to pick the canonical one for code emission.
- *
- * Returns < 0 if `a` is better, > 0 if `b` is better, 0 if equivalent.
- *
- * The criteria are checked in strict priority order — the first criterion
- * that distinguishes the two candidates wins.  This avoids the fragility
- * of magic-number scoring where weights could accidentally interact.
- */
-static int codegen_compare_record_candidates(
-    const struct RecordType *a, const struct RecordType *b)
-{
-    assert(a != NULL && b != NULL);
-
-    /* 1. A record with parent fields merged is fully resolved — always prefer it. */
-    if (a->parent_fields_merged != b->parent_fields_merged)
-        return a->parent_fields_merged ? -1 : 1;
-
-    /* 2. Prefer class/interface over plain record types. */
-    int a_typed = (a->is_class || a->is_interface);
-    int b_typed = (b->is_class || b->is_interface);
-    if (a_typed != b_typed)
-        return a_typed ? -1 : 1;
-
-    /* 3. More implemented interfaces = more complete definition. */
-    if (a->num_interfaces != b->num_interfaces)
-        return (a->num_interfaces > b->num_interfaces) ? -1 : 1;
-
-    /* 4. Having a parent class name indicates a non-stub definition. */
-    int a_has_parent = (a->parent_class_name != NULL);
-    int b_has_parent = (b->parent_class_name != NULL);
-    if (a_has_parent != b_has_parent)
-        return a_has_parent ? -1 : 1;
-
-    /* 5. More visible fields = more complete definition. */
-    int a_fields = codegen_record_visible_field_count(a);
-    int b_fields = codegen_record_visible_field_count(b);
-    if (a_fields != b_fields)
-        return (a_fields > b_fields) ? -1 : 1;
-
-    /* 6. More methods = more complete definition. */
-    int a_methods = ListLength(a->method_templates);
-    int b_methods = ListLength(b->method_templates);
-    if (a_methods != b_methods)
-        return (a_methods > b_methods) ? -1 : 1;
-
-    /* 7. More properties = more complete definition. */
-    int a_props = ListLength(a->properties);
-    int b_props = ListLength(b->properties);
-    if (a_props != b_props)
-        return (a_props > b_props) ? -1 : 1;
-
-    return 0;
-}
-
-
 static int codegen_record_is_forward_stub(const struct RecordType *record)
 {
     if (record == NULL)
@@ -4735,57 +4751,8 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     if (record == NULL || symtab == NULL || record->parent_class_name == NULL)
         return NULL;
 
-    ListNode_t *matches = FindAllIdents(symtab, record->parent_class_name);
-    if (matches == NULL)
-        return NULL;
-
-    const struct RecordType *best = NULL;
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
-        HashNode_t *cand = (HashNode_t *)cur->cur;
-        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
-            continue;
-        if (best == NULL || codegen_compare_record_candidates(cand_record, best) < 0)
-            best = cand_record;
-    }
-    DestroyList(matches);
-    if (best_node == NULL)
-        return NULL;
-
-    if (best_node->source_unit_index > 0)
-    {
-        const char *unit_name = unit_registry_get(best_node->source_unit_index);
-        if (unit_name != NULL)
-        {
-            size_t qualified_len = strlen(unit_name) + 1 + strlen(record->parent_class_name) + 1;
-            char *qualified_id = (char *)malloc(qualified_len);
-            if (qualified_id != NULL)
-            {
-                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, record->parent_class_name);
-                HashNode_t *qualified = NULL;
-                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
-                {
-                    const struct RecordType *qualified_record = get_record_type_from_node(qualified);
-                    if (qualified_record == NULL && qualified->type != NULL &&
-                        qualified->type->kind == TYPE_KIND_POINTER &&
-                        qualified->type->info.points_to != NULL &&
-                        qualified->type->info.points_to->kind == TYPE_KIND_RECORD)
-                        qualified_record = qualified->type->info.points_to->info.record_info;
-                    free(qualified_id);
-                    if (qualified_record != NULL)
-                        return qualified_record;
-                }
-                free(qualified_id);
-            }
-        }
-    }
-
-    const struct RecordType *best_record = get_record_type_from_node(best_node);
-    if (best_record == NULL && best_node->type != NULL &&
-        best_node->type->kind == TYPE_KIND_POINTER &&
-        best_node->type->info.points_to != NULL &&
-        best_node->type->info.points_to->kind == TYPE_KIND_RECORD)
-        best_record = best_node->type->info.points_to->info.record_info;
-    return best_record;
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, record->parent_class_name);
+    return codegen_lookup_record_type_for_node(symtab, best_node, record->parent_class_name);
 }
 
 
@@ -5018,81 +4985,11 @@ static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
     if (symtab == NULL || class_label == NULL || *class_label == NULL)
         return;
 
-    HashNode_t *preferred = semcheck_find_preferred_type_node(symtab, *class_label);
-    if (preferred != NULL) {
-        struct RecordType *preferred_record = get_record_type_from_node(preferred);
-        if (preferred_record == NULL && preferred->type != NULL &&
-            preferred->type->kind == TYPE_KIND_POINTER &&
-            preferred->type->info.points_to != NULL &&
-            preferred->type->info.points_to->kind == TYPE_KIND_RECORD)
-            preferred_record = preferred->type->info.points_to->info.record_info;
-        if (preferred_record != NULL) {
-            *record_info = preferred_record;
-            if (preferred_record->type_id != NULL)
-                *class_label = preferred_record->type_id;
-            else if (preferred->id != NULL)
-                *class_label = preferred->id;
-            if (preferred_record->num_interfaces > 0 ||
-                preferred_record->method_templates != NULL ||
-                preferred_record->properties != NULL ||
-                preferred_record->parent_fields_merged)
-                return;
-        }
-    }
-
-    ListNode_t *matches = FindAllIdents(symtab, *class_label);
-    if (matches == NULL)
-        return;
-
-    HashNode_t *best_node = NULL;
-    struct RecordType *best_record = NULL;
-
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
-        HashNode_t *cand = (HashNode_t *)cur->cur;
-        struct RecordType *cand_record = get_record_type_from_node(cand);
-        if (cand_record == NULL)
-            continue;
-        const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-        if (dbg != NULL && *class_label != NULL &&
-            (strcasecmp(*class_label, "TList") == 0 ||
-             strcasecmp(*class_label, "TStringList") == 0 ||
-             strcasecmp(*class_label, "TComponent") == 0 ||
-             strcasecmp(*class_label, "TInterfaceList") == 0)) {
-            fprintf(stderr,
-                "[KGPC] canonical candidate %s: rec=%p class=%d iface=%d parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-                *class_label, (void *)cand_record, cand_record->is_class,
-                cand_record->is_interface,
-                cand_record->parent_class_name != NULL ? cand_record->parent_class_name : "(null)",
-                cand_record->num_interfaces, ListLength(cand_record->method_templates),
-                ListLength(cand_record->properties), cand_record->parent_fields_merged,
-                cand_record->type_id != NULL ? cand_record->type_id : "(null)");
-        }
-        if (best_record == NULL ||
-            codegen_compare_record_candidates(cand_record, best_record) < 0) {
-            best_node = cand;
-            best_record = cand_record;
-        }
-    }
-
-    DestroyList(matches);
-
+    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, *class_label);
+    struct RecordType *best_record =
+        codegen_lookup_record_type_for_node(symtab, best_node, *class_label);
     if (best_record == NULL)
         return;
-
-    const char *dbg = getenv("KGPC_DEBUG_CANONICAL_RECORDS");
-    if (dbg != NULL && *class_label != NULL &&
-        (strcasecmp(*class_label, "TList") == 0 ||
-         strcasecmp(*class_label, "TStringList") == 0 ||
-         strcasecmp(*class_label, "TComponent") == 0 ||
-         strcasecmp(*class_label, "TInterfaceList") == 0)) {
-        fprintf(stderr,
-            "[KGPC] canonical selected %s: rec=%p parent=%s num_ifaces=%d methods=%d props=%d merged=%d type_id=%s\n",
-            *class_label, (void *)best_record,
-            best_record->parent_class_name != NULL ? best_record->parent_class_name : "(null)",
-            best_record->num_interfaces, ListLength(best_record->method_templates),
-            ListLength(best_record->properties), best_record->parent_fields_merged,
-            best_record->type_id != NULL ? best_record->type_id : "(null)");
-    }
 
     *record_info = best_record;
     if (best_record->type_id != NULL)
@@ -5895,7 +5792,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
             codegen_function_locals(unit->tree_data.unit_data.interface_var_decls, ctx, symtab);
+            codegen_function_locals(unit->tree_data.unit_data.implementation_var_decls, ctx, symtab);
             codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.interface_const_decls);
+            codegen_emit_const_decl_equivs_from_list(ctx, unit->tree_data.unit_data.implementation_const_decls);
         }
     }
     codegen_function_locals(data->var_declaration, ctx, symtab);
@@ -6166,6 +6065,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
             if (unit == NULL || unit->type != TREE_UNIT)
                 continue;
             inst_list = codegen_var_initializers(unit->tree_data.unit_data.interface_var_decls, inst_list, ctx, symtab);
+            inst_list = codegen_var_initializers(unit->tree_data.unit_data.implementation_var_decls, inst_list, ctx, symtab);
         }
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
@@ -7212,6 +7112,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         (proc->owner_class != NULL && proc->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
     EnterScope(symtab, 0);
+    codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
     codegen_register_decl_list(proc->args_var, symtab, 1);
     codegen_register_decl_list(proc->declarations, symtab, 0);
@@ -7464,6 +7365,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
     EnterScope(symtab, 0);
+    codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
     codegen_register_decl_list(func->args_var, symtab, 1);
     codegen_register_decl_list(func->declarations, symtab, 0);
