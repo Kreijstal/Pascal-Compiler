@@ -3308,7 +3308,6 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     g_stack_home_space_bytes = (ctx->target_abi == KGPC_TARGET_ABI_WINDOWS) ? 32 : 0;
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
-    ctx->comp_ctx = comp_ctx;
     g_codegen_available_subprograms = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 

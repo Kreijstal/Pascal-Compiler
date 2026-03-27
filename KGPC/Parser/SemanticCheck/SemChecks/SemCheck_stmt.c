@@ -685,6 +685,10 @@ static int semcheck_record_assign_operator_score(SymTab_t *symtab, HashNode_t *c
     if (arg_rank < 0 || ret_rank < 0 || ret_type == NULL)
         return 0;
 
+    /* Composite key: argument match is more important than return type match.
+     * kgpc_type_conversion_rank returns 0=exact, 1=promotion, 2+=conversion,
+     * so lower values are better.  The weights (8, 2) ensure argument rank
+     * always dominates return rank in the comparison (lower total = better). */
     *score_out = arg_rank * 8 + ret_rank * 2;
     if (return_type_out != NULL)
         *return_type_out = ret_type;
@@ -1959,61 +1963,10 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         return 0;
 
     char *proc_id = stmt->stmt_data.procedure_call_data.id;
-    int forced_system_builtin = 0;
-    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
-    {
-        const char *placeholder_name =
-            stmt->stmt_data.procedure_call_data.placeholder_method_name;
-        ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
-        struct Expression *qualifier_expr =
-            (args != NULL) ? (struct Expression *)args->cur : NULL;
-        const char *derived_name = NULL;
-
-        if (placeholder_name == NULL &&
-            proc_id != NULL &&
-            proc_id[0] == '_' &&
-            proc_id[1] == '_' &&
-            proc_id[2] != '\0')
-        {
-            derived_name = proc_id + 2;
-            placeholder_name = derived_name;
-        }
-
-        if (placeholder_name == NULL ||
-            !pascal_identifier_equals(placeholder_name, expected_name) ||
-            qualifier_expr == NULL ||
-            qualifier_expr->type != EXPR_VAR_ID ||
-            qualifier_expr->expr_data.id == NULL ||
-            !pascal_identifier_equals(qualifier_expr->expr_data.id, "System"))
-        {
-            return 0;
-        }
-
-        ListNode_t *remaining_args = args->next;
-        destroy_expr(qualifier_expr);
-        args->cur = NULL;
-        free(args);
-        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-
-        if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
-        {
-            free(proc_id);
-            proc_id = strdup(expected_name);
-            if (proc_id == NULL)
-                return 1;
-            stmt->stmt_data.procedure_call_data.id = proc_id;
-        }
-
-        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
-        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-        {
-            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
-            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
-        }
-        forced_system_builtin = 1;
-    }
-
     if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
+        return 0;
+
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
         return 0;
 
     /* Prefer user-defined/prologue procedures over builtins when available.
@@ -2023,7 +1976,6 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
                         pascal_identifier_equals(expected_name, "Val") ||
                         pascal_identifier_equals(expected_name, "Str") ||
-                        forced_system_builtin ||
                         (qualifier != NULL &&
                          pascal_identifier_equals(qualifier, "System"));
     if (!force_builtin &&
@@ -2061,32 +2013,6 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         
         builtin_node->referenced += 1;
-        if (handled != NULL)
-            *handled = 1;
-        return handler(symtab, stmt, max_scope_lev);
-    }
-
-    if (forced_system_builtin)
-    {
-        stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
-        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
-        semcheck_stmt_set_call_kgpc_type(stmt, NULL,
-            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
-        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
-        if (handled != NULL)
-            *handled = 1;
-        return handler(symtab, stmt, max_scope_lev);
-    }
-
-    if (qualifier != NULL && pascal_identifier_equals(qualifier, "System"))
-    {
-        stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
-        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
-        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
-        semcheck_stmt_set_call_kgpc_type(stmt, NULL,
-            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
-        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         if (handled != NULL)
             *handled = 1;
         return handler(symtab, stmt, max_scope_lev);
@@ -3096,6 +3022,95 @@ static int semcheck_builtin_settextcodepage(SymTab_t *symtab, struct Statement *
     return semcheck_builtin_untyped_call(symtab, stmt, max_scope_lev, 1);
 }
 
+/*
+ * Per-parameter penalty classification for write/writeln overload resolution.
+ * Lower penalty = better match.  Penalties are summed across all parameters
+ * to produce a total candidate penalty.
+ *
+ * The penalty tiers are:
+ *   EXACT (0)        — types match exactly
+ *   INT_PROMOTION (1) — Int ↔ LongInt interchangeable
+ *   STRING_SUBTYPE (2) — STRING_TYPE matches but UnicodeString is less preferred
+ *   FILE_SUBTYPE (3)  — FILE_TYPE matches but TypedFile doesn't match plain File
+ *   INCOMPATIBLE (1000) — no valid conversion
+ */
+enum {
+    WRITE_PENALTY_EXACT = 0,
+    WRITE_PENALTY_INT_PROMOTION = 1,
+    WRITE_PENALTY_STRING_SUBTYPE = 2,
+    WRITE_PENALTY_FILE_SUBTYPE = 3,
+    WRITE_PENALTY_INCOMPATIBLE = 1000
+};
+
+static int semcheck_write_param_penalty(Tree_t *formal_decl, int formal_type, int actual_type)
+{
+    if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
+        return WRITE_PENALTY_EXACT;
+
+    if (formal_type == actual_type)
+    {
+        /* When both are STRING_TYPE, prefer RawByteString over UnicodeString.
+         * RawByteString is FPC's catch-all byte string type; UnicodeString
+         * requires codepage conversion. */
+        if (formal_type == STRING_TYPE)
+        {
+            const char *formal_type_id = (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                ? formal_decl->tree_data.var_decl_data.type_id : NULL;
+            if (formal_type_id != NULL && strcasecmp(formal_type_id, "UnicodeString") == 0)
+                return WRITE_PENALTY_STRING_SUBTYPE;
+        }
+        /* When both are FILE_TYPE, prefer plain File over TypedFile.
+         * A TypedFile formal should not match a plain File actual. */
+        if (formal_type == FILE_TYPE)
+        {
+            const char *formal_type_id = (formal_decl != NULL && formal_decl->type == TREE_VAR_DECL)
+                ? formal_decl->tree_data.var_decl_data.type_id : NULL;
+            if (formal_type_id != NULL && strcasecmp(formal_type_id, "TypedFile") == 0)
+                return WRITE_PENALTY_FILE_SUBTYPE;
+        }
+        return WRITE_PENALTY_EXACT;
+    }
+
+    if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
+        (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
+        return WRITE_PENALTY_INT_PROMOTION;
+
+    return WRITE_PENALTY_INCOMPATIBLE;
+}
+
+/*
+ * Compute the total penalty for a write/writeln candidate by summing
+ * per-parameter penalties.  Used for both initial scoring and tie-breaking
+ * recomputation (eliminating code duplication).
+ */
+static int semcheck_write_candidate_total_penalty(HashNode_t *candidate,
+    ListNode_t *actual_args, SymTab_t *symtab, int max_scope_lev)
+{
+    assert(candidate != NULL);
+    assert(candidate->type != NULL);
+    assert(candidate->type->kind == TYPE_KIND_PROCEDURE);
+
+    ListNode_t *formal = candidate->type->info.proc_info.params;
+    ListNode_t *actual = actual_args;
+    int total = 0;
+
+    while (formal != NULL && actual != NULL)
+    {
+        Tree_t *formal_decl = (Tree_t *)formal->cur;
+        struct Expression *actual_expr = (struct Expression *)actual->cur;
+        int formal_type = resolve_param_type(formal_decl, symtab);
+        int actual_type = UNKNOWN_TYPE;
+        semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
+
+        total += semcheck_write_param_penalty(formal_decl, formal_type, actual_type);
+
+        formal = formal->next;
+        actual = actual->next;
+    }
+
+    return total;
+}
+
 static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement *stmt, int max_scope_lev)
 {
     if (symtab == NULL || stmt == NULL)
@@ -3148,7 +3163,7 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
     {
         int call_arg_count = ListLength(stmt->stmt_data.procedure_call_data.expr_args);
         HashNode_t *best_match = NULL;
-        int best_score = 9999;
+        int best_penalty = WRITE_PENALTY_INCOMPATIBLE + 1;
         int num_best = 0;
 
         for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
@@ -3161,73 +3176,16 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
             if (ListLength(formal_params) != call_arg_count)
                 continue;
 
-            ListNode_t *formal = formal_params;
-            ListNode_t *actual = stmt->stmt_data.procedure_call_data.expr_args;
-            /* Write/Writeln overload ranking: lower penalty = better match.
-             * Uses named constants instead of magic numbers. */
-            enum {
-                WRITE_PENALTY_EXACT         = 0,
-                WRITE_PENALTY_INT_PROMOTION = 1,
-                WRITE_PENALTY_UNICODE_STR   = 2,
-                WRITE_PENALTY_TYPED_FILE    = 3,
-                WRITE_PENALTY_INCOMPATIBLE  = 1000
-            };
-            int current_penalty = 0;
-            while (formal != NULL && actual != NULL)
+            int penalty = semcheck_write_candidate_total_penalty(candidate,
+                stmt->stmt_data.procedure_call_data.expr_args, symtab, max_scope_lev);
+
+            if (penalty < best_penalty)
             {
-                Tree_t *formal_decl = (Tree_t *)formal->cur;
-                struct Expression *actual_expr = (struct Expression *)actual->cur;
-                int formal_type = resolve_param_type(formal_decl, symtab);
-                int actual_type = UNKNOWN_TYPE;
-                semcheck_stmt_expr_tag(&actual_type, symtab, actual_expr, max_scope_lev, NO_MUTATE);
-
-                if (formal_type == UNKNOWN_TYPE || actual_type == UNKNOWN_TYPE)
-                    current_penalty += WRITE_PENALTY_EXACT;
-                else if (formal_type == actual_type)
-                {
-                    /* When both are STRING_TYPE, prefer RawByteString over
-                     * UnicodeString.  RawByteString is FPC's catch-all byte
-                     * string type that any AnsiString converts to without
-                     * codepage conversion; UnicodeString requires conversion. */
-                    if (formal_type == STRING_TYPE && actual_type == STRING_TYPE)
-                    {
-                        const char *formal_type_id = NULL;
-                        if (formal_decl->type == TREE_VAR_DECL)
-                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
-                        if (formal_type_id != NULL &&
-                            strcasecmp(formal_type_id, "UnicodeString") == 0)
-                            current_penalty += WRITE_PENALTY_UNICODE_STR;
-                    }
-                    /* When both are FILE_TYPE, prefer the exact match:
-                     * File formal for File actual, TypedFile for TypedFile.
-                     * A TypedFile formal should not match a plain File actual. */
-                    if (formal_type == FILE_TYPE)
-                    {
-                        const char *formal_type_id = NULL;
-                        if (formal_decl->type == TREE_VAR_DECL)
-                            formal_type_id = formal_decl->tree_data.var_decl_data.type_id;
-                        if (formal_type_id != NULL &&
-                            strcasecmp(formal_type_id, "TypedFile") == 0)
-                            current_penalty += WRITE_PENALTY_TYPED_FILE;
-                    }
-                }
-                else if ((formal_type == LONGINT_TYPE && actual_type == INT_TYPE) ||
-                         (formal_type == INT_TYPE && actual_type == LONGINT_TYPE))
-                    current_penalty += WRITE_PENALTY_INT_PROMOTION;
-                else
-                    current_penalty += WRITE_PENALTY_INCOMPATIBLE;
-
-                formal = formal->next;
-                actual = actual->next;
-            }
-
-            if (current_penalty < best_score)
-            {
-                best_score = current_penalty;
+                best_penalty = penalty;
                 best_match = candidate;
                 num_best = 1;
             }
-            else if (current_penalty == best_score)
+            else if (penalty == best_penalty)
             {
                 num_best++;
             }
@@ -3246,38 +3204,9 @@ static int semcheck_set_stmt_call_mangled_id(SymTab_t *symtab, struct Statement 
                     continue;
                 if (ListLength(c2->type->info.proc_info.params) != call_arg_count)
                     continue;
-                /* Recompute this candidate's score to check if it ties */
-                ListNode_t *f2 = c2->type->info.proc_info.params;
-                ListNode_t *a2 = stmt->stmt_data.procedure_call_data.expr_args;
-                int s2 = 0;
-                while (f2 != NULL && a2 != NULL)
-                {
-                    Tree_t *fd = (Tree_t *)f2->cur;
-                    struct Expression *ae = (struct Expression *)a2->cur;
-                    int ft = resolve_param_type(fd, symtab);
-                    int at = UNKNOWN_TYPE;
-                    semcheck_stmt_expr_tag(&at, symtab, ae, max_scope_lev, NO_MUTATE);
-                    if (ft == UNKNOWN_TYPE || at == UNKNOWN_TYPE)
-                        s2 += 0;
-                    else if (ft == at)
-                    {
-                        if (ft == STRING_TYPE)
-                        {
-                            const char *fti = (fd->type == TREE_VAR_DECL) ?
-                                fd->tree_data.var_decl_data.type_id : NULL;
-                            if (fti != NULL && strcasecmp(fti, "UnicodeString") == 0)
-                                s2 += 2;
-                        }
-                    }
-                    else if ((ft == LONGINT_TYPE && at == INT_TYPE) ||
-                             (ft == INT_TYPE && at == LONGINT_TYPE))
-                        s2 += 1;
-                    else
-                        s2 += 1000;
-                    f2 = f2->next;
-                    a2 = a2->next;
-                }
-                if (s2 == best_score && c2->mangled_id != NULL &&
+                int c2_penalty = semcheck_write_candidate_total_penalty(c2,
+                    stmt->stmt_data.procedure_call_data.expr_args, symtab, max_scope_lev);
+                if (c2_penalty == best_penalty && c2->mangled_id != NULL &&
                     strcmp(c2->mangled_id, best_match->mangled_id) != 0)
                 {
                     all_same = 0;
@@ -4160,8 +4089,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                     if (parent_method_node == NULL)
                                     {
                                         HashNode_t *best_match = NULL;
-                                        int best_rank = 0, num_best = 0;
-                                        semcheck_resolve_overload(&best_match, &best_rank, &num_best,
+                                        int num_best = 0;
+                                        semcheck_resolve_overload(&best_match, &num_best,
                                             parent_candidates, self_arg, symtab, call_expr, INT_MAX, 0);
                                         if (best_match != NULL && num_best == 1)
                                             parent_method_node = best_match;
@@ -6121,77 +6050,21 @@ skip_type_receiver_rewrite:
             if (is_unit_qualifier)
             {
                 /* Unit-qualified call; resolve using the structured method name. */
-                char *real_proc_name = NULL;
-                char *unit_qualifier_copy = strdup(potential_unit_name);
-                if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-                {
-                    real_proc_name =
-                        strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name);
-                }
-                else if (proc_id != NULL &&
-                    proc_id[0] == '_' &&
-                    proc_id[1] == '_' &&
-                    proc_id[2] != '\0')
-                {
-                    real_proc_name = strdup(proc_id + 2);
-                }
+                char *real_proc_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                    ? strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name) : NULL;
                 if (real_proc_name == NULL)
                 {
-                    free(unit_qualifier_copy);
                     /* strdup failed - skip transformation, will report error later */
                 }
                 else
                 {
-                    if (pascal_identifier_equals(potential_unit_name, "System") &&
-                        pascal_identifier_equals(real_proc_name, "Error"))
-                    {
-                        ListNode_t *remaining_args = args_given->next;
-                        destroy_expr(first_arg);
-                        args_given->cur = NULL;
-                        free(args_given);
-
-                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
-                        free(proc_id);
-                        proc_id = strdup("Halt");
-                        if (proc_id == NULL)
-                        {
-                            free(real_proc_name);
-                            return 1;
-                        }
-                        stmt->stmt_data.procedure_call_data.id = proc_id;
-                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
-                        if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
-                        {
-                            free(stmt->stmt_data.procedure_call_data.call_qualifier);
-                            stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
-                        }
-                        stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
-                        unit_qualifier_copy = NULL;
-                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-                        {
-                            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
-                            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
-                        }
-                        args_given = remaining_args;
-                        was_unit_qualified = 1;
-                        free(real_proc_name);
-                    }
-                    else
-                    {
-                    int force_strip_system_qualifier =
-                        pascal_identifier_equals(potential_unit_name, "System");
                     ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
 
-                    if (proc_candidates != NULL || force_strip_system_qualifier)
+                    if (proc_candidates != NULL)
                     {
                         /* Found the procedure by name. Transform the call:
                          * 1. Remove the first argument (the unit qualifier)
                          * 2. Change proc_id to the real procedure name (without "__")
-                         *
-                         * System-qualified builtins are not always present as ordinary
-                         * symbol-table procedures, but semcheck still needs the
-                         * placeholder receiver stripped so later builtin resolution can
-                         * match names like Error, Halt, and Exit.
                          */
                         /* Save the remaining args before modifying the list */
                         ListNode_t *remaining_args = args_given->next;
@@ -6211,23 +6084,10 @@ skip_type_receiver_rewrite:
                         proc_id = real_proc_name;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
                         stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
-                        if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
-                        {
-                            free(stmt->stmt_data.procedure_call_data.call_qualifier);
-                            stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
-                        }
-                        stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
-                        unit_qualifier_copy = NULL;
-                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-                        {
-                            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
-                            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
-                        }
                         args_given = remaining_args;
                         was_unit_qualified = 1;
 
-                        if (proc_candidates != NULL)
-                            DestroyList(proc_candidates);
+                        DestroyList(proc_candidates);
 
                         /* Continue with normal procedure call handling using the transformed call */
                     }
@@ -6248,13 +6108,6 @@ skip_type_receiver_rewrite:
                             proc_id = real_proc_name;
                             stmt->stmt_data.procedure_call_data.id = proc_id;
                             stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
-                            if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
-                            {
-                                free(stmt->stmt_data.procedure_call_data.call_qualifier);
-                                stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
-                            }
-                            stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
-                            unit_qualifier_copy = NULL;
                             args_given = remaining_args;
                             was_unit_qualified = 1;
                         }
@@ -6263,8 +6116,6 @@ skip_type_receiver_rewrite:
                             /* Procedure not found - free real_proc_name and fall through to report error */
                             free(real_proc_name);
                         }
-                    }
-                    free(unit_qualifier_copy);
                     }
                 }
             }
@@ -8148,7 +7999,7 @@ proccall_parent_resolve_done:
         call_stub.line_num = stmt->line_num;
         call_stub.type = EXPR_FUNCTION_CALL;
 
-        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+        int overload_status = semcheck_resolve_overload(&best_candidate, &num_best_matches,
             overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
 
         if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1)
@@ -8186,7 +8037,7 @@ proccall_parent_resolve_done:
         call_stub.line_num = stmt->line_num;
         call_stub.type = EXPR_FUNCTION_CALL;
 
-        int overload_status = semcheck_resolve_overload(&best_candidate, NULL, &num_best_matches,
+        int overload_status = semcheck_resolve_overload(&best_candidate, &num_best_matches,
             overload_candidates, args_given, symtab, &call_stub, max_scope_lev, 0);
 
         if (overload_status == 0 && best_candidate != NULL && num_best_matches == 1 &&

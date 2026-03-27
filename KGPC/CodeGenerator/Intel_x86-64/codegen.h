@@ -237,7 +237,6 @@ typedef struct CodeGenContext {
     int write_label_counter;
     FILE *output_file;
     SymTab_t *symtab;
-    CompilationContext *comp_ctx;
     kgpc_target_abi_t target_abi;
     int had_error;
     CodeGenLoopFrame *loop_frames;

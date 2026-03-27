@@ -36,7 +36,6 @@ int semcheck_method_accepts_arg_count(ListNode_t *params, int arg_count, int *ex
 int semcheck_append_default_args(ListNode_t **args_head, ListNode_t *formal_params, int line_num);
 
 int semcheck_resolve_overload(HashNode_t **best_match_out,
-    int *best_rank_out,
     int *num_best_out,
     ListNode_t *overload_candidates,
     ListNode_t *args_given,
