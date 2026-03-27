@@ -9023,6 +9023,32 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
     return inst_list;
 }
 
+static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst_list,
+    CodeGenContext *ctx)
+{
+    if (stmt == NULL || ctx == NULL)
+        return inst_list;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->next == NULL || args->next->next == NULL)
+        return inst_list;
+
+    /* Pascal Move is Move(src, dst, count); kgpc_move expects destination
+     * first. Reorder the call explicitly instead of letting the generic
+     * builtin dispatcher emit a direct call to "Move". */
+    ListNode_t *dst_node = CreateListNode(args->next->cur, LIST_EXPR);
+    ListNode_t *src_node = CreateListNode(args->cur, LIST_EXPR);
+    ListNode_t *count_node = CreateListNode(args->next->next->cur, LIST_EXPR);
+    dst_node->next = src_node;
+    src_node->next = count_node;
+
+    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL);
+    DestroyList(dst_node);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+    return codegen_cleanup_call_stack(inst_list, ctx);
+}
+
 ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
@@ -9171,6 +9197,15 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
     {
         inst_list = codegen_builtin_val(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
+    {
+        inst_list = codegen_builtin_move(stmt, inst_list, ctx);
         #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
         #endif

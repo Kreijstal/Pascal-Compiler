@@ -1963,10 +1963,61 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         return 0;
 
     char *proc_id = stmt->stmt_data.procedure_call_data.id;
-    if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
-        return 0;
-
+    int forced_system_builtin = 0;
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder)
+    {
+        const char *placeholder_name =
+            stmt->stmt_data.procedure_call_data.placeholder_method_name;
+        ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+        struct Expression *qualifier_expr =
+            (args != NULL) ? (struct Expression *)args->cur : NULL;
+        const char *derived_name = NULL;
+
+        if (placeholder_name == NULL &&
+            proc_id != NULL &&
+            proc_id[0] == '_' &&
+            proc_id[1] == '_' &&
+            proc_id[2] != '\0')
+        {
+            derived_name = proc_id + 2;
+            placeholder_name = derived_name;
+        }
+
+        if (placeholder_name == NULL ||
+            !pascal_identifier_equals(placeholder_name, expected_name) ||
+            qualifier_expr == NULL ||
+            qualifier_expr->type != EXPR_VAR_ID ||
+            qualifier_expr->expr_data.id == NULL ||
+            !pascal_identifier_equals(qualifier_expr->expr_data.id, "System"))
+        {
+            return 0;
+        }
+
+        ListNode_t *remaining_args = args->next;
+        destroy_expr(qualifier_expr);
+        args->cur = NULL;
+        free(args);
+        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+
+        if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
+        {
+            free(proc_id);
+            proc_id = strdup(expected_name);
+            if (proc_id == NULL)
+                return 1;
+            stmt->stmt_data.procedure_call_data.id = proc_id;
+        }
+
+        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+        {
+            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
+        }
+        forced_system_builtin = 1;
+    }
+
+    if (proc_id == NULL || !pascal_identifier_equals(proc_id, expected_name))
         return 0;
 
     /* Prefer user-defined/prologue procedures over builtins when available.
@@ -1976,10 +2027,22 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
     int force_builtin = pascal_identifier_equals(expected_name, "Assign") ||
                         pascal_identifier_equals(expected_name, "Val") ||
                         pascal_identifier_equals(expected_name, "Str") ||
+                        forced_system_builtin ||
                         (qualifier != NULL &&
                          pascal_identifier_equals(qualifier, "System"));
     if (!force_builtin &&
         FindSymbol(&existing, symtab, proc_id) != 0 && existing != NULL &&
+        existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
+    {
+        /* Builtin procedure names should still win over implicit/self method
+         * visibility. For example, TFPList.Move must not shadow System.Move
+         * inside another TFPList method body. Only non-method user/global
+         * procedures should suppress builtin resolution here. */
+        if (existing->owner_class != NULL)
+            existing = NULL;
+    }
+
+    if (!force_builtin && existing != NULL &&
         existing->hash_type != HASHTYPE_BUILTIN_PROCEDURE)
     {
         return 0;
@@ -2013,6 +2076,32 @@ static int try_resolve_builtin_procedure(SymTab_t *symtab,
         stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         
         builtin_node->referenced += 1;
+        if (handled != NULL)
+            *handled = 1;
+        return handler(symtab, stmt, max_scope_lev);
+    }
+
+    if (forced_system_builtin)
+    {
+        stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
+        semcheck_stmt_set_call_kgpc_type(stmt, NULL,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
+        if (handled != NULL)
+            *handled = 1;
+        return handler(symtab, stmt, max_scope_lev);
+    }
+
+    if (qualifier != NULL && pascal_identifier_equals(qualifier, "System"))
+    {
+        stmt->stmt_data.procedure_call_data.resolved_proc = NULL;
+        stmt->stmt_data.procedure_call_data.mangled_id = NULL;
+        stmt->stmt_data.procedure_call_data.call_hash_type = HASHTYPE_BUILTIN_PROCEDURE;
+        semcheck_stmt_set_call_kgpc_type(stmt, NULL,
+            stmt->stmt_data.procedure_call_data.is_call_info_valid == 1);
+        stmt->stmt_data.procedure_call_data.is_call_info_valid = 1;
         if (handled != NULL)
             *handled = 1;
         return handler(symtab, stmt, max_scope_lev);
@@ -6050,21 +6139,77 @@ skip_type_receiver_rewrite:
             if (is_unit_qualifier)
             {
                 /* Unit-qualified call; resolve using the structured method name. */
-                char *real_proc_name = (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
-                    ? strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name) : NULL;
+                char *real_proc_name = NULL;
+                char *unit_qualifier_copy = strdup(potential_unit_name);
+                if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                {
+                    real_proc_name =
+                        strdup(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+                }
+                else if (proc_id != NULL &&
+                    proc_id[0] == '_' &&
+                    proc_id[1] == '_' &&
+                    proc_id[2] != '\0')
+                {
+                    real_proc_name = strdup(proc_id + 2);
+                }
                 if (real_proc_name == NULL)
                 {
+                    free(unit_qualifier_copy);
                     /* strdup failed - skip transformation, will report error later */
                 }
                 else
                 {
+                    if (pascal_identifier_equals(potential_unit_name, "System") &&
+                        pascal_identifier_equals(real_proc_name, "Error"))
+                    {
+                        ListNode_t *remaining_args = args_given->next;
+                        destroy_expr(first_arg);
+                        args_given->cur = NULL;
+                        free(args_given);
+
+                        stmt->stmt_data.procedure_call_data.expr_args = remaining_args;
+                        free(proc_id);
+                        proc_id = strdup("Halt");
+                        if (proc_id == NULL)
+                        {
+                            free(real_proc_name);
+                            return 1;
+                        }
+                        stmt->stmt_data.procedure_call_data.id = proc_id;
+                        stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.call_qualifier);
+                            stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
+                        }
+                        stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
+                        unit_qualifier_copy = NULL;
+                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+                            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
+                        }
+                        args_given = remaining_args;
+                        was_unit_qualified = 1;
+                        free(real_proc_name);
+                    }
+                    else
+                    {
+                    int force_strip_system_qualifier =
+                        pascal_identifier_equals(potential_unit_name, "System");
                     ListNode_t *proc_candidates = FindAllIdents(symtab, real_proc_name);
 
-                    if (proc_candidates != NULL)
+                    if (proc_candidates != NULL || force_strip_system_qualifier)
                     {
                         /* Found the procedure by name. Transform the call:
                          * 1. Remove the first argument (the unit qualifier)
                          * 2. Change proc_id to the real procedure name (without "__")
+                         *
+                         * System-qualified builtins are not always present as ordinary
+                         * symbol-table procedures, but semcheck still needs the
+                         * placeholder receiver stripped so later builtin resolution can
+                         * match names like Error, Halt, and Exit.
                          */
                         /* Save the remaining args before modifying the list */
                         ListNode_t *remaining_args = args_given->next;
@@ -6084,10 +6229,23 @@ skip_type_receiver_rewrite:
                         proc_id = real_proc_name;
                         stmt->stmt_data.procedure_call_data.id = proc_id;
                         stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                        if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.call_qualifier);
+                            stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
+                        }
+                        stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
+                        unit_qualifier_copy = NULL;
+                        if (stmt->stmt_data.procedure_call_data.placeholder_method_name != NULL)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.placeholder_method_name);
+                            stmt->stmt_data.procedure_call_data.placeholder_method_name = NULL;
+                        }
                         args_given = remaining_args;
                         was_unit_qualified = 1;
 
-                        DestroyList(proc_candidates);
+                        if (proc_candidates != NULL)
+                            DestroyList(proc_candidates);
 
                         /* Continue with normal procedure call handling using the transformed call */
                     }
@@ -6108,6 +6266,13 @@ skip_type_receiver_rewrite:
                             proc_id = real_proc_name;
                             stmt->stmt_data.procedure_call_data.id = proc_id;
                             stmt->stmt_data.procedure_call_data.is_method_call_placeholder = 0;
+                            if (stmt->stmt_data.procedure_call_data.call_qualifier != NULL)
+                            {
+                                free(stmt->stmt_data.procedure_call_data.call_qualifier);
+                                stmt->stmt_data.procedure_call_data.call_qualifier = NULL;
+                            }
+                            stmt->stmt_data.procedure_call_data.call_qualifier = unit_qualifier_copy;
+                            unit_qualifier_copy = NULL;
                             args_given = remaining_args;
                             was_unit_qualified = 1;
                         }
@@ -6116,6 +6281,8 @@ skip_type_receiver_rewrite:
                             /* Procedure not found - free real_proc_name and fall through to report error */
                             free(real_proc_name);
                         }
+                    }
+                    free(unit_qualifier_copy);
                     }
                 }
             }

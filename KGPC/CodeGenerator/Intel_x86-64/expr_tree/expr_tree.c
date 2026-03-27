@@ -4018,11 +4018,17 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
 
-                /* If FindIdent returned a function but there's a const with the same
-                 * name (e.g. FPC declares Pi as [internproc] function but we have it as a
-                 * real constant), prefer the user-scope const first, then builtin const.
-                 * This ensures unit constants like 'PI = 3.14' shadow builtin Pi. */
-                if (found && node != NULL && node->hash_type == HASHTYPE_FUNCTION &&
+                /* If FindSymbol returned a callable/type-like symbol but there is a
+                 * constant with the same name in the active/user scopes (or builtin
+                 * scope), prefer the constant. This keeps enum literals and user
+                 * constants from being shadowed by unrelated imported procedures or
+                 * builtins, without letting globals override local variables/params. */
+                if (found && node != NULL &&
+                    !(node->hash_type == HASHTYPE_CONST || node->is_constant) &&
+                    (node->hash_type == HASHTYPE_FUNCTION ||
+                     node->hash_type == HASHTYPE_PROCEDURE ||
+                     node->hash_type == HASHTYPE_BUILTIN_PROCEDURE ||
+                     node->hash_type == HASHTYPE_TYPE) &&
                     ctx != NULL && ctx->symtab != NULL)
                 {
                     /* Check user scope for a constant with the same name */
@@ -4035,7 +4041,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         for (ListNode_t *a = all; a != NULL; a = a->next)
                         {
                             HashNode_t *h = (HashNode_t *)a->cur;
-                            if (h != NULL && h->hash_type == HASHTYPE_CONST)
+                            if (h != NULL && (h->hash_type == HASHTYPE_CONST || h->is_constant))
                             {
                                 user_const = h;
                                 break;
@@ -4048,22 +4054,39 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     {
                         node = user_const;
                     }
+                    else if (ctx->symtab->current_unit_index > 0 &&
+                             ctx->symtab->current_unit_index < SYMTAB_MAX_UNITS &&
+                             ctx->symtab->unit_scopes[ctx->symtab->current_unit_index] != NULL &&
+                             ctx->symtab->unit_scopes[ctx->symtab->current_unit_index]->table != NULL)
+                    {
+                        HashNode_t *unit_const = FindIdentInTableForUnit(
+                            ctx->symtab->unit_scopes[ctx->symtab->current_unit_index]->table,
+                            expr->expr_data.id, ctx->symtab->current_unit_index);
+                        if (unit_const != NULL &&
+                            (unit_const->hash_type == HASHTYPE_CONST || unit_const->is_constant))
+                        {
+                            node = unit_const;
+                        }
+                    }
                     else if (ctx->symtab->builtin_scope->table != NULL)
                     {
                         HashNode_t *builtin_node = FindIdentInTable(ctx->symtab->builtin_scope->table,
                             expr->expr_data.id);
-                        if (builtin_node != NULL && builtin_node->hash_type == HASHTYPE_CONST)
+                        if (builtin_node != NULL &&
+                            (builtin_node->hash_type == HASHTYPE_CONST || builtin_node->is_constant))
                             node = builtin_node;
                     }
                 }
 
-                if (!(found && node != NULL && node->hash_type == HASHTYPE_CONST))
+                if (!(found && node != NULL &&
+                      (node->hash_type == HASHTYPE_CONST || node->is_constant)))
                     stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
                 #ifdef DEBUG_CODEGEN
                 CODEGEN_DEBUG("DEBUG: gencode_leaf_var: stack_node = %p, scope_depth = %d\n", stack_node, scope_depth);
                 #endif
 
-                if (found && node->hash_type == HASHTYPE_CONST)
+                if (found && node != NULL &&
+                    (node->hash_type == HASHTYPE_CONST || node->is_constant))
                 {
                     /* Check if this is a procedure address constant */
                     if (node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE &&
