@@ -2015,74 +2015,6 @@ static int codegen_formal_shortstring_size(Tree_t *decl, SymTab_t *symtab)
     return 256;
 }
 
-static int codegen_expr_shortstring_storage_size(const struct Expression *expr, CodeGenContext *ctx)
-{
-    if (expr == NULL)
-        return 256;
-
-    KgpcType *expr_type = expr_get_kgpc_type(expr);
-    if (expr_type != NULL)
-    {
-        struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
-        if (alias != NULL && (alias->is_shortstring || alias->is_array))
-        {
-            if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-                return alias->array_end - alias->array_start + 1;
-            if (alias->storage_size > 1)
-                return (int)alias->storage_size;
-        }
-
-        if (kgpc_type_is_array(expr_type))
-        {
-            int start = 0;
-            int end = -1;
-            if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
-                end >= start && end >= 0)
-                return end - start + 1;
-        }
-
-        if (kgpc_type_is_shortstring(expr_type))
-            return 256;
-    }
-
-    if (expr->is_array_expr)
-    {
-        int lower_bound = expr_get_array_lower_bound(expr);
-        int upper_bound = expr_get_array_upper_bound(expr);
-        if (upper_bound >= lower_bound && upper_bound >= 0)
-            return upper_bound - lower_bound + 1;
-    }
-
-    if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
-    {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
-        {
-            if (node->type != NULL)
-            {
-                struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-                if (alias != NULL && alias->is_shortstring)
-                {
-                    if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-                        return alias->array_end - alias->array_start + 1;
-                    if (alias->storage_size > 1)
-                        return (int)alias->storage_size;
-                }
-            }
-
-            {
-                int start = 0;
-                int end = -1;
-                hashnode_get_array_bounds(node, &start, &end);
-                if (end >= start && end >= 0)
-                    return end - start + 1;
-            }
-        }
-    }
-
-    return 256;
-}
-
 static long long codegen_static_array_length(const struct Expression *expr)
 {
     if (expr == NULL || !expr->is_array_expr || expr->array_is_dynamic)
@@ -2735,6 +2667,46 @@ static void codegen_enum_typeinfo_label(const char *type_id, char *buffer, size_
         sanitized);
 }
 
+static void codegen_record_typeinfo_label(const char *type_id, char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    char sanitized[CODEGEN_MAX_INST_BUF];
+    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
+    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+}
+
+static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
+    char *buffer, size_t size)
+{
+    if (buffer == NULL || size == 0)
+        return;
+    buffer[0] = '\0';
+    if (type_id == NULL || type_id[0] == '\0')
+        return;
+
+    HashNode_t *type_node = NULL;
+    if (symtab != NULL &&
+        FindSymbol(&type_node, symtab, type_id) != 0 &&
+        type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(type_node->type);
+        if (alias != NULL && alias->is_enum)
+        {
+            codegen_enum_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+
+        if (get_record_type_from_node(type_node) != NULL)
+        {
+            codegen_record_typeinfo_label(type_id, buffer, size);
+            return;
+        }
+    }
+
+    codegen_enum_typeinfo_label(type_id, buffer, size);
+}
+
 /* Helper to get KgpcType from expression, preferring resolved_kgpc_type.
  * Returns the KgpcType if available, or creates a temporary one from legacy fields.
  * Returns NULL if type cannot be determined.
@@ -3032,7 +3004,7 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
-                node->const_set_size > 0)
+                node->const_set_size > 4)
             {
                 return 1;
             }
@@ -3574,6 +3546,7 @@ long long codegen_expr_sret_size(const struct Expression *expr)
 {
     KgpcType *ret_type = NULL;
     KgpcType *type = NULL;
+    long long size = 0;
 
     if (expr == NULL)
         return 0;
@@ -3617,9 +3590,19 @@ long long codegen_expr_sret_size(const struct Expression *expr)
         return 16;
     }
 
-    /* ShortStrings are passed via SRET because they're small fixed-size arrays */
+    /* ShortStrings are passed via SRET because they're small fixed-size arrays.
+     * Use the actual sized-shortstring storage when type metadata is available. */
     if (expr_has_type_tag(expr, SHORTSTRING_TYPE))
+    {
+        type = expr_get_kgpc_type(expr);
+        if (type != NULL)
+        {
+            size = kgpc_type_sizeof(type);
+            if (size > 0)
+                return size;
+        }
         return 256;
+    }
 
     type = expr_get_kgpc_type(expr);
     if (type != NULL && type->kind == TYPE_KIND_ARRAY &&
@@ -4278,11 +4261,10 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     if (expr == NULL || size_out == NULL)
         return 1;
 
-    /* A plain ShortString uses fixed 256-byte storage, but sized shortstring
-     * aliases (e.g. string[1]) must preserve their actual storage length. */
+    /* ShortString uses fixed 256-byte storage (length byte + 255 chars). */
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
     {
-        *size_out = codegen_expr_shortstring_storage_size(expr, ctx);
+        *size_out = 256;
         return 0;
     }
 
@@ -4309,7 +4291,8 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     {
         if (kgpc_type_is_shortstring(expr_type))
         {
-            *size_out = codegen_expr_shortstring_storage_size(expr, ctx);
+            long long short_size = kgpc_type_sizeof(expr_type);
+            *size_out = (short_size > 1 && short_size <= INT_MAX) ? short_size : 256;
             return 0;
         }
         if (kgpc_type_is_string(expr_type))
@@ -4893,7 +4876,7 @@ static ListNode_t *codegen_expr_tree_value(struct Expression *expr, ListNode_t *
             }
 
             char label[CODEGEN_MAX_INST_BUF];
-            codegen_enum_typeinfo_label(type_id, label, sizeof(label));
+            codegen_typeinfo_label_for_type_id(ctx->symtab, type_id, label, sizeof(label));
             int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, tmp_reg->bit_64);
             if (buf_len > 0)
             {
@@ -5068,7 +5051,7 @@ ListNode_t *codegen_sign_extend32_to64(ListNode_t *inst_list, const char *src_re
     assert(src_reg32 != NULL);
     assert(dst_reg64 != NULL);
 
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     snprintf(buffer, sizeof(buffer), "\tmovslq\t%s, %s\n", src_reg32, dst_reg64);
     return add_inst(inst_list, buffer);
 }
@@ -5078,7 +5061,7 @@ ListNode_t *codegen_zero_extend32_to64(ListNode_t *inst_list, const char *src_re
     assert(src_reg32 != NULL);
     assert(dst_reg32 != NULL);
 
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", src_reg32, dst_reg32);
     return add_inst(inst_list, buffer);
 }
@@ -5134,7 +5117,7 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     }
 
     long long load_size = expr_effective_size_bytes(expr);
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     if (load_size == 1)
         snprintf(buffer, sizeof(buffer), "\tmovzbl\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_32);
     else if (load_size == 2)
@@ -5166,7 +5149,7 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
         return inst_list;
     }
 
-    char buffer[64];
+    char buffer[CODEGEN_MAX_INST_BUF];
     if (inner->type == EXPR_VAR_ID)
     {
         StackNode_t *var_node = find_label(inner->expr_data.id);
@@ -8568,6 +8551,45 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             right_is_char_set = expr_is_char_set_ctx(right_expr, ctx);
         }
 
+        if (right_const_set != NULL && right_const_set->const_set_value != NULL)
+        {
+            Register_t *set_addr_reg = NULL;
+
+            inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
+            if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
+            {
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
+            set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "const set addr");
+            if (set_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
+            }
+
+            char buffer_addr[96];
+            snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
+                right_const_set->const_set_label, set_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer_addr);
+
+            /* btl with memory operand handles both 4-byte small sets and 32-byte char sets. */
+            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left_reg->bit_32, set_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), set_addr_reg);
+            free_reg(get_reg_stack(), left_reg);
+            free_reg(get_reg_stack(), right_reg);
+            return inst_list;
+        }
+
         if (right_is_char_set)
         {
             /* For character sets: right operand is 32-byte array, left is char value (0-255)
@@ -8580,38 +8602,14 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
             /* Get address of the set variable */
             Register_t *set_addr_reg = NULL;
-            if (right_const_set != NULL && right_const_set->const_set_value != NULL)
+            inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+            if (codegen_had_error(ctx) || set_addr_reg == NULL)
             {
-                inst_list = codegen_emit_const_set_rodata(right_const_set, inst_list, ctx);
-                if (codegen_had_error(ctx) || right_const_set->const_set_label == NULL)
-                {
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
-                set_addr_reg = codegen_try_get_reg(&inst_list, ctx, "char set const addr");
-                if (set_addr_reg == NULL)
-                {
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
-                char buffer_addr[96];
-                snprintf(buffer_addr, sizeof(buffer_addr), "\tleaq\t%s(%%rip), %s\n",
-                    right_const_set->const_set_label, set_addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer_addr);
-            }
-            else
-            {
-                inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
-                if (codegen_had_error(ctx) || set_addr_reg == NULL)
-                {
-                    if (set_addr_reg != NULL)
-                        free_reg(get_reg_stack(), set_addr_reg);
-                    free_reg(get_reg_stack(), left_reg);
-                    free_reg(get_reg_stack(), right_reg);
-                    return inst_list;
-                }
+                if (set_addr_reg != NULL)
+                    free_reg(get_reg_stack(), set_addr_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), right_reg);
+                return inst_list;
             }
 
             /* btl with memory operand auto-computes byte offset for any bit position */
@@ -8948,7 +8946,18 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     assert(offset != NULL);
 
     char buffer[128];
-    StackNode_t *var = find_label(var_id);
+    int scope_depth = 0;
+    StackNode_t *var = find_label_with_depth(var_id, &scope_depth);
+
+    if (var == NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *sym_node = NULL;
+        if (FindSymbol(&sym_node, ctx->symtab, var_id) != 0 &&
+            sym_node != NULL && sym_node->mangled_id != NULL)
+        {
+            var = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+        }
+    }
 
     if(var == NULL) {
         /* If we're inside a nonstatic class method, the bare name may be a field
@@ -9120,8 +9129,41 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     }
 
     *offset = var->offset;
-    snprintf(buffer, 100, "\tmovq\t-8(%%rbp), %s\n", current_non_local_reg64());
-    inst_list = add_inst(inst_list, buffer);
+    if (var->is_static)
+    {
+        const char *label = (var->static_label != NULL) ? var->static_label : var->label;
+        *offset = 0;
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label,
+            current_non_local_reg64());
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (scope_depth <= 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rbp, %s\n", current_non_local_reg64());
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+        if (frame_reg != NULL)
+        {
+            if (strcmp(frame_reg->bit_64, current_non_local_reg64()) != 0)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    frame_reg->bit_64, current_non_local_reg64());
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
+        else
+        {
+            codegen_report_error(ctx,
+                "ERROR: Failed to acquire static link for non-local variable %s.",
+                var_id);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %s\n",
+                current_non_local_reg64());
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
 
     CODEGEN_DEBUG("DEBUG: Non-local access generated\n");
     #ifdef DEBUG_CODEGEN

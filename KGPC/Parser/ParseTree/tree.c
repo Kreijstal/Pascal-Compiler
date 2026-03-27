@@ -1367,6 +1367,11 @@ void destroy_tree(Tree_t *tree)
             free(tree->tree_data.arr_decl_data.type_id);
           if (tree->tree_data.arr_decl_data.type_ref != NULL)
             type_ref_free(tree->tree_data.arr_decl_data.type_ref);
+          if (tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+          {
+              kgpc_type_release(tree->tree_data.arr_decl_data.element_kgpc_type);
+              tree->tree_data.arr_decl_data.element_kgpc_type = NULL;
+          }
           if (tree->tree_data.arr_decl_data.inline_record_type != NULL)
               destroy_record_type(tree->tree_data.arr_decl_data.inline_record_type);
           if (tree->tree_data.arr_decl_data.range_str != NULL)

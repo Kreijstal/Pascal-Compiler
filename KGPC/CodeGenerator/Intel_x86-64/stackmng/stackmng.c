@@ -148,6 +148,25 @@ static inline int stack_slot_alignment_for_size(int size)
     return alignment;
 }
 
+static void stackscope_append_node(ListNode_t **head, ListNode_t **tail, ListNode_t *node)
+{
+    assert(head != NULL);
+    assert(tail != NULL);
+    assert(node != NULL);
+
+    node->next = NULL;
+    if (*head == NULL)
+    {
+        *head = node;
+        *tail = node;
+        return;
+    }
+
+    assert(*tail != NULL);
+    (*tail)->next = node;
+    *tail = node;
+}
+
 /* Adds temporary storage to t */
 StackNode_t *add_l_t(char *label)
 {
@@ -175,15 +194,8 @@ StackNode_t *add_l_t(char *label)
 
     new_node = init_stack_node(offset, label, temp_size);
 
-    if(cur_scope->t == NULL)
-    {
-        cur_scope->t = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->t = PushListNodeBack(cur_scope->t,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->t, &cur_scope->t_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to t_offset %d\n", label, offset);
@@ -220,11 +232,8 @@ StackNode_t *add_l_t_bytes(char *label, int size)
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    if (cur_scope->t == NULL)
-        cur_scope->t = CreateListNode(new_node, LIST_UNSPECIFIED);
-    else
-        cur_scope->t = PushListNodeBack(cur_scope->t,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
+    stackscope_append_node(&cur_scope->t, &cur_scope->t_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to t_offset %d (bytes=%d)\n",
@@ -265,15 +274,8 @@ StackNode_t *add_l_x(char *label, int size)
     new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    if(cur_scope->x == NULL)
-    {
-        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->x = PushListNodeBack(cur_scope->x,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to x_offset %d\n", new_node->label, new_node->offset);
@@ -314,6 +316,11 @@ void remove_last_l_x(char *label)
     else
         cur_scope->x = last_match->next;
 
+    if (cur_scope->x == NULL)
+        cur_scope->x_tail = NULL;
+    else if (cur_scope->x_tail == last_match)
+        cur_scope->x_tail = last_match_prev;
+
     /* Free the node */
     StackNode_t *node = (StackNode_t *)last_match->cur;
     if (node != NULL) {
@@ -343,15 +350,8 @@ StackNode_t *add_array(char *label, int total_size, int element_size, int lower_
     new_node->element_size = element_size;
     new_node->is_dynamic = 0;
 
-    if(cur_scope->x == NULL)
-    {
-        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->x = PushListNodeBack(cur_scope->x,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added array %s to x_offset %d\n", new_node->label, new_node->offset);
@@ -393,15 +393,8 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
             new_node->static_label = strdup(static_label);
     }
 
-    if(cur_scope->x == NULL)
-    {
-        cur_scope->x = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->x = PushListNodeBack(cur_scope->x,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added dynamic array %s descriptor to x_offset %d\n", new_node->label, new_node->offset);
@@ -423,10 +416,7 @@ StackNode_t *add_static_var(char *label, int size, const char *static_label)
         new_node->static_label = strdup(static_label);
 
     ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
-    if (cur_scope->x == NULL)
-        cur_scope->x = list_node;
-    else
-        cur_scope->x = PushListNodeBack(cur_scope->x, list_node);
+    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail, list_node);
     return new_node;
 }
 
@@ -453,15 +443,8 @@ StackNode_t *add_l_z(char *label)
 
     new_node = init_stack_node(offset, label, DOUBLEWORD);
 
-    if(cur_scope->z == NULL)
-    {
-        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->z = PushListNodeBack(cur_scope->z,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d\n", label, offset);
@@ -489,11 +472,8 @@ StackNode_t *add_l_z_bytes(char *label, int size)
     StackNode_t *new_node = init_stack_node(offset, label, aligned_size);
     new_node->element_size = size;
 
-    if (cur_scope->z == NULL)
-        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
-    else
-        cur_scope->z = PushListNodeBack(cur_scope->z,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
+    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d (bytes=%d)\n",
@@ -526,15 +506,8 @@ StackNode_t *add_q_z(char *label)
 
     new_node = init_stack_node(offset, label, 8);
 
-    if(cur_scope->z == NULL)
-    {
-        cur_scope->z = CreateListNode(new_node, LIST_UNSPECIFIED);
-    }
-    else
-    {
-        cur_scope->z = PushListNodeBack(cur_scope->z,
-            CreateListNode(new_node, LIST_UNSPECIFIED));
-    }
+    stackscope_append_node(&cur_scope->z, &cur_scope->z_tail,
+        CreateListNode(new_node, LIST_UNSPECIFIED));
 
     #ifdef DEBUG_CODEGEN
         CODEGEN_DEBUG("DEBUG: Added %s to z_offset %d (quadword)\n", label, offset);
@@ -1325,6 +1298,9 @@ StackScope_t *init_stackscope()
     new_scope->t = NULL;
     new_scope->x = NULL;
     new_scope->z = NULL;
+    new_scope->t_tail = NULL;
+    new_scope->x_tail = NULL;
+    new_scope->z_tail = NULL;
 
     new_scope->prev_scope = NULL;
 
@@ -1512,10 +1488,7 @@ StackNode_t *add_static_array(char *label, int total_size, int element_size, int
         new_node->static_label = strdup(static_label);
 
     ListNode_t *list_node = CreateListNode(new_node, LIST_UNSPECIFIED);
-    if (cur_scope->x == NULL)
-        cur_scope->x = list_node;
-    else
-        cur_scope->x = PushListNodeBack(cur_scope->x, list_node);
+    stackscope_append_node(&cur_scope->x, &cur_scope->x_tail, list_node);
 
     return new_node;
 }

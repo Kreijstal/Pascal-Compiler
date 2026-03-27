@@ -110,6 +110,7 @@ KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type);
 KgpcType* create_array_type(KgpcType *element_type, int start_index, int end_index);
 KgpcType* create_array_of_const_type(void);
 KgpcType* create_record_type(struct RecordType *record_info);
+KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *type);
 
 /* Create KgpcType from TypeAlias structure
  * Handles ALL TypeAlias cases: arrays, pointers, sets, enums, files, primitives
