@@ -17634,16 +17634,51 @@ static int ast_has_keyword_in_list(ast_t *node, const char *keyword, int max_dep
     return ast_has_keyword_in_list(node->next, keyword, max_depth);
 }
 
-/* Search a single AST node and its children (NOT siblings) for a keyword.
-   This avoids contamination from sibling procedure declarations that may
-   have different directives (e.g. nostackframe). */
-static int ast_has_keyword(ast_t *node, const char *keyword, int max_depth) {
-    if (node == NULL || max_depth <= 0)
+static int ast_list_has_directive_keyword(ast_t *node, const char *keyword, int max_depth)
+{
+    if (node == NULL || keyword == NULL || max_depth <= 0)
         return 0;
-    if (node->sym != NULL && node->sym->name != NULL &&
-        strcasecmp(node->sym->name, keyword) == 0)
-        return 1;
-    return ast_has_keyword_in_list(node->child, keyword, max_depth - 1);
+
+    for (ast_t *cur = node; cur != NULL; cur = cur->next)
+    {
+        if (cur->typ == PASCAL_T_FUNCTION_BODY ||
+            cur->typ == PASCAL_T_BEGIN_BLOCK ||
+            cur->typ == PASCAL_T_ASM_BLOCK ||
+            cur->typ == PASCAL_T_CONST_SECTION ||
+            cur->typ == PASCAL_T_VAR_SECTION ||
+            cur->typ == PASCAL_T_TYPE_SECTION ||
+            cur->typ == PASCAL_T_LABEL_SECTION ||
+            cur->typ == PASCAL_T_PROCEDURE_DECL ||
+            cur->typ == PASCAL_T_FUNCTION_DECL ||
+            cur->typ == PASCAL_T_METHOD_IMPL)
+            break;
+
+        if (cur->sym != NULL && cur->sym->name != NULL &&
+            strcasecmp(cur->sym->name, keyword) == 0)
+            return 1;
+
+        switch (cur->typ)
+        {
+            case PASCAL_T_NONE:
+            case PASCAL_T_IDENTIFIER:
+            case PASCAL_T_EXTERNAL_NAME:
+            case PASCAL_T_EXTERNAL_NAME_EXPR:
+                if (ast_has_keyword_in_list(cur->child, keyword, max_depth - 1))
+                    return 1;
+                break;
+            default:
+                break;
+        }
+    }
+
+    return 0;
+}
+
+static int ast_has_routine_directive(ast_t *node, const char *keyword, int max_depth)
+{
+    if (node == NULL || keyword == NULL || max_depth <= 0)
+        return 0;
+    return ast_list_has_directive_keyword(node->child, keyword, max_depth);
 }
 
 /* Build a TypeAlias capturing a complex return type from TypeInfo, transferring
@@ -18292,17 +18327,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
         case PASCAL_T_IDENTIFIER: {
             char *dir_sym = dup_symbol(node);
             if (dir_sym != NULL) {
-                if (strcasecmp(dir_sym, "nostackframe") == 0)
-                    is_nostackframe = 1;
                 free(dir_sym);
-            }
-            if (node->child != NULL && node->child->typ == PASCAL_T_IDENTIFIER) {
-                char *dir_child = dup_symbol(node->child);
-                if (dir_child != NULL) {
-                    if (strcasecmp(dir_child, "nostackframe") == 0)
-                        is_nostackframe = 1;
-                    free(dir_child);
-                }
             }
             break;
         }
@@ -18391,7 +18416,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     if (tree != NULL && method_node->index >= 0)
         tree->source_index = method_node->index + g_source_offset;
     if (!is_nostackframe)
-        is_nostackframe = ast_has_keyword(method_node, "nostackframe", 8);
+        is_nostackframe = ast_has_routine_directive(method_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
         tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL) {
@@ -18683,11 +18708,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         case PASCAL_T_IDENTIFIER: {
             char *self_sym = dup_symbol(cur);
             if (self_sym != NULL) {
-                if (strcasecmp(self_sym, "nostackframe") == 0) {
-                    is_nostackframe = 1;
-                } else if (strcasecmp(self_sym, "varargs") == 0) {
-                    is_varargs = 1;
-                } else if (strcasecmp(self_sym, "alias") == 0) {
+                if (strcasecmp(self_sym, "alias") == 0) {
                     /* [Alias:'NAME'] bracket directive — the string value is
                        either a child node or the next sibling (depending on
                        how the PEG grammar flattened the seq). */
@@ -18751,11 +18772,6 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
                 if (directive != NULL) {
                     if (is_external_directive(directive))
                         is_external = 1;
-                    else if (strcasecmp(directive, "nostackframe") == 0) {
-                        is_nostackframe = 1;
-                    } else if (strcasecmp(directive, "varargs") == 0) {
-                        is_varargs = 1;
-                    }
                 }
                 free(directive);
             }
@@ -18834,7 +18850,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     }
 
     if (!is_varargs)
-        is_varargs = ast_has_keyword(proc_node, "varargs", 8);
+        is_varargs = ast_has_routine_directive(proc_node, "varargs", 8);
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder),
@@ -18842,7 +18858,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     if (tree != NULL && proc_node->index >= 0)
         tree->source_index = proc_node->index + g_source_offset;
     if (!is_nostackframe)
-        is_nostackframe = ast_has_keyword(proc_node, "nostackframe", 8);
+        is_nostackframe = ast_has_routine_directive(proc_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
         tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL && is_varargs)
@@ -19107,10 +19123,6 @@ static Tree_t *convert_function(ast_t *func_node) {
             if (self_sym != NULL) {
                 if (is_external_directive(self_sym))
                     is_external = 1;
-                else if (strcasecmp(self_sym, "nostackframe") == 0)
-                    is_nostackframe = 1;
-                else if (strcasecmp(self_sym, "varargs") == 0)
-                    is_varargs = 1;
                 else if (strcasecmp(self_sym, "alias") == 0) {
                     /* [Alias:'NAME'] bracket directive — the string value is
                        either a child node or the next sibling (depending on
@@ -19176,10 +19188,6 @@ static Tree_t *convert_function(ast_t *func_node) {
                 if (directive != NULL) {
                     if (is_external_directive(directive))
                         is_external = 1;
-                    else if (strcasecmp(directive, "nostackframe") == 0)
-                        is_nostackframe = 1;
-                    else if (strcasecmp(directive, "varargs") == 0)
-                        is_varargs = 1;
                 }
                 free(directive);
             }
@@ -19258,7 +19266,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
 
     if (!is_varargs)
-        is_varargs = ast_has_keyword(func_node, "varargs", 8);
+        is_varargs = ast_has_routine_directive(func_node, "varargs", 8);
     ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
     Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
                                 label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
@@ -19266,7 +19274,7 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (tree != NULL && func_node->index >= 0)
         tree->source_index = func_node->index + g_source_offset;
     if (!is_nostackframe)
-        is_nostackframe = ast_has_keyword(func_node, "nostackframe", 8);
+        is_nostackframe = ast_has_routine_directive(func_node, "nostackframe", 8);
     if (tree != NULL && is_nostackframe)
         tree->tree_data.subprogram_data.nostackframe = 1;
     if (tree != NULL && is_varargs)
