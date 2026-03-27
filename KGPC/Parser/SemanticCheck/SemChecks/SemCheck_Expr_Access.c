@@ -6097,7 +6097,7 @@ method_call_resolved:
                 }
             }
 
-                        if (value_candidates != NULL)
+            if (value_candidates != NULL)
             {
                 HashNode_t *value_match = NULL;
                 int value_count = 0;

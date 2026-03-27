@@ -941,39 +941,6 @@ static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
     return hashnode_get_record_type(node);
 }
 
-/*
- * Compare two HashNode_t type entries to determine which is the better
- * candidate for type resolution.
- *
- * Returns < 0 if `a` is better, > 0 if `b` is better, 0 if equivalent.
- *
- * Criteria in strict priority order:
- *   1. Prefer entries from a named unit (source_unit_index > 0)
- *   2. Among unit entries, prefer higher unit index (later = closer scope)
- *   3. Prefer public declarations
- *   4. Prefer unit-defined types
- */
-static int codegen_compare_type_nodes(const HashNode_t *a, const HashNode_t *b)
-{
-    assert(a != NULL && b != NULL);
-
-    int a_has_unit = (a->source_unit_index > 0);
-    int b_has_unit = (b->source_unit_index > 0);
-    if (a_has_unit != b_has_unit)
-        return a_has_unit ? -1 : 1;
-
-    if (a->source_unit_index != b->source_unit_index)
-        return (a->source_unit_index > b->source_unit_index) ? -1 : 1;
-
-    if (a->unit_is_public != b->unit_is_public)
-        return a->unit_is_public ? -1 : 1;
-
-    if (a->defined_in_unit != b->defined_in_unit)
-        return a->defined_in_unit ? -1 : 1;
-
-    return 0;
-}
-
 static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *type_name)
 {
     if (symtab == NULL || type_name == NULL)
@@ -988,8 +955,18 @@ static HashNode_t *codegen_pick_type_node_by_name(SymTab_t *symtab, const char *
         HashNode_t *cand = (HashNode_t *)cur->cur;
         if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
             continue;
-        if (best_node == NULL || codegen_compare_type_nodes(cand, best_node) < 0)
+
+        if (best_node == NULL ||
+            (best_node->source_unit_index <= 0 && cand->source_unit_index > 0) ||
+            (cand->source_unit_index > 0 && best_node->source_unit_index > 0 &&
+             cand->source_unit_index > best_node->source_unit_index) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             !best_node->unit_is_public && cand->unit_is_public) ||
+            (cand->source_unit_index == best_node->source_unit_index &&
+             cand->unit_is_public == best_node->unit_is_public &&
+             !best_node->defined_in_unit && cand->defined_in_unit)) {
             best_node = cand;
+        }
     }
 
     DestroyList(matches);
@@ -3843,6 +3820,9 @@ static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, lo
                     node != NULL &&
                     (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
                 {
+                    int type_tag = codegen_tag_from_kgpc(node->type);
+                    if (!is_ordinal_type(type_tag))
+                        return 0;
                     *out_value = node->const_int_value;
                     return 1;
                 }
@@ -4888,8 +4868,70 @@ static const struct RecordType *codegen_record_parent(const struct RecordType *r
     if (record == NULL || symtab == NULL || record->parent_class_name == NULL)
         return NULL;
 
-    HashNode_t *best_node = codegen_pick_type_node_by_name(symtab, record->parent_class_name);
-    return codegen_lookup_record_type_for_node(symtab, best_node, record->parent_class_name);
+    ListNode_t *matches = FindAllIdents(symtab, record->parent_class_name);
+    if (matches == NULL)
+        return NULL;
+
+    HashNode_t *best_node = NULL;
+    int best_score = INT_MIN;
+
+    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next) {
+        HashNode_t *cand = (HashNode_t *)cur->cur;
+        if (cand == NULL || cand->hash_type != HASHTYPE_TYPE)
+            continue;
+
+        int score = 0;
+        if (cand->defined_in_unit)
+            score += 1000;
+        if (cand->unit_is_public)
+            score += 100;
+        if (cand->source_unit_index > 0)
+            score += 10 + cand->source_unit_index;
+
+        if (best_node == NULL || score > best_score) {
+            best_node = cand;
+            best_score = score;
+        }
+    }
+    DestroyList(matches);
+    if (best_node == NULL)
+        return NULL;
+
+    if (best_node->source_unit_index > 0)
+    {
+        const char *unit_name = unit_registry_get(best_node->source_unit_index);
+        if (unit_name != NULL)
+        {
+            size_t qualified_len = strlen(unit_name) + 1 + strlen(record->parent_class_name) + 1;
+            char *qualified_id = (char *)malloc(qualified_len);
+            if (qualified_id != NULL)
+            {
+                snprintf(qualified_id, qualified_len, "%s.%s", unit_name, record->parent_class_name);
+                HashNode_t *qualified = NULL;
+                if (FindSymbol(&qualified, symtab, qualified_id) != 0 && qualified != NULL)
+                {
+                    const struct RecordType *qualified_record = get_record_type_from_node(qualified);
+                    if (qualified_record == NULL && qualified->type != NULL &&
+                        qualified->type->kind == TYPE_KIND_POINTER &&
+                        qualified->type->info.points_to != NULL &&
+                        qualified->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        qualified_record = qualified->type->info.points_to->info.record_info;
+                    free(qualified_id);
+                    if (qualified_record != NULL)
+                        return qualified_record;
+                }
+                free(qualified_id);
+            }
+        }
+    }
+
+    const struct RecordType *best_record = get_record_type_from_node(best_node);
+    if (best_record == NULL && best_node->type != NULL &&
+        best_node->type->kind == TYPE_KIND_POINTER &&
+        best_node->type->info.points_to != NULL &&
+        best_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+        best_record = best_node->type->info.points_to->info.record_info;
+    return best_record;
 }
 
 

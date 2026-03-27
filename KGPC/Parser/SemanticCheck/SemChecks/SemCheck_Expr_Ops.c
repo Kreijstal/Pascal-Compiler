@@ -270,7 +270,7 @@ static int semcheck_try_refine_funccall_to_bool(
         return 0;
 
     HashNode_t *best_match = NULL;
-        int num_best = 0;
+    int num_best = 0;
     int resolve_status = semcheck_resolve_overload(&best_match, &num_best,
         bool_candidates, call_expr->expr_data.function_call_data.args_expr,
         symtab, call_expr, max_scope_lev, 1);
