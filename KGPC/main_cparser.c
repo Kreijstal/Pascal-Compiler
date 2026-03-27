@@ -1570,7 +1570,17 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
     {
         if (track_time)
             start_time = current_time_seconds();
+        /* When KGPC_SKIP_IMPORTED_IMPL_BODIES is active, tell the converter
+         * to skip procedure/function/method bodies in the implementation
+         * section.  This avoids creating millions of Expression/Statement
+         * nodes that semcheck and codegen will never use, saving hundreds
+         * of MB of peak RSS for large compilations like pp.pas. */
+        int skip_bodies = (kgpc_getenv("KGPC_SKIP_IMPORTED_IMPL_BODIES") != NULL);
+        if (skip_bodies)
+            from_cparser_set_skip_impl_bodies(1);
         bool ok = parse_pascal_file(path, &unit_tree, true);
+        if (skip_bodies)
+            from_cparser_set_skip_impl_bodies(0);
         if (track_time)
         {
             g_time_parse_units += current_time_seconds() - start_time;

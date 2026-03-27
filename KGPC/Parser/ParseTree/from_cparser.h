@@ -11,6 +11,12 @@ void from_cparser_cleanup(void);
 void from_cparser_resolve_deferred_arrays(Tree_t *program);
 void from_cparser_set_source_offset(int offset);
 
+/* When set to 1, implementation section procedure/function/method bodies
+ * are converted as stubs with NULL statement_list.  This avoids creating
+ * millions of Expression/Statement nodes for imported units that codegen
+ * does not need.  Call with 0 to restore normal conversion. */
+void from_cparser_set_skip_impl_bodies(int skip);
+
 /* Frontend error tracking */
 void from_cparser_reset_error_count(void);
 int from_cparser_get_error_count(void);

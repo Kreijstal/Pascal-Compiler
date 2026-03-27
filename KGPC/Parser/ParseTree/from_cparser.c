@@ -98,6 +98,17 @@ static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
 
+/* When true, implementation section procedure/function/method bodies are
+ * converted as stubs (NULL statement_list, no local declarations) to save
+ * memory.  Only the signature (name, params, return type, class binding)
+ * is kept, which is what codegen needs for label/VMT generation. */
+static int g_skip_impl_bodies = 0;
+
+void from_cparser_set_skip_impl_bodies(int skip)
+{
+    g_skip_impl_bodies = skip;
+}
+
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
  * defined in already-loaded units can be resolved when parsing later units.
@@ -17873,11 +17884,13 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
                             ast_t *body_cursor = return_type_node ? return_type_node->next : param_node->next;
                             while (body_cursor != NULL) {
                                 if (body_cursor->typ == PASCAL_T_BEGIN_BLOCK) {
-                                    body = convert_block(body_cursor);
+                                    if (!g_skip_impl_bodies)
+                                        body = convert_block(body_cursor);
                                     break;
                                 } else if (body_cursor->typ == PASCAL_T_FUNCTION_BODY) {
-                                    convert_routine_body(body_cursor, &op_const_decls, &op_var_builder, &op_label_builder,
-                                        &op_nested_subs, &body, &op_type_decls);
+                                    if (!g_skip_impl_bodies)
+                                        convert_routine_body(body_cursor, &op_const_decls, &op_var_builder, &op_label_builder,
+                                            &op_nested_subs, &body, &op_type_decls);
                                     break;
                                 }
                                 body_cursor = body_cursor->next;
@@ -18275,19 +18288,23 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(node, &const_decls, &var_builder, &label_builder,
-                                 &nested_subs, &body, &type_decls);
+            if (!g_skip_impl_bodies)
+                convert_routine_body(node, &const_decls, &var_builder, &label_builder,
+                                     &nested_subs, &body, &type_decls);
             break;
         case PASCAL_T_BEGIN_BLOCK:
-            body = convert_block(node);
+            if (!g_skip_impl_bodies)
+                body = convert_block(node);
             break;
         case PASCAL_T_ASM_BLOCK: {
-            struct Statement *stmt = convert_statement(node);
-            ListBuilder stmts_builder;
-            list_builder_init(&stmts_builder);
-            if (stmt != NULL)
-                list_builder_append(&stmts_builder, stmt, LIST_STMT);
-            body = mk_compoundstatement(node->line, list_builder_finish(&stmts_builder));
+            if (!g_skip_impl_bodies) {
+                struct Statement *stmt = convert_statement(node);
+                ListBuilder stmts_builder;
+                list_builder_init(&stmts_builder);
+                if (stmt != NULL)
+                    list_builder_append(&stmts_builder, stmt, LIST_STMT);
+                body = mk_compoundstatement(node->line, list_builder_finish(&stmts_builder));
+            }
             break;
         }
         case PASCAL_T_IDENTIFIER: {
@@ -18666,19 +18683,23 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
-                                 &nested_subs, &body, &type_decls);
+            if (!g_skip_impl_bodies)
+                convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
+                                     &nested_subs, &body, &type_decls);
             break;
         case PASCAL_T_BEGIN_BLOCK:
-            body = convert_block(cur);
+            if (!g_skip_impl_bodies)
+                body = convert_block(cur);
             break;
         case PASCAL_T_ASM_BLOCK: {
-            struct Statement *stmt = convert_statement(cur);
-            ListBuilder stmts_builder;
-            list_builder_init(&stmts_builder);
-            if (stmt != NULL)
-                list_builder_append(&stmts_builder, stmt, LIST_STMT);
-            body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+            if (!g_skip_impl_bodies) {
+                struct Statement *stmt = convert_statement(cur);
+                ListBuilder stmts_builder;
+                list_builder_init(&stmts_builder);
+                if (stmt != NULL)
+                    list_builder_append(&stmts_builder, stmt, LIST_STMT);
+                body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+            }
             break;
         }
         case PASCAL_T_IDENTIFIER: {
@@ -19088,19 +19109,23 @@ static Tree_t *convert_function(ast_t *func_node) {
             break;
         }
         case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
-                                 &nested_subs, &body, &type_decls);
+            if (!g_skip_impl_bodies)
+                convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
+                                     &nested_subs, &body, &type_decls);
             break;
         case PASCAL_T_BEGIN_BLOCK:
-            body = convert_block(cur);
+            if (!g_skip_impl_bodies)
+                body = convert_block(cur);
             break;
         case PASCAL_T_ASM_BLOCK: {
-            struct Statement *stmt = convert_statement(cur);
-            ListBuilder stmts_builder;
-            list_builder_init(&stmts_builder);
-            if (stmt != NULL)
-                list_builder_append(&stmts_builder, stmt, LIST_STMT);
-            body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+            if (!g_skip_impl_bodies) {
+                struct Statement *stmt = convert_statement(cur);
+                ListBuilder stmts_builder;
+                list_builder_init(&stmts_builder);
+                if (stmt != NULL)
+                    list_builder_append(&stmts_builder, stmt, LIST_STMT);
+                body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+            }
             break;
         }
         case PASCAL_T_IDENTIFIER: {
