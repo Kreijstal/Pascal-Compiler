@@ -3018,8 +3018,11 @@ ListNode_t *codegen_emit_interface_dispatch(ListNode_t *inst_list,
         inst_list = spill_fn(inst_list, arg_spills, xmm_spills);
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", self_reg, current_arg_reg64(0));
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", guid_label, current_arg_reg64(1));
-        inst_list = add_inst(inst_list, buffer);
+        {
+            char guid_buffer[768];
+            snprintf(guid_buffer, sizeof(guid_buffer), "\tleaq\t%s(%%rip), %s\n", guid_label, current_arg_reg64(1));
+            inst_list = add_inst(inst_list, guid_buffer);
+        }
         snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", vmt_index, current_arg_reg32(2));
         inst_list = add_inst(inst_list, buffer);
         inst_list = add_inst(inst_list, "\tcall\t__kgpc_resolve_intf_method\n");
@@ -3938,7 +3941,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             fprintf(ctx->output_file, "\t.align 8\n");
             fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n", iface_name);
             fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
-            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
+            fprintf(ctx->output_file, "\t.long\t0x%08X\n", d1);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
             fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
             fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
@@ -4923,7 +4926,7 @@ static int codegen_class_implements_interface(SymTab_t *symtab,
     return result;
 }
 
-static void codegen_collect_inferred_interfaces(SymTab_t *symtab,
+static void __attribute__((unused)) codegen_collect_inferred_interfaces(SymTab_t *symtab,
     const struct RecordType *record, const char *class_label,
     const char ***out_names, int *out_count)
 {

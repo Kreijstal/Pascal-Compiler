@@ -4011,7 +4011,7 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
                     return;
                 }
             }
-            int add_result = AddIdentToTable(symtab->current_scope->table, qualified_id,
+            (void)AddIdentToTable(symtab->current_scope->table, qualified_id,
                 NULL, HASHTYPE_TYPE, qualified_type);
             if (qualified_type != NULL)
                 kgpc_type_release(qualified_type);
