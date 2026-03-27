@@ -4018,12 +4018,17 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
                     node != NULL);
 
-                /* If FindSymbol returned a non-constant but there is a constant with the
-                 * same name in the active/user scopes (or builtin scope), prefer the
-                 * constant.  This keeps enum literals and user constants from being
-                 * shadowed by unrelated imported names. */
+                /* If FindSymbol returned a callable/type-like symbol but there is a
+                 * constant with the same name in the active/user scopes (or builtin
+                 * scope), prefer the constant. This keeps enum literals and user
+                 * constants from being shadowed by unrelated imported procedures or
+                 * builtins, without letting globals override local variables/params. */
                 if (found && node != NULL &&
                     !(node->hash_type == HASHTYPE_CONST || node->is_constant) &&
+                    (node->hash_type == HASHTYPE_FUNCTION ||
+                     node->hash_type == HASHTYPE_PROCEDURE ||
+                     node->hash_type == HASHTYPE_BUILTIN_PROCEDURE ||
+                     node->hash_type == HASHTYPE_TYPE) &&
                     ctx != NULL && ctx->symtab != NULL)
                 {
                     /* Check user scope for a constant with the same name */

@@ -3820,6 +3820,9 @@ static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, lo
                     node != NULL &&
                     (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
                 {
+                    int type_tag = codegen_tag_from_kgpc(node->type);
+                    if (!is_ordinal_type(type_tag))
+                        return 0;
                     *out_value = node->const_int_value;
                     return 1;
                 }
@@ -3876,11 +3879,6 @@ static int codegen_eval_const_expr(struct Expression *expr, SymTab_t *symtab, lo
                         *out_value = left * right;
                         return 1;
                     case SLASH:
-                        if (right != 0)
-                        {
-                            *out_value = left / right;
-                            return 1;
-                        }
                         return 0;
                     case DIV:
                         if (right != 0)
@@ -3935,6 +3933,19 @@ static void codegen_emit_const_decl_equivs_from_list(CodeGenContext *ctx, ListNo
 
         if (!codegen_should_emit_const_equiv_symbol(ctx, NULL, NULL, id))
             continue;
+
+        if (ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, (char *)id) != 0 &&
+                node != NULL &&
+                (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
+            {
+                int type_tag = codegen_tag_from_kgpc(node->type);
+                if (!is_ordinal_type(type_tag))
+                    continue;
+            }
+        }
 
         long long const_value = 0;
         if (codegen_eval_const_expr(value, ctx != NULL ? ctx->symtab : NULL, &const_value))
