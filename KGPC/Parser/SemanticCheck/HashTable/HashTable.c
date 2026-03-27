@@ -362,7 +362,6 @@ HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix)
     assert(suffix != NULL);
 
     /* Build ".suffix" pattern in canonical (lowercased) form */
-    size_t suffix_len = strlen(suffix);
     char stack_buf[PASCAL_ID_STACK_MAX];
     char dot_suffix_buf[PASCAL_ID_STACK_MAX];
     char *canonical_suffix = pascal_identifier_lower_buf(suffix, stack_buf, sizeof(stack_buf));
