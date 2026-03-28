@@ -3048,6 +3048,16 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
                             field->type_id = strdup(qualified_name);
                         }
                     }
+                    /* When the field is declared with a ^ prefix (e.g. RefPtr: ^PMyRec),
+                     * field->type_id resolves to the pointed-to type (PMyRec).  We need
+                     * to wrap it in an additional pointer level to get the correct type
+                     * for the field itself (pointer→PMyRec = pointer→pointer→TMyRec). */
+                    if (field->is_pointer && field_type != NULL)
+                    {
+                        KgpcType *ptr_wrapped = create_pointer_type(field_type);
+                        kgpc_type_release(field_type);
+                        field_type = ptr_wrapped;
+                    }
                 }
                 else if (field->is_array)
                 {
