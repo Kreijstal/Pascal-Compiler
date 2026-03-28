@@ -3837,6 +3837,18 @@ def _add_pp_pas_bootstrap_test():
     if _FPC_RTL_AST_CACHE_DIR is not None:
         pp_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
+    pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
+
+    def _strip_pp_header(output):
+        """Strip version/copyright/path lines from pp.pas -h output."""
+        lines = output.splitlines(True)
+        return "".join(
+            l for l in lines
+            if not l.startswith("Free Pascal Compiler version")
+            and not l.startswith("Copyright")
+            and "[options] <inputfile>" not in l
+        )
+
     def test_pp_pas_bootstrap(self):
         """pp.pas bootstrap compilation — compile the FPC compiler itself."""
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap.s")
@@ -3852,6 +3864,22 @@ def _add_pp_pas_bootstrap_test():
             self.compile_executable(asm_file, executable_file)
         except Exception as e:
             self.fail(f"pp.pas linking failed: {e}")
+            return
+
+        # Run the compiled compiler with -h and compare output
+        try:
+            process = subprocess.run(
+                [executable_file, "-h"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp.pas binary timed out running with -h")
+            return
+
+        expected_output = read_file_content(pp_expected_file)
+        actual_output = _strip_pp_header(process.stdout or "")
+        self.assertEqual(actual_output, expected_output)
+        self.assertEqual(process.returncode, 0)
 
     test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
     test_pp_pas_bootstrap.__doc__ = "pp.pas bootstrap — compile and link the FPC compiler"
