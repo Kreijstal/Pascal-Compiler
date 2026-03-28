@@ -5754,6 +5754,17 @@ int32_t popcnt_li(int32_t value)
     return (int32_t)__builtin_popcount((uint32_t)value);
 }
 
+/* fpc_finalize: FPC runtime procedure for finalizing managed types
+ * (strings, dynamic arrays, interfaces, variants).  The actual
+ * finalization logic depends on TypeInfo, but the current compiler
+ * doesn't emit full RTTI.  Provide a no-op stub so that generated
+ * cleanup code links successfully. */
+void fpc_finalize(void *data, void *typeinfo)
+{
+    (void)data;
+    (void)typeinfo;
+}
+
 /* filecreate_rbs: FPC FileCreate(Filename: string): THandle
  * Creates a new file (or truncates existing), returns file descriptor.
  * The _i and _i_i suffixed variants (with Rights/Attributes params) redirect

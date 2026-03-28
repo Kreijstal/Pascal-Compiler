@@ -507,20 +507,134 @@ static int codegen_builtin_lowhigh_try_value(struct Expression *expr, CodeGenCon
         if (codegen_builtin_lowhigh_try_alias_value(alias, is_high,
                 value_out, use_qword_out))
             return 1;
+
+        /* Enums with explicit values: scan literals in the symbol table
+         * to find the actual min/max ordinal values. */
+        if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+            alias->enum_has_explicit_values && ctx != NULL && ctx->symtab != NULL)
+        {
+            long long enum_min = LLONG_MAX;
+            long long enum_max = LLONG_MIN;
+            int found_any = 0;
+            for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next)
+            {
+                const char *name = (const char *)lit->cur;
+                if (name == NULL)
+                    continue;
+                HashNode_t *lit_node = NULL;
+                if (FindSymbol(&lit_node, ctx->symtab, name) != 0 &&
+                    lit_node != NULL && lit_node->is_constant)
+                {
+                    long long val = lit_node->const_int_value;
+                    if (val < enum_min)
+                        enum_min = val;
+                    if (val > enum_max)
+                        enum_max = val;
+                    found_any = 1;
+                }
+            }
+            if (found_any)
+            {
+                *value_out = is_high ? enum_max : enum_min;
+                *use_qword_out = (enum_min < INT32_MIN || enum_max > INT32_MAX);
+                return 1;
+            }
+        }
     }
 
     long long low = 0;
     long long high = 0;
     int use_qword = 0;
-    if (!codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
+    if (codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
             &low, &high, &use_qword))
     {
-        return 0;
+        *value_out = is_high ? high : low;
+        *use_qword_out = use_qword;
+        return 1;
     }
 
-    *value_out = is_high ? high : low;
-    *use_qword_out = use_qword;
-    return 1;
+    /* Look up the argument variable in the symbol table and try to get
+     * bounds from its declared type's TypeAlias (covers enums, subranges,
+     * and arrays whose element type aliases weren't propagated to the
+     * expression). */
+    if (ctx != NULL && ctx->symtab != NULL &&
+        arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        int found_sym = FindSymbol(&var_node, ctx->symtab, arg_expr->expr_data.id);
+        if (found_sym != 0 && var_node != NULL &&
+            (var_node->hash_type == HASHTYPE_VAR ||
+             var_node->hash_type == HASHTYPE_ARRAY ||
+             var_node->hash_type == HASHTYPE_CONST ||
+             var_node->hash_type == HASHTYPE_FUNCTION))
+        {
+            /* Try the variable's KgpcType alias */
+            if (var_node->type != NULL)
+            {
+                struct TypeAlias *var_alias = kgpc_type_get_type_alias(var_node->type);
+                if (codegen_builtin_lowhigh_try_alias_value(var_alias, is_high,
+                        value_out, use_qword_out))
+                    return 1;
+
+                /* For arrays, return the index bounds */
+                if (kgpc_type_is_array(var_node->type))
+                {
+                    long long arr_low = var_node->type->info.array_info.start_index;
+                    long long arr_high = var_node->type->info.array_info.end_index;
+                    if (arr_high >= arr_low)
+                    {
+                        *value_out = is_high ? arr_high : arr_low;
+                        *use_qword_out = (arr_low < INT32_MIN || arr_high > INT32_MAX);
+                        return 1;
+                    }
+                }
+
+                /* Try primitive tag from the variable's type */
+                int var_tag = codegen_tag_from_kgpc(var_node->type);
+                if (codegen_builtin_lowhigh_bounds_from_tag(var_tag,
+                        &low, &high, &use_qword))
+                {
+                    *value_out = is_high ? high : low;
+                    *use_qword_out = use_qword;
+                    return 1;
+                }
+            }
+
+            /* Try the hash node's inline type alias (for var decl aliases) */
+            struct TypeAlias *node_alias = hashnode_get_type_alias(var_node);
+            if (codegen_builtin_lowhigh_try_alias_value(node_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+        }
+    }
+
+    /* Last resort: try to get bounds from the function call's resolved
+     * procedure type.  For Low/High the return type matches the argument
+     * type, so we can derive bounds from the return type's primitive tag. */
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL)
+    {
+        KgpcType *proc_type = expr->expr_data.function_call_data.call_kgpc_type;
+        if (proc_type->kind == TYPE_KIND_PROCEDURE &&
+            proc_type->info.proc_info.return_type != NULL)
+        {
+            KgpcType *ret_type = proc_type->info.proc_info.return_type;
+            struct TypeAlias *ret_alias = kgpc_type_get_type_alias(ret_type);
+            if (codegen_builtin_lowhigh_try_alias_value(ret_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+            int ret_tag = codegen_tag_from_kgpc(ret_type);
+            if (codegen_builtin_lowhigh_bounds_from_tag(ret_tag,
+                    &low, &high, &use_qword))
+            {
+                *value_out = is_high ? high : low;
+                *use_qword_out = use_qword;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
@@ -2494,6 +2608,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 return lowered;
         }
 
+        /* PopCnt builtin: redirect to the runtime's fpc_in_popcnt_x */
+        if (func_id != NULL && pascal_identifier_equals(func_id, "PopCnt"))
+            func_mangled_name = "fpc_in_popcnt_x";
+
         if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
             expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
@@ -3228,6 +3346,25 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     }
                     return inst_list;
                 }
+            }
+
+            /* PopCnt builtin: redirect to runtime's fpc_in_popcnt_x */
+            if (call_target != NULL &&
+                pascal_identifier_equals(call_target, "PopCnt"))
+            {
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                owned_call_target = strdup("fpc_in_popcnt_x");
+                call_target = owned_call_target;
+            }
+            /* Redirect mangled PopCnt variants (e.g. popcnt_u64) to runtime */
+            if (call_target != NULL &&
+                strncasecmp(call_target, "popcnt_", 7) == 0)
+            {
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                owned_call_target = strdup("fpc_in_popcnt_x");
+                call_target = owned_call_target;
             }
 
             if (call_target != NULL)
