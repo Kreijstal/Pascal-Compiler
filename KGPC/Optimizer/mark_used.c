@@ -715,6 +715,77 @@ static void mark_stmt_calls(struct Statement *stmt, SubprogramMap *map) {
             mark_expr_calls(stmt->stmt_data.for_in_data.loop_var, map);
             mark_expr_calls(stmt->stmt_data.for_in_data.collection, map);
             mark_stmt_calls(stmt->stmt_data.for_in_data.do_stmt, map);
+            /* For-in loops on class/record collections call GetEnumerator,
+             * MoveNext, and GetCurrent at codegen time without explicit
+             * call nodes in the AST.  Mark these enumerator methods used
+             * so DCE doesn't eliminate them. */
+            {
+                struct Expression *coll = stmt->stmt_data.for_in_data.collection;
+                if (coll != NULL && coll->resolved_kgpc_type != NULL)
+                {
+                    KgpcType *ctype = coll->resolved_kgpc_type;
+                    if (kgpc_type_is_pointer(ctype) && ctype->info.points_to != NULL)
+                        ctype = ctype->info.points_to;
+                    if (kgpc_type_is_record(ctype))
+                    {
+                        struct RecordType *rec = kgpc_type_get_record(ctype);
+                        if (rec != NULL && rec->type_id != NULL)
+                        {
+                            /* Mark GetEnumerator on the collection class */
+                            mark_class_methods_by_owner(NULL, rec->type_id, "GetEnumerator", map);
+                            /* Mark MoveNext/GetCurrent on any nested enumerator class.
+                             * Walk the subprogram map to find methods whose mangled_id
+                             * starts with "<CollectionClass>." and whose method_name is
+                             * MoveNext or GetCurrent.  This handles nested enumerator
+                             * classes like tai_aggregatetypedconst.tadeenumerator. */
+                            const char *class_id = rec->type_id;
+                            size_t class_id_len = strlen(class_id);
+                            for (unsigned b = 0; b < SUBPROG_MAP_BUCKETS; b++)
+                            {
+                                SubprogramEntry *e = map->buckets[b];
+                                while (e != NULL)
+                                {
+                                    Tree_t *sub = e->subprogram;
+                                    if (sub != NULL && sub->type == TREE_SUBPROGRAM)
+                                    {
+                                        const char *owner = sub->tree_data.subprogram_data.owner_class;
+                                        const char *method = sub->tree_data.subprogram_data.method_name;
+                                        const char *mangled = sub->tree_data.subprogram_data.mangled_id;
+                                        int is_enum_method = 0;
+                                        /* Check by owner_class prefix (nested enumerator owner starts with collection class) */
+                                        if (owner != NULL && method != NULL &&
+                                            strncasecmp(owner, class_id, class_id_len) == 0 &&
+                                            owner[class_id_len] == '.' &&
+                                            (strcasecmp(method, "MoveNext") == 0 ||
+                                             strcasecmp(method, "GetCurrent") == 0))
+                                            is_enum_method = 1;
+                                        /* Also check by mangled_id prefix (e.g. "tai_aggregatetypedconst.tadeenumerator__movenext_p") */
+                                        if (!is_enum_method && mangled != NULL &&
+                                            strncasecmp(mangled, class_id, class_id_len) == 0 &&
+                                            mangled[class_id_len] == '.')
+                                        {
+                                            const char *after_dot = mangled + class_id_len + 1;
+                                            const char *dunder = strstr(after_dot, "__");
+                                            if (dunder != NULL)
+                                            {
+                                                const char *mname = dunder + 2;
+                                                if (strncasecmp(mname, "movenext", 8) == 0 ||
+                                                    strncasecmp(mname, "getcurrent", 10) == 0)
+                                                    is_enum_method = 1;
+                                            }
+                                        }
+                                        if (is_enum_method)
+                                        {
+                                            mark_subprogram_recursive(sub, map);
+                                        }
+                                    }
+                                    e = e->next;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             break;
             
         case STMT_CASE: {
@@ -948,6 +1019,11 @@ static void scan_used_subprogram_bodies(ListNode_t *sub_list, SubprogramMap *map
                 struct Statement *body = sub->tree_data.subprogram_data.statement_list;
                 if (body != NULL)
                     mark_stmt_calls(body, map);
+                /* Also scan nested subprogram bodies so that references from
+                 * nested procedures (e.g. @nested_func used as callback) are
+                 * discovered during the fixpoint scan. */
+                if (sub->tree_data.subprogram_data.subprograms != NULL)
+                    scan_used_subprogram_bodies(sub->tree_data.subprogram_data.subprograms, map);
             }
         }
         sub_list = sub_list->next;
@@ -1348,16 +1424,38 @@ static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_
 
     if (sub_list == NULL)
     {
-        CompilationContext *comp_ctx = compilation_context_get_active();
-        if (comp_ctx != NULL)
+        /* Walk ALL subprograms in the SubprogramMap.  We cannot rely on
+         * unit subprogram lists because units may have been merged into
+         * the program tree (flat scope). The map was built from all sources
+         * and covers everything. */
+        size_t owner_len = strlen(owner_class);
+        size_t method_len = strlen(method_name);
+        for (unsigned b = 0; b < SUBPROG_MAP_BUCKETS; b++)
         {
-            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui)
+            SubprogramEntry *e = map->buckets[b];
+            while (e != NULL)
             {
-                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                if (unit_tree != NULL && unit_tree->type == TREE_UNIT &&
-                    unit_tree->tree_data.unit_data.subprograms != NULL)
-                    mark_class_methods_by_owner(unit_tree->tree_data.unit_data.subprograms,
-                        owner_class, method_name, map);
+                Tree_t *sub = e->subprogram;
+                if (sub != NULL && sub->type == TREE_SUBPROGRAM)
+                {
+                    const char *sub_owner = sub->tree_data.subprogram_data.owner_class;
+                    const char *sub_method = sub->tree_data.subprogram_data.method_name;
+                    const char *sub_mangled = sub->tree_data.subprogram_data.mangled_id;
+                    int match = 0;
+                    if (sub_owner != NULL && sub_method != NULL &&
+                        strcasecmp(sub_owner, owner_class) == 0 &&
+                        strcasecmp(sub_method, method_name) == 0)
+                        match = 1;
+                    if (!match && sub_mangled != NULL &&
+                        strncasecmp(sub_mangled, owner_class, owner_len) == 0 &&
+                        sub_mangled[owner_len] == '_' &&
+                        sub_mangled[owner_len + 1] == '_' &&
+                        strncasecmp(sub_mangled + owner_len + 2, method_name, method_len) == 0)
+                        match = 1;
+                    if (match)
+                        mark_subprogram_recursive(sub, map);
+                }
+                e = e->next;
             }
         }
         return;

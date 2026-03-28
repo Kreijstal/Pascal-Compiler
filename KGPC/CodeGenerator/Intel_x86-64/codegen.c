@@ -2976,9 +2976,10 @@ void codegen_common_record_typeinfo_label(const char *type_id, char *buffer, siz
     if (type_id == NULL || type_id[0] == '\0')
         return;
 
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+    /* Use type_id directly without sanitization — dots are valid in
+     * assembly labels and the TYPEINFO label emission uses dots for
+     * nested types (e.g. "tcgprocinfo.ttempinfo_flags_entry"). */
+    snprintf(buffer, size, "%s_TYPEINFO", type_id);
 }
 
 void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
@@ -3003,10 +3004,19 @@ void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *typ
             return;
         }
 
-        if (hashnode_get_record_type(type_node) != NULL)
         {
-            codegen_common_record_typeinfo_label(type_id, buffer, size);
-            return;
+            struct RecordType *record = hashnode_get_record_type(type_node);
+            if (record != NULL)
+            {
+                /* Use record->type_id when available — for nested types the
+                 * type_id is the full qualified name (e.g. "tcgprocinfo.ttempinfo_flags_entry")
+                 * which matches how the label is emitted.  Fall back to the
+                 * caller's type_id if record->type_id is not set. */
+                const char *label_name = (record->type_id != NULL) ?
+                    record->type_id : type_id;
+                codegen_common_record_typeinfo_label(label_name, buffer, size);
+                return;
+            }
         }
     }
 
@@ -4921,6 +4931,65 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
     }
 
+    /* Emit GUID for standalone interfaces (their VMT is emitted above but
+     * a separate GUID pass may miss them if they are not in the main scope).
+     * Deduplicate via "__kgpc_guid_" prefix in emitted_classes. */
+    if (record_info->is_interface && class_label != NULL)
+    {
+        char guid_dedup_buf[512];
+        snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
+                 "__kgpc_guid_%s", class_label);
+        if (!emitted_class_set_contains(emitted_classes, guid_dedup_buf))
+        {
+            char *guid_dedup_key = strdup(guid_dedup_buf);
+            if (guid_dedup_key != NULL)
+                emitted_class_set_add(emitted_classes, guid_dedup_key);
+
+            uint32_t gd1 = 0;
+            uint16_t gd2 = 0, gd3 = 0;
+            uint8_t gd4[8] = {0};
+            codegen_resolve_record_guid(symtab, record_info,
+                &gd1, &gd2, &gd3, gd4);
+
+            int is_win = codegen_target_is_windows();
+            fprintf(ctx->output_file,
+                    "\n# GUID constant for interface %s (from VMT emission)\n",
+                    class_label);
+            if (is_win) {
+                fprintf(ctx->output_file,
+                        "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n",
+                        class_label);
+                fprintf(ctx->output_file, "\t.linkonce discard\n");
+            } else {
+                fprintf(ctx->output_file, "\t.data\n");
+            }
+            fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n", class_label);
+            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", class_label);
+            fprintf(ctx->output_file, "\t.long\t0x%08X\n", gd1);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)gd2);
+            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)gd3);
+            fprintf(ctx->output_file,
+                    "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
+                    "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                    gd4[0], gd4[1], gd4[2], gd4[3],
+                    gd4[4], gd4[5], gd4[6], gd4[7]);
+            /* Emit pguid pointer */
+            if (is_win) {
+                fprintf(ctx->output_file,
+                        "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n",
+                        class_label);
+                fprintf(ctx->output_file, "\t.linkonce discard\n");
+            }
+            fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n", class_label);
+            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", class_label);
+            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", class_label);
+            fprintf(ctx->output_file, "%s\n",
+                    codegen_readonly_section_directive());
+        }
+    }
+
     if (free_effective_iface_names)
         free((void *)effective_iface_names);
 }
@@ -5571,10 +5640,14 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
             uint32_t guid_d1 = 0;
             uint16_t guid_d2 = 0, guid_d3 = 0;
             uint8_t guid_d4[8] = {0};
-            if (record_info != NULL && record_info->is_interface &&
-                codegen_resolve_record_guid(ctx->symtab, record_info,
-                    &guid_d1, &guid_d2, &guid_d3, guid_d4))
+            if (record_info != NULL && record_info->is_interface)
             {
+                /* Resolve declared GUID if available; otherwise emit all-zero
+                 * GUID for interfaces without a declared GUID (they still need
+                 * a GUID symbol for interface method dispatch at runtime). */
+                codegen_resolve_record_guid(ctx->symtab, record_info,
+                    &guid_d1, &guid_d2, &guid_d3, guid_d4);
+
                 const char *iface_name = record_info->type_id;
                 if (iface_name == NULL)
                     iface_name = type_tree->tree_data.type_decl_data.id;
@@ -5800,10 +5873,12 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                     uint32_t guid_d1 = 0;
                     uint16_t guid_d2 = 0, guid_d3 = 0;
                     uint8_t guid_d4[8] = {0};
-                    if (record_info != NULL && record_info->is_interface &&
-                        codegen_resolve_record_guid(symtab, record_info,
-                            &guid_d1, &guid_d2, &guid_d3, guid_d4))
+                    if (record_info != NULL && record_info->is_interface)
                     {
+                        /* Resolve declared GUID; emit all-zero for interfaces
+                         * without a declared GUID (still needed for dispatch). */
+                        codegen_resolve_record_guid(symtab, record_info,
+                            &guid_d1, &guid_d2, &guid_d3, guid_d4);
                         const char *iface_name = record_info->type_id;
                         if (iface_name == NULL)
                             iface_name = hash_node->id;
@@ -5827,6 +5902,106 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                             int is_win = codegen_target_is_windows();
                             fprintf(ctx->output_file,
                                     "\n# GUID constant for interface %s (standalone)\n",
+                                    iface_name);
+                            if (is_win) {
+                                fprintf(ctx->output_file,
+                                        "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n",
+                                        iface_name);
+                                fprintf(ctx->output_file, "\t.linkonce discard\n");
+                            } else {
+                                fprintf(ctx->output_file, "\t.data\n");
+                            }
+                            fprintf(ctx->output_file, "\t.align 8\n");
+                            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
+                            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d2);
+                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d3);
+                            fprintf(ctx->output_file,
+                                    "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
+                                    "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+                                    d4[0], d4[1], d4[2], d4[3],
+                                    d4[4], d4[5], d4[6], d4[7]);
+                            /* Emit pguid pointer */
+                            if (is_win) {
+                                fprintf(ctx->output_file,
+                                        "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n",
+                                        iface_name);
+                                fprintf(ctx->output_file, "\t.linkonce discard\n");
+                            }
+                            fprintf(ctx->output_file, "\t.align 8\n");
+                            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
+                            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n",
+                                    iface_name);
+                            fprintf(ctx->output_file, "%s\n",
+                                    codegen_readonly_section_directive());
+                        }
+                    }
+                }
+                node = node->next;
+            }
+        }
+    }
+
+    /* Also walk unit_scopes for interfaces (parallel to the VMT walk above). */
+    for (int ui = 0; ui < SYMTAB_MAX_UNITS; ui++)
+    {
+        ScopeNode *unit_scope = symtab->unit_scopes[ui];
+        if (unit_scope == NULL)
+            continue;
+        HashTable_t *table = unit_scope->table;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++)
+        {
+            ListNode_t *node = table->table[b];
+            while (node != NULL)
+            {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
+                    hash_node->type != NULL)
+                {
+                    struct RecordType *record_info = NULL;
+                    if (hash_node->type->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.record_info;
+                    else if (hash_node->type->kind == TYPE_KIND_POINTER &&
+                             hash_node->type->info.points_to != NULL &&
+                             hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.points_to->info.record_info;
+
+                    uint32_t guid_d1 = 0;
+                    uint16_t guid_d2 = 0, guid_d3 = 0;
+                    uint8_t guid_d4[8] = {0};
+                    if (record_info != NULL && record_info->is_interface)
+                    {
+                        codegen_resolve_record_guid(symtab, record_info,
+                            &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                        const char *iface_name = record_info->type_id;
+                        if (iface_name == NULL)
+                            iface_name = hash_node->id;
+                        if (iface_name == NULL) { node = node->next; continue; }
+
+                        char guid_dedup_buf[512];
+                        snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
+                                 "__kgpc_guid_%s", iface_name);
+                        if (!emitted_class_set_contains(&emitted_classes, guid_dedup_buf))
+                        {
+                            char *guid_dedup_key = strdup(guid_dedup_buf);
+                            if (guid_dedup_key != NULL)
+                                emitted_class_set_add(&emitted_classes, guid_dedup_key);
+
+                            unsigned long d1 = (unsigned long)guid_d1;
+                            unsigned int d2 = (unsigned int)guid_d2;
+                            unsigned int d3 = (unsigned int)guid_d3;
+                            unsigned char d4[8];
+                            memcpy(d4, guid_d4, sizeof(d4));
+
+                            int is_win = codegen_target_is_windows();
+                            fprintf(ctx->output_file,
+                                    "\n# GUID constant for interface %s (from unit scope)\n",
                                     iface_name);
                             if (is_win) {
                                 fprintf(ctx->output_file,
