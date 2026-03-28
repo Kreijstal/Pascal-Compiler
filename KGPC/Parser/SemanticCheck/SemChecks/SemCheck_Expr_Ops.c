@@ -2270,12 +2270,38 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
 
     /* If a value symbol exists at scope 0 (the innermost scope, which includes
      * method-local variables/parameters), it should shadow Self fields.
-     * This is the original behavior — local vars shadow Self fields. */
+     * But in the flat scope merge, scope 0 also contains imported globals.
+     * Only bail if the symbol is genuinely local to the current method. */
     int preferred_scope = 0;
-    if (semcheck_find_preferred_value_ident(symtab, id, &preferred_scope) != NULL &&
-        preferred_scope == 0)
+    HashNode_t *preferred_node = semcheck_find_preferred_value_ident(symtab, id, &preferred_scope);
+    if (preferred_node != NULL && preferred_scope == 0)
     {
-        return -1;
+        /* Check if the found symbol is local to the current scope.
+         * If we're inside an imported unit's method (scope unit_index > 0
+         * and differs from current_unit_index), a scope-0 symbol might be
+         * an imported global from the flat merge — don't let it shadow
+         * Self fields. unit_index=0 means unset (program's own scope). */
+        /* Check if the found symbol is genuinely local to this method.
+         * In the flat scope merge, scope 0 contains both parameters and
+         * imported globals. We consider it local if:
+         * (1) scope_unit_index is 0 (unset — program's own scope), OR
+         * (2) scope_unit_index matches current_unit_index, OR
+         * (3) the symbol was found at preferred_scope > 0 (method local). */
+        int scope_unit = symtab->current_scope != NULL
+            ? symtab->current_scope->unit_index : 0;
+        int is_imported_method = (scope_unit != 0 &&
+                                  scope_unit != symtab->current_unit_index);
+        if (!is_imported_method)
+            return -1;
+        /* In an imported method: the symbol might be a parameter (pushed
+         * into the method scope at depth 0) or an imported global (in
+         * the flat-merged unit scope at depth 0). Parameters have their
+         * source_unit_index matching the method's scope unit. */
+        if (preferred_scope == 0 &&
+            preferred_node->source_unit_index == scope_unit)
+        {
+            return -1;
+        }
     }
 
     struct RecordType *field_owner = NULL;
