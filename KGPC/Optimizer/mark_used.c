@@ -1058,20 +1058,56 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
     }
 
     /* Scan typed constant and variable initializers for function references.
-       These contain EXPR_ADDR_OF_PROC (e.g. @NoBeginThread) that DCE must preserve. */
+       These contain EXPR_ADDR_OF_PROC (e.g. @NoBeginThread) that DCE must preserve.
+       Both TREE_VAR_DECL and TREE_ARR_DECL can have initializers with function
+       pointer references (e.g. typed constant arrays of records with @handler fields). */
     {
         ListNode_t *var_node = program->tree_data.program_data.var_declaration;
         while (var_node != NULL) {
             if (var_node->type == LIST_TREE && var_node->cur != NULL) {
                 Tree_t *vdecl = (Tree_t*)var_node->cur;
-                if (vdecl->type == TREE_VAR_DECL) {
-                    struct Statement *init = vdecl->tree_data.var_decl_data.initializer;
-                    if (init != NULL) {
-                        mark_stmt_calls(init, &map);
+                struct Statement *init = NULL;
+                if (vdecl->type == TREE_VAR_DECL)
+                    init = vdecl->tree_data.var_decl_data.initializer;
+                else if (vdecl->type == TREE_ARR_DECL)
+                    init = vdecl->tree_data.arr_decl_data.initializer;
+                if (init != NULL)
+                    mark_stmt_calls(init, &map);
+            }
+            var_node = var_node->next;
+        }
+    }
+    /* Also scan unit-level typed constant / variable initializers.
+       Typed constants (e.g. arrays of records with function pointer fields like
+       @pd_abstract) are stored as var_decl or arr_decl nodes in unit var lists. */
+    {
+        CompilationContext *comp_ctx = compilation_context_get_active();
+        if (comp_ctx != NULL) {
+            for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                ListNode_t *var_lists[2] = {
+                    unit_tree->tree_data.unit_data.interface_var_decls,
+                    unit_tree->tree_data.unit_data.implementation_var_decls
+                };
+                for (int vi = 0; vi < 2; ++vi) {
+                    ListNode_t *var_node = var_lists[vi];
+                    while (var_node != NULL) {
+                        if (var_node->type == LIST_TREE && var_node->cur != NULL) {
+                            Tree_t *vdecl = (Tree_t*)var_node->cur;
+                            struct Statement *init = NULL;
+                            if (vdecl->type == TREE_VAR_DECL)
+                                init = vdecl->tree_data.var_decl_data.initializer;
+                            else if (vdecl->type == TREE_ARR_DECL)
+                                init = vdecl->tree_data.arr_decl_data.initializer;
+                            if (init != NULL)
+                                mark_stmt_calls(init, &map);
+                        }
+                        var_node = var_node->next;
                     }
                 }
             }
-            var_node = var_node->next;
         }
     }
 
