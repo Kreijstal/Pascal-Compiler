@@ -699,6 +699,9 @@ void pascal_frontend_cleanup(void)
 }
 
 /* Compute the cache file path for a given source path.
+ * The hash includes user-defined preprocessor symbols so that different
+ * define sets (e.g. regular RTL tests vs pp.pas bootstrap) produce
+ * distinct cache files.
  * Returns a malloc'd string or NULL if caching is disabled. */
 static char *compute_ast_cache_path(const char *source_path)
 {
@@ -706,14 +709,22 @@ static char *compute_ast_cache_path(const char *source_path)
         return NULL;
 
     size_t dir_len = strlen(g_ast_cache_dir);
-    uint64_t source_hash = fnv1a64_bytes((const unsigned char *)source_path, strlen(source_path));
+    uint64_t hash = fnv1a64_bytes((const unsigned char *)source_path, strlen(source_path));
+    /* Mix in user-defined preprocessor symbols so different -D flags
+     * produce different cache entries. */
+    for (int i = 0; i < g_user_define_count; ++i)
+    {
+        if (g_user_defines[i] != NULL)
+            hash = fnv1a64_bytes((const unsigned char *)g_user_defines[i],
+                                 strlen(g_user_defines[i])) ^ hash;
+    }
     /* <dir>/<16-hex>.ast_cache\0 */
     size_t total = dir_len + 1 + 16 + 10 + 1;
     char *cache_path = (char *)malloc(total);
     if (cache_path == NULL)
         return NULL;
     snprintf(cache_path, total, "%s/%016llx.ast_cache",
-        g_ast_cache_dir, (unsigned long long)source_hash);
+        g_ast_cache_dir, (unsigned long long)hash);
     return cache_path;
 }
 
