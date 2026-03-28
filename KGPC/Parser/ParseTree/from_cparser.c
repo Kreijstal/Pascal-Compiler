@@ -97,6 +97,10 @@ static ast_t *g_interface_section_ast = NULL;
 static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
+/* When instantiating a generic method template, this points to the owning
+ * RecordType so that type_name_is_class_like can answer without touching the
+ * (possibly freed) raw parser AST globals. */
+static struct RecordType *g_instantiate_record = NULL;
 
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
@@ -3155,8 +3159,14 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     GenericTypeDecl *saved_context = generic_registry_current_context();
     generic_registry_set_context(record->generic_decl);
 
+    /* Let type_name_is_class_like resolve via the already-converted record
+     * instead of the raw parser AST (which may have been freed). */
+    struct RecordType *saved_record = g_instantiate_record;
+    g_instantiate_record = record;
+
     Tree_t *method_tree = convert_method_impl(method_copy);
 
+    g_instantiate_record = saved_record;
     generic_registry_set_context(saved_context);
 
     g_source_offset = saved_offset;
@@ -5845,6 +5855,14 @@ static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_na
 static int type_name_is_class_like(const char *type_name) {
     if (type_name == NULL)
         return 0;
+
+    /* When called during generic method instantiation the raw parser AST
+     * may already have been freed.  Use the converted RecordType instead. */
+    if (g_instantiate_record != NULL) {
+        if (g_instantiate_record->type_id != NULL &&
+            strcasecmp(g_instantiate_record->type_id, type_name) == 0)
+            return g_instantiate_record->is_class;
+    }
 
     ast_t *type_decl = find_type_decl_in_section(g_interface_type_section_ast, type_name);
     if (type_decl == NULL)
@@ -19925,6 +19943,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
         final_tree = tree;
+        /* Clear borrowed AST pointers before the caller frees the raw AST. */
+        g_interface_type_section_ast = NULL;
+        g_implementation_type_section_ast = NULL;
         return final_tree;
     }
 
@@ -20275,6 +20296,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                subprograms, initialization, finalization);
         if (unit_scan_copy != NULL)
             free_ast(unit_scan_copy);
+        /* Clear borrowed AST pointers before the caller frees the raw AST. */
+        g_interface_type_section_ast = NULL;
+        g_implementation_type_section_ast = NULL;
         return tree;
     }
 
