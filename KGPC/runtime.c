@@ -2434,6 +2434,63 @@ void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t e
     descriptor->length = new_length;
 }
 
+/*
+ * Copy a segment of a dynamic array.
+ * src_descriptor_ptr: pointer to source kgpc_dynarray_descriptor_t
+ * index: 0-based start index
+ * count: number of elements to copy
+ * element_size: size of each element in bytes
+ * Returns: pointer to a new heap-allocated kgpc_dynarray_descriptor_t (temp)
+ */
+void *kgpc_dynarray_copy(const void *src_descriptor_ptr, int64_t index, int64_t count, int64_t element_size)
+{
+    if (src_descriptor_ptr == NULL || element_size <= 0)
+        return NULL;
+
+    const kgpc_dynarray_descriptor_t *src = (const kgpc_dynarray_descriptor_t *)src_descriptor_ptr;
+    int64_t src_len = src->length;
+
+    if (index < 0)
+        index = 0;
+    if (count < 0)
+        count = 0;
+
+    if (index >= src_len)
+        count = 0;
+    else if (index + count > src_len)
+        count = src_len - index;
+
+    kgpc_dynarray_descriptor_t *dest = (kgpc_dynarray_descriptor_t *)calloc(1, sizeof(kgpc_dynarray_descriptor_t));
+    if (dest == NULL)
+        return NULL;
+
+    if (count > 0)
+    {
+        size_t alloc_count = (size_t)count;
+        if (alloc_count < SIZE_MAX)
+            alloc_count += 1; /* Spare slot for off-by-one tolerance */
+
+        dest->data = calloc(alloc_count, (size_t)element_size);
+        if (dest->data != NULL)
+        {
+            memcpy(dest->data, (char *)src->data + (index * element_size), (size_t)count * (size_t)element_size);
+            dest->length = count;
+        }
+        else
+        {
+            free(dest);
+            return NULL;
+        }
+    }
+    else
+    {
+        dest->data = NULL;
+        dest->length = 0;
+    }
+
+    return dest;
+}
+
 void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
 {
     FILE *dest = kgpc_text_output_stream(file);

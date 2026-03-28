@@ -824,11 +824,12 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
     /* Also accept dynamic arrays for Copy */
-    int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY);
+    int is_dynarray = (source_kgpc_type != NULL && kgpc_type_is_dynamic_array(source_kgpc_type));
+    int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY && !is_dynarray);
 
-    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array)
+    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_dynarray)
     {
-        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
+        semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string or dynamic array.\n", expr->line_num);
         error_count++;
     }
 
@@ -868,8 +869,8 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     else
     {
         /* 1-argument form: Copy(S) — copy entire string/array.
-           Synthesize index=1 and count=INT_MAX. */
-        index_expr = mk_inum(expr->line_num, 1LL);
+           Synthesize index=1 (strings) or 0 (dynarray) and count=INT_MAX. */
+        index_expr = mk_inum(expr->line_num, is_dynarray ? 0LL : 1LL);
         assert(index_expr != NULL);
         semcheck_expr_set_resolved_type(index_expr, LONGINT_TYPE);
         ListNode_t *index_node = CreateListNode(index_expr, LIST_EXPR);
@@ -883,6 +884,29 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         args->next = index_node;
     }
 
+    if (error_count == 0 && is_dynarray)
+    {
+        /* Synthesize 4th argument: element size */
+        long long elem_size = kgpc_type_get_array_element_size(source_kgpc_type);
+        struct Expression *esize_expr = mk_inum(expr->line_num, elem_size);
+        assert(esize_expr != NULL);
+        semcheck_expr_set_resolved_type(esize_expr, LONGINT_TYPE);
+        ListNode_t *esize_node = CreateListNode(esize_expr, LIST_EXPR);
+
+        /* Copy accepts 3 args + 1 synthesized: S, Index, Count, ElementSize.
+           Append to the end of args list. */
+        ListNode_t *cur = args;
+        while (cur->next != NULL) cur = cur->next;
+        cur->next = esize_node;
+
+        /* Wrap source expression with EXPR_ADDR since runtime takes descriptor pointer */
+        if (source_expr->type != EXPR_ADDR)
+        {
+            args->cur = mk_addressof(source_expr->line_num, source_expr);
+            source_expr = (struct Expression *)args->cur;
+        }
+    }
+
     if (error_count == 0)
     {
         if (expr->expr_data.function_call_data.mangled_id != NULL)
@@ -892,7 +916,8 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
         }
         /* Use ShortString-specific copy if source is a ShortString */
         const char *copy_func = is_shortstring ? "kgpc_shortstring_copy" :
-            (is_wide_string ? "kgpc_unicodestring_copy" : "kgpc_string_copy");
+            (is_wide_string ? "kgpc_unicodestring_copy" :
+            (is_dynarray ? "kgpc_dynarray_copy" : "kgpc_string_copy"));
         expr->expr_data.function_call_data.mangled_id = strdup(copy_func);
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
@@ -901,7 +926,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
             return 1;
         }
         semcheck_reset_function_call_cache(expr);
-        if (is_array)
+        if (is_dynarray)
         {
             int tag = semcheck_tag_from_kgpc(source_kgpc_type);
             semcheck_expr_set_resolved_type(expr, tag);
