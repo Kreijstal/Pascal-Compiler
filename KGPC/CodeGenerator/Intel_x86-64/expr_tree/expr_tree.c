@@ -4494,7 +4494,14 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                      /* Class type used as value -> Address of VMT
                       * Use RIP-relative addressing for cross-platform compatibility
                       * (Windows x64 doesn't support $symbol immediates) */
-                     snprintf(buffer, buf_len, "%s_VMT(%%rip)", expr->expr_data.id);
+                     /* Use the canonical type_id from the record_info for the VMT
+                      * label so it matches the emitted VMT definition (Pascal is
+                      * case-insensitive, so the expression id may differ in case). */
+                     const char *vmt_class_label =
+                         node->type->info.points_to->info.record_info->type_id;
+                     if (vmt_class_label == NULL)
+                         vmt_class_label = expr->expr_data.id;
+                     snprintf(buffer, buf_len, "%s_VMT(%%rip)", vmt_class_label);
                 }
                 else if(stack_node != NULL)
                 {
