@@ -7124,6 +7124,32 @@ skip_type_receiver_rewrite:
     }
 
     
+    /* When call_qualifier is already set to a known unit name (e.g. System.Seek
+     * inside a method body), the parser may have set is_method_call_placeholder
+     * with Self as the first arg.  Skip method resolution entirely and handle
+     * as a unit-qualified free procedure call.  We cannot modify the AST here
+     * because the same nodes are shared across unit copies. */
+    if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder &&
+        stmt->stmt_data.procedure_call_data.call_qualifier != NULL &&
+        semcheck_is_unit_name(stmt->stmt_data.procedure_call_data.call_qualifier) &&
+        args_given != NULL)
+    {
+        struct Expression *first_arg = (struct Expression *)args_given->cur;
+        if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+            first_arg->expr_data.id != NULL &&
+            pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+        {
+            /* Type-check Self (first arg) so it doesn't leave unresolved types,
+             * then skip it for the actual call. */
+            int self_type_tag = UNKNOWN_TYPE;
+            semcheck_stmt_expr_tag(&self_type_tag, symtab, first_arg, max_scope_lev, NO_MUTATE);
+            /* Advance past Self for overload resolution */
+            args_given = args_given->next;
+            was_unit_qualified = 1;
+            goto skip_method_placeholder_resolution;
+        }
+    }
+
     /* Check for method call with unresolved name (member-access placeholder) where first arg is the instance. */
     if (stmt->stmt_data.procedure_call_data.is_method_call_placeholder && args_given != NULL) {
         struct Expression *first_arg = (struct Expression *)args_given->cur;
@@ -7736,6 +7762,8 @@ skip_type_receiver_rewrite:
         }
     }
 
+skip_method_placeholder_resolution:
+
     /* For inherited calls where mangled_id is already set, use it directly
      * instead of re-mangling based on the call site arguments.
      * The mangled_id already includes the correct parameter signature. */
@@ -7812,6 +7840,57 @@ skip_type_receiver_rewrite:
     }
 
     ListNode_t *overload_candidates = FindAllIdents(symtab, proc_id);
+
+    /* When the call was unit-qualified (e.g. System.Seek), filter candidates to
+     * only those belonging to the specified unit.  This prevents a same-named
+     * method in the current class from shadowing the intended unit's version.
+     * Fall back to unfiltered results if filtering would leave no candidates. */
+    if (was_unit_qualified && stmt->stmt_data.procedure_call_data.call_qualifier != NULL &&
+        overload_candidates != NULL)
+    {
+        const char *uq_name = stmt->stmt_data.procedure_call_data.call_qualifier;
+        ListNode_t *filtered = NULL;
+        ListNode_t *filtered_tail = NULL;
+        for (ListNode_t *cn = overload_candidates; cn != NULL; cn = cn->next)
+        {
+            HashNode_t *hn = (HashNode_t *)cn->cur;
+            if (hn == NULL) continue;
+            int match = 0;
+            if (hn->source_unit_index != 0)
+            {
+                const char *src_name = unit_registry_get(hn->source_unit_index);
+                if (src_name != NULL && pascal_identifier_equals(src_name, uq_name))
+                    match = 1;
+            }
+            if (!match && hn->type != NULL && hn->type->kind == TYPE_KIND_PROCEDURE &&
+                hn->type->info.proc_info.definition != NULL)
+            {
+                int def_unit_idx =
+                    hn->type->info.proc_info.definition->tree_data.subprogram_data.source_unit_index;
+                if (def_unit_idx != 0)
+                {
+                    const char *src_name = unit_registry_get(def_unit_idx);
+                    if (src_name != NULL && pascal_identifier_equals(src_name, uq_name))
+                        match = 1;
+                }
+            }
+            if (match)
+            {
+                ListNode_t *new_node = CreateListNode(hn, LIST_UNSPECIFIED);
+                if (filtered == NULL)
+                    filtered = new_node;
+                else
+                    filtered_tail->next = new_node;
+                filtered_tail = new_node;
+            }
+        }
+        if (filtered != NULL)
+        {
+            DestroyList(overload_candidates);
+            overload_candidates = filtered;
+        }
+    }
+
     HashNode_t *resolved_proc = NULL;
     int match_count = 0;
     if (overload_candidates != NULL)
