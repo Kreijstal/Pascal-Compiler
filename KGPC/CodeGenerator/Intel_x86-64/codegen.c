@@ -7112,12 +7112,12 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     if (FindSymbol(&var_node, symtab, var_name) && var_node != NULL && var_node->type != NULL) {
                         KgpcArrayDimensionInfo dim_info;
                         if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0) {
-                            if (dim_info.strides[0] > element_size &&
+                            if (dim_info.strides[0] > 0 &&
                                 dim_info.strides[0] <= INT_MAX)
                             {
                                 element_size = (int)dim_info.strides[0];
                             }
-                            if (dim_info.total_size > total_size)
+                            if (dim_info.total_size > 0)
                                 total_size = (int)dim_info.total_size;
                         } else {
                             long long kgpc_size = kgpc_type_sizeof(var_node->type);

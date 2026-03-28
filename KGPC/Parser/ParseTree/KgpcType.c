@@ -852,12 +852,25 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                         alias->array_element_type_id, defined_in_unit);
                 if (element_node != NULL && element_node->type != NULL)
                 {
-                    element_type = element_node->type;
-                    kgpc_type_retain(element_type);
+                    /* If the alias carries a specific element storage size
+                       (e.g. string[19] → 20 bytes), prefer that over the
+                       generic symbol table entry (ShortString → 256). */
+                    if (alias->array_element_storage_size > 0) {
+                        element_type = create_primitive_type_with_size(
+                            element_type_tag, alias->array_element_storage_size);
+                    } else {
+                        element_type = element_node->type;
+                        kgpc_type_retain(element_type);
+                    }
                 }
             }
-            if (element_type == NULL)
-                element_type = create_primitive_type(element_type_tag);
+            if (element_type == NULL) {
+                if (alias->array_element_storage_size > 0)
+                    element_type = create_primitive_type_with_size(
+                        element_type_tag, alias->array_element_storage_size);
+                else
+                    element_type = create_primitive_type(element_type_tag);
+            }
         } else if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
             symtab != NULL) {
             /* Type reference - try to resolve it */
@@ -3595,6 +3608,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->array_start = src->array_start;
     dst->array_end = src->array_end;
     dst->array_element_type = src->array_element_type;
+    dst->array_element_storage_size = src->array_element_storage_size;
     dst->is_shortstring = src->is_shortstring;
     dst->is_wide_string = src->is_wide_string;
     dst->is_open_array = src->is_open_array;

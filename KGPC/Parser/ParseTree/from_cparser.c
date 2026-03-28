@@ -7414,6 +7414,14 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = SHORTSTRING_TYPE;
                         if (type_info->element_type_id == NULL)
                             type_info->element_type_id = strdup("ShortString");
+                        /* Preserve the shortstring capacity so codegen uses
+                           the correct element size (N+1 bytes for string[N])
+                           instead of defaulting to 256. */
+                        if (nested_info.end > 0 && type_info->element_kgpc_type == NULL) {
+                            type_info->element_kgpc_type =
+                                create_primitive_type_with_size(SHORTSTRING_TYPE,
+                                                               nested_info.end + 1);
+                        }
                         if (nested_id != NULL)
                             free(nested_id);
                     } else if (nested_info.is_range && mapped == UNKNOWN_TYPE) {
@@ -12184,6 +12192,16 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         }
     }
 
+    /* When the type is a named identifier (like TNames), resolve it to check
+     * if it's an array type alias so we can use lower_const_array. */
+    if (type_id != NULL && !type_info.is_array) {
+        TypeInfo resolved_info = {0};
+        if (resolve_array_type_info_from_ast(type_id, type_section, &resolved_info, 0) == 0) {
+            resolve_array_bounds(&resolved_info, type_section, const_section, id);
+            type_info = resolved_info;
+        }
+    }
+
     if (type_id == NULL && const_section_is_resourcestring(const_section)) {
         type_id = strdup("AnsiString");
     }
@@ -12922,10 +12940,16 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     } else if (type_info.is_array) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
                                  type_info.element_type_id, type_info.start, type_info.end);
-        if (decl != NULL)
+        if (decl != NULL) {
             decl->tree_data.type_decl_data.info.alias.is_shortstring =
                 type_info.is_shortstring ||
                 (id != NULL && pascal_identifier_equals(id, "ShortString"));
+            if (type_info.element_kgpc_type != NULL) {
+                long long esize = kgpc_type_sizeof(type_info.element_kgpc_type);
+                if (esize > 0 && esize <= INT_MAX)
+                    decl->tree_data.type_decl_data.info.alias.array_element_storage_size = (int)esize;
+            }
+        }
         type_info.element_type_id = NULL;
     } else if (type_info.is_record && type_id != NULL) {
         /* Alias to a record type (including generic specializations) */
@@ -17836,6 +17860,11 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
                 alias->array_end = type_info->end;
                 alias->array_element_type = type_info->element_type;
                 alias->array_element_type_id = type_info->element_type_id;
+                if (type_info->element_kgpc_type != NULL) {
+                    long long esize = kgpc_type_sizeof(type_info->element_kgpc_type);
+                    if (esize > 0 && esize <= INT_MAX)
+                        alias->array_element_storage_size = (int)esize;
+                }
                 alias->is_shortstring = type_info->is_shortstring;
                 alias->is_open_array = type_info->is_open_array;
             }
