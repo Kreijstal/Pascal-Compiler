@@ -2268,6 +2268,9 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
         self_node == NULL || self_record == NULL)
         return -1;
 
+    /* If a value symbol exists at scope 0 (the innermost scope, which includes
+     * method-local variables/parameters), it should shadow Self fields.
+     * This is the original behavior — local vars shadow Self fields. */
     int preferred_scope = 0;
     if (semcheck_find_preferred_value_ident(symtab, id, &preferred_scope) != NULL &&
         preferred_scope == 0)
@@ -2601,27 +2604,61 @@ int semcheck_varid(int *type_return,
                 semcheck_get_current_method_owner() != NULL ? semcheck_get_current_method_owner() : "<null>");
         }
     }
-    /* When inside a class method, class fields take precedence over
-     * outer-scope constants/types with the same name. If FindSymbol found
-     * a non-variable symbol, check if Self has a field and prefer it. */
+    /* When inside a class/object method, Self fields take precedence over
+     * imported symbols with the same name. If FindSymbol found a symbol
+     * that is NOT a local variable (e.g. a global variable, constant, or
+     * type from another unit), check if Self has a field and prefer it.
+     * Local variables/parameters and function return variables still shadow
+     * fields — only imported/global symbols lose to Self fields. */
     if (scope_return && hash_return != NULL && id != NULL &&
-        hash_return->hash_type != HASHTYPE_VAR &&
         hash_return->hash_type != HASHTYPE_FUNCTION_RETURN &&
         hash_return->hash_type != HASHTYPE_ARRAY)
     {
-        HashNode_t *self_node = NULL;
-        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+        /* Skip Self field check for variables that are local to the current
+         * method (they correctly shadow fields). A local variable is one
+         * found in the current scope (source_unit_index matches current unit
+         * or is at scope level 0 / local). For imported variables from other
+         * units, check Self fields. */
+        int skip_self_check = 0;
+        if (hash_return->hash_type == HASHTYPE_VAR)
         {
-            struct RecordType *self_record = get_record_type_from_node(self_node);
-            if (self_record == NULL)
-                self_record = semcheck_resolve_helper_self_record(symtab,
-                    self_node, self_record);
-            if (self_record != NULL)
+            /* A local variable/parameter declared in the method body should
+             * shadow Self fields. An imported variable from the flat scope
+             * merge should NOT.
+             * Key insight: local parameters have source_unit_index=0 AND are
+             * pushed into the subprogram scope. Imported vars also have
+             * source_unit_index=0 but are in the unit scope. We can check
+             * the scope's unit_index: if it differs from current_unit_index,
+             * the variable came from a unit scope (imported). */
+            if (symtab->current_scope != NULL &&
+                symtab->current_scope->unit_index == symtab->current_unit_index)
             {
-                int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
-                    max_scope_lev, mutating, self_node, self_record, id);
-                if (field_result >= 0)
-                    return field_result;
+                /* We're in the program/method's own scope — var is local */
+                skip_self_check = 1;
+            }
+            else if (hash_return->source_unit_index != 0 &&
+                     hash_return->source_unit_index == symtab->current_unit_index)
+            {
+                /* Variable is from current compilation unit */
+                skip_self_check = 1;
+            }
+        }
+        if (!skip_self_check)
+        {
+            HashNode_t *self_node = NULL;
+            if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+            {
+                struct RecordType *self_record = get_record_type_from_node(self_node);
+                if (self_record == NULL)
+                    self_record = semcheck_resolve_helper_self_record(symtab,
+                        self_node, self_record);
+                if (self_record != NULL)
+                {
+                    int field_result = semcheck_try_self_field_access(type_return, symtab, expr,
+                        max_scope_lev, mutating, self_node, self_record, id);
+                    if (field_result >= 0)
+                        return field_result;
+                }
             }
         }
     }

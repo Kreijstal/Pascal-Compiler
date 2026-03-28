@@ -4361,7 +4361,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             /* Pass remaining arguments starting from index 1 (skip class type argument) */
                             inst_list = codegen_pass_arguments(
                                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                                func_type, func_id, 1, src_expr);
+                                func_type, func_id, 1, src_expr, 0);
 
                             /* Emit Self AFTER argument evaluation so that arg-passing code
                              * cannot clobber the Self register (e.g. %rdi on SysV). */
@@ -4422,7 +4422,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     inst_list = codegen_pass_arguments(
                         src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
                         func_type,
-                        src_expr->expr_data.function_call_data.id, 1, src_expr);
+                        src_expr->expr_data.function_call_data.id, 1, src_expr, 0);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         dest_save_slot->offset, ret_ptr_reg);
@@ -9099,7 +9099,7 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     dst_node->next = src_node;
     src_node->next = count_node;
 
-    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL);
+    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL, 0);
     DestroyList(dst_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
@@ -9390,8 +9390,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_name_hint == NULL)
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
-        proc_name_hint, 0, NULL);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
+        proc_name_hint, 0, NULL, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
@@ -11226,7 +11226,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             {
                 char call_buffer[CODEGEN_MAX_INST_BUF];
                 inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
-                    unmangled_name, 0, NULL);
+                    unmangled_name, 0, NULL, 0);
                 snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", call_target);
                 inst_list = add_inst(inst_list, call_buffer);
             }
@@ -11480,8 +11480,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 4. Pass arguments as usual */
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, 0, NULL);
-        
+            proc_name_hint, 0, NULL, 0);
+
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
         
@@ -11593,7 +11593,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         int arg_start_index = should_pass_static_link ? 1 : 0;
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, arg_start_index, NULL);
+            proc_name_hint, arg_start_index, NULL,
+            stmt->stmt_data.procedure_call_data.is_class_method_call);
 
         if (should_pass_static_link)
         {
@@ -13243,6 +13244,28 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     // Increment label (for continue statements)
     snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
     inst_list = add_inst(inst_list, buffer);
+
+    // Overflow guard: if the loop variable already equals the limit,
+    // skip the increment to prevent wrap-around for small types
+    // (e.g., Byte 255 + 1 wraps to 0, causing an infinite loop).
+    {
+        Register_t *guard_reg = NULL;
+        inst_list = codegen_evaluate_expr(for_var, inst_list, ctx, &guard_reg);
+        if (!codegen_had_error(ctx) && guard_reg != NULL) {
+            if (limit_is_qword)
+                snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %s\n",
+                         limit_temp->offset, guard_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t-%d(%%rbp), %s\n",
+                         limit_temp->offset, guard_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), guard_reg);
+            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", exit_label);
+            inst_list = add_inst(inst_list, buffer);
+        } else if (guard_reg != NULL) {
+            free_reg(get_reg_stack(), guard_reg);
+        }
+    }
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);

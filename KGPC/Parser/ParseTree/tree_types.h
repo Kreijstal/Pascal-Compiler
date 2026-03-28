@@ -42,6 +42,7 @@ struct TypeAlias
     int array_element_type;
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;
+    int array_element_storage_size;  /* For shortstring elements: N+1 bytes for string[N] */
     int is_shortstring;
     int is_wide_string;
     int is_open_array;

@@ -692,12 +692,14 @@ def _run_helper_with_valgrind(command, *, timeout=None, text=True, input_data=No
     return run_executable_with_valgrind(command, **runner_kwargs)
 
 
-def run_compiler(input_file, output_file, flags=None):
+def run_compiler(input_file, output_file, flags=None, timeout=None):
     """Runs the KGPC compiler with the given arguments."""
     if flags is None:
         flags = []
     else:
         flags = list(flags)
+    if timeout is None:
+        timeout = COMPILER_TIMEOUT
 
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -731,7 +733,7 @@ def run_compiler(input_file, output_file, flags=None):
             "check": True,
             "capture_output": True,
             "text": True,
-            "timeout": COMPILER_TIMEOUT,
+            "timeout": timeout,
         }
         with COMPILER_PARALLEL_SEMAPHORE:
             result = subprocess.run(command, **run_kwargs)
@@ -834,12 +836,15 @@ class TAPTestResult(unittest.TestResult):
         super().startTest(test)
         # Enforce per-test timeout in TAP mode to avoid hangs.
         if not IS_WINDOWS_ABI and hasattr(signal, "SIGALRM"):
+            method = getattr(test, test._testMethodName, None)
+            per_test_timeout = getattr(method, '_timeout', TEST_CASE_TIMEOUT)
+
             def _timeout_handler(_signum, _frame):
-                raise TimeoutError(f"Test timed out after {TEST_CASE_TIMEOUT} seconds")
+                raise TimeoutError(f"Test timed out after {per_test_timeout} seconds")
 
             self._prev_alarm_handler = signal.getsignal(signal.SIGALRM)
             signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(TEST_CASE_TIMEOUT)
+            signal.alarm(per_test_timeout)
         self._test_index += 1
         self._test_states[test] = {"reported": False, "had_failure": False}
         self._test_start_times[test] = time.monotonic()
@@ -1080,7 +1085,11 @@ class ParallelTestRunner:
             class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
                 futures = {
-                    executor.submit(_run_single_test_with_timeout, t, self.timeout, self.stream): t
+                    executor.submit(
+                        _run_single_test_with_timeout, t,
+                        getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                        self.stream,
+                    ): t
                     for t in tests
                     if t.__class__ not in class_errors
                 }
@@ -1180,7 +1189,10 @@ class TAPParallelTestRunner:
 
             with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
                 future_to_index = {
-                    executor.submit(_run_single_test_with_timeout, t, self.timeout): idx
+                    executor.submit(
+                        _run_single_test_with_timeout, t,
+                        getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                    ): idx
                     for idx, t in enumerate(tests)
                     if t.__class__ not in class_errors
                 }
@@ -3777,9 +3789,108 @@ def _discover_and_add_fpc_rtl_tests():
         setattr(TestCompiler, method_name, make_fpc_rtl_test(base_name))
 
 
+# ---------------------------------------------------------------------------
+# pp.pas bootstrap compilation test — added as a special FPC RTL test.
+# This verifies that the compiler can parse and codegen the FPC compiler
+# itself (pp.pas), which exercises far more of the language than any
+# individual RTL test case.
+# ---------------------------------------------------------------------------
+def _add_pp_pas_bootstrap_test():
+    """Add pp.pas compilation as a special FPC RTL test."""
+    if not FPC_RTL_MODE:
+        return
+
+    fpc_src = os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource")
+    pp_pas = os.path.join(fpc_src, "compiler", "pp.pas")
+    if not os.path.isfile(pp_pas):
+        return
+
+    # pp.pas needs additional -I/-Fu paths for the compiler source tree
+    pp_extra_flags = [
+        "-DCPU64", "-DCPUX86_64", "-Dx86_64", "-DFPC", "-DLINUX", "-DUNIX",
+        "-DFPC_HAS_TYPE_EXTENDED", "-DSUPPORT_EXTENDED", "-Sg",
+        "-I" + os.path.join(fpc_src, "rtl", "objpas"),
+        "-I" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        "-I" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        "-I" + os.path.join(fpc_src, "rtl", "linux"),
+        "-I" + os.path.join(fpc_src, "rtl", "unix"),
+        "-I" + os.path.join(fpc_src, "rtl", "inc"),
+        "-I" + os.path.join(fpc_src, "rtl", "x86_64"),
+        "-I" + os.path.join(fpc_src, "rtl", "linux", "x86_64"),
+        "-I" + os.path.join(fpc_src, "rtl", "unix", "x86_64"),
+        "-I" + os.path.join(fpc_src, "compiler"),
+        "-I" + os.path.join(fpc_src, "compiler", "x86"),
+        "-I" + os.path.join(fpc_src, "compiler", "x86_64"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        "-Fu" + os.path.join(fpc_src, "compiler"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "x86"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "x86_64"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "systems"),
+    ]
+
+    pp_flags = ["--no-stdlib"] + pp_extra_flags
+    if _FPC_RTL_AST_CACHE_DIR is not None:
+        pp_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
+    pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
+
+    def _strip_pp_header(output):
+        """Strip version/copyright/path lines from pp.pas -h output."""
+        lines = output.splitlines(True)
+        return "".join(
+            l for l in lines
+            if not l.startswith("Free Pascal Compiler version")
+            and not l.startswith("Copyright")
+            and "[options] <inputfile>" not in l
+        )
+
+    def test_pp_pas_bootstrap(self):
+        """pp.pas bootstrap compilation — compile the FPC compiler itself."""
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap" + EXE_EXT)
+
+        try:
+            run_compiler(pp_pas, asm_file, flags=pp_flags, timeout=600)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"pp.pas compilation failed: {e}")
+            return
+
+        try:
+            self.compile_executable(asm_file, executable_file)
+        except Exception as e:
+            self.fail(f"pp.pas linking failed: {e}")
+            return
+
+        # Run the compiled compiler with -h and compare output
+        try:
+            process = subprocess.run(
+                [executable_file, "-h"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp.pas binary timed out running with -h")
+            return
+
+        expected_output = read_file_content(pp_expected_file)
+        actual_output = _strip_pp_header(process.stdout or "")
+        self.assertEqual(actual_output, expected_output)
+        self.assertEqual(process.returncode, 0)
+
+    test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
+    test_pp_pas_bootstrap.__doc__ = "pp.pas bootstrap — compile and link the FPC compiler"
+    test_pp_pas_bootstrap._timeout = 900  # pp.pas is much larger than regular tests
+    setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
+
+
 # Auto-discover and add tests before loading the suite
 if FPC_RTL_MODE:
     _discover_and_add_fpc_rtl_tests()
+    _add_pp_pas_bootstrap_test()
 else:
     _discover_and_add_auto_tests()
 

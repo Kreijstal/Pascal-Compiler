@@ -97,6 +97,10 @@ static ast_t *g_interface_section_ast = NULL;
 static ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
 static const char *g_current_method_name = NULL;
+/* When instantiating a generic method template, this points to the owning
+ * RecordType so that type_name_is_class_like can answer without touching the
+ * (possibly freed) raw parser AST globals. */
+static struct RecordType *g_instantiate_record = NULL;
 
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
@@ -1322,7 +1326,11 @@ static void reset_const_sections(void) {
         g_const_sections = NULL;
         g_const_sections_tail = NULL;
     }
-    const_int_ht_destroy();
+    /* Keep const_int_ht alive across unit conversions so that constants
+       defined in one unit (e.g. NR_ES in cpubase) remain available when
+       parsing array bounds in a later unit (e.g. aasmcpu). The hash table
+       stores only {name, int} pairs — no AST pointers — so it is safe to
+       retain. */
     const_decl_index_destroy();
 }
 
@@ -3155,8 +3163,14 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     GenericTypeDecl *saved_context = generic_registry_current_context();
     generic_registry_set_context(record->generic_decl);
 
+    /* Let type_name_is_class_like resolve via the already-converted record
+     * instead of the raw parser AST (which may have been freed). */
+    struct RecordType *saved_record = g_instantiate_record;
+    g_instantiate_record = record;
+
     Tree_t *method_tree = convert_method_impl(method_copy);
 
+    g_instantiate_record = saved_record;
     generic_registry_set_context(saved_context);
 
     g_source_offset = saved_offset;
@@ -5846,6 +5860,14 @@ static int type_name_is_class_like(const char *type_name) {
     if (type_name == NULL)
         return 0;
 
+    /* When called during generic method instantiation the raw parser AST
+     * may already have been freed.  Use the converted RecordType instead. */
+    if (g_instantiate_record != NULL) {
+        if (g_instantiate_record->type_id != NULL &&
+            strcasecmp(g_instantiate_record->type_id, type_name) == 0)
+            return g_instantiate_record->is_class;
+    }
+
     ast_t *type_decl = find_type_decl_in_section(g_interface_type_section_ast, type_name);
     if (type_decl == NULL)
         type_decl = find_type_decl_in_section(g_implementation_type_section_ast, type_name);
@@ -6146,6 +6168,15 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
         else
             *out_value = left ^ right;
         return 0;
+    }
+    case PASCAL_T_FUNC_CALL:
+    {
+        /* Typecast expressions like tregister($05000000) are parsed as
+         * FUNC_CALL where child is the type name and child->next is the
+         * argument.  Evaluate the argument as an integer constant. */
+        if (expr->child != NULL && expr->child->next != NULL)
+            return evaluate_const_int_expr(expr->child->next, out_value, depth + 1);
+        return -1;
     }
     default:
         return -1;
@@ -7383,6 +7414,14 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = SHORTSTRING_TYPE;
                         if (type_info->element_type_id == NULL)
                             type_info->element_type_id = strdup("ShortString");
+                        /* Preserve the shortstring capacity so codegen uses
+                           the correct element size (N+1 bytes for string[N])
+                           instead of defaulting to 256. */
+                        if (nested_info.end > 0 && type_info->element_kgpc_type == NULL) {
+                            type_info->element_kgpc_type =
+                                create_primitive_type_with_size(SHORTSTRING_TYPE,
+                                                               nested_info.end + 1);
+                        }
                         if (nested_id != NULL)
                             free(nested_id);
                     } else if (nested_info.is_range && mapped == UNKNOWN_TYPE) {
@@ -10981,8 +11020,15 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
             is_external = 1;
         } else if (scan->typ == PASCAL_T_PUBLIC_NAME) {
-            /* Public name: variable is exported with specified symbol */
-            if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
+            /* Public name: variable is exported with specified symbol.
+             * The parser wraps the string in EXTERNAL_NAME_EXPR, so
+             * structure is: PUBLIC_NAME -> EXTERNAL_NAME_EXPR -> STRING */
+            char *name = extract_external_name_from_node(scan);
+            if (name != NULL) {
+                if (cname_override != NULL)
+                    free(cname_override);
+                cname_override = name;
+            } else if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
                 if (cname_override != NULL)
                     free(cname_override);
                 cname_override = dup_symbol(scan->child);
@@ -12153,6 +12199,16 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         }
     }
 
+    /* When the type is a named identifier (like TNames), resolve it to check
+     * if it's an array type alias so we can use lower_const_array. */
+    if (type_id != NULL && !type_info.is_array) {
+        TypeInfo resolved_info = {0};
+        if (resolve_array_type_info_from_ast(type_id, type_section, &resolved_info, 0) == 0) {
+            resolve_array_bounds(&resolved_info, type_section, const_section, id);
+            type_info = resolved_info;
+        }
+    }
+
     if (type_id == NULL && const_section_is_resourcestring(const_section)) {
         type_id = strdup("AnsiString");
     }
@@ -12891,10 +12947,16 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
     } else if (type_info.is_array) {
         decl = mk_typealiasdecl(type_decl_node->line, id, 1, type_info.element_type,
                                  type_info.element_type_id, type_info.start, type_info.end);
-        if (decl != NULL)
+        if (decl != NULL) {
             decl->tree_data.type_decl_data.info.alias.is_shortstring =
                 type_info.is_shortstring ||
                 (id != NULL && pascal_identifier_equals(id, "ShortString"));
+            if (type_info.element_kgpc_type != NULL) {
+                long long esize = kgpc_type_sizeof(type_info.element_kgpc_type);
+                if (esize > 0 && esize <= INT_MAX)
+                    decl->tree_data.type_decl_data.info.alias.array_element_storage_size = (int)esize;
+            }
+        }
         type_info.element_type_id = NULL;
     } else if (type_info.is_record && type_id != NULL) {
         /* Alias to a record type (including generic specializations) */
@@ -17805,6 +17867,11 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
                 alias->array_end = type_info->end;
                 alias->array_element_type = type_info->element_type;
                 alias->array_element_type_id = type_info->element_type_id;
+                if (type_info->element_kgpc_type != NULL) {
+                    long long esize = kgpc_type_sizeof(type_info->element_kgpc_type);
+                    if (esize > 0 && esize <= INT_MAX)
+                        alias->array_element_storage_size = (int)esize;
+                }
                 alias->is_shortstring = type_info->is_shortstring;
                 alias->is_open_array = type_info->is_open_array;
             }
@@ -19925,6 +19992,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
         Tree_t *tree = mk_program(cur->line, program_id, args, uses, label_decls, const_decls,
                                   list_builder_finish(&var_decls_builder), type_decls, subprograms, body);
         final_tree = tree;
+        /* Clear borrowed AST pointers before the caller frees the raw AST. */
+        g_interface_type_section_ast = NULL;
+        g_implementation_type_section_ast = NULL;
         return final_tree;
     }
 
@@ -20275,6 +20345,9 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                                subprograms, initialization, finalization);
         if (unit_scan_copy != NULL)
             free_ast(unit_scan_copy);
+        /* Clear borrowed AST pointers before the caller frees the raw AST. */
+        g_interface_type_section_ast = NULL;
+        g_implementation_type_section_ast = NULL;
         return tree;
     }
 

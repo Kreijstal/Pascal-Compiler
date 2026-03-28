@@ -1352,7 +1352,10 @@ int semcheck_funccall(int *type_return,
 
             if (current_class != NULL && current_class->parent_class_name != NULL)
             {
-                /* Look up method in parent class; walk up ancestors if needed */
+                /* Look up method in parent class; walk up ancestors if needed.
+                 * Use FindAllIdents to handle overloaded methods whose
+                 * mangled names have parameter-type suffixes (e.g.
+                 * tcgraisenode__pass_1_p instead of tcgraisenode__pass_1). */
                 const char *search_parent = current_class->parent_class_name;
                 while (search_parent != NULL)
                 {
@@ -1360,8 +1363,54 @@ int semcheck_funccall(int *type_return,
                     snprintf(parent_mangled, sizeof(parent_mangled), "%s__%s",
                         search_parent, id);
                     HashNode_t *parent_method = NULL;
+                    /* First try exact match */
                     if (FindSymbol(&parent_method, symtab, parent_mangled) != 0 &&
                         parent_method != NULL)
+                    {
+                        /* found */
+                    }
+                    else
+                    {
+                        /* Try overload resolution via FindAllIdents */
+                        parent_method = NULL;
+                        ListNode_t *candidates = FindAllIdents(symtab, parent_mangled);
+                        if (candidates != NULL)
+                        {
+                            /* Build temp args including Self to match method signatures */
+                            struct Expression *tmp_self = mk_varid(expr->line_num, strdup("Self"));
+                            ListNode_t *tmp_self_arg = CreateListNode(tmp_self, LIST_EXPR);
+                            tmp_self_arg->next = args_given;
+
+                            char *call_mangled = MangleFunctionNameFromCallSite(
+                                parent_mangled, tmp_self_arg, symtab, INT_MAX);
+                            if (call_mangled != NULL)
+                            {
+                                for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                                {
+                                    HashNode_t *cand = (HashNode_t *)c->cur;
+                                    if (cand != NULL && cand->mangled_id != NULL &&
+                                        strcmp(cand->mangled_id, call_mangled) == 0)
+                                    {
+                                        parent_method = cand;
+                                        break;
+                                    }
+                                }
+                                free(call_mangled);
+                            }
+                            if (parent_method == NULL)
+                            {
+                                /* Fallback: use first candidate */
+                                HashNode_t *first = (HashNode_t *)candidates->cur;
+                                if (first != NULL)
+                                    parent_method = first;
+                            }
+                            tmp_self_arg->next = NULL;
+                            destroy_expr(tmp_self);
+                            free(tmp_self_arg);
+                            DestroyList(candidates);
+                        }
+                    }
+                    if (parent_method != NULL)
                     {
                         /* Prepend Self as the first argument (method receiver) */
                         struct Expression *self_expr = mk_varid(expr->line_num, strdup("Self"));
@@ -1370,12 +1419,23 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.args_expr = self_arg;
                         args_given = self_arg;
 
-                        /* Rewrite the call id to the parent's mangled name.
+                        /* Rewrite the call id to the parent's base name (without
+                         * parameter-type suffixes) so downstream symbol table lookups
+                         * still work.  Set mangled_id to the fully resolved name
+                         * (with suffixes) so codegen emits the correct call target.
                          * Keep is_inherited_call set so downstream code skips
                          * VMT dispatch — inherited calls must be direct. */
                         free(expr->expr_data.function_call_data.id);
                         expr->expr_data.function_call_data.id = strdup(parent_mangled);
                         id = expr->expr_data.function_call_data.id;
+                        /* Set mangled_id to the resolved name from the symbol table */
+                        if (parent_method->mangled_id != NULL)
+                        {
+                            if (expr->expr_data.function_call_data.mangled_id != NULL)
+                                free(expr->expr_data.function_call_data.mangled_id);
+                            expr->expr_data.function_call_data.mangled_id =
+                                strdup(parent_method->mangled_id);
+                        }
                         break;
                     }
                     /* Walk up to grandparent */
