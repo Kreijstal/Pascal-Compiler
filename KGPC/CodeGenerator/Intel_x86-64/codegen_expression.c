@@ -5699,13 +5699,9 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     long long offset = expr->expr_data.record_access_data.field_offset;
-    /* When accessing a class var via type reference (TMyClass.FValue), the
-     * CLASSVAR storage layout starts at offset 0, but the semcheck computes
-     * field offsets with a POINTER_SIZE_BYTES (8) prefix for the VMT pointer
-     * (since classes have an implicit VMT slot at offset 0 in instances).
-     * Subtract the VMT size so the offset matches the CLASSVAR layout. */
-    if (is_type_ref && is_class_field && offset >= 8)
-        offset -= 8;
+    /* Class var fields accessed via type reference (TMyClass.FValue) use
+     * CLASSVAR-relative offsets computed by the semcheck — no VMT adjustment
+     * needed since CLASSVAR storage has no VMT prefix. */
     if (offset != 0)
     {
         char buffer[128];
@@ -9673,7 +9669,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
-    int arg_start_index, const struct Expression *call_expr)
+    int arg_start_index, const struct Expression *call_expr,
+    int is_class_method_call_hint)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -10639,53 +10636,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             }
                         }
 
-                        /* For class methods, dereference the first argument (Self) to get instance pointer,
-                         * BUT only if Self was not already loaded by value (i.e., not a var param).
-                         * For non-methods with var parameters, don't dereference. */
+                        /* Self parameters of class type have is_var_param cleared to 0
+                         * (at line ~9895), so they never enter this is_var_param branch.
+                         * Only real var parameters and array parameters reach here.
+                         *
+                         * For non-var class parameters (entered via is_array_param/is_array_arg),
+                         * we need to dereference to get the instance pointer.
+                         * For var parameters of class type, we pass the address as-is
+                         * so the callee can modify the variable. */
                         int should_dereference = 0;
-                        int called_is_method = 0;
-                        if (procedure_name != NULL && ctx->symtab != NULL)
+                        if (!is_var_param && !arg_is_var_param)
                         {
-                            HashNode_t *called_func = NULL;
-                            if (FindSymbol(&called_func, ctx->symtab, procedure_name) != 0 &&
-                                called_func != NULL && called_func->owner_class != NULL)
-                                called_is_method = 1;
-                        }
-                        if (is_class_method && arg_num == 0 && !arg_is_var_param &&
-                            called_is_method)
-                        {
-                            /* Class method Self from local variable: dereference to get instance pointer */
+                            /* Non-var class parameter: dereference to get instance pointer */
                             should_dereference = 1;
                         }
-                        else if (!is_var_param && !arg_is_var_param)
-                        {
-                            /* Non-var class parameter from local variable: dereference to get instance pointer */
-                            should_dereference = 1;
-                        }
-                        else if (arg_num == 0 && is_var_param && !arg_is_var_param &&
-                                 called_is_method)
-                        {
-                            /* Self parameter for a method call from outside a class method context.
-                             * The formal Self parameter is a var param, but for a global/static
-                             * class/interface variable, codegen_address_for_expr emits leaq (address
-                             * of the variable), so we need to dereference to get the object pointer. */
-                            should_dereference = 1;
-                        }
-                        /* else: var parameter of class type OR argument is already a var param:
-                         * codegen_address_for_expr already loaded the value, don't dereference again */
 
                         if (should_dereference)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                                addr_reg->bit_64, addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-
-                        /* For class method calls on instances, Self must be the VMT pointer,
-                         * not the instance pointer. After the dereference above, addr_reg holds
-                         * the instance pointer. Dereference again to get VMT from offset 0. */
-                        if (should_dereference && arg_num == 0 &&
-                            codegen_call_requires_class_method_vmt_self(call_expr, ctx))
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                                 addr_reg->bit_64, addr_reg->bit_64);

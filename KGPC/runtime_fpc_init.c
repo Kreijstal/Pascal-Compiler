@@ -37,6 +37,38 @@ void kgpc_fpc_init_os_params(int argc, char **argv, char **envp)
 }
 
 /* ------------------------------------------------------------------ */
+/* FPC FPU initialization.                                             */
+/* Default8087CW and DefaultMXCSR are declared in the system unit as   */
+/* zero-initialized globals.  sysresetfpu loads them into the FPU/SSE  */
+/* control registers, but zero means all exceptions are unmasked.      */
+/* FPC's normal values: Default8087CW=$1332, DefaultMXCSR=$1F80.       */
+/* Must be set before initthread_u64 calls sysresetfpu.                */
+/*                                                                     */
+/* Common definitions (.comm) are overridden by the FPC system unit's  */
+/* strong .globl definitions when linked together.  For non-FPC        */
+/* programs the .comm provides the storage so the init function        */
+/* doesn't fault.  Portable — no weak symbols needed.                  */
+/* ------------------------------------------------------------------ */
+#ifdef __GNUC__
+int16_t Default8087CW __attribute__((common));
+int32_t DefaultMXCSR  __attribute__((common));
+#else
+int16_t Default8087CW;
+int32_t DefaultMXCSR;
+#endif
+
+void kgpc_fpc_init_fpu(void)
+{
+    Default8087CW = 0x1332;   /* FPC default: mask all x87 exceptions */
+    DefaultMXCSR = 0x1F80;    /* SSE default: mask all exceptions, round-to-nearest */
+}
+
+/* Note: FPC heap init (initthread_u64 / InitThread) is handled by the
+ * FPC system unit's own initialization section — not by the C runtime.
+ * This avoids needing a weak symbol or function pointer for a function
+ * that only exists in FPC programs. */
+
+/* ------------------------------------------------------------------ */
 /* FPC_THREADVARTABLES: Thread variable tables (TltvInitTablesTable)   */
 /* count=0 means no thread variables — init/copy loops do nothing.     */
 /* ------------------------------------------------------------------ */

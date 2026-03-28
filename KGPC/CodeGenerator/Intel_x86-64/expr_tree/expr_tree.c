@@ -25,6 +25,8 @@
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
 #include "../../../Parser/SemanticCheck/SemCheck.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
@@ -3066,7 +3068,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         inst_list = codegen_pass_arguments(args_to_pass,
-            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr);
+            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr,
+            expr->expr_data.function_call_data.is_class_method_call);
 
         /* Invalidate static link cache after argument evaluation
          * because the static link register may have been clobbered
@@ -3838,7 +3841,10 @@ cleanup_constructor:
          * Only apply when the identifier is not a local/stack variable in this scope,
          * otherwise this breaks function result variables that share the function name.
          * Skip if gencode_leaf_var already resolved the identifier to a constant immediate
-         * (e.g. Pi from FPC internproc shadowed by a builtin real constant). */
+         * (e.g. Pi from FPC internproc shadowed by a builtin real constant).
+         * Also skip when inside a class method and the bare name is a field of Self —
+         * otherwise a global function with the same name shadows the field (e.g.
+         * VarFreeMap.L0 field vs global function l0 from msg2inc). */
         if (stack_node == NULL &&
             symbol_node != NULL &&
             (symbol_node->hash_type == HASHTYPE_PROCEDURE ||
@@ -3846,9 +3852,36 @@ cleanup_constructor:
             symbol_node->mangled_id != NULL &&
             buf_leaf[0] != '$')
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                symbol_node->mangled_id, target_reg->bit_64);
-            return add_inst(inst_list, buffer);
+            int is_self_field = 0;
+            if (ctx != NULL && ctx->current_subprogram_owner_class != NULL &&
+                ctx->symtab != NULL)
+            {
+                struct RecordType *owner_record = semcheck_lookup_record_type(
+                    ctx->symtab, ctx->current_subprogram_owner_class);
+                if (owner_record == NULL &&
+                    ctx->current_subprogram_owner_class_full != NULL)
+                {
+                    owner_record = semcheck_lookup_record_type(ctx->symtab,
+                        ctx->current_subprogram_owner_class_full);
+                }
+                if (owner_record != NULL)
+                {
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (resolve_record_field(ctx->symtab, owner_record,
+                            expr->expr_data.id, &field_desc, &field_offset,
+                            0, 1) == 0 && field_desc != NULL)
+                    {
+                        is_self_field = 1;
+                    }
+                }
+            }
+            if (!is_self_field)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    symbol_node->mangled_id, target_reg->bit_64);
+                return add_inst(inst_list, buffer);
+            }
         }
         /* Bare method name used as a procedural reference (e.g., @SetStatus
          * inside a class method).  The symtab might not have a procedure

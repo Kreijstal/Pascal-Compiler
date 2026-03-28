@@ -3127,14 +3127,19 @@ void kgpc_init_widestringmanager(void);
 
 void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
 void kgpc_fpc_init_thread_manager(void);
+void kgpc_fpc_init_fpu(void);
 
 void kgpc_init_args(int argc, char **argv, char **envp)
 {
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
     kgpc_fpc_init_os_params(argc, argv, envp);
-    kgpc_init_widestringmanager();
     kgpc_fpc_init_thread_manager();
+    kgpc_init_widestringmanager();
+    kgpc_fpc_init_fpu();
+    /* Note: FPC heap init (initthread_u64) is NOT called here.
+     * The FPC system unit's own initialization section calls it
+     * before any Pascal code that needs heap allocation runs. */
 }
 
 int kgpc_param_count(void)

@@ -790,6 +790,7 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         *found = 0;
 
     long long offset = start_offset;
+    long long classvar_offset = 0; /* separate running offset for class var fields within CLASSVAR storage */
     ListNode_t *cur = members;
     while (cur != NULL)
     {
@@ -798,22 +799,34 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
             struct RecordField *field = (struct RecordField *)cur->cur;
             if (field != NULL && !record_field_is_hidden(field))
             {
-                /* Class variables are stored as globals, not in the instance
-                 * layout.  They can still be looked up by name (for access
-                 * resolution) but must not contribute to the running offset. */
+                /* Class variables are stored as globals in CLASSVAR storage,
+                 * not in the instance layout.  Track their offset within the
+                 * CLASSVAR block separately so codegen can use it directly. */
                 if (field->is_class_var)
                 {
+                    /* Compute this class var's size and alignment.
+                     * Must match codegen's CLASSVAR data emission alignment
+                     * (codegen.c line ~4932): max alignment 8. */
+                    long long cv_field_size = 0;
+                    (void)compute_field_size(symtab, field, &cv_field_size, depth + 1, line_num);
+                    if (cv_field_size <= 0)
+                        cv_field_size = 8; /* default to pointer size */
+                    int cv_alignment = (cv_field_size >= 8) ? 8 :
+                                       (cv_field_size >= 4) ? 4 : 1;
+                    classvar_offset = (classvar_offset + cv_alignment - 1) & ~(cv_alignment - 1);
+
                     if (field->name != NULL &&
                         pascal_identifier_equals(field->name, field_name))
                     {
                         if (out_field != NULL)
                             *out_field = field;
                         if (offset_out != NULL)
-                            *offset_out = -1; /* sentinel: not an instance offset */
+                            *offset_out = classvar_offset;
                         if (found != NULL)
                             *found = 1;
                         return 0;
                     }
+                    classvar_offset += cv_field_size;
                     cur = cur->next;
                     continue;
                 }

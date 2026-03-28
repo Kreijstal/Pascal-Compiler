@@ -5988,14 +5988,7 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     }
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_endprologue\n");
-    if (codegen_target_is_windows())
-    {
-        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
-    }
-    else
-    {
-        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
-    }
+    fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
@@ -6882,7 +6875,6 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         char *static_label = NULL;
                         int is_external_var = tree->tree_data.var_decl_data.is_external;
                         char *cname_override = tree->tree_data.var_decl_data.cname_override;
-                        
                         if (cname_override != NULL) {
                             /* Use the external/public name directly */
                             static_label = strdup(cname_override);

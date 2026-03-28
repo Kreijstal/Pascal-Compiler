@@ -11020,8 +11020,15 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             }
             is_external = 1;
         } else if (scan->typ == PASCAL_T_PUBLIC_NAME) {
-            /* Public name: variable is exported with specified symbol */
-            if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
+            /* Public name: variable is exported with specified symbol.
+             * The parser wraps the string in EXTERNAL_NAME_EXPR, so
+             * structure is: PUBLIC_NAME -> EXTERNAL_NAME_EXPR -> STRING */
+            char *name = extract_external_name_from_node(scan);
+            if (name != NULL) {
+                if (cname_override != NULL)
+                    free(cname_override);
+                cname_override = name;
+            } else if (scan->child != NULL && scan->child->typ == PASCAL_T_STRING) {
                 if (cname_override != NULL)
                     free(cname_override);
                 cname_override = dup_symbol(scan->child);
