@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: 56 RTL units compile (0 errors); pp.pas compiles with 78 errors (down from 1279)
+## Status: 56 RTL units compile (0 errors); pp.pas compiles with 0 errors (down from 1279)
 
 ## Prerequisites
 
@@ -186,7 +186,7 @@ ordering issues.
 ### pp.pas (current bootstrap attempt)
 ```bash
 ./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
-  -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -Sg \
+  -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED -Sg \
   -IFPCSource/rtl/objpas \
   -IFPCSource/rtl/objpas/sysutils \
   -IFPCSource/rtl/objpas/classes \
@@ -213,6 +213,8 @@ ordering issues.
 
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
+`-DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED` are needed so `systemh.inc` defines `TExtended80Rec`
+(used by `math.pp`'s `Frexp`/`Ldexp`). These flags propagate to all unit preprocessing.
 
 ### FPC RTL (56 units)
 
@@ -267,29 +269,13 @@ The AST parser cache (`kgpc_ast_cache_<hash>`) is keyed on the binary hash.
 Every recompile invalidates the cache, requiring a full re-parse of all 267
 units (~44 seconds uncached vs ~3-5 seconds cached).
 
-## Remaining Blockers (78 errors in pp.pas)
+## Remaining Blockers (0 errors in pp.pas)
 
-### Error Categories
-| Category | Count | Root Cause |
-|---|---|---|
-| typecast unknown type (get_def_dwarf_labs) | 12 | Parser treats method call as typecast |
-| record field shiftval (TLongIntHelper) | 10 | Type helper method not resolved through helper chain |
-| overload resolution (createsection etc.) | 10 | semcheck_proccall uses different overload resolution than semcheck_funccall |
-| equality comparison (shortstring vs char) | 0 | **FIXED** — string-char comparisons now accepted |
-| UpCase expects char | 6 | Cascade from unresolved array access type |
-| Assigned expects pointer | 3 | Cascade from unresolved types |
-| function else() not declared | 4 | `{$else}` directive parsed as code |
-| function childcount() not declared | 4 | Line tracking, misattributed errors |
-| find/FindWithHash overload | 9 | ShortString/String overload matching |
-| initializer mismatch (inv) | 4 | Type mismatch in variable init |
-| for-in loop requires array | 3 | Unresolved iterator type |
-| Low/High non-array | 3 | Type resolution cascade |
-| Various 1-off errors | ~10 | Mixed causes |
+All semantic errors resolved. pp.pas compiles and generates code successfully.
 
-### Critical (blocks most remaining errors)
-1. **Operator overloading on records** — `Tconstexprint` uses `operator :=`, `operator <`, etc.
-2. **Type helper method resolution** — `shiftval` on integer types via `TLongIntHelper`
-3. **`{$else}` directive handling** — Conditional compilation directives parsed as code
+Previous blockers that were resolved:
+- TExtended80Rec typecast errors (15) — fixed by passing `-DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED`
+- Operator overloading, type helper resolution, overload resolution, etc. — all resolved in earlier iterations
 
 ### References
 - Keep using the FPC-declared order from `make -n -B -C ./FPCSource/rtl/linux units`
