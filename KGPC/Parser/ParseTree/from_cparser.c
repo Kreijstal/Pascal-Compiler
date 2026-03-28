@@ -1326,7 +1326,11 @@ static void reset_const_sections(void) {
         g_const_sections = NULL;
         g_const_sections_tail = NULL;
     }
-    const_int_ht_destroy();
+    /* Keep const_int_ht alive across unit conversions so that constants
+       defined in one unit (e.g. NR_ES in cpubase) remain available when
+       parsing array bounds in a later unit (e.g. aasmcpu). The hash table
+       stores only {name, int} pairs — no AST pointers — so it is safe to
+       retain. */
     const_decl_index_destroy();
 }
 
@@ -6164,6 +6168,15 @@ static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
         else
             *out_value = left ^ right;
         return 0;
+    }
+    case PASCAL_T_FUNC_CALL:
+    {
+        /* Typecast expressions like tregister($05000000) are parsed as
+         * FUNC_CALL where child is the type name and child->next is the
+         * argument.  Evaluate the argument as an integer constant. */
+        if (expr->child != NULL && expr->child->next != NULL)
+            return evaluate_const_int_expr(expr->child->next, out_value, depth + 1);
+        return -1;
     }
     default:
         return -1;
