@@ -2268,11 +2268,12 @@ static int semcheck_try_self_field_access(int *type_return, SymTab_t *symtab,
         self_node == NULL || self_record == NULL)
         return -1;
 
+    /* If a value symbol exists at scope 0 (the innermost scope, which includes
+     * method-local variables/parameters), it should shadow Self fields.
+     * This is the original behavior — local vars shadow Self fields. */
     int preferred_scope = 0;
-    HashNode_t *preferred_node = semcheck_find_preferred_value_ident(symtab, id, &preferred_scope);
-    if (preferred_node != NULL && preferred_scope == 0 &&
-        !(preferred_node->hash_type == HASHTYPE_VAR &&
-          preferred_node->source_unit_index != symtab->current_unit_index))
+    if (semcheck_find_preferred_value_ident(symtab, id, &preferred_scope) != NULL &&
+        preferred_scope == 0)
     {
         return -1;
     }
@@ -2621,14 +2622,26 @@ int semcheck_varid(int *type_return,
         int skip_self_check = 0;
         if (hash_return->hash_type == HASHTYPE_VAR)
         {
-            /* Local variables/parameters declared within the method body
-             * correctly shadow Self fields. Imported variables from other
-             * units should NOT shadow fields.
-             * Heuristic: if the found variable has a different
-             * source_unit_index than the current unit being compiled, it's
-             * imported and should not shadow Self fields. */
-            if (hash_return->source_unit_index == symtab->current_unit_index)
+            /* A local variable/parameter declared in the method body should
+             * shadow Self fields. An imported variable from the flat scope
+             * merge should NOT.
+             * Key insight: local parameters have source_unit_index=0 AND are
+             * pushed into the subprogram scope. Imported vars also have
+             * source_unit_index=0 but are in the unit scope. We can check
+             * the scope's unit_index: if it differs from current_unit_index,
+             * the variable came from a unit scope (imported). */
+            if (symtab->current_scope != NULL &&
+                symtab->current_scope->unit_index == symtab->current_unit_index)
+            {
+                /* We're in the program/method's own scope — var is local */
                 skip_self_check = 1;
+            }
+            else if (hash_return->source_unit_index != 0 &&
+                     hash_return->source_unit_index == symtab->current_unit_index)
+            {
+                /* Variable is from current compilation unit */
+                skip_self_check = 1;
+            }
         }
         if (!skip_self_check)
         {
