@@ -3244,10 +3244,10 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
 
     int arg_type = semcheck_tag_from_kgpc(arg_kgpc_type);
 
-    /* Ordinal overloads on enum/range variables keep their declared bounds. */
+    /* Ordinal overloads on enum/range/set variables keep their declared bounds. */
     {
         struct TypeAlias *arg_alias = kgpc_type_get_type_alias(arg_kgpc_type);
-        if (arg_alias != NULL)
+        while (arg_alias != NULL)
         {
             long long low = 0;
             long long high = 0;
@@ -3263,6 +3263,7 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     low = 0;
                     high = (long long)count - 1;
                     have_bounds = 1;
+                    result_type = ENUM_TYPE;
                 }
             }
             if (!have_bounds && arg_alias->range_known)
@@ -3272,7 +3273,75 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                 have_bounds = 1;
                 if (low < -2147483648LL || high > 2147483647LL)
                     result_type = INT64_TYPE;
+                else if (result_type == SET_TYPE || result_type == UNKNOWN_TYPE)
+                    result_type = LONGINT_TYPE;
             }
+            /* For set types, Low/High returns bounds of the element type */
+            if (!have_bounds && arg_alias->is_set)
+            {
+                if (arg_alias->set_element_type == BYTE_TYPE ||
+                    (arg_alias->set_element_type_id != NULL &&
+                     pascal_identifier_equals(arg_alias->set_element_type_id, "Byte")))
+                {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                    result_type = BYTE_TYPE;
+                }
+                else if (arg_alias->set_element_type == CHAR_TYPE ||
+                         (arg_alias->set_element_type_id != NULL &&
+                          (pascal_identifier_equals(arg_alias->set_element_type_id, "Char") ||
+                           pascal_identifier_equals(arg_alias->set_element_type_id, "AnsiChar"))))
+                {
+                    low = 0;
+                    high = 255;
+                    have_bounds = 1;
+                    result_type = CHAR_TYPE;
+                }
+                else if (arg_alias->set_element_type == BOOL)
+                {
+                    low = 0;
+                    high = 1;
+                    have_bounds = 1;
+                    result_type = BOOL;
+                }
+                else if (arg_alias->set_element_type_id != NULL)
+                {
+                    /* Look up the element type to get its bounds */
+                    HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab,
+                        arg_alias->set_element_type_id);
+                    if (elem_node != NULL && elem_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+                        if (elem_alias != NULL && elem_alias->range_known)
+                        {
+                            low = elem_alias->range_start;
+                            high = elem_alias->range_end;
+                            have_bounds = 1;
+                        }
+                        else if (elem_alias != NULL && elem_alias->is_enum &&
+                                 elem_alias->enum_literals != NULL &&
+                                 !elem_alias->enum_has_explicit_values)
+                        {
+                            int count = ListLength(elem_alias->enum_literals);
+                            if (count > 0)
+                            {
+                                low = 0;
+                                high = count - 1;
+                                have_bounds = 1;
+                            }
+                        }
+                    }
+                }
+                if (have_bounds)
+                {
+                    if (low < -2147483648LL || high > 2147483647LL)
+                        result_type = INT64_TYPE;
+                    else if (result_type == SET_TYPE || result_type == UNKNOWN_TYPE)
+                        result_type = LONGINT_TYPE;
+                }
+            }
+
             if (!have_bounds && arg_alias->target_type_id != NULL)
             {
                 const char *target_name = arg_alias->target_type_id;
@@ -3328,12 +3397,51 @@ int semcheck_builtin_lowhigh(int *type_return, SymTab_t *symtab,
                     result_type = CHAR_TYPE;
                 }
             }
+
             if (have_bounds)
             {
                 semcheck_replace_call_with_integer_literal(expr, is_high ? high : low);
                 semcheck_expr_set_resolved_type(expr, result_type);
+                if (expr->resolved_kgpc_type != NULL)
+                    destroy_kgpc_type(expr->resolved_kgpc_type);
+                expr->resolved_kgpc_type = create_primitive_type(result_type);
                 *type_return = result_type;
                 return 0;
+            }
+
+            if (arg_alias->target_type_id != NULL)
+            {
+                /* Follow the alias chain with a basic cycle guard to avoid infinite loops
+                 * on malformed or cyclic type definitions.
+                 */
+                int alias_depth = 0;
+                const int max_alias_depth = 32;
+
+                while (arg_alias != NULL && arg_alias->target_type_id != NULL)
+                {
+                    HashNode_t *target_node = semcheck_find_preferred_type_node(
+                        symtab, arg_alias->target_type_id);
+
+                    if (target_node != NULL && target_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        arg_alias = get_type_alias_from_node(target_node);
+                    }
+                    else
+                    {
+                        arg_alias = NULL;
+                    }
+
+                    if (++alias_depth >= max_alias_depth)
+                    {
+                        /* Bail out on excessively deep or cyclic alias chains */
+                        arg_alias = NULL;
+                        break;
+                    }
+                }
+            }
+            else
+            {
+                arg_alias = NULL;
             }
         }
     }
