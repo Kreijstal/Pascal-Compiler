@@ -3348,18 +3348,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
-            /* PopCnt builtin: redirect to runtime's fpc_in_popcnt_x */
+            /* PopCnt builtin and mangled variants (e.g. popcnt_u64):
+             * redirect to runtime's fpc_in_popcnt_x */
             if (call_target != NULL &&
-                pascal_identifier_equals(call_target, "PopCnt"))
-            {
-                if (owned_call_target != NULL)
-                    free(owned_call_target);
-                owned_call_target = strdup("fpc_in_popcnt_x");
-                call_target = owned_call_target;
-            }
-            /* Redirect mangled PopCnt variants (e.g. popcnt_u64) to runtime */
-            if (call_target != NULL &&
-                strncasecmp(call_target, "popcnt_", 7) == 0)
+                (pascal_identifier_equals(call_target, "PopCnt") ||
+                 strncasecmp(call_target, "popcnt_", 7) == 0))
             {
                 if (owned_call_target != NULL)
                     free(owned_call_target);
