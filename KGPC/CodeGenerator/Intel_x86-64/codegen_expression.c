@@ -3740,6 +3740,28 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     return 0;
 }
 
+/* Detect expressions that evaluate to a char value at runtime even though
+ * the semantic checker may have promoted their type tag to STRING_TYPE.
+ * This covers string indexing (Result[L]) which loads a single byte. */
+int codegen_expr_is_string_char_index(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    /* EXPR_ARRAY_ACCESS into a string yields a char */
+    if (expr->type == EXPR_ARRAY_ACCESS &&
+        expr->expr_data.array_access_data.array_expr != NULL)
+    {
+        struct Expression *base = expr->expr_data.array_access_data.array_expr;
+        if (expr_has_type_tag(base, STRING_TYPE) ||
+            expr_has_type_tag(base, SHORTSTRING_TYPE) ||
+            (base->resolved_kgpc_type != NULL &&
+             (kgpc_type_is_string(base->resolved_kgpc_type) ||
+              kgpc_type_is_shortstring(base->resolved_kgpc_type))))
+            return 1;
+    }
+    return 0;
+}
+
 static int expr_is_char_pointer(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -8621,12 +8643,16 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
      * a raw char integer.  Detect this by checking the expression node type. */
     int right_needs_char_promo = (right_expr != NULL &&
         (right_expr->type == EXPR_CHAR_CODE ||
-         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
-         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)));
+         expr_get_type_tag(right_expr) == CHAR_TYPE ||
+         (right_expr->resolved_kgpc_type != NULL &&
+          kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
+         codegen_expr_is_string_char_index(right_expr)));
     int left_needs_char_promo = (left_expr != NULL &&
         (left_expr->type == EXPR_CHAR_CODE ||
-         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
-         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)));
+         expr_get_type_tag(left_expr) == CHAR_TYPE ||
+         (left_expr->resolved_kgpc_type != NULL &&
+          kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
+         codegen_expr_is_string_char_index(left_expr)));
     if ((left_is_string || right_is_string) && right_needs_char_promo)
     {
         StackNode_t *lhs_spill = add_l_t("relop_str_char_lhs");

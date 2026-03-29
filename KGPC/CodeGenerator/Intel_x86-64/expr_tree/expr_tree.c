@@ -5827,15 +5827,24 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
                     inst_list = restore_spilled_reg64_operand(inst_list, left, spill_other);
 
-                    /* Promote char-typed operands (EXPR_CHAR_CODE or single-char
-                     * EXPR_STRING resolved to CHAR_TYPE) to string pointers.
-                     * The register holds a raw char integer, not a string pointer.
-                     * Convert via kgpc_char_to_string before kgpc_string_compare. */
-                    if (left_expr != NULL &&
+                    /* Promote char-typed operands to string pointers before
+                     * kgpc_string_compare.  Detect chars by expression type
+                     * (EXPR_CHAR_CODE), legacy type tag (CHAR_TYPE), or
+                     * resolved KgpcType (covers string-index expressions like
+                     * Result[L] which are char but not EXPR_CHAR_CODE). */
+                    int left_is_char_operand = (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
-                         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
-                         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
-                        left_reg != NULL)
+                         expr_get_type_tag(left_expr) == CHAR_TYPE ||
+                         (left_expr->resolved_kgpc_type != NULL &&
+                          kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
+                         codegen_expr_is_string_char_index(left_expr)));
+                    int right_is_char_operand = (right_expr != NULL &&
+                        (right_expr->type == EXPR_CHAR_CODE ||
+                         expr_get_type_tag(right_expr) == CHAR_TYPE ||
+                         (right_expr->resolved_kgpc_type != NULL &&
+                          kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
+                         codegen_expr_is_string_char_index(right_expr)));
+                    if (left_is_char_operand && left_reg != NULL)
                     {
                         StackNode_t *rhs_save = NULL;
                         if (right_reg != NULL)
@@ -5846,11 +5855,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
                         inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
                     }
-                    if (right_expr != NULL &&
-                        (right_expr->type == EXPR_CHAR_CODE ||
-                         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
-                         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
-                        right_reg != NULL)
+                    if (right_is_char_operand && right_reg != NULL)
                     {
                         StackNode_t *lhs_save = NULL;
                         if (left_reg != NULL)

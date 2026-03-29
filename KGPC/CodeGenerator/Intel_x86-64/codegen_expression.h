@@ -71,6 +71,7 @@ int codegen_expr_involves_extended(const struct Expression *expr);
 /* Check if expression type matches a specific type tag, using KgpcType when available.
  * Returns 1 if match, 0 otherwise. */
 int expr_has_type_tag(const struct Expression *expr, int type_tag);
+int codegen_expr_is_string_char_index(const struct Expression *expr);
 
 /* Check if expression uses qword (64-bit) operations, using KgpcType when available.
  * Returns 1 if qword, 0 otherwise. */
