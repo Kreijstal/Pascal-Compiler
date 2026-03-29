@@ -18515,6 +18515,19 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
             has_return_type = 1;
             TypeInfo type_info = {0};
             return_type = convert_type_spec(node->child, &return_type_id, NULL, &type_info);
+            /* Same NULL-child fallback as convert_function: when the parser
+             * produces a RETURN_TYPE node without a child subtree (forward
+             * declarations), use the sym name for {$H-} remapping. */
+            if (return_type == UNKNOWN_TYPE && return_type_id == NULL &&
+                node->sym != NULL && node->sym->name != NULL)
+            {
+                if (pascal_frontend_default_shortstring() &&
+                    strcasecmp(node->sym->name, "string") == 0)
+                {
+                    return_type = SHORTSTRING_TYPE;
+                    return_type_id = strdup(node->sym->name);
+                }
+            }
             if (return_type_ref == NULL)
                 return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
             if (return_type_id == NULL && node->sym != NULL && node->sym->name != NULL)
