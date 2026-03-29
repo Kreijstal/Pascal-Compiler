@@ -10836,6 +10836,21 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             decl->tree_data.arr_decl_data.array_dimensions = type_info.array_dimensions;
             type_info.array_dimensions = NULL;
         }
+        /* For single-dimension enum-indexed arrays (e.g., array[TColor] of ...),
+         * the bounds are 0,0 because the enum wasn't resolved at parse time.
+         * Transfer the dimension name as unresolved_index_type so semcheck can resolve it. */
+        if (decl != NULL && decl->tree_data.arr_decl_data.unresolved_index_type == NULL &&
+            type_info.start == 0 && type_info.end == 0 &&
+            type_info.array_dimensions != NULL &&
+            type_info.array_dimensions->type == LIST_STRING &&
+            type_info.array_dimensions->cur != NULL)
+        {
+            const char *dim_str = (const char *)type_info.array_dimensions->cur;
+            /* Only if it's a single identifier (no "..") */
+            if (strstr(dim_str, "..") == NULL) {
+                decl->tree_data.arr_decl_data.unresolved_index_type = strdup(dim_str);
+            }
+        }
         type_info.element_type_id = NULL;
         destroy_type_info_contents(&type_info);
         if (type_id != NULL)
@@ -12065,6 +12080,20 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     if (type_info->unresolved_index_type != NULL) {
         array_decl->tree_data.arr_decl_data.unresolved_index_type = type_info->unresolved_index_type;
         type_info->unresolved_index_type = NULL;
+    }
+    /* Fallback: for single-dim enum-indexed arrays where resolve_array_bounds
+     * didn't set unresolved_index_type (e.g., enum was defined later), extract
+     * the dimension name from array_dimensions. */
+    if (array_decl->tree_data.arr_decl_data.unresolved_index_type == NULL &&
+        start == 0 && end == 0 &&
+        type_info->array_dimensions != NULL &&
+        type_info->array_dimensions->type == LIST_STRING &&
+        type_info->array_dimensions->cur != NULL)
+    {
+        const char *dim_str = (const char *)type_info->array_dimensions->cur;
+        if (strstr(dim_str, "..") == NULL) {
+            array_decl->tree_data.arr_decl_data.unresolved_index_type = strdup(dim_str);
+        }
     }
     array_decl->tree_data.arr_decl_data.is_typed_const = 1;
     array_decl->tree_data.arr_decl_data.has_static_storage = 1;
@@ -19580,8 +19609,8 @@ static void resolve_deferred_arrays_in_list(ListNode_t *decl_list)
             if (decl->tree_data.arr_decl_data.ids != NULL &&
                 decl->tree_data.arr_decl_data.ids->cur != NULL)
                 id = (const char *)decl->tree_data.arr_decl_data.ids->cur;
-            fprintf(stderr, "ERROR: Could not resolve deferred array index type '%s' for %s.\n",
-                    type_name, id);
+            /* Not an error: semcheck will resolve enum-indexed array bounds
+             * from the symbol table at a later stage. */
         }
     }
 }

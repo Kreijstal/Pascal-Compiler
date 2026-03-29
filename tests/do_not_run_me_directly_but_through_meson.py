@@ -3876,10 +3876,26 @@ def _add_pp_pas_bootstrap_test():
             self.fail("pp.pas binary timed out running with -h")
             return
 
+        # Check exit code first — if the binary crashed, report that instead
+        # of a confusing empty-string-vs-expected diff.
+        if process.returncode != 0:
+            import signal as _signal
+            sig = -process.returncode if process.returncode < 0 else None
+            sig_name = ""
+            if sig is not None:
+                try:
+                    sig_name = f" ({_signal.Signals(sig).name})"
+                except (ValueError, AttributeError):
+                    pass
+            stderr_snippet = (process.stderr or "")[:2000]
+            self.fail(
+                f"pp.pas binary exited with code {process.returncode}{sig_name}\n"
+                f"stderr:\n{stderr_snippet}"
+            )
+
         expected_output = read_file_content(pp_expected_file)
         actual_output = _strip_pp_header(process.stdout or "")
         self.assertEqual(actual_output, expected_output)
-        self.assertEqual(process.returncode, 0)
 
     test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
     test_pp_pas_bootstrap.__doc__ = "pp.pas bootstrap — compile and link the FPC compiler"

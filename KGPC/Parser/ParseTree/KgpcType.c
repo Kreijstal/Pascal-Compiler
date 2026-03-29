@@ -2909,7 +2909,7 @@ long long kgpc_type_sizeof(KgpcType *type)
         case TYPE_KIND_ARRAY:
         {
             if (kgpc_type_is_dynamic_array(type))
-                return 8;
+                return 16; /* Runtime uses 16-byte embedded descriptor (data ptr + length) */
             /* Use the KgpcType's concrete start_index/end_index.
              * Note: For multi-dimensional arrays defined via TypeAlias, the size computation
              * might be incorrect here because element_type may not be nested arrays.

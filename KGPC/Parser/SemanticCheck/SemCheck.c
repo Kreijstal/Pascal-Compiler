@@ -16397,6 +16397,42 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             fprintf(stderr, "[SemCheck] Processing inline array for var: %s\n",
                                 ids && ids->cur ? (char*)ids->cur : "<null>");
                         struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+
+                        /* Resolve enum-indexed array bounds (e.g., array[TMyEnum] of ...) */
+                        if (alias->array_dimensions != NULL &&
+                            alias->array_start == 0 && alias->array_end == 0 &&
+                            !alias->is_open_array)
+                        {
+                            ListNode_t *first_dim = alias->array_dimensions;
+                            const char *dim_str = (first_dim != NULL && first_dim->type == LIST_STRING) ?
+                                (const char *)first_dim->cur : NULL;
+                            if (dim_str != NULL)
+                            {
+                                HashNode_t *dim_type_node = NULL;
+                                if (FindSymbol(&dim_type_node, symtab, dim_str) != 0 &&
+                                    dim_type_node != NULL && dim_type_node->hash_type == HASHTYPE_TYPE)
+                                {
+                                    struct TypeAlias *dim_alias = get_type_alias_from_node(dim_type_node);
+                                    if (dim_alias != NULL && dim_alias->is_enum &&
+                                        dim_alias->enum_literals != NULL)
+                                    {
+                                        int count = ListLength(dim_alias->enum_literals);
+                                        if (count > 0)
+                                        {
+                                            alias->array_start = 0;
+                                            alias->array_end = count - 1;
+                                        }
+                                    }
+                                    else if (dim_alias != NULL && dim_alias->is_range &&
+                                             dim_alias->range_known)
+                                    {
+                                        alias->array_start = dim_alias->range_start;
+                                        alias->array_end = dim_alias->range_end;
+                                    }
+                                }
+                            }
+                        }
+
                         int start = alias->array_start;
                         int end = alias->array_end;
                         if (alias->is_open_array)
@@ -16875,6 +16911,68 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                /* Resolve enum-indexed array bounds (e.g., array[TMyEnum] of ...) */
+                if (start_bound == 0 && end_bound == 0 &&
+                    tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
+                {
+                    const char *idx_type = tree->tree_data.arr_decl_data.unresolved_index_type;
+                    HashNode_t *idx_node = NULL;
+                    if (FindSymbol(&idx_node, symtab, idx_type) != 0 &&
+                        idx_node != NULL && idx_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *idx_alias = get_type_alias_from_node(idx_node);
+                        if (idx_alias != NULL && idx_alias->is_enum &&
+                            idx_alias->enum_literals != NULL)
+                        {
+                            int count = ListLength(idx_alias->enum_literals);
+                            if (count > 0)
+                            {
+                                start_bound = 0;
+                                end_bound = count - 1;
+                            }
+                        }
+                        else if (idx_alias != NULL && idx_alias->is_range &&
+                                 idx_alias->range_known)
+                        {
+                            start_bound = idx_alias->range_start;
+                            end_bound = idx_alias->range_end;
+                        }
+                    }
+                }
+                /* Also check array_dimensions for single-identifier dimensions */
+                if (start_bound == 0 && end_bound == 0 &&
+                    tree->tree_data.arr_decl_data.array_dimensions != NULL)
+                {
+                    ListNode_t *first_dim = tree->tree_data.arr_decl_data.array_dimensions;
+                    const char *dim_str = (first_dim != NULL && first_dim->type == LIST_STRING) ?
+                        (const char *)first_dim->cur : NULL;
+                    if (dim_str != NULL)
+                    {
+                        HashNode_t *dim_node = NULL;
+                        if (FindSymbol(&dim_node, symtab, dim_str) != 0 &&
+                            dim_node != NULL && dim_node->hash_type == HASHTYPE_TYPE)
+                        {
+                            struct TypeAlias *dim_alias = get_type_alias_from_node(dim_node);
+                            if (dim_alias != NULL && dim_alias->is_enum &&
+                                dim_alias->enum_literals != NULL)
+                            {
+                                int count = ListLength(dim_alias->enum_literals);
+                                if (count > 0)
+                                {
+                                    start_bound = 0;
+                                    end_bound = count - 1;
+                                }
+                            }
+                            else if (dim_alias != NULL && dim_alias->is_range &&
+                                     dim_alias->range_known)
+                            {
+                                start_bound = dim_alias->range_start;
+                                end_bound = dim_alias->range_end;
+                            }
+                        }
+                    }
+                }
+
                 /* CRITICAL FIX: Update the tree's s_range and e_range fields with the resolved bounds.
                  * Downstream code (especially the x86-64 code generator) checks arr->e_range < arr->s_range
                  * to determine if an array is dynamic. Without updating these fields, arrays declared with
