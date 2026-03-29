@@ -2159,6 +2159,10 @@ static int compile_single_program(
     file_to_parse = (char *)input_file;
     semcheck_set_source_path(input_file);
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
+    /* Reset {$H-} flag before semantic analysis.  The flag is only meaningful
+     * during per-file AST conversion (from_cparser.c); the merged AST already
+     * has the correct return types (SHORTSTRING_TYPE where appropriate). */
+    pascal_frontend_set_default_shortstring(false);
 
     debug_check_type_presence(user_tree);
     report_rss("after loading all units");
@@ -2746,6 +2750,7 @@ int main(int argc, char **argv)
         file_to_parse = (char *)input_file;
         semcheck_set_source_path(input_file);
         semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
+        pascal_frontend_set_default_shortstring(false);
 
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
@@ -2984,7 +2989,8 @@ int main(int argc, char **argv)
     file_to_parse = (char *)input_file;
     semcheck_set_source_path(input_file);
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
-    
+    pascal_frontend_set_default_shortstring(false);
+
     debug_check_type_presence(user_tree);
     /* Build the combined program view from loaded unit records.
      * Loaded units are stored in the context during load_unit() and merged

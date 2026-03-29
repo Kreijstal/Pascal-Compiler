@@ -29,6 +29,7 @@ static char* strndup(const char* s, size_t n)
 #include "../../string_intern.h"
 #include "../../unit_registry.h"
 #include "../../compilation_context.h"
+#include "../pascal_frontend.h"
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
@@ -7101,6 +7102,10 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         }
 
         int result = map_type_name(dup, type_id_out);
+        /* Under {$H-}, bare 'string' means shortstring (256-byte value type). */
+        if (result == STRING_TYPE && pascal_frontend_default_shortstring() &&
+            strcasecmp(dup, "string") == 0)
+            result = SHORTSTRING_TYPE;
         if (type_info != NULL && result == FILE_TYPE) {
             type_info->is_file = 1;
             type_info->file_type = FILE_TYPE;
@@ -7817,7 +7822,11 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* Get the preserved type name for RawByteString/UnicodeString */
         char *preserved_type_id = NULL;
         int type_tag = map_type_name(type_name, &preserved_type_id);
-        
+        /* Under {$H-}, 'string' means shortstring (256-byte value type).
+         * Only remap bare 'string', not explicit names like AnsiString/UnicodeString. */
+        if (type_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
+            strcasecmp(type_name, "string") == 0)
+            type_tag = SHORTSTRING_TYPE;
         if (type_tag != UNKNOWN_TYPE) {
             KgpcType *type = create_primitive_type(type_tag);
             /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
@@ -8114,13 +8123,16 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                     if (ret_type_name != NULL) {
                         // First check if it's a primitive type
                         int ret_tag = map_type_name(ret_type_name, NULL);
+                        if (ret_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
+                            strcasecmp(ret_type_name, "string") == 0)
+                            ret_tag = SHORTSTRING_TYPE;
                         if (ret_tag != UNKNOWN_TYPE) {
                             return_type = create_primitive_type(ret_tag);
                             owns_return_type = 1;
                         } else {
                             // Check if it's a user-defined type in the symbol table
                             HashNode_t *type_node = NULL;
-                            if (symtab != NULL && FindSymbol(&type_node, symtab, ret_type_name) != 0 && 
+                            if (symtab != NULL && FindSymbol(&type_node, symtab, ret_type_name) != 0 &&
                                 type_node != NULL && type_node->type != NULL) {
                                 return_type = type_node->type;
                             }
@@ -10617,6 +10629,9 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
             char *ret_name = dup_symbol(ret_node);
             if (ret_name != NULL) {
                 int ret_tag = map_type_name(ret_name, NULL);
+                if (ret_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
+                    strcasecmp(ret_name, "string") == 0)
+                    ret_tag = SHORTSTRING_TYPE;
                 if (ret_tag != UNKNOWN_TYPE)
                     return_type = create_primitive_type(ret_tag);
                 return_type_id = strdup(ret_name);
@@ -19225,6 +19240,21 @@ static Tree_t *convert_function(ast_t *func_node) {
     if (cur != NULL && cur->typ == PASCAL_T_RETURN_TYPE) {
         TypeInfo type_info = {0};
         return_type = convert_type_spec(cur->child, &return_type_id, NULL, &type_info);
+        /* When the PASCAL_T_RETURN_TYPE node has no child (e.g. interface/forward
+         * declarations where the parser strips the type subtree), fall back to
+         * the sym name on the RETURN_TYPE node itself.  Only apply the {$H-}
+         * remapping for bare 'string'; leave other types as UNKNOWN_TYPE for
+         * semcheck to resolve via the symbol table. */
+        if (return_type == UNKNOWN_TYPE && return_type_id == NULL &&
+            cur->sym != NULL && cur->sym->name != NULL)
+        {
+            if (pascal_frontend_default_shortstring() &&
+                strcasecmp(cur->sym->name, "string") == 0)
+            {
+                return_type = SHORTSTRING_TYPE;
+                return_type_id = strdup(cur->sym->name);
+            }
+        }
         if (return_type_ref == NULL)
             return_type_ref = type_ref_from_info_or_id(&type_info, return_type_id);
         if (return_type_id == NULL && cur->sym != NULL && cur->sym->name != NULL)

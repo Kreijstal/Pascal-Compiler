@@ -4491,7 +4491,6 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
-    const char *debug_env = kgpc_getenv("KGPC_DEBUG_RETURN_TYPE");
     KgpcType *builtin_return = NULL;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
@@ -4551,37 +4550,45 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             }
             else
             {
-                subprogram->tree_data.subprogram_data.return_type = builtin_type;
-                builtin_return = create_primitive_type(builtin_type);
+                /* Preserve SHORTSTRING_TYPE set during AST conversion under {$H-};
+                 * semcheck_map_builtin_type_name_local maps bare "String" to
+                 * STRING_TYPE, but the per-file directive already chose correctly. */
+                if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+                    builtin_type == STRING_TYPE)
+                {
+                    builtin_return = create_primitive_type(SHORTSTRING_TYPE);
+                }
+                else
+                {
+                    subprogram->tree_data.subprogram_data.return_type = builtin_type;
+                    builtin_return = create_primitive_type(builtin_type);
+                }
             }
         }
-    }
-
-    if (debug_env != NULL)
-    {
-        const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
-        int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
-        const char *resolved_type = (type_node != NULL && type_node->type != NULL)
-            ? kgpc_type_to_string(type_node->type)
-            : "<null>";
-        fprintf(stderr,
-            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d resolved=%s\n",
-            subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
-            rt_id ? rt_id : "<null>",
-            primitive_tag,
-            (void *)type_node,
-            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1,
-            resolved_type);
     }
 
     if (builtin_return != NULL)
         return builtin_return;
 
-    return kgpc_type_build_function_return(
+    KgpcType *result = kgpc_type_build_function_return(
         subprogram->tree_data.subprogram_data.inline_return_type,
         type_node,
         subprogram->tree_data.subprogram_data.return_type,
         symtab);
+
+    /* Under {$H-}, from_cparser sets return_type = SHORTSTRING_TYPE on
+     * functions returning bare 'string'.  If the symbol table resolved
+     * "String" to the system unit's AnsiString alias (STRING_TYPE),
+     * override to SHORTSTRING so sret and value-type semantics apply. */
+    if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+        result != NULL && result->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(result) == STRING_TYPE)
+    {
+        destroy_kgpc_type(result);
+        result = create_primitive_type(SHORTSTRING_TYPE);
+    }
+
+    return result;
 }
 
 /* Forward declarations for type resolution helpers used in const evaluation. */

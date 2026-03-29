@@ -8507,6 +8507,31 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    /* Fallback: if the AST node's return_type tag is SHORTSTRING_TYPE (set during
+     * AST conversion under {$H-}), but the KgpcType on the symbol table didn't
+     * reflect it (because semcheck runs with the flag reset), force sret and
+     * patch the KgpcType so body codegen uses value-type access. */
+    if (!has_record_return && func->return_type == SHORTSTRING_TYPE)
+    {
+        has_record_return = 1;
+        record_return_size = 256;
+    }
+    if (func->return_type == SHORTSTRING_TYPE && func_node != NULL &&
+        func_node->type != NULL && func_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *ret = func_node->type->info.proc_info.return_type;
+        if (ret != NULL && ret->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc_type_get_primitive_tag(ret) == STRING_TYPE)
+        {
+            /* Patch STRING -> SHORTSTRING so body codegen uses value semantics */
+            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+        }
+        else if (ret == NULL)
+        {
+            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+        }
+    }
+
     /* Only nested functions receive static links (excluding class methods). */
     int will_need_static_link = (!is_class_method && lexical_depth > 1);
     

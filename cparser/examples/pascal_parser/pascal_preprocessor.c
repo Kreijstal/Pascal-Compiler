@@ -1276,7 +1276,7 @@ static bool handle_directive(PascalPreprocessor *pp,
             strcmp(keyword, "STOP") == 0) {
             should_preserve = true;
         }
-        
+
         // If we should preserve this directive, output it verbatim
         if (branch_active && should_preserve) {
             // Reconstruct the original directive

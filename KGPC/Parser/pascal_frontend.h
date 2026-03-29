@@ -35,5 +35,6 @@ bool pascal_frontend_is_objfpc_mode(void);
 void pascal_frontend_reset_objfpc_mode(void);
 void pascal_frontend_set_objfpc_mode(void);
 bool pascal_frontend_default_shortstring(void);
+void pascal_frontend_set_default_shortstring(bool value);
 
 #endif

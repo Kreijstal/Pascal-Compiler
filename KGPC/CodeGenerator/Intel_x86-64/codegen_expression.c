@@ -430,6 +430,19 @@ static KgpcType *codegen_function_call_return_type_from_expr(
     if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
         return NULL;
 
+    /* If the callee's Tree_t has return_type == SHORTSTRING_TYPE (set during AST
+     * conversion under {$H-}), honour that even though the KgpcType from
+     * semantic analysis may say STRING_TYPE.  Must check before ret_type
+     * early-return since semcheck creates STRING_TYPE KgpcType when the
+     * global flag is reset. */
+    if (call_type->info.proc_info.definition != NULL &&
+        call_type->info.proc_info.definition->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+    {
+        if (cached_shortstring == NULL)
+            cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
+        return cached_shortstring;
+    }
+
     ret_type = kgpc_type_get_return_type(call_type);
     if (ret_type != NULL)
         return ret_type;

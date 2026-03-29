@@ -135,15 +135,17 @@ static bool detect_objfpc_mode(const char *buffer, size_t length)
     return false;
 }
 
-static int detect_shortstring_default(const char *buffer, size_t length, bool *out_shortstring)
+/* Scan a buffer for {$H+} or {$H-} directives.
+ * Returns 1 if found, 0 if not.  Updates *out_shortstring to match the
+ * LAST occurrence: true for {$H-} (shortstring default), false for {$H+}. */
+static int detect_shortstring_in_buffer(const char *buffer, size_t length, bool *value_out)
 {
-    if (buffer == NULL || length == 0 || out_shortstring == NULL)
+    if (buffer == NULL || length == 0 || value_out == NULL)
         return 0;
 
     const char *pos = buffer;
     const char *end = buffer + length;
     int found = 0;
-    bool value = false;
 
     while (pos < end)
     {
@@ -163,7 +165,7 @@ static int detect_shortstring_default(const char *buffer, size_t length, bool *o
                         next++;
                     if (next < dir_end && (*next == '+' || *next == '-'))
                     {
-                        value = (*next == '-');
+                        *value_out = (*next == '-');
                         found = 1;
                     }
                 }
@@ -174,9 +176,156 @@ static int detect_shortstring_default(const char *buffer, size_t length, bool *o
         pos++;
     }
 
-    if (found)
-        *out_shortstring = value;
     return found;
+}
+
+/* Try to resolve an include file name relative to the source directory
+ * and the registered include paths. Returns a malloc'd path or NULL. */
+static char *resolve_include_for_h_detection(const char *source_path, const char *inc_name)
+{
+    /* Try relative to the source file's directory first. */
+    if (source_path != NULL)
+    {
+        const char *last_sep = strrchr(source_path, '/');
+        if (last_sep != NULL)
+        {
+            size_t dir_len = (size_t)(last_sep - source_path + 1);
+            size_t name_len = strlen(inc_name);
+            char *full = (char *)malloc(dir_len + name_len + 1);
+            if (full != NULL)
+            {
+                memcpy(full, source_path, dir_len);
+                memcpy(full + dir_len, inc_name, name_len + 1);
+                FILE *f = fopen(full, "r");
+                if (f != NULL)
+                {
+                    fclose(f);
+                    return full;
+                }
+                free(full);
+            }
+        }
+    }
+
+    /* Try registered include paths. */
+    for (int i = 0; i < g_user_include_path_count; ++i)
+    {
+        if (g_user_include_paths[i] == NULL)
+            continue;
+        size_t plen = strlen(g_user_include_paths[i]);
+        size_t nlen = strlen(inc_name);
+        char *full = (char *)malloc(plen + 1 + nlen + 1);
+        if (full == NULL)
+            continue;
+        memcpy(full, g_user_include_paths[i], plen);
+        full[plen] = '/';
+        memcpy(full + plen + 1, inc_name, nlen + 1);
+        FILE *f = fopen(full, "r");
+        if (f != NULL)
+        {
+            fclose(f);
+            return full;
+        }
+        free(full);
+    }
+
+    return NULL;
+}
+
+/* Detect {$H+/-} in a source buffer.  If not found directly, also follow
+ * {$i <file>} includes one level deep to detect the directive in common
+ * included files like fpcdefs.inc. */
+static int detect_shortstring_default(const char *buffer, size_t length,
+                                      bool *out_shortstring,
+                                      const char *source_path)
+{
+    if (buffer == NULL || length == 0 || out_shortstring == NULL)
+        return 0;
+
+    bool value = false;
+    if (detect_shortstring_in_buffer(buffer, length, &value))
+    {
+        *out_shortstring = value;
+        return 1;
+    }
+
+    /* Not found directly — look for {$i <file>} includes and check them. */
+    const char *pos = buffer;
+    const char *end = buffer + length;
+
+    while (pos < end)
+    {
+        if (*pos == '{' && (pos + 1) < end && pos[1] == '$')
+        {
+            const char *dir_start = pos + 2;
+            const char *dir_end = dir_start;
+            while (dir_end < end && *dir_end != '}')
+                dir_end++;
+
+            /* Check for {$i <filename>} or {$include <filename>} */
+            size_t dir_len = (size_t)(dir_end - dir_start);
+            if (dir_len >= 2 &&
+                (dir_start[0] == 'i' || dir_start[0] == 'I') &&
+                (dir_start[1] == ' ' || dir_start[1] == '\t'))
+            {
+                const char *fname_start = dir_start + 2;
+                while (fname_start < dir_end && isspace((unsigned char)*fname_start))
+                    fname_start++;
+                /* Skip if it looks like {$I+} or {$I-} (I/O check toggle) */
+                if (fname_start < dir_end && *fname_start != '+' && *fname_start != '-')
+                {
+                    const char *fname_end = fname_start;
+                    while (fname_end < dir_end && !isspace((unsigned char)*fname_end))
+                        fname_end++;
+                    size_t fname_len = (size_t)(fname_end - fname_start);
+                    if (fname_len > 0 && fname_len < 256)
+                    {
+                        char inc_name[256];
+                        memcpy(inc_name, fname_start, fname_len);
+                        inc_name[fname_len] = '\0';
+                        /* Resolve and read the include file. */
+                        char *inc_path = resolve_include_for_h_detection(source_path, inc_name);
+                        if (inc_path != NULL)
+                        {
+                            FILE *f = fopen(inc_path, "r");
+                            if (f != NULL)
+                            {
+                                fseek(f, 0, SEEK_END);
+                                long sz = ftell(f);
+                                fseek(f, 0, SEEK_SET);
+                                if (sz > 0 && sz < 1024 * 1024)
+                                {
+                                    char *inc_buf = (char *)malloc((size_t)sz + 1);
+                                    if (inc_buf != NULL)
+                                    {
+                                        size_t rd = fread(inc_buf, 1, (size_t)sz, f);
+                                        inc_buf[rd] = '\0';
+                                        bool inc_value = false;
+                                        if (detect_shortstring_in_buffer(inc_buf, rd, &inc_value))
+                                        {
+                                            *out_shortstring = inc_value;
+                                            free(inc_buf);
+                                            fclose(f);
+                                            free(inc_path);
+                                            return 1;
+                                        }
+                                        free(inc_buf);
+                                    }
+                                }
+                                fclose(f);
+                            }
+                            free(inc_path);
+                        }
+                    }
+                }
+            }
+
+            pos = dir_end;
+        }
+        pos++;
+    }
+
+    return 0;
 }
 
 /* Getter for objfpc mode flag - used by main_cparser.c to inject ObjPas */
@@ -200,6 +349,11 @@ void pascal_frontend_set_objfpc_mode(void)
 bool pascal_frontend_default_shortstring(void)
 {
     return g_default_shortstring;
+}
+
+void pascal_frontend_set_default_shortstring(bool value)
+{
+    g_default_shortstring = value;
 }
 
 void pascal_frontend_add_include_path(const char *path)
@@ -814,6 +968,21 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 if (detect_objfpc_mode(cached_pp_buf, cached_pp_len))
                     g_objfpc_mode_detected = true;
 
+                /* Detect {$H-} from original source (not cached preprocessed,
+                 * since preprocessing strips directives).  This must happen
+                 * before tree_from_pascal_ast so the return-type remapping
+                 * in from_cparser.c sees the correct flag. */
+                {
+                    size_t raw_len = 0;
+                    char *raw_buf = read_file(path, &raw_len);
+                    if (raw_buf != NULL)
+                    {
+                        detect_shortstring_default(raw_buf, raw_len,
+                                                   &g_default_shortstring, path);
+                        free(raw_buf);
+                    }
+                }
+
                 /* Convert the cached AST to Tree_t */
                 Tree_t *tree = NULL;
                 bool success = false;
@@ -858,7 +1027,7 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
 
     /* Detect {$H+/-} directive on original source BEFORE preprocessing,
      * since the preprocessor strips directive comments. */
-    detect_shortstring_default(buffer, length, &g_default_shortstring);
+    detect_shortstring_default(buffer, length, &g_default_shortstring, path);
 
     PascalPreprocessor *preprocessor = pascal_preprocessor_create();
     if (preprocessor == NULL)
