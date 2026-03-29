@@ -1266,6 +1266,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
     {
         struct TypeAlias *inline_alias = var_decl->tree_data.var_decl_data.inline_type_alias;
+        int var_type_tag = var_decl->tree_data.var_decl_data.type;
         if (inline_alias != NULL && inline_alias->is_array &&
             !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
         {
@@ -1329,6 +1330,78 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     kgpc_type_retain(type_node->type);
                     return type_node->type;
                 }
+            }
+        }
+
+        if (var_type_tag == POINTER_TYPE &&
+            !kgpc_type_is_pointer(var_decl->tree_data.var_decl_data.cached_kgpc_type) &&
+            decl_type_id != NULL)
+        {
+            KgpcType *pointee_type = NULL;
+            int pointee_shared = 0;
+            if (symtab != NULL)
+            {
+                struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+                    decl_type_id, decl_defined_in_unit);
+                if (type_node != NULL && type_node->type != NULL)
+                {
+                    pointee_type = type_node->type;
+                    pointee_shared = 1;
+                }
+            }
+            if (pointee_type == NULL)
+            {
+                int builtin_tag = UNKNOWN_TYPE;
+                if (pascal_identifier_equals(decl_type_id, "String") || pascal_identifier_equals(decl_type_id, "AnsiString") ||
+                    pascal_identifier_equals(decl_type_id, "RawByteString") ||
+                    pascal_identifier_equals(decl_type_id, "UnicodeString") ||
+                    pascal_identifier_equals(decl_type_id, "WideString"))
+                    builtin_tag = STRING_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "ShortString"))
+                    builtin_tag = SHORTSTRING_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Integer"))
+                    builtin_tag = INT_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "LongInt"))
+                    builtin_tag = LONGINT_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Int64") ||
+                         pascal_identifier_equals(decl_type_id, "SizeUInt") || pascal_identifier_equals(decl_type_id, "QWord") ||
+                         pascal_identifier_equals(decl_type_id, "NativeUInt") || pascal_identifier_equals(decl_type_id, "NativeInt") ||
+                         pascal_identifier_equals(decl_type_id, "PtrInt") || pascal_identifier_equals(decl_type_id, "PtrUInt"))
+                    builtin_tag = INT64_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Byte"))
+                    builtin_tag = BYTE_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Word"))
+                    builtin_tag = WORD_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "LongWord") || pascal_identifier_equals(decl_type_id, "Cardinal"))
+                    builtin_tag = LONGWORD_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Real") || pascal_identifier_equals(decl_type_id, "Double"))
+                    builtin_tag = REAL_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Extended"))
+                    builtin_tag = EXTENDED_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Char") || pascal_identifier_equals(decl_type_id, "AnsiChar"))
+                    builtin_tag = CHAR_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Boolean"))
+                    builtin_tag = BOOL;
+                else if (pascal_identifier_equals(decl_type_id, "Pointer"))
+                    builtin_tag = POINTER_TYPE;
+
+                if (builtin_tag != UNKNOWN_TYPE)
+                    pointee_type = create_primitive_type(builtin_tag);
+            }
+
+            if (pointee_type != NULL)
+            {
+                if (pointee_shared)
+                    kgpc_type_retain(pointee_type);
+                KgpcType *pointer_type = create_pointer_type(pointee_type);
+                if (pointer_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return pointer_type;
+                }
+                if (!pointee_shared)
+                    destroy_kgpc_type(pointee_type);
             }
         }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);

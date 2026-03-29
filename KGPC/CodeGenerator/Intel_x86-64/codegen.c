@@ -1902,13 +1902,22 @@ static int codegen_shortstring_storage_size(KgpcType *type)
     if (type == NULL)
         return 0;
 
+    int primitive_shortstring = (type->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(type) == SHORTSTRING_TYPE);
+
     struct TypeAlias *alias = kgpc_type_get_type_alias(type);
     if (alias != NULL && alias->is_shortstring)
     {
         if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
             return (int)alias->storage_size;
         if (alias->array_end >= alias->array_start && alias->array_end >= 0)
-            return alias->array_end - alias->array_start + 1;
+        {
+            int alias_size = alias->array_end - alias->array_start + 1;
+            if (alias_size > 1)
+                return alias_size;
+        }
+        if (primitive_shortstring)
+            return 256;
     }
 
     if (kgpc_type_is_shortstring(type))
@@ -1928,6 +1937,23 @@ static inline int get_var_storage_size(HashNode_t *node)
 {
     if (node == NULL)
         return -1;
+
+    struct TypeAlias *node_alias = get_type_alias_from_node(node);
+    if (node_alias != NULL)
+    {
+        if (node_alias->is_pointer || node_alias->is_class_reference)
+            return 8;
+        if (node_alias->is_shortstring)
+        {
+            if (node_alias->storage_size > 1 && node_alias->storage_size <= INT_MAX)
+                return (int)node_alias->storage_size;
+            if (node_alias->array_end >= node_alias->array_start && node_alias->array_end >= 0)
+                return node_alias->array_end - node_alias->array_start + 1;
+            return 256;
+        }
+        if (node_alias->storage_size > 0 && node_alias->storage_size <= INT_MAX)
+            return (int)node_alias->storage_size;
+    }
     
     /* Check KgpcType first */
     if (node->type != NULL)
@@ -2017,6 +2043,91 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
     }
     return DOUBLEWORD;
+}
+
+static int codegen_storage_size_from_type(KgpcType *type)
+{
+    if (type == NULL)
+        return -1;
+
+    if (kgpc_type_is_shortstring(type))
+    {
+        int short_size = codegen_shortstring_storage_size(type);
+        return short_size > 0 ? short_size : 256;
+    }
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL)
+    {
+        if (alias->is_pointer || alias->is_class_reference)
+            return 8;
+        if (alias->is_shortstring)
+        {
+            int short_size = codegen_shortstring_storage_size(type);
+            return short_size > 0 ? short_size : 256;
+        }
+        if (alias->storage_size > 0 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+    }
+
+    long long size = kgpc_type_sizeof(type);
+    if (size > 0 && size <= INT_MAX)
+        return (int)size;
+
+    if (type->kind == TYPE_KIND_POINTER || type->kind == TYPE_KIND_PROCEDURE)
+        return 8;
+
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        switch (kgpc_type_get_primitive_tag(type))
+        {
+            case CHAR_TYPE:
+            case BOOL:
+                return 1;
+            case LONGINT_TYPE:
+                return 4;
+            case INT64_TYPE:
+            case QWORD_TYPE:
+            case STRING_TYPE:
+            case POINTER_TYPE:
+            case PROCEDURE:
+            case REAL_TYPE:
+                return 8;
+            case SHORTSTRING_TYPE:
+                return 256;
+            default:
+                return DOUBLEWORD;
+        }
+    }
+
+    return -1;
+}
+
+static int codegen_storage_size_from_type_alias(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return -1;
+
+    if (alias->is_pointer || alias->is_class_reference)
+        return 8;
+
+    if (alias->is_shortstring)
+    {
+        if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+        if (alias->array_end >= alias->array_start && alias->array_end >= 0)
+        {
+            int alias_size = alias->array_end - alias->array_start + 1;
+            if (alias_size > 1)
+                return alias_size;
+        }
+        return 256;
+    }
+
+    if (alias->storage_size > 0 && alias->storage_size <= INT_MAX)
+        return (int)alias->storage_size;
+
+    return -1;
 }
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -6959,9 +7070,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     FindSymbol(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
-                if (decl_type != NULL && kgpc_type_is_array(decl_type))
+                if (decl_type != NULL)
                     effective_type_node = &decl_type_node;
-                if (effective_type_node == NULL)
+                else if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
                 KgpcType *param_type = NULL;
@@ -7166,7 +7277,25 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     }
                     
                     /* Get allocation size using helper */
-                    if (size_node != NULL)
+                    int decl_storage_size = -1;
+                    decl_storage_size = codegen_storage_size_from_type_alias(
+                        tree->tree_data.var_decl_data.inline_type_alias);
+                    if (decl_type != NULL)
+                    {
+                        int type_size = codegen_storage_size_from_type(decl_type);
+                        if (decl_storage_size <= 0)
+                            decl_storage_size = type_size;
+                    }
+                    if (decl_storage_size <= 0 && cached_type != NULL)
+                        decl_storage_size = codegen_storage_size_from_type(cached_type);
+                    if (decl_storage_size <= 0 && type_node != NULL)
+                        decl_storage_size = get_var_storage_size(type_node);
+
+                    if (decl_storage_size > 0)
+                    {
+                        alloc_size = decl_storage_size;
+                    }
+                    else if (size_node != NULL)
                     {
                         int size = get_var_storage_size(size_node);
                         if (size > 0)
