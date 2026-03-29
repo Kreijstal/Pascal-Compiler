@@ -654,6 +654,7 @@ struct Expression
         {
             char *proc_mangled_id;  /* Owned copy, survives scope cleanup */
             char *proc_id;          /* Owned copy, survives scope cleanup */
+            int source_unit_index;  /* Unit where the symbol was resolved */
         } addr_of_proc_data;
 
         /* Anonymous function/procedure */

@@ -3627,33 +3627,68 @@ cleanup_constructor:
             }
         }
         /* If proc_label is an unprefixed mangled name but the definition was
-         * unit-qualified (unit$$ prefix), resolve to the prefixed version. */
+         * unit-qualified (unit$$ prefix), resolve to the prefixed version.
+         * When source_unit_index is set on the expression, prefer the
+         * candidate from the same unit to avoid cross-unit collisions
+         * (e.g. comprsrc.initglobals vs globals.initglobals). */
         char *collision_label = NULL;
         if (proc_label != NULL && strstr(proc_label, "$$") == NULL &&
             ctx != NULL && ctx->symtab != NULL)
         {
             const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
+            int target_unit = expr->expr_data.addr_of_proc_data.source_unit_index;
             if (lookup_id != NULL)
             {
                 ListNode_t *candidates = FindAllIdents(ctx->symtab, lookup_id);
-                for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                /* First pass: prefer candidate from the same unit as the
+                 * symbol that semcheck resolved. */
+                if (target_unit > 0)
                 {
-                    HashNode_t *cand = (HashNode_t *)c->cur;
-                    if (cand == NULL || cand->mangled_id == NULL)
-                        continue;
-                    const char *sep = strstr(cand->mangled_id, "$$");
-                    if (sep == NULL)
-                        continue;
-                    if (strcmp(sep + 2, proc_label) == 0 &&
-                        cand->type != NULL &&
-                        cand->type->kind == TYPE_KIND_PROCEDURE &&
-                        cand->type->info.proc_info.definition != NULL &&
-                        cand->type->info.proc_info.definition
-                            ->tree_data.subprogram_data.statement_list != NULL)
+                    for (ListNode_t *c = candidates; c != NULL; c = c->next)
                     {
-                        collision_label = strdup(cand->mangled_id);
-                        proc_label = collision_label;
-                        break;
+                        HashNode_t *cand = (HashNode_t *)c->cur;
+                        if (cand == NULL || cand->mangled_id == NULL)
+                            continue;
+                        if (cand->source_unit_index != target_unit)
+                            continue;
+                        const char *sep = strstr(cand->mangled_id, "$$");
+                        if (sep == NULL)
+                            continue;
+                        if (strcmp(sep + 2, proc_label) == 0 &&
+                            cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL &&
+                            cand->type->info.proc_info.definition
+                                ->tree_data.subprogram_data.statement_list != NULL)
+                        {
+                            collision_label = strdup(cand->mangled_id);
+                            proc_label = collision_label;
+                            break;
+                        }
+                    }
+                }
+                /* Fallback: take any candidate with a unit$$ prefix. */
+                if (collision_label == NULL)
+                {
+                    for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)c->cur;
+                        if (cand == NULL || cand->mangled_id == NULL)
+                            continue;
+                        const char *sep = strstr(cand->mangled_id, "$$");
+                        if (sep == NULL)
+                            continue;
+                        if (strcmp(sep + 2, proc_label) == 0 &&
+                            cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL &&
+                            cand->type->info.proc_info.definition
+                                ->tree_data.subprogram_data.statement_list != NULL)
+                        {
+                            collision_label = strdup(cand->mangled_id);
+                            proc_label = collision_label;
+                            break;
+                        }
                     }
                 }
                 if (candidates != NULL) DestroyList(candidates);

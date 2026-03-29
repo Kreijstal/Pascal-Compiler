@@ -5077,6 +5077,7 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     expr->type = EXPR_ADDR_OF_PROC;
                     expr->expr_data.addr_of_proc_data.proc_mangled_id = rhs_symbol->mangled_id ? strdup(rhs_symbol->mangled_id) : NULL;
                     expr->expr_data.addr_of_proc_data.proc_id = rhs_symbol->id ? strdup(rhs_symbol->id) : NULL;
+                    expr->expr_data.addr_of_proc_data.source_unit_index = rhs_symbol->source_unit_index;
                     /* Resolve the type NOW while the symbol is still alive. */
                     if (rhs_symbol->type != NULL)
                     {
@@ -9293,6 +9294,7 @@ proccall_parent_resolve_done:
                             arg_expr->type = EXPR_ADDR_OF_PROC;
                             arg_expr->expr_data.addr_of_proc_data.proc_mangled_id = arg_node->mangled_id ? strdup(arg_node->mangled_id) : NULL;
                             arg_expr->expr_data.addr_of_proc_data.proc_id = arg_node->id ? strdup(arg_node->id) : NULL;
+                            arg_expr->expr_data.addr_of_proc_data.source_unit_index = arg_node->source_unit_index;
                             /* Resolve the type NOW while the symbol is still alive. */
                             if (arg_node->type != NULL)
                             {

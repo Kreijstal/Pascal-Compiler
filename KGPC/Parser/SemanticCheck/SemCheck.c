@@ -17422,6 +17422,8 @@ next_identifier:
                                         proc_target != NULL ? strdup(proc_target) : NULL;
                                     init_expr->expr_data.addr_of_proc_data.proc_id =
                                         proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                    init_expr->expr_data.addr_of_proc_data.source_unit_index =
+                                        proc_symbol->source_unit_index;
                                 }
                                 /* Resolve the type NOW while the symbol is still alive. */
                                 if (expr_type != NULL)
