@@ -1897,6 +1897,31 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
     return 8;
 }
 
+static int codegen_shortstring_storage_size(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->is_shortstring)
+    {
+        if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+        if (alias->array_end >= alias->array_start && alias->array_end >= 0)
+            return alias->array_end - alias->array_start + 1;
+    }
+
+    if (kgpc_type_is_shortstring(type))
+    {
+        long long size = kgpc_type_sizeof(type);
+        if (size > 1 && size <= INT_MAX)
+            return (int)size;
+        return 256;
+    }
+
+    return 0;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
@@ -1914,7 +1939,10 @@ static inline int get_var_storage_size(HashNode_t *node)
             if (alias != NULL)
             {
                 if (alias->is_shortstring)
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(node->type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 if (alias->storage_size > 0)
                     return (int)alias->storage_size;
             }
@@ -1938,7 +1966,10 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case PROCEDURE:
                     return 8;
                 case SHORTSTRING_TYPE:
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(node->type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 {
@@ -3729,6 +3760,7 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 
 /* Forward declaration */
 void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak);
+void codegen_stack_space_for_inst_list(ListNode_t *inst_list, CodeGenContext *ctx);
 
 /* Generates a function header.
  * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
@@ -4030,7 +4062,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "%s:\n", init_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -4092,7 +4124,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "%s:\n", final_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -6257,24 +6289,118 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     #endif
 }
 
+static int codegen_max_rbp_stack_ref(ListNode_t *inst_list)
+{
+    int max_offset = 0;
+
+    while (inst_list != NULL)
+    {
+        if (inst_list->type == LIST_STRING && inst_list->cur != NULL)
+        {
+            const char *text = (const char *)inst_list->cur;
+            const char *cursor = text;
+
+            while ((cursor = strchr(cursor, '-')) != NULL)
+            {
+                const char *digits = cursor + 1;
+                char *endptr = NULL;
+                long offset;
+
+                if (!isdigit((unsigned char)*digits))
+                {
+                    ++cursor;
+                    continue;
+                }
+
+                offset = strtol(digits, &endptr, 10);
+                if (endptr != NULL &&
+                    strncmp(endptr, "(%rbp)", 6) == 0 &&
+                    offset > 0 && offset <= INT_MAX &&
+                    (int)offset > max_offset)
+                {
+                    max_offset = (int)offset;
+                }
+
+                cursor = digits;
+            }
+        }
+
+        inst_list = inst_list->next;
+    }
+
+    return max_offset;
+}
+
+static int codegen_compute_stack_space_from_insts(ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    int needed_space = codegen_max_rbp_stack_ref(inst_list);
+    int div;
+    int rem;
+
+    assert(ctx != NULL);
+
+    if (ctx->callee_save_rbx_offset > needed_space)
+        needed_space = ctx->callee_save_rbx_offset;
+    if (ctx->callee_save_r12_offset > needed_space)
+        needed_space = ctx->callee_save_r12_offset;
+    if (ctx->callee_save_r13_offset > needed_space)
+        needed_space = ctx->callee_save_r13_offset;
+    if (ctx->callee_save_r14_offset > needed_space)
+        needed_space = ctx->callee_save_r14_offset;
+    if (ctx->callee_save_r15_offset > needed_space)
+        needed_space = ctx->callee_save_r15_offset;
+
+    needed_space += current_stack_home_space();
+    if (needed_space <= 0)
+        return 0;
+
+    div = needed_space / REQUIRED_OFFSET;
+    rem = needed_space % REQUIRED_OFFSET;
+    if (rem > 0)
+        ++div;
+
+    return div * REQUIRED_OFFSET;
+}
+
 /* Generates code to allocate needed stack space */
-void codegen_stack_space(CodeGenContext *ctx)
+void codegen_stack_space_for_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     int needed_space;
+    const int stack_probe_page = 4096;
 
     assert(ctx != NULL);
 
-    needed_space = get_full_stack_offset();
+    needed_space = codegen_compute_stack_space_from_insts(inst_list, ctx);
     assert(needed_space >= 0);
 
     int aligned_space = align_to_multiple(needed_space, REQUIRED_OFFSET);
 
     if(aligned_space != 0)
     {
-        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        if (aligned_space > stack_probe_page)
+        {
+            int remaining = aligned_space;
+
+            while (remaining > stack_probe_page)
+            {
+                fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", stack_probe_page);
+                fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+                remaining -= stack_probe_page;
+            }
+
+            if (remaining > 0)
+            {
+                fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", remaining);
+                fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+            }
+        }
+        else
+        {
+            fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        }
         if (codegen_target_is_windows())
             fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", aligned_space);
 
@@ -6338,6 +6464,11 @@ void codegen_stack_space(CodeGenContext *ctx)
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+}
+
+void codegen_stack_space(CodeGenContext *ctx)
+{
+    codegen_stack_space_for_inst_list(NULL, ctx);
 }
 
 /* Writes instruction list to file */
@@ -6735,7 +6866,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
 
     codegen_function_header(prgm_name, ctx);
-    codegen_stack_space(ctx);
+    codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     free_inst_list(inst_list);
@@ -7903,7 +8034,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     free_inst_list(inst_list);
@@ -8760,7 +8891,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     free_inst_list(inst_list);
@@ -9101,7 +9232,10 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
                 case POINTER_TYPE:
                     return 8;
                 case SHORTSTRING_TYPE:
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(element_type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 case CHAR_TYPE:
                 case BOOL:
                     return 1;
@@ -9278,7 +9412,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
-    codegen_stack_space(ctx);
+    codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     

@@ -8383,6 +8383,10 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
     int element_size = (int)element_size_ll;
+    int is_string_char_index = codegen_expr_is_string_char_index(expr);
+
+    if (is_string_char_index)
+        element_size = 1;
 
     /* Class/pointer-typed array elements are always pointer-sized (8 bytes).
      * codegen_get_indexable_element_size may return the full class instance size
@@ -8398,9 +8402,11 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         int is_big = (element_size > CODEGEN_POINTER_SIZE_BYTES);
         int is_shortstr = codegen_expr_is_shortstring_value(expr);
         int is_shortstr2 = codegen_array_access_targets_shortstring(expr, ctx);
+        int is_char_index = is_string_char_index ||
+            expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1;
         if (is_big ||
             is_record_element ||
-            is_shortstr || is_shortstr2)
+            ((is_shortstr || is_shortstr2) && !is_char_index))
         {
             char buffer[100];
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
@@ -8412,7 +8418,7 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
 
     char buffer[100];
-    if (expr_uses_qword_kgpctype(expr) || element_size == 8)
+    if (!is_string_char_index && (expr_uses_qword_kgpctype(expr) || element_size == 8))
     {
         /* 8-byte elements (including pointers, int64, etc.) need 64-bit load */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
@@ -8761,13 +8767,19 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
          expr_get_type_tag(right_expr) == CHAR_TYPE ||
          (right_expr->resolved_kgpc_type != NULL &&
           kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
-         codegen_expr_is_string_char_index(right_expr)));
+         codegen_expr_is_string_char_index(right_expr)) &&
+        !(right_expr != NULL &&
+          codegen_expr_is_shortstring_value_ctx(right_expr, ctx) &&
+          !codegen_expr_is_string_char_index(right_expr)));
     int left_needs_char_promo = (left_expr != NULL &&
         (left_expr->type == EXPR_CHAR_CODE ||
          expr_get_type_tag(left_expr) == CHAR_TYPE ||
          (left_expr->resolved_kgpc_type != NULL &&
           kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
-         codegen_expr_is_string_char_index(left_expr)));
+         codegen_expr_is_string_char_index(left_expr)) &&
+        !(left_expr != NULL &&
+          codegen_expr_is_shortstring_value_ctx(left_expr, ctx) &&
+          !codegen_expr_is_string_char_index(left_expr)));
     if ((left_is_string || right_is_string) && right_needs_char_promo)
     {
         StackNode_t *lhs_spill = add_l_t("relop_str_char_lhs");

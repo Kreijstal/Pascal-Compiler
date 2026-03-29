@@ -2874,6 +2874,49 @@ static int codegen_shortstring_capacity_from_type_local(KgpcType *type)
     return 0;
 }
 
+static int codegen_shortstring_capacity_from_array_element_local(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+
+    KgpcType *base_type = expr_get_kgpc_type(base_expr);
+    if (base_type == NULL &&
+        base_expr->type == EXPR_VAR_ID &&
+        ctx != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            base_type = node->type;
+        }
+    }
+
+    if (base_type != NULL && kgpc_type_is_array(base_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+        int capacity = codegen_shortstring_capacity_from_type_local(elem_type);
+        if (capacity > 0)
+            return capacity;
+    }
+
+    if (base_expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(base_expr->expr_data.id, &scope_depth);
+        if (stack_node != NULL && stack_node->element_size > 1)
+            return stack_node->element_size;
+    }
+
+    return 0;
+}
+
 static int codegen_record_field_shortstring_capacity(const struct Expression *expr,
     CodeGenContext *ctx)
 {
@@ -3174,6 +3217,10 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
         int record_field_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
         if (record_field_capacity > 1)
             return record_field_capacity;
+
+        int array_element_capacity = codegen_shortstring_capacity_from_array_element_local(expr, ctx);
+        if (array_element_capacity > 1)
+            return array_element_capacity;
 
         KgpcType *expr_type = expr_get_kgpc_type(expr);
         if (expr_type != NULL &&

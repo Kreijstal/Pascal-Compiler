@@ -1091,9 +1091,10 @@ Register_t *get_reg_with_spill(RegStack_t *reg_stack, ListNode_t **inst_list)
 
     /* Allocate stack slot for this spill */
     char spill_label[64];
-    snprintf(spill_label, sizeof(spill_label), "spill_%s_%llu",
-        spill_reg->bit_64 + 1, (unsigned long long)(reg_stack->use_sequence + 1));
-    StackNode_t *spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
+    snprintf(spill_label, sizeof(spill_label), "spill_%s", spill_reg->bit_64 + 1);
+    StackNode_t *spill_slot = find_in_temp(spill_label);
+    if (spill_slot == NULL)
+        spill_slot = add_l_t_bytes(spill_label, (int)sizeof(void *));
     if (spill_slot == NULL)
     {
         REG_DEBUG_LOG("[reg-spill] ERROR: Failed to allocate spill slot\n");
@@ -1154,9 +1155,11 @@ void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
         {
             /* Allocate a temp slot for this register's value */
             char spill_label[64];
-            snprintf(spill_label, sizeof(spill_label), "__caller_save_%s_%llu",
-                reg->bit_64 + 1, (unsigned long long)(reg_stack->use_sequence + 1));
-            StackNode_t *slot = add_l_t_bytes(spill_label, 8);
+            snprintf(spill_label, sizeof(spill_label), "__caller_save_%s",
+                reg->bit_64 + 1);
+            StackNode_t *slot = find_in_temp(spill_label);
+            if (slot == NULL)
+                slot = add_l_t_bytes(spill_label, 8);
             if (slot != NULL)
             {
                 state->entries[state->count].reg = reg;
@@ -1181,9 +1184,10 @@ void regstack_caller_save(RegStack_t *reg_stack, ListNode_t **inst_list,
     if (state->rax_was_saved)
     {
         char ret_label[64];
-        snprintf(ret_label, sizeof(ret_label), "__call_retval_%llu",
-            (unsigned long long)(reg_stack->use_sequence + 1));
-        StackNode_t *ret_slot = add_l_t_bytes(ret_label, 8);
+        snprintf(ret_label, sizeof(ret_label), "__call_retval");
+        StackNode_t *ret_slot = find_in_temp(ret_label);
+        if (ret_slot == NULL)
+            ret_slot = add_l_t_bytes(ret_label, 8);
         if (ret_slot != NULL)
             state->return_spill_offset = ret_slot->offset;
     }
