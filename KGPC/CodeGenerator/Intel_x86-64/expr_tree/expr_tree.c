@@ -5630,23 +5630,31 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                 if (is_char_set)
                 {
-                    /* Char sets are 32 bytes in memory. If the right operand is in a register,
-                     * it holds a POINTER to the set — use btl %bit, (%addr).
-                     * If the right operand is already a memory reference (stack variable),
-                     * use it directly without extra parentheses. */
+                    /* Large sets (> 4 bytes) need the ADDRESS of the set, not its value.
+                     * The expr_tree evaluation loaded only 4 bytes into right_reg, which is
+                     * insufficient for sets > 32 elements.  Discard the value and re-evaluate
+                     * the set expression as an address via codegen_char_set_address. */
                     if (left32 != NULL && left8 != NULL)
                     {
+                        /* Free the incorrectly-loaded value register */
                         if (right_reg != NULL)
-                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left32, right_reg->bit_64);
-                        else if (right != NULL)
-                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left32, right);
-                        else
-                            break;
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            free_reg(get_reg_stack(), right_reg);
+                            right_reg = NULL;
+                        }
+
+                        Register_t *set_addr_reg = NULL;
+                        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                        if (set_addr_reg != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left32, set_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), set_addr_reg);
+                        }
                     }
                 }
                 else

@@ -3197,24 +3197,32 @@ int expr_get_array_upper_bound(const struct Expression *expr)
     return expr->array_upper_bound;
 }
 
-/* Check if an expression represents a character set (set of char) */
+/* Check if an expression represents a "large" set that requires memory-based
+ * operations (> 4 bytes).  This includes char sets (32 bytes) and enum sets
+ * whose element type has more than 32 members. */
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
         return 0;
-    
+
     /* Check if expression has a KgpcType with type_alias */
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set &&
-            (alias->set_element_type == CHAR_TYPE ||
-             (alias->set_element_type_id != NULL &&
-              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-            return 1;
+        if (alias != NULL && alias->is_set)
+        {
+            /* Char sets are always large (32 bytes) */
+            if (alias->set_element_type == CHAR_TYPE ||
+                (alias->set_element_type_id != NULL &&
+                 (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                return 1;
+            /* Any set with cached storage_size > 4 needs memory-based ops */
+            if (alias->storage_size > 4)
+                return 1;
+        }
     }
-    
+
     /* For variable references, look up the type in the symbol table */
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
@@ -3224,12 +3232,16 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             if (node->type != NULL)
             {
                 struct TypeAlias *alias = node->type->type_alias;
-                if (alias != NULL && alias->is_set &&
-                    (alias->set_element_type == CHAR_TYPE ||
-                     (alias->set_element_type_id != NULL &&
-                      (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                       pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-                    return 1;
+                if (alias != NULL && alias->is_set)
+                {
+                    if (alias->set_element_type == CHAR_TYPE ||
+                        (alias->set_element_type_id != NULL &&
+                         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                        return 1;
+                    if (alias->storage_size > 4)
+                        return 1;
+                }
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
@@ -3240,6 +3252,32 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
         }
     }
     
+    /* For record field access, check if the field is a large set (> 4 bytes) */
+    if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(
+            (struct Expression *)expr, (CodeGenContext *)ctx);
+        if (field != NULL && field->type == SET_TYPE)
+        {
+            if (field->has_cached_layout && field->cached_size > 4)
+                return 1;
+            /* Fallback: check set_element_type_id in the symtab */
+            if (field->set_element_type_id != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *elem_node = NULL;
+                if (FindSymbol(&elem_node, ctx->symtab, field->set_element_type_id) != 0 &&
+                    elem_node != NULL && elem_node->type != NULL)
+                {
+                    struct TypeAlias *elem_alias = elem_node->type->type_alias;
+                    if (elem_alias != NULL && elem_alias->is_enum &&
+                        elem_alias->enum_literals != NULL &&
+                        ListLength(elem_alias->enum_literals) > 32)
+                        return 1;
+                }
+            }
+        }
+    }
+
     /* For set literals, check if elements are characters or single-char strings */
     if (expr->type == EXPR_SET && expr->expr_data.set_data.elements != NULL)
     {
@@ -4517,6 +4555,35 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     {
         *size_out = 256;
         return 0;
+    }
+
+    /* Large set types (> 4 bytes) are routed through record-style assignment.
+     * Use kgpc_type_sizeof to get the set storage size directly. */
+    if (expr_get_type_tag(expr) == SET_TYPE)
+    {
+        KgpcType *set_type = expr_get_kgpc_type(expr);
+        if (set_type != NULL)
+        {
+            long long set_size = kgpc_type_sizeof(set_type);
+            if (set_size > 0)
+            {
+                *size_out = set_size;
+                return 0;
+            }
+        }
+    }
+
+    /* For record field access to a large set field, use the field's cached size */
+    if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(
+            (struct Expression *)expr, ctx);
+        if (field != NULL && field->type == SET_TYPE &&
+            field->has_cached_layout && field->cached_size > 4)
+        {
+            *size_out = field->cached_size;
+            return 0;
+        }
     }
 
     if (kgpc_getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
@@ -5888,16 +5955,18 @@ static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list, CodeGenContext
     char skip_label[18];
     gen_label(skip_label, sizeof(skip_label), ctx);
 
+    /* Guard against negative values only — btsl on a 32-bit register
+     * naturally wraps the bit index mod 32, so values > 31 are handled
+     * correctly (they map to the corresponding bit in the 32-bit word).
+     * This is consistent with how the IN operator tests bits using
+     * register-based btl which also wraps mod 32. */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", value_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", skip_label);
-    inst_list = add_inst(inst_list, buffer);
 
-    /* Use btsl to set the bit (avoids %ecx shift register conflict) */
+    /* Use btsl to set the bit (avoids %ecx shift register conflict).
+     * btsl on a 32-bit register wraps bit index mod 32. */
     snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
@@ -5940,15 +6009,13 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", order_label);
     inst_list = add_inst(inst_list, buffer);
 
+    /* Guard: if end < 0, the range is empty */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", end_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", done_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", start_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
-    inst_list = add_inst(inst_list, buffer);
 
+    /* Floor start at 0 (no negative bit positions) */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjge\t%s\n", start_floor_label);
@@ -5958,14 +6025,8 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", start_floor_label);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", end_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", end_cap_label);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$31, %s\n", end_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "%s:\n", end_cap_label);
-    inst_list = add_inst(inst_list, buffer);
+    /* No cap at 31 — btsl on a 32-bit register wraps bit index mod 32,
+     * which is consistent with how the IN operator tests bits. */
 
     snprintf(buffer, sizeof(buffer), "%s:\n", loop_label);
     inst_list = add_inst(inst_list, buffer);
@@ -5999,7 +6060,7 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
 
     /* Check if this is a character set literal */
     int is_char_set = force_char_set || expr_is_char_set_ctx(expr, ctx);
-    
+
     if (is_char_set)
     {
         /* Character sets need 32 bytes in memory, not a register */
@@ -8507,7 +8568,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         if (codegen_had_error(ctx) || elem_reg == NULL)
             return inst_list;
 
-        /* Spill elem to stack across potential function calls in address eval */
+        /* Spill elem to stack across potential function calls in set eval */
         StackNode_t *elem_spill = add_l_t("in_elem_spill");
         if (elem_spill != NULL)
         {
@@ -8518,10 +8579,13 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg = NULL;
         }
 
-        /* Get the address of the right operand (set) */
-        Register_t *set_addr_reg = NULL;
-        inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
-        if (codegen_had_error(ctx) || set_addr_reg == NULL)
+        /* Evaluate the right operand (set) as a VALUE in a register.
+         * For non-char sets stored as 4 bytes, we use register-based btl
+         * which wraps bit index mod 32 — consistent with how set literals
+         * are constructed (btsl also wraps mod 32 in register form). */
+        Register_t *set_val_reg = NULL;
+        inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &set_val_reg);
+        if (codegen_had_error(ctx) || set_val_reg == NULL)
         {
             if (elem_reg != NULL)
                 free_reg(get_reg_stack(), elem_reg);
@@ -8534,7 +8598,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg = codegen_try_get_reg(&inst_list, ctx, "in_elem_reload");
             if (elem_reg == NULL)
             {
-                free_reg(get_reg_stack(), set_addr_reg);
+                free_reg(get_reg_stack(), set_val_reg);
                 return inst_list;
             }
             snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
@@ -8542,10 +8606,12 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             inst_list = add_inst(inst_list, buffer);
         }
 
-        /* btl with memory operand auto-computes byte offset for bit positions
-           beyond 31, so we can test any bit in the set correctly. */
-        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n",
-            elem_reg->bit_32, set_addr_reg->bit_64);
+        /* Use register-based btl which wraps bit index mod 32.
+         * This is consistent with set construction (btsl wraps mod 32).
+         * For 4-byte sets, bits > 31 are aliased with bits 0-31 by the
+         * same wrapping, so both set and test use the same bit position. */
+        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+            elem_reg->bit_32, set_val_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
             elem_reg->bit_32, elem_reg->bit_32);
@@ -8554,7 +8620,7 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             elem_reg->bit_32, elem_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
 
-        free_reg(get_reg_stack(), set_addr_reg);
+        free_reg(get_reg_stack(), set_val_reg);
         free_reg(get_reg_stack(), elem_reg);
         return inst_list;
     }

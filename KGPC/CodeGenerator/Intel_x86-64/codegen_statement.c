@@ -2062,7 +2062,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         }
                         field_storage = next_off - field->field_offset;
                     }
-                    if (field_storage > 0 && field_storage < 4)
+                    if (field_storage > 0 && field_storage != 4 &&
+                        field_storage <= INT_MAX)
                         field_access->resolved_kgpc_type =
                             create_primitive_type_with_size(field->field_type, (int)field_storage);
                     else
@@ -9651,6 +9652,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             if (field_is_static_array && src_is_static_array)
                 return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+
+            /* Large set fields (> 4 bytes, e.g. set of enum with > 32 elements)
+             * need memory-based construction via codegen_assign_record_value,
+             * which will force the set literal into the 32-byte path. */
+            if (field->type == SET_TYPE && field->has_cached_layout && field->cached_size > 4)
+                return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
         }
     }
 

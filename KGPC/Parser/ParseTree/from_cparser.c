@@ -8390,6 +8390,9 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
                 field_desc->pointer_type_id = NULL;
             field_desc->pointer_type_ref =
                 type_ref_from_pointer_info(&field_info, field_info.pointer_type_id);
+            /* Copy set element type info for proper set size computation */
+            if (field_info.is_set && field_info.set_element_type_id != NULL)
+                field_desc->set_element_type_id = strdup(field_info.set_element_type_id);
             list_builder_append(&result, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)
@@ -9809,6 +9812,9 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
                         list_builder_append(&clone_builder, strdup((char *)en->cur), LIST_STRING);
                 field_desc->enum_literals = list_builder_finish(&clone_builder);
             }
+            /* Copy set element type info for proper set size computation */
+            if (field_info.is_set && field_info.set_element_type_id != NULL)
+                field_desc->set_element_type_id = strdup(field_info.set_element_type_id);
             list_builder_append(&result_builder, field_desc, LIST_RECORD_FIELD);
         } else {
             if (field_name != NULL)

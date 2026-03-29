@@ -36,6 +36,10 @@
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 
+/* Forward declarations — defined below kgpc_type_sizeof */
+static long long kgpc_default_set_storage_size_for_high(long long high);
+static int kgpc_list_length(ListNode_t *list);
+
 /* Check if a HashNode represents a class type (either a pointer to a class record
  * or a direct class record).  Used to prefer class types over plain record aliases
  * when the same name resolves to both (e.g. TTimeZone = timezone struct alias vs
@@ -650,7 +654,7 @@ KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size) {
         alias->base_type = primitive_tag;
         alias->is_array = 0;
         alias->is_pointer = 0;
-        alias->is_set = 0;
+        alias->is_set = (primitive_tag == SET_TYPE) ? 1 : 0;
         alias->is_enum = 0;
         alias->is_file = 0;
         alias->is_range = 0;
