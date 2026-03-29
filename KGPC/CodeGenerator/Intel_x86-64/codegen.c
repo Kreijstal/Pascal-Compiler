@@ -275,7 +275,12 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
                 cand->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
-            if (strncmp(cand->mangled_id, stale_target, prefix_len) != 0)
+            /* Strip unit$$ prefix from candidate mangled_id for comparison */
+            const char *cand_base = cand->mangled_id;
+            const char *cand_sep = strstr(cand_base, "$$");
+            if (cand_sep != NULL)
+                cand_base = cand_sep + 2;
+            if (strncmp(cand_base, stale_target, prefix_len) != 0)
                 continue;
             Tree_t *def = cand->type->info.proc_info.definition;
             if (def == NULL || def->tree_data.subprogram_data.statement_list == NULL)
@@ -412,6 +417,46 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
 
     if (call_target == NULL)
         call_target = expr->expr_data.function_call_data.id;
+
+    /* Final fixup: if call_target is an unprefixed mangled name but all
+     * definitions with that base name have been unit-qualified by the
+     * codegen_apply_unit_mangled_prefixes pre-pass, look up the correct
+     * unit-qualified label.  This handles cases where semcheck cached a
+     * mangled_id before codegen added the unit$$ prefix. */
+    if (call_target != NULL && strstr(call_target, "$$") == NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL)
+    {
+        ListNode_t *candidates = FindAllIdents(ctx->symtab,
+            expr->expr_data.function_call_data.id);
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *cand = (HashNode_t *)cur->cur;
+            if (cand == NULL || cand->mangled_id == NULL)
+                continue;
+            /* Check if cand->mangled_id has the form "unit$$call_target" */
+            const char *sep = strstr(cand->mangled_id, "$$");
+            if (sep == NULL)
+                continue;
+            const char *base = sep + 2;
+            if (strcmp(base, call_target) == 0)
+            {
+                /* Verify this candidate has a real implementation */
+                if (cand->type != NULL &&
+                    cand->type->kind == TYPE_KIND_PROCEDURE &&
+                    cand->type->info.proc_info.definition != NULL &&
+                    cand->type->info.proc_info.definition
+                        ->tree_data.subprogram_data.statement_list != NULL)
+                {
+                    call_target = cand->mangled_id;
+                    break;
+                }
+            }
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+    }
+
     return call_target;
 }
 
@@ -703,6 +748,186 @@ static void codegen_keep_subprogram_label(const char *label)
         g_codegen_available_subprograms = node;
     else
         g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+}
+
+/* Build a unit-qualified mangled name: "unitname$$base_mangled".  Returns a
+ * malloc'd string.  The caller must free it. */
+static char *codegen_build_unit_qualified_mangled(const char *base_mangled,
+                                                   int source_unit_index)
+{
+    if (base_mangled == NULL || source_unit_index <= 0)
+        return NULL;
+    const char *unit_name = unit_registry_get(source_unit_index);
+    if (unit_name == NULL || unit_name[0] == '\0')
+        return NULL;
+    size_t ulen = strlen(unit_name);
+    size_t blen = strlen(base_mangled);
+    char *result = malloc(ulen + 2 + blen + 1);
+    if (result == NULL)
+        return NULL;
+    for (size_t i = 0; i < ulen; i++)
+        result[i] = (char)tolower((unsigned char)unit_name[i]);
+    result[ulen] = '$';
+    result[ulen + 1] = '$';
+    memcpy(result + ulen + 2, base_mangled, blen + 1);
+    return result;
+}
+
+/* Returns 1 if a subprogram tree node is eligible for unit-prefix qualification
+ * (non-method, non-external, non-internproc, has a mangled_id, from a unit). */
+static int codegen_subprogram_is_prefix_eligible(Tree_t *sub)
+{
+    if (sub == NULL || sub->type != TREE_SUBPROGRAM)
+        return 0;
+    struct Subprogram *data = &sub->tree_data.subprogram_data;
+    if (data->source_unit_index <= 0)
+        return 0;
+    if (data->owner_class != NULL)
+        return 0;
+    if (data->cname_override != NULL || data->cname_flag)
+        return 0;
+    if (data->mangled_id == NULL || data->mangled_id[0] == '\0')
+        return 0;
+    if (data->internproc_id != NULL && data->internproc_id[0] != '\0')
+        return 0;
+    return 1;
+}
+
+/* Collision map: tracks mangled names and which unit they belong to.
+ * A mangled_id that appears with two different source_unit_indices is
+ * "colliding" and needs the unit$$ prefix. */
+typedef struct CgCollisionEntry {
+    char *mangled_id;
+    int first_unit_index;
+    int is_colliding;
+    struct CgCollisionEntry *next;
+} CgCollisionEntry;
+
+#define CG_COLLISION_BUCKETS 256
+
+typedef struct {
+    CgCollisionEntry *buckets[CG_COLLISION_BUCKETS];
+} CgCollisionMap;
+
+static unsigned cg_collision_hash(const char *s)
+{
+    unsigned h = 0;
+    for (; *s; s++)
+        h = h * 31 + (unsigned char)*s;
+    return h % CG_COLLISION_BUCKETS;
+}
+
+/* Record a (mangled_id, unit_index) pair.  If the same mangled_id is seen with
+ * a different unit_index, mark it as colliding. */
+static void cg_collision_record(CgCollisionMap *map, const char *mangled_id,
+                                 int unit_index)
+{
+    unsigned idx = cg_collision_hash(mangled_id);
+    for (CgCollisionEntry *e = map->buckets[idx]; e != NULL; e = e->next) {
+        if (strcmp(e->mangled_id, mangled_id) == 0) {
+            if (e->first_unit_index != unit_index)
+                e->is_colliding = 1;
+            return;
+        }
+    }
+    CgCollisionEntry *entry = malloc(sizeof(CgCollisionEntry));
+    if (entry == NULL)
+        return;
+    entry->mangled_id = strdup(mangled_id);
+    entry->first_unit_index = unit_index;
+    entry->is_colliding = 0;
+    entry->next = map->buckets[idx];
+    map->buckets[idx] = entry;
+}
+
+static int cg_collision_is_colliding(const CgCollisionMap *map,
+                                      const char *mangled_id)
+{
+    unsigned idx = cg_collision_hash(mangled_id);
+    for (CgCollisionEntry *e = map->buckets[idx]; e != NULL; e = e->next) {
+        if (strcmp(e->mangled_id, mangled_id) == 0)
+            return e->is_colliding;
+    }
+    return 0;
+}
+
+static void cg_collision_destroy(CgCollisionMap *map)
+{
+    for (int i = 0; i < CG_COLLISION_BUCKETS; i++) {
+        CgCollisionEntry *e = map->buckets[i];
+        while (e != NULL) {
+            CgCollisionEntry *next = e->next;
+            free(e->mangled_id);
+            free(e);
+            e = next;
+        }
+        map->buckets[i] = NULL;
+    }
+}
+
+/* First pass: collect (mangled_id, source_unit_index) pairs from all eligible
+ * subprograms to detect cross-unit mangled name collisions. */
+static void codegen_collect_mangled_collisions(ListNode_t *sub_list,
+                                                CgCollisionMap *map)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (codegen_subprogram_is_prefix_eligible(sub)) {
+            cg_collision_record(map, sub->tree_data.subprogram_data.mangled_id,
+                sub->tree_data.subprogram_data.source_unit_index);
+        }
+        if (sub != NULL && sub->type == TREE_SUBPROGRAM &&
+            sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_collect_mangled_collisions(
+                sub->tree_data.subprogram_data.subprograms, map);
+        sub_list = sub_list->next;
+    }
+}
+
+/* Second pass: for subprograms whose mangled_id collides across units, apply
+ * the unit$$ prefix to both the tree node and the corresponding HashNode. */
+static void codegen_apply_collision_prefixes(ListNode_t *sub_list,
+                                              SymTab_t *symtab,
+                                              const CgCollisionMap *map)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (codegen_subprogram_is_prefix_eligible(sub)) {
+            struct Subprogram *data = &sub->tree_data.subprogram_data;
+            if (cg_collision_is_colliding(map, data->mangled_id)) {
+                char *prefixed = codegen_build_unit_qualified_mangled(
+                    data->mangled_id, data->source_unit_index);
+                if (prefixed != NULL) {
+                    /* Update corresponding HashNode in the symbol table. */
+                    if (symtab != NULL && data->id != NULL) {
+                        ListNode_t *candidates = FindAllIdents(symtab, data->id);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *hn = (HashNode_t *)c->cur;
+                            if (hn == NULL || hn->type == NULL ||
+                                hn->type->kind != TYPE_KIND_PROCEDURE)
+                                continue;
+                            Tree_t *def = hn->type->info.proc_info.definition;
+                            if (def != sub)
+                                continue;
+                            if (hn->mangled_id != NULL)
+                                free(hn->mangled_id);
+                            hn->mangled_id = strdup(prefixed);
+                            break;
+                        }
+                        if (candidates != NULL)
+                            DestroyList(candidates);
+                    }
+                    free(data->mangled_id);
+                    data->mangled_id = prefixed;
+                }
+            }
+        }
+        if (sub != NULL && sub->type == TREE_SUBPROGRAM &&
+            sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_apply_collision_prefixes(
+                sub->tree_data.subprogram_data.subprograms, symtab, map);
+        sub_list = sub_list->next;
+    }
 }
 
 static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
@@ -3638,6 +3863,35 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
 
     codegen_program_header(input_file_name, ctx);
 
+    /* Detect and resolve cross-unit mangled name collisions (e.g.
+     * comptty.IsATTY vs termio.IsATTY both producing "isatty_t").
+     * Two passes: first collect all (mangled_id, unit) pairs, then
+     * prefix only colliding names with "unit$$". */
+    {
+        CgCollisionMap collision_map;
+        memset(&collision_map, 0, sizeof(collision_map));
+        /* Pass 1: collect collisions from all units */
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit != NULL && unit->type == TREE_UNIT)
+                    codegen_collect_mangled_collisions(
+                        unit->tree_data.unit_data.subprograms, &collision_map);
+            }
+        }
+        /* Pass 2: apply prefixes to colliding names */
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit != NULL && unit->type == TREE_UNIT)
+                    codegen_apply_collision_prefixes(
+                        unit->tree_data.unit_data.subprograms, symtab,
+                        &collision_map);
+            }
+        }
+        cg_collision_destroy(&collision_map);
+    }
+
     /* Collect callable export names from loaded units, then program */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
@@ -3727,6 +3981,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+    /* No collision detection needed for single-unit codegen — collisions
+     * only occur when multiple units are merged in program codegen. */
     codegen_collect_callable_export_names(tree->tree_data.unit_data.subprograms);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);

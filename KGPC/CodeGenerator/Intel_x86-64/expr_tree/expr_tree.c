@@ -3626,8 +3626,42 @@ cleanup_constructor:
                 }
             }
         }
+        /* If proc_label is an unprefixed mangled name but the definition was
+         * unit-qualified (unit$$ prefix), resolve to the prefixed version. */
+        char *collision_label = NULL;
+        if (proc_label != NULL && strstr(proc_label, "$$") == NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
+            if (lookup_id != NULL)
+            {
+                ListNode_t *candidates = FindAllIdents(ctx->symtab, lookup_id);
+                for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                {
+                    HashNode_t *cand = (HashNode_t *)c->cur;
+                    if (cand == NULL || cand->mangled_id == NULL)
+                        continue;
+                    const char *sep = strstr(cand->mangled_id, "$$");
+                    if (sep == NULL)
+                        continue;
+                    if (strcmp(sep + 2, proc_label) == 0 &&
+                        cand->type != NULL &&
+                        cand->type->kind == TYPE_KIND_PROCEDURE &&
+                        cand->type->info.proc_info.definition != NULL &&
+                        cand->type->info.proc_info.definition
+                            ->tree_data.subprogram_data.statement_list != NULL)
+                    {
+                        collision_label = strdup(cand->mangled_id);
+                        proc_label = collision_label;
+                        break;
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
+        if (collision_label != NULL) free(collision_label);
         if (resolved_label != NULL) free(resolved_label);
         return add_inst(inst_list, buffer);
     }
