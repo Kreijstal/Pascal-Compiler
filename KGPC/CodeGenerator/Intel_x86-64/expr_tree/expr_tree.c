@@ -1611,7 +1611,23 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     assert(expr != NULL);
 
     if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
-        return build_expr_tree(expr->expr_data.typecast_data.expr);
+    {
+        /* When a typecast converts an array to a pointer type (e.g. PByte(top^.data)
+         * where data is array[0..0] of byte), the result should be the ADDRESS of
+         * the array, not its element value.  Keep the TYPECAST node as a leaf so
+         * gencode_case0 can emit an address computation instead of a value load. */
+        struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
+        int tc_target = expr->expr_data.typecast_data.target_type;
+        if (tc_target == POINTER_TYPE && tc_inner->is_array_expr &&
+            codegen_expr_is_addressable(tc_inner))
+        {
+            /* Fall through to create a leaf TYPECAST node */
+        }
+        else
+        {
+            return build_expr_tree(tc_inner);
+        }
+    }
 
     expr_node_t *new_node;
 
@@ -3489,6 +3505,30 @@ cleanup_constructor:
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
         return codegen_record_access(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr->expr_data.typecast_data.expr->is_array_expr &&
+             codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
+    {
+        /* Array-to-pointer typecast (e.g. PByte(top^.data)):
+         * compute the ADDRESS of the array, not its value. */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.typecast_data.expr,
+            inst_list, ctx, &addr_reg);
+        if (addr_reg != NULL)
+        {
+            if (addr_reg != target_reg)
+            {
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    addr_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+            }
+        }
+        return inst_list;
     }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
