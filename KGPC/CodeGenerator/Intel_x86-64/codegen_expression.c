@@ -8492,21 +8492,70 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    /* Non-char-set IN: evaluate the full relop expression as a boolean value */
+    /* Non-char-set IN: use memory-based btl to correctly handle sets > 32 elements.
+     * btl reg, reg wraps the bit index mod 32, so it fails for enum sets with > 32
+     * elements (e.g. set of tsystemflags with 42 elements).  btl reg, (mem) correctly
+     * computes the byte offset for any bit position. */
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
             *relop_type = NE;
 
-        Register_t *result_reg = NULL;
-        inst_list = codegen_expr_with_result(expr, inst_list, ctx, &result_reg);
-        if (result_reg != NULL)
+        /* Evaluate the left operand (element value) */
+        Register_t *elem_reg = NULL;
+        inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &elem_reg);
+        if (codegen_had_error(ctx) || elem_reg == NULL)
+            return inst_list;
+
+        /* Spill elem to stack across potential function calls in address eval */
+        StackNode_t *elem_spill = add_l_t("in_elem_spill");
+        if (elem_spill != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
-                result_reg->bit_32, result_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n",
+                elem_reg->bit_32, elem_spill->offset);
             inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), result_reg);
+            free_reg(get_reg_stack(), elem_reg);
+            elem_reg = NULL;
         }
+
+        /* Get the address of the right operand (set) */
+        Register_t *set_addr_reg = NULL;
+        inst_list = codegen_address_for_expr(right_expr, inst_list, ctx, &set_addr_reg);
+        if (codegen_had_error(ctx) || set_addr_reg == NULL)
+        {
+            if (elem_reg != NULL)
+                free_reg(get_reg_stack(), elem_reg);
+            return inst_list;
+        }
+
+        /* Reload elem if spilled */
+        if (elem_spill != NULL)
+        {
+            elem_reg = codegen_try_get_reg(&inst_list, ctx, "in_elem_reload");
+            if (elem_reg == NULL)
+            {
+                free_reg(get_reg_stack(), set_addr_reg);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                elem_spill->offset, elem_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        /* btl with memory operand auto-computes byte offset for bit positions
+           beyond 31, so we can test any bit in the set correctly. */
+        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n",
+            elem_reg->bit_32, set_addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
+            elem_reg->bit_32, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
+            elem_reg->bit_32, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), set_addr_reg);
+        free_reg(get_reg_stack(), elem_reg);
         return inst_list;
     }
 
@@ -9046,9 +9095,31 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
-        /* Regular 32-bit sets — use btl (avoids %ecx conflict) */
-        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        /* Enum sets may exceed 32 elements, so btl reg,reg (which wraps mod 32)
+         * is incorrect.  Spill the set value to the stack and use btl reg,(mem)
+         * which correctly computes the byte offset for any bit position. */
+        {
+            StackNode_t *set_spill = add_l_t("in_set_spill");
+            if (set_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    right_reg->bit_64, set_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), right_reg);
+
+                snprintf(buffer, sizeof(buffer), "\tbtl\t%s, -%d(%%rbp)\n",
+                    left_reg->bit_32, set_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* Fallback: use register btl (only correct for sets <= 32 elements) */
+                snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+                    left_reg->bit_32, right_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), right_reg);
+            }
+        }
         /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
@@ -9056,7 +9127,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
-        free_reg(get_reg_stack(), right_reg);
         return inst_list;
     }
 
@@ -9287,14 +9357,15 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
         }
     }
 
-    if (!is_char_set_in)
+    if (!is_char_set_in && relop_kind != IN)
     {
-        /* For non-char-set operations, the expression tree approach works */
+        /* For non-set operations, the expression tree approach works */
         return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
     }
 
-    /* For char set IN operations, we need to use codegen_simple_relop
-     * which properly handles the 32-byte set, then convert flags to value */
+    /* For set IN operations (both char sets and enum sets), we need to use
+     * codegen_simple_relop which properly handles memory-based btl for sets
+     * that may exceed 32 elements, then convert flags to a value. */
     
     int relop_type = 0;
     inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
