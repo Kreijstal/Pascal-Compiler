@@ -6964,7 +6964,28 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             }
                         }
 
-                        add_l_x((char *)id_list->cur, alloc_size);
+                        /* Local typed constants need static storage so their
+                         * address remains valid after the function returns. */
+                        if (tree->tree_data.var_decl_data.has_static_storage &&
+                            tree->tree_data.var_decl_data.static_label != NULL)
+                        {
+                            char *static_label = tree->tree_data.var_decl_data.static_label;
+                            if (!tree->tree_data.var_decl_data.static_storage_emitted)
+                            {
+                                if (ctx->output_file != NULL)
+                                {
+                                    int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, alloc_size, alignment);
+                                }
+                                tree->tree_data.var_decl_data.static_storage_emitted = 1;
+                            }
+                            add_static_var((char *)id_list->cur, alloc_size, static_label);
+                        }
+                        else
+                        {
+                            add_l_x((char *)id_list->cur, alloc_size);
+                        }
                     }
                 }
                 id_list = id_list->next;

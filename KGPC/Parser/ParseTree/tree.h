@@ -152,6 +152,9 @@ typedef struct Tree
             int inferred_type;
             struct Statement *initializer;
             int is_typed_const;
+            int has_static_storage;
+            int static_storage_emitted;
+            char *static_label;
             int currency_scaled;
             struct RecordType *inline_record_type;  /* For inline record declarations */
             struct TypeAlias *inline_type_alias;   /* For inline complex aliases (file of T, etc.) */

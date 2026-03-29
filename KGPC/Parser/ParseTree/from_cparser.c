@@ -2231,6 +2231,18 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
 
 static int typed_const_counter = 0;
 
+/* Mark a TREE_VAR_DECL as having static storage (for local typed constants) */
+static void mark_var_decl_static_storage(Tree_t *decl)
+{
+    if (decl == NULL || decl->type != TREE_VAR_DECL)
+        return;
+    decl->tree_data.var_decl_data.has_static_storage = 1;
+    char label_buffer[64];
+    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_var_%d", typed_const_counter);
+    decl->tree_data.var_decl_data.static_label = strdup(label_buffer);
+    ++typed_const_counter;
+}
+
 static int is_operator_token_name(const char *name)
 {
     if (name == NULL)
@@ -12159,6 +12171,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, PROCEDURE, NULL, 0, 0,
                                        initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            mark_var_decl_static_storage(decl);
             decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             /* Attach the inline procedure type for proper type checking */
             KgpcType *proc_kgpc = convert_type_spec_to_kgpctype(proc_type_node, NULL);
@@ -12319,6 +12332,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
                                       initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            mark_var_decl_static_storage(decl);
             decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             list_builder_append(var_builder, decl, LIST_TREE);
 
@@ -12348,6 +12362,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *decl = mk_vardecl(const_decl_node->line, ids, typed_const_tag, type_id, 0, 0,
                                       initializer_stmt, NULL, NULL, NULL);
             decl->tree_data.var_decl_data.is_typed_const = 1;
+            mark_var_decl_static_storage(decl);
             decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
             list_builder_append(var_builder, decl, LIST_TREE);
 
@@ -12371,6 +12386,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
             Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
                 type_id, 0, 0, NULL, inline_record, NULL, NULL);
             var_decl->tree_data.var_decl_data.is_typed_const = 1;
+            mark_var_decl_static_storage(var_decl);
             var_decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
 
             if (var_builder != NULL)
@@ -12478,8 +12494,9 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         Tree_t *var_decl = mk_vardecl(const_decl_node->line, var_ids, var_type,
             type_id, 0, 0, initializer, inline_record, NULL, NULL);
         var_decl->tree_data.var_decl_data.is_typed_const = 1;
+        mark_var_decl_static_storage(var_decl);
         var_decl->tree_data.var_decl_data.type_ref = type_ref_from_info_or_id(&type_info, type_id);
-        
+
         if (var_builder != NULL)
             list_builder_append(var_builder, var_decl, LIST_TREE);
         
