@@ -171,10 +171,6 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
 {
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-
     assert(table != NULL);
     assert(id != NULL);
 
@@ -183,27 +179,30 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     if (canonical_id == NULL)
         return NULL;
 
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-        return NULL;
-    }
+    int hash = hashpjw(canonical_id);
+    HashNode_t *node = FindIdentInTable_Prehashed(table, canonical_id, hash);
 
-    cur = list;
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
+    return node;
+}
+
+HashNode_t *FindIdentInTable_Prehashed(HashTable_t *table, const char *canonical_id, int hash)
+{
+    assert(table != NULL);
+    assert(canonical_id != NULL);
+
+    ListNode_t *list = table->table[hash % TABLE_SIZE];
+    ListNode_t *cur = list;
     while(cur != NULL)
     {
-        hash_node = (HashNode_t *)cur->cur;
+        HashNode_t *hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
-            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return hash_node;
         }
         cur = cur->next;
     }
 
-    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return NULL;
 }
 
@@ -466,12 +465,6 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
 
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-    ListNode_t *found_list = NULL;
-    ListNode_t *found_tail = NULL;  /* track tail for O(1) append */
-
     assert(table != NULL);
     assert(id != NULL);
 
@@ -480,18 +473,26 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
     if (canonical_id == NULL)
         return NULL;
 
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-        return NULL;
-    }
+    int hash = hashpjw(canonical_id);
+    ListNode_t *found_list = FindAllIdentsInTable_Prehashed(table, canonical_id, hash);
 
-    cur = list;
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
+    return found_list;
+}
+
+ListNode_t *FindAllIdentsInTable_Prehashed(HashTable_t *table, const char *canonical_id, int hash)
+{
+    assert(table != NULL);
+    assert(canonical_id != NULL);
+
+    ListNode_t *list = table->table[hash % TABLE_SIZE];
+    ListNode_t *cur = list;
+    ListNode_t *found_list = NULL;
+    ListNode_t *found_tail = NULL;  /* track tail for O(1) append */
+
     while(cur != NULL)
     {
-        hash_node = (HashNode_t *)cur->cur;
+        HashNode_t *hash_node = (HashNode_t *)cur->cur;
         if(strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
             ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
@@ -509,7 +510,6 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
         cur = cur->next;
     }
 
-    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return found_list;
 }
 

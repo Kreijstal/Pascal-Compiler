@@ -125,6 +125,9 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
 
+/* Pre-hashed variant of FindIdentInTable to avoid redundant canonicalization/hashing in loops. */
+HashNode_t *FindIdentInTable_Prehashed(HashTable_t *table, const char *canonical_id, int hash);
+
 /* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
  * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
  * this skips program-local redeclarations to find the unit-defined symbol. */
@@ -150,6 +153,9 @@ HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix);
 
 /* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);
+
+/* Pre-hashed variant of FindAllIdentsInTable. */
+ListNode_t *FindAllIdentsInTable_Prehashed(HashTable_t *table, const char *canonical_id, int hash);
 
 /* Move an existing hash node to the back of its bucket list */
 void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node);

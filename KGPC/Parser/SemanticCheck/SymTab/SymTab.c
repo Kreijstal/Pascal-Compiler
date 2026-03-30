@@ -18,6 +18,7 @@
 #include "../../ParseTree/KgpcType.h"
 #include "../../ParseTree/type_tags.h"
 #include "../../../unit_registry.h"
+#include "../../../identifier_utils.h"
 
 /* Forward declarations */
 ScopeNode *GetOrCreateUnitScope(SymTab_t *symtab, int unit_index);  /* defined later */
@@ -684,9 +685,18 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
     ScopeNode *scope = symtab->current_scope;
     int trace_flush = (id != NULL && strcasecmp(id, "Flush") == 0 && getenv("KGPC_DEBUG_FLUSH") != NULL);
 
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
+    if (canonical_id == NULL)
+    {
+        *hash_return = NULL;
+        return 0;
+    }
+    int hash = hashpjw(canonical_id);
+
     while (scope != NULL)
     {
-        HashNode_t *node = FindIdentInTable(scope->table, id);
+        HashNode_t *node = FindIdentInTable_Prehashed(scope->table, canonical_id, hash);
 
         if (trace_flush)
             fprintf(stderr, "[FLUSH] scope=%p unit_idx=%d table=%p node=%p num_deps=%d parent=%p\n",
@@ -695,6 +705,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
         if (node != NULL)
         {
             *hash_return = node;
+            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return 1;
         }
 
@@ -704,7 +715,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
         {
             for (int i = scope->num_deps - 1; i >= 0; i--)
             {
-                node = FindIdentInTable(scope->dep_scopes[i]->table, id);
+                node = FindIdentInTable_Prehashed(scope->dep_scopes[i]->table, canonical_id, hash);
                 if (trace_flush)
                     fprintf(stderr, "[FLUSH]   dep[%d] unit_idx=%d table=%p node=%p\n",
                         i, scope->dep_scopes[i]->unit_index, (void*)scope->dep_scopes[i]->table, (void*)node);
@@ -719,6 +730,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
                         node->source_unit_index != symtab->current_unit_index)
                         continue;
                     *hash_return = node;
+                    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
                     return 1;
                 }
             }
@@ -727,6 +739,7 @@ static int FindIdent_Tree(HashNode_t **hash_return, SymTab_t *symtab, const char
         scope = scope->parent;
     }
 
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     *hash_return = NULL;
     return 0;
 }
@@ -771,19 +784,26 @@ static ListNode_t *FindAllIdents_Tree(SymTab_t *symtab, const char *id)
     ListNode_t *all = NULL;
     ScopeNode *scope = symtab->current_scope;
 
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
+    if (canonical_id == NULL)
+        return NULL;
+    int hash = hashpjw(canonical_id);
+
     while (scope != NULL)
     {
-        all = append_list(all, FindAllIdentsInTable(scope->table, id));
+        all = append_list(all, FindAllIdentsInTable_Prehashed(scope->table, canonical_id, hash));
 
         if (scope->num_deps > 0)
         {
             for (int i = 0; i < scope->num_deps; i++)
-                all = append_list(all, FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+                all = append_list(all, FindAllIdentsInTable_Prehashed(scope->dep_scopes[i]->table, canonical_id, hash));
         }
 
         scope = scope->parent;
     }
 
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return all;
 }
 
@@ -794,9 +814,15 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
 {
     ScopeNode *scope = symtab->current_scope;
 
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *canonical_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
+    if (canonical_id == NULL)
+        return NULL;
+    int hash = hashpjw(canonical_id);
+
     while (scope != NULL)
     {
-        ListNode_t *matches = FindAllIdentsInTable(scope->table, id);
+        ListNode_t *matches = FindAllIdentsInTable_Prehashed(scope->table, canonical_id, hash);
         if (matches != NULL)
         {
             /* Also collect from dep_scopes at this level for completeness */
@@ -804,8 +830,9 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
             {
                 for (int i = 0; i < scope->num_deps; i++)
                     matches = append_list(matches,
-                        FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+                        FindAllIdentsInTable_Prehashed(scope->dep_scopes[i]->table, canonical_id, hash));
             }
+            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return matches;
         }
 
@@ -815,14 +842,18 @@ static ListNode_t *FindAllIdentsInNearestScope_Tree(SymTab_t *symtab, const char
             ListNode_t *dep_matches = NULL;
             for (int i = 0; i < scope->num_deps; i++)
                 dep_matches = append_list(dep_matches,
-                    FindAllIdentsInTable(scope->dep_scopes[i]->table, id));
+                    FindAllIdentsInTable_Prehashed(scope->dep_scopes[i]->table, canonical_id, hash));
             if (dep_matches != NULL)
+            {
+                pascal_identifier_lower_buf_free(canonical_id, stack_buf);
                 return dep_matches;
+            }
         }
 
         scope = scope->parent;
     }
 
+    pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return NULL;
 }
 
