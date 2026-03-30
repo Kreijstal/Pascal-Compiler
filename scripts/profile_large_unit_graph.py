@@ -82,20 +82,86 @@ def build_command(args: argparse.Namespace, asm_path: Path) -> list[str]:
     ]
 
 
-def ensure_bootstrap_prereqs(fpc_source: Path) -> None:
+def build_msg2inc_command(compiler: Path, fpc_source: Path, asm_path: Path) -> list[str]:
+    return [
+        str(compiler),
+        str(fpc_source / "compiler" / "utils" / "msg2inc.pp"),
+        str(asm_path),
+        "--no-stdlib",
+        "-DCPU64",
+        "-DCPUX86_64",
+        "-Dx86_64",
+        "-DFPC",
+        "-DLINUX",
+        "-DUNIX",
+        "-DFPC_HAS_TYPE_EXTENDED",
+        "-DSUPPORT_EXTENDED",
+        "-Sg",
+        f"-I{fpc_source / 'rtl' / 'objpas'}",
+        f"-I{fpc_source / 'rtl' / 'objpas' / 'sysutils'}",
+        f"-I{fpc_source / 'rtl' / 'objpas' / 'classes'}",
+        f"-I{fpc_source / 'rtl' / 'linux'}",
+        f"-I{fpc_source / 'rtl' / 'unix'}",
+        f"-I{fpc_source / 'rtl' / 'inc'}",
+        f"-I{fpc_source / 'rtl' / 'x86_64'}",
+        f"-I{fpc_source / 'rtl' / 'linux' / 'x86_64'}",
+        f"-I{fpc_source / 'rtl' / 'unix' / 'x86_64'}",
+        f"-Fu{fpc_source / 'rtl' / 'unix'}",
+        f"-Fu{fpc_source / 'rtl' / 'linux'}",
+        f"-Fu{fpc_source / 'rtl' / 'objpas'}",
+        f"-Fu{fpc_source / 'rtl' / 'inc'}",
+        f"-Fu{fpc_source / 'rtl' / 'objpas' / 'sysutils'}",
+        f"-Fu{fpc_source / 'rtl' / 'objpas' / 'classes'}",
+    ]
+
+
+def ensure_bootstrap_prereqs(compiler: Path, fpc_source: Path, output_dir: Path) -> None:
     msgtxt = fpc_source / "compiler" / "msgtxt.inc"
     if msgtxt.exists():
         return
 
-    cmd = ["make", "-B", "-C", str(fpc_source / "compiler"), "msg"]
-    print("Preparing FPC bootstrap prerequisites:")
-    print(" ".join(cmd))
+    runtime_lib = compiler.parent / "libkgpc_runtime.a"
+    if not runtime_lib.exists():
+        raise RuntimeError(f"missing KGPC runtime library: {runtime_lib}")
+
+    asm_path = output_dir / "msg2inc.s"
+    exe_path = output_dir / "msg2inc"
+    compile_cmd = build_msg2inc_command(compiler, fpc_source, asm_path)
+    link_cmd = [
+        "cc", "-O2", "-no-pie", "-o", str(exe_path), str(asm_path), str(runtime_lib),
+        "-lm", "-lpthread",
+    ]
+    run_cmd = [str(exe_path.resolve()), "msg/errore.msg", "msg", "msg"]
+
+    print("Preparing FPC bootstrap prerequisites with KGPC:")
+    print(" ".join(compile_cmd))
     sys.stdout.flush()
-    proc = subprocess.run(cmd, capture_output=True, text=True)
+    proc = subprocess.run(compile_cmd, capture_output=True, text=True)
     sys.stdout.write(proc.stdout)
     sys.stderr.write(proc.stderr)
     if proc.returncode != 0:
-        raise RuntimeError(f"failed to generate {msgtxt} (exit {proc.returncode})")
+        raise RuntimeError(f"failed to compile msg2inc with KGPC (exit {proc.returncode})")
+
+    print(" ".join(link_cmd))
+    sys.stdout.flush()
+    proc = subprocess.run(link_cmd, capture_output=True, text=True)
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    if proc.returncode != 0:
+        raise RuntimeError(f"failed to link msg2inc (exit {proc.returncode})")
+
+    print(" ".join(run_cmd))
+    sys.stdout.flush()
+    proc = subprocess.run(
+        run_cmd,
+        cwd=fpc_source / "compiler",
+        capture_output=True,
+        text=True,
+    )
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    if proc.returncode != 0:
+        raise RuntimeError(f"failed to generate {msgtxt} with KGPC msg2inc (exit {proc.returncode})")
 
 
 def parse_timings(output: str) -> dict[str, float]:
@@ -125,7 +191,8 @@ def main() -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     asm_path = output_dir / "test_pp_readargs.s"
     fpc_source = Path(args.fpc_source)
-    ensure_bootstrap_prereqs(fpc_source)
+    compiler = Path(args.compiler)
+    ensure_bootstrap_prereqs(compiler, fpc_source, output_dir)
     cmd = build_command(args, asm_path)
 
     print("Running perf probe command:")
