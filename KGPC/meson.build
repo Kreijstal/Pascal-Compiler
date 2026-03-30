@@ -98,15 +98,7 @@ gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
 runtime_sources = [
   'runtime.c',
-  'runtime_fpopen.c',
-  'runtime_fpopen_i_i_i.c',
-  'runtime_fpclose.c',
-  'runtime_fpclose_i.c',
-  'runtime_fpread.c',
-  'runtime_fpwrite.c',
-  'runtime_fpgetcwd.c',
-  'runtime_fplseek.c',
-  'runtime_fpchmod.c',
+  'runtime_baseunix.c',
 ]
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
