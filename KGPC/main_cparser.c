@@ -98,6 +98,8 @@ static const char *g_codegen_cache_dir = NULL;
 static char g_codegen_cache_obj_path[4096]; /* path to the cached .o used/created */
 static char g_codegen_cache_asm_path[4096]; /* path to the cache .s (unit functions only) */
 static int g_codegen_cache_hit = 0; /* 1 if cache hit, 0 if miss */
+static int g_codegen_cache_forced_function_sections = 0;
+static int g_codegen_cache_forced_skip_unit_codegen = 0;
 static int g_saved_argc = 0;
 static char **g_saved_argv = NULL;
 static int g_batch_mode = 0;
@@ -2027,6 +2029,7 @@ static int batch_mode_main(int argc, char **argv)
 static void emit_link_args(void); /* forward declaration */
 static void codegen_cache_check(void);
 static void codegen_cache_populate(const char *asm_file);
+static void codegen_cache_clear_transient_flags(void);
 
 /* Compile a single Pascal program.  Used by both normal mode and batch mode.
  * Returns 0 on success, non-zero on error. */
@@ -2310,14 +2313,14 @@ static int compile_single_program(
                 codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
-        /* Clear cache-mode flags so they don't leak into later compilations. */
-        clear_codegen_cache_miss_flag();
+        /* Clear transient cache-mode flags so they don't leak into later compilations. */
+        codegen_cache_clear_transient_flags();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
-        clear_codegen_cache_miss_flag();
+        codegen_cache_clear_transient_flags();
     }
 
     DestroySymTab(symtab);
@@ -2445,6 +2448,9 @@ static void codegen_cache_check(void)
     if (g_codegen_cache_dir == NULL)
         return;
 
+    g_codegen_cache_forced_function_sections = 0;
+    g_codegen_cache_forced_skip_unit_codegen = 0;
+
     char key[32];
     codegen_cache_compute_key(key, sizeof(key));
     snprintf(g_codegen_cache_obj_path, sizeof(g_codegen_cache_obj_path),
@@ -2455,17 +2461,40 @@ static void codegen_cache_check(void)
     if (access(g_codegen_cache_obj_path, R_OK) == 0)
     {
         fprintf(stderr, "Codegen cache hit: %s\n", g_codegen_cache_obj_path);
-        set_skip_unit_codegen_flag();
-        set_function_sections_flag();
+        if (!skip_unit_codegen_flag())
+        {
+            set_skip_unit_codegen_flag();
+            g_codegen_cache_forced_skip_unit_codegen = 1;
+        }
+        if (!function_sections_flag())
+        {
+            set_function_sections_flag();
+            g_codegen_cache_forced_function_sections = 1;
+        }
         g_codegen_cache_hit = 1;
     }
     else
     {
         fprintf(stderr, "Codegen cache miss; will populate: %s\n", g_codegen_cache_obj_path);
-        set_function_sections_flag();
+        if (!function_sections_flag())
+        {
+            set_function_sections_flag();
+            g_codegen_cache_forced_function_sections = 1;
+        }
         set_codegen_cache_miss_flag();
         g_codegen_cache_hit = 0;
     }
+}
+
+static void codegen_cache_clear_transient_flags(void)
+{
+    clear_codegen_cache_miss_flag();
+    if (g_codegen_cache_forced_skip_unit_codegen)
+        clear_skip_unit_codegen_flag();
+    if (g_codegen_cache_forced_function_sections)
+        clear_function_sections_flag();
+    g_codegen_cache_forced_skip_unit_codegen = 0;
+    g_codegen_cache_forced_function_sections = 0;
 }
 
 /* Replace broken sections in cache .s with ud2 stubs.
@@ -3566,14 +3595,14 @@ int main(int argc, char **argv)
                 codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
-        /* Clear cache-mode flags so they don't leak into later compilations. */
-        clear_codegen_cache_miss_flag();
+        /* Clear transient cache-mode flags so they don't leak into later compilations. */
+        codegen_cache_clear_transient_flags();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
-        clear_codegen_cache_miss_flag();
+        codegen_cache_clear_transient_flags();
     }
 
     DestroySymTab(symtab);

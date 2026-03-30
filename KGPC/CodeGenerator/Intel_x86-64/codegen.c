@@ -4630,6 +4630,8 @@ static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
     ScopeNode *saved_scope = symtab->current_scope;
     int saved_unit_index = symtab->current_unit_index;
     ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, source_unit_index);
+    if (unit_scope != NULL && unit_scope->codegen_unit_scope_registered)
+        return;
     if (unit_scope != NULL)
         symtab->current_scope = unit_scope;
     symtab->current_unit_index = source_unit_index;
@@ -4640,6 +4642,8 @@ static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
     codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
     codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
     codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
+    if (unit_scope != NULL)
+        unit_scope->codegen_unit_scope_registered = 1;
 
     symtab->current_scope = saved_scope;
     symtab->current_unit_index = saved_unit_index;

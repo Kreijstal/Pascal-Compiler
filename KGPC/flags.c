@@ -199,6 +199,11 @@ void set_function_sections_flag(void)
     FLAG_FUNCTION_SECTIONS = 1;
 }
 
+void clear_function_sections_flag(void)
+{
+    FLAG_FUNCTION_SECTIONS = 0;
+}
+
 int function_sections_flag(void)
 {
     return FLAG_FUNCTION_SECTIONS;
@@ -207,6 +212,11 @@ int function_sections_flag(void)
 void set_skip_unit_codegen_flag(void)
 {
     FLAG_SKIP_UNIT_CODEGEN = 1;
+}
+
+void clear_skip_unit_codegen_flag(void)
+{
+    FLAG_SKIP_UNIT_CODEGEN = 0;
 }
 
 int skip_unit_codegen_flag(void)
