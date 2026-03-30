@@ -30,6 +30,12 @@ static int FLAG_COMPILE_SYSTEM_UNIT = 0;
 /* Flag for enabling goto statements (FPC -Sg flag) */
 static int FLAG_GOTO_ENABLED = 0;
 
+/* Flag for emitting each function in its own .text section (for linker --gc-sections) */
+static int FLAG_FUNCTION_SECTIONS = 0;
+
+/* Flag for skipping unit codegen (only emit program code; units come from cached .o) */
+static int FLAG_SKIP_UNIT_CODEGEN = 0;
+
 static kgpc_target_abi_t FLAG_TARGET_ABI =
 #if defined(_WIN32) || defined(__CYGWIN__)
     KGPC_TARGET_ABI_WINDOWS;
@@ -182,4 +188,24 @@ int compile_system_unit_flag(void)
 int goto_enabled_flag(void)
 {
     return FLAG_GOTO_ENABLED;
+}
+
+void set_function_sections_flag(void)
+{
+    FLAG_FUNCTION_SECTIONS = 1;
+}
+
+int function_sections_flag(void)
+{
+    return FLAG_FUNCTION_SECTIONS;
+}
+
+void set_skip_unit_codegen_flag(void)
+{
+    FLAG_SKIP_UNIT_CODEGEN = 1;
+}
+
+int skip_unit_codegen_flag(void)
+{
+    return FLAG_SKIP_UNIT_CODEGEN;
 }

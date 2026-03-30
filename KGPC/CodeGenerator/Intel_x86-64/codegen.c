@@ -3586,7 +3586,7 @@ static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab, in
     }
 
     if (emitted_any)
-        fprintf(ctx->output_file, ".text\n");
+        fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
 
     for (int i = 0; i < emitted_count; ++i)
         free((void *)emitted_labels[i]);
@@ -3913,6 +3913,10 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
+    /* Emit per-function .text section when --function-sections is enabled,
+     * allowing the linker's --gc-sections to strip unused functions. */
+    if (function_sections_flag())
+        fprintf(ctx->output_file, "\t.section\t.text.%s,\"ax\",@progbits\n", func_name);
     /* All functions use .globl — the compiler produces a single .s file but
      * the runtime library (.a) needs to call many unit-defined functions. */
     const char *vis = ".globl";
@@ -4670,7 +4674,7 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     fprintf(ctx->output_file, ".string \"%%d\\n\"\n");
     fprintf(ctx->output_file, ".format_str_n:\n");
     fprintf(ctx->output_file, ".string \"\\n\"\n");
-    fprintf(ctx->output_file, ".text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
     codegen_emit_integer_const_equivs(ctx, symtab);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -4954,7 +4958,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char thunk_label[768];
                         snprintf(thunk_label, sizeof(thunk_label), "%s_INTF_%s_THUNK_%s",
                             class_label, iface_name, vtbl_imethod->name);
-                        fprintf(ctx->output_file, "\t.text\n");
+                        fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
                         /* If the method returns a large type (SRET), Self
                          * shifts from the first to the second arg register. */
@@ -6029,7 +6033,7 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
              * check above ensures we don't emit when a concrete impl exists. */
             fprintf(ctx->output_file,
                     "\n# Abstract method stub: %s\n", mangled_id);
-            fprintf(ctx->output_file, "\t.text\n");
+            fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
             fprintf(ctx->output_file, ".globl %s\n", mangled_id);
             fprintf(ctx->output_file, "%s:\n", mangled_id);
             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
@@ -6078,7 +6082,7 @@ static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
     if (ctx == NULL || exported_symbol == NULL || target_symbol == NULL)
         return;
 
-    fprintf(ctx->output_file, "\t.text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
     fprintf(ctx->output_file, ".globl %s\n", exported_symbol);
     fprintf(ctx->output_file, "%s:\n", exported_symbol);
     fprintf(ctx->output_file, "\tjmp\t%s\n", target_symbol);
@@ -6152,7 +6156,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     EmittedClassSet emitted_classes = {0};
 
-    /* Emit VMTs from loaded units first */
+    /* Emit VMTs from loaded units */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6167,7 +6171,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     /* Emit VMTs from the current compilation unit/program declarations.
      * When compiling a unit directly, it is not yet present in loaded_units,
-     * so we must emit from the current TREE_UNIT explicitly. */
+     * so we must emit from the current TREE_UNIT explicitly.
+     * When --skip-unit-codegen is active, codegen_vmt returns early above. */
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_from_type_list(ctx, symtab,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
@@ -6183,7 +6188,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
      * (e.g., specializations pulled in from units like FGL).
      * Restrict this fallback to whole-program codegen. Direct unit codegen
      * should emit from the unit's own declared types, not arbitrary symtab
-     * entries that may include incomplete or transient records. */
+     * entries that may include incomplete or transient records.
+     * When --skip-unit-codegen is active, codegen_vmt returns early above. */
     if (tree->type == TREE_PROGRAM_TYPE)
     {
         for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
@@ -6347,7 +6353,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     emitted_class_set_destroy(&emitted_classes);
 
-    fprintf(ctx->output_file, ".text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -6689,7 +6695,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     push_stackscope();
 
-    /* Process var/const declarations from loaded units first, then program */
+    /* Process var/const declarations from loaded units first, then program.
+     * These are always needed — even with --skip-unit-codegen, the per-test
+     * compilation must emit unit globals and run unit init code. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6727,7 +6735,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * return from load_unit(), so the most fundamental unit has the highest
      * array index.  Iterating in reverse processes fundamentals first. */
     codegen_subprograms(data->subprograms, ctx, symtab);
-    if (comp_ctx != NULL) {
+    if (comp_ctx != NULL && !skip_unit_codegen_flag()) {
         for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
@@ -6962,7 +6970,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
 
     inst_list = NULL;
-    /* Emit var initializers from loaded units first, then program */
+    /* Emit var initializers from loaded units first, then program. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6974,7 +6982,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
 
-    /* Emit unit initialization blocks in dependency (load) order */
+    /* Emit unit initialization blocks in dependency (load) order. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -7002,7 +7010,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
-    /* Emit unit finalization blocks in reverse dependency order (LIFO) */
+    /* Emit unit finalization blocks in reverse dependency order (LIFO). */
     if (comp_ctx != NULL) {
         for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -7023,7 +7031,8 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
        init/finalization.  KGPC inlines that code into main, so emit a
-       minimal table with TableCount = 0. */
+       minimal table with TableCount = 0.
+       */
     if (ctx->output_file != NULL) {
         fprintf(ctx->output_file, "\n.data\n");
         fprintf(ctx->output_file, ".globl\tINITFINAL\n");
@@ -7851,6 +7860,16 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub->tree_data.subprogram_data.is_generic_template);
         }
 
+        /* When --skip-unit-codegen is active, skip subprograms that belong
+         * to a unit (source_unit_index != 0).  Their code comes from the
+         * pre-compiled warmup .o file. */
+        if (skip_unit_codegen_flag() &&
+            sub->tree_data.subprogram_data.source_unit_index != 0)
+        {
+            sub_list = sub_list->next;
+            continue;
+        }
+
         if (mangled_id != NULL && codegen_set_contains(&g_emitted_set, mangled_id))
         {
             if (trace_tfplistenum || trace_missing_calls)
@@ -7958,16 +7977,73 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             codegen_set_insert(&g_emitted_set, mangled_id);
         }
 
-        switch(sub->tree_data.subprogram_data.sub_type)
+        /* When --function-sections is active, buffer each function's output
+         * so we can discard broken functions (those with codegen errors like
+         * unresolved non-locals).  The broken section would produce invalid
+         * assembly; --gc-sections removes the stub at link time. */
+        if (function_sections_flag())
         {
-            case TREE_SUBPROGRAM_PROC:
-                codegen_procedure(sub, ctx, symtab);
-                break;
-            case TREE_SUBPROGRAM_FUNC:
-                codegen_function(sub, ctx, symtab);
-                break;
-            default:
-                assert(0 && "Unrecognized subprogram type in codegen!");
+            FILE *real_output = ctx->output_file;
+            char *membuf = NULL;
+            size_t membuf_size = 0;
+            FILE *mem_output = open_memstream(&membuf, &membuf_size);
+            ctx->output_file = mem_output;
+            int had_error_before = ctx->had_error;
+            ctx->had_error = 0;
+
+            switch(sub->tree_data.subprogram_data.sub_type)
+            {
+                case TREE_SUBPROGRAM_PROC:
+                    codegen_procedure(sub, ctx, symtab);
+                    break;
+                case TREE_SUBPROGRAM_FUNC:
+                    codegen_function(sub, ctx, symtab);
+                    break;
+                default:
+                    assert(0 && "Unrecognized subprogram type in codegen!");
+            }
+
+            fflush(mem_output);
+            fclose(mem_output);
+            ctx->output_file = real_output;
+
+            if (ctx->had_error)
+            {
+                /* Discard broken output; emit a minimal stub so the symbol
+                 * exists (linker --gc-sections will remove it if unused). */
+                if (mangled_id != NULL)
+                {
+                    fprintf(real_output,
+                        "\t.section\t.text.%s,\"ax\",@progbits\n"
+                        "\t.globl\t%s\n"
+                        "%s:\n"
+                        "\tud2\n",
+                        mangled_id, mangled_id, mangled_id);
+                }
+                /* Reset register allocator to recover from leaked registers */
+                reset_reg_stack();
+            }
+            else
+            {
+                /* Good output — write to real file */
+                fwrite(membuf, 1, membuf_size, real_output);
+            }
+            ctx->had_error = had_error_before;
+            free(membuf);
+        }
+        else
+        {
+            switch(sub->tree_data.subprogram_data.sub_type)
+            {
+                case TREE_SUBPROGRAM_PROC:
+                    codegen_procedure(sub, ctx, symtab);
+                    break;
+                case TREE_SUBPROGRAM_FUNC:
+                    codegen_function(sub, ctx, symtab);
+                    break;
+                default:
+                    assert(0 && "Unrecognized subprogram type in codegen!");
+            }
         }
         sub_list = sub_list->next;
     }

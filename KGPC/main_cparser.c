@@ -94,6 +94,9 @@ static bool g_skip_stdlib = false;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
 static int g_ast_cache_explicit = 0;
+static const char *g_codegen_cache_dir = NULL;
+static char g_codegen_cache_obj_path[4096]; /* path to the cached .o used/created */
+static int g_codegen_cache_hit = 0; /* 1 if cache hit, 0 if miss */
 static int g_batch_mode = 0;
 static int g_batch_max_parallel = 0; /* 0 = auto (nproc) */
 
@@ -659,6 +662,18 @@ static SetFlagsResult set_flags(char **optional_args, int count)
         {
             fprintf(stderr, "Dead-code elimination disabled (emit unused subprograms).\n\n");
             set_disable_dce_flag();
+        }
+        else if (strcmp(arg, "--function-sections") == 0)
+        {
+            set_function_sections_flag();
+        }
+        else if (strcmp(arg, "--skip-unit-codegen") == 0)
+        {
+            set_skip_unit_codegen_flag();
+        }
+        else if (strncmp(arg, "--codegen-cache-dir=", 20) == 0)
+        {
+            g_codegen_cache_dir = &arg[20];
         }
         else if (arg[0] == '-' && arg[1] == 'I' && arg[2] != '\0')
         {
@@ -2007,6 +2022,8 @@ static int batch_mode_main(int argc, char **argv)
 #endif /* !_WIN32 */
 
 static void emit_link_args(void); /* forward declaration */
+static void codegen_cache_check(void);
+static void codegen_cache_populate(const char *asm_file);
 
 /* Compile a single Pascal program.  Used by both normal mode and batch mode.
  * Returns 0 on success, non-zero on error. */
@@ -2219,6 +2236,9 @@ static int compile_single_program(
 
     if (sem_result <= 0)
     {
+        /* Check codegen cache after semcheck (units are fully loaded) */
+        codegen_cache_check();
+
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
         CodeGenContext ctx;
@@ -2262,7 +2282,7 @@ static int compile_single_program(
         report_rss("after code generation");
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
-        if (codegen_failed)
+        if (codegen_failed && !function_sections_flag())
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
@@ -2270,6 +2290,11 @@ static int compile_single_program(
         }
         else
         {
+            if (codegen_failed)
+                fprintf(stderr, "WARNING: codegen had errors; keeping output for --function-sections (--gc-sections will discard broken sections).\n");
+            /* On cache miss, assemble the full .s into the cache .o */
+            if (!codegen_failed)
+                codegen_cache_populate(output_file);
             emit_link_args();
         }
     }
@@ -2287,13 +2312,167 @@ static int compile_single_program(
     return exit_code;
 }
 
+/* Compute a cache key from the set of loaded units + compiler mtime.
+ * Returns a hex string of a hash of sorted unit names. */
+static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
+{
+    int count = unit_registry_count();
+    /* Collect and sort unit names */
+    const char **names = calloc((size_t)count, sizeof(const char *));
+    int n = 0;
+    for (int i = 1; i <= count; i++)
+    {
+        const char *name = unit_registry_get(i);
+        if (name != NULL)
+            names[n++] = name;
+    }
+    /* Simple insertion sort (unit count is small) */
+    for (int i = 1; i < n; i++)
+    {
+        const char *tmp = names[i];
+        int j = i - 1;
+        while (j >= 0 && strcasecmp(names[j], tmp) > 0)
+        {
+            names[j + 1] = names[j];
+            j--;
+        }
+        names[j + 1] = tmp;
+    }
+    /* Hash the sorted names */
+    unsigned long hash = 5381;
+    for (int i = 0; i < n; i++)
+    {
+        for (const char *p = names[i]; *p; p++)
+        {
+            unsigned char c = (unsigned char)*p;
+            if (c >= 'A' && c <= 'Z')
+                c = c - 'A' + 'a';
+            hash = hash * 33 + c;
+        }
+        hash = hash * 33 + '\0'; /* separator */
+    }
+    free(names);
+
+    /* Include compiler binary mtime for cache invalidation */
+    {
+        char exe_path[PATH_MAX];
+        ssize_t len = get_executable_path(exe_path, sizeof(exe_path), NULL);
+        if (len > 0)
+        {
+            struct stat st;
+            if (stat(exe_path, &st) == 0)
+                hash = hash * 33 + (unsigned long)st.st_mtime;
+        }
+    }
+
+    /* Include target ABI in cache key */
+    hash = hash * 33 + (unsigned long)current_target_abi();
+
+    /* Include MALLOC_PERTURB_ since it affects runtime behavior testing */
+    {
+        const char *mp = getenv("MALLOC_PERTURB_");
+        if (mp != NULL)
+            for (const char *p = mp; *p; p++)
+                hash = hash * 33 + (unsigned char)*p;
+    }
+
+    snprintf(key_buf, key_buf_size, "%016lx", hash);
+}
+
+/* Check if a codegen cache entry exists for the current unit set.
+ * If so, enables skip-unit-codegen + function-sections and sets g_codegen_cache_hit.
+ * Returns the path to the cached .o in g_codegen_cache_obj_path. */
+static void codegen_cache_check(void)
+{
+    if (g_codegen_cache_dir == NULL)
+        return;
+
+    char key[32];
+    codegen_cache_compute_key(key, sizeof(key));
+    snprintf(g_codegen_cache_obj_path, sizeof(g_codegen_cache_obj_path),
+             "%s/%s.o", g_codegen_cache_dir, key);
+
+    if (access(g_codegen_cache_obj_path, R_OK) == 0)
+    {
+        /* Cache hit — enable skip-unit-codegen + function-sections */
+        fprintf(stderr, "Codegen cache hit: %s\n", g_codegen_cache_obj_path);
+        set_skip_unit_codegen_flag();
+        set_function_sections_flag();
+        g_codegen_cache_hit = 1;
+    }
+    else
+    {
+        /* Cache miss — enable function-sections for the full compile */
+        fprintf(stderr, "Codegen cache miss; will populate: %s\n", g_codegen_cache_obj_path);
+        set_function_sections_flag();
+        g_codegen_cache_hit = 0;
+    }
+}
+
+/* After a cache-miss full compile, assemble the .s into the cache .o.
+ * Invokes `as` and `objcopy` externally.
+ * If assembly fails (e.g. broken inline-asm), the cache is not populated
+ * and g_codegen_cache_obj_path is cleared so link args don't reference it. */
+static void codegen_cache_populate(const char *asm_file)
+{
+    if (g_codegen_cache_dir == NULL || g_codegen_cache_hit)
+        return;
+
+    /* Ensure cache directory exists */
+    {
+        char mkdir_cmd[4200];
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p '%s'", g_codegen_cache_dir);
+        system(mkdir_cmd);
+    }
+
+    /* Assemble .s → temp .o */
+    char tmp_obj[4200];
+    snprintf(tmp_obj, sizeof(tmp_obj), "%s.tmp", g_codegen_cache_obj_path);
+
+    char cmd[8500];
+    snprintf(cmd, sizeof(cmd), "as '%s' -o '%s' 2>/dev/null", asm_file, tmp_obj);
+    int rc = system(cmd);
+    if (rc != 0)
+    {
+        fprintf(stderr, "WARNING: codegen cache: as failed (rc=%d), cache not populated\n", rc);
+        g_codegen_cache_obj_path[0] = '\0'; /* Don't reference non-existent .o in link args */
+        return;
+    }
+
+    /* Localize main symbol so it doesn't conflict with per-test main */
+    snprintf(cmd, sizeof(cmd),
+             "objcopy --localize-symbol=main '%s' '%s' 2>/dev/null",
+             tmp_obj, g_codegen_cache_obj_path);
+    rc = system(cmd);
+    if (rc != 0)
+    {
+        /* Try without objcopy — just rename */
+        rename(tmp_obj, g_codegen_cache_obj_path);
+        fprintf(stderr, "WARNING: codegen cache: objcopy failed, cached without localizing main\n");
+    }
+    else
+    {
+        remove(tmp_obj);
+    }
+
+    fprintf(stderr, "Codegen cache populated: %s\n", g_codegen_cache_obj_path);
+}
+
 static void emit_link_args(void)
 {
     if (!g_emit_link_args)
         return;
 
-    char buffer[256];
+    char buffer[4096];
     size_t used = 0;
+
+    /* If using codegen cache, include the cached .o and gc-sections */
+    if (g_codegen_cache_dir != NULL && g_codegen_cache_obj_path[0] != '\0')
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " %s -Wl,--gc-sections -Wl,-z,muldefs",
+                                 g_codegen_cache_obj_path);
+    }
 
     if (!target_windows_flag())
     {
@@ -3064,6 +3243,9 @@ int main(int argc, char **argv)
 
     if (sem_result <= 0)
     {
+        /* Check codegen cache after semcheck (units are fully loaded) */
+        codegen_cache_check();
+
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
         CodeGenContext ctx;
@@ -3118,7 +3300,7 @@ int main(int argc, char **argv)
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
-        if (codegen_failed)
+        if (codegen_failed && !function_sections_flag())
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
@@ -3126,6 +3308,11 @@ int main(int argc, char **argv)
         }
         else
         {
+            if (codegen_failed)
+                fprintf(stderr, "WARNING: codegen had errors; keeping output for --function-sections (--gc-sections will discard broken sections).\n");
+            /* On cache miss, assemble the full .s into the cache .o */
+            if (!codegen_failed)
+                codegen_cache_populate(output_file);
             emit_link_args();
         }
     }

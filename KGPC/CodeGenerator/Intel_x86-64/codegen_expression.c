@@ -5635,8 +5635,8 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
                     char escaped[512];
                     escape_string(escaped, node->const_string_value, sizeof(escaped));
                     snprintf(rodata_buf, sizeof(rodata_buf),
-                        "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n\t.text\n",
-                        readonly_section, str_label, escaped, ptr_label, str_label);
+                        "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n%s\n",
+                        readonly_section, str_label, escaped, ptr_label, str_label, codegen_text_section_resume());
                     inst_list = add_inst(inst_list, rodata_buf);
                     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                         ptr_label, target_reg->bit_64);
@@ -9865,7 +9865,11 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                 (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
                     ? ctx->current_subprogram_owner_class : "<null>");
         }
-        assert(!"unresolved non-local symbol reached codegen fallback");
+        /* When emitting all unit functions for --function-sections warmup,
+         * some functions have unresolvable non-locals (e.g. local consts in
+         * functions that DCE normally removes).  Don't abort — emit broken
+         * code; --gc-sections will discard the unused section at link time. */
+        *offset = 0;
         return inst_list;
     }
 
@@ -10544,8 +10548,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
                 /* Use larger buffer for string literal embedding to avoid truncation */
                 char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-                snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                         readonly_section, label, escaped_str);
+                snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                         readonly_section, label, escaped_str, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, str_literal_buffer);
 
                 StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",

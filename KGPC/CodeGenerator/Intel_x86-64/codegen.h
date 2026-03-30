@@ -128,6 +128,15 @@ static inline const char *codegen_readonly_section_directive(void)
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
 }
 
+/* Return the directive to switch back to the current text section.
+ * With --function-sections, each function is in its own .text.funcname section;
+ * use .previous to return to it after a .rodata detour instead of the bare .text
+ * which would incorrectly place code in the default .text section. */
+static inline const char *codegen_text_section_resume(void)
+{
+    return function_sections_flag() ? "\t.previous" : "\t.text";
+}
+
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1

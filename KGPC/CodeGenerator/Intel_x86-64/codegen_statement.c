@@ -425,7 +425,7 @@ ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_lis
         }
 
         if (pos + 16 < sizeof(rodata))
-            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "\t.text\n");
+            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "%s\n", codegen_text_section_resume());
 
         inst_list = add_inst(inst_list, rodata);
         node->const_set_label = strdup(label);
@@ -1779,8 +1779,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     char add_rodata[1024];
                     const char *readonly_section = codegen_readonly_section_directive();
                     /* Simple assembly-safe emit — control chars are rare in constants */
-                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                        readonly_section, label, str_const_node->const_string_value);
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                        readonly_section, label, str_const_node->const_string_value, codegen_text_section_resume());
                     inst_list = add_inst(inst_list, add_rodata);
 
                     char buffer[96];
@@ -4766,8 +4766,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
             /* Use larger buffer for string literal embedding to avoid truncation */
             char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                     readonly_section, label, escaped_str);
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                     readonly_section, label, escaped_str, codegen_text_section_resume());
             inst_list = add_inst(inst_list, str_literal_buffer);
             
             /* Get register for string literal address */
@@ -9425,8 +9425,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char escaped_msg[CODEGEN_MAX_INST_BUF];
                 escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
                 char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                         readonly_section, msg_label, escaped_msg);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                         readonly_section, msg_label, escaped_msg, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
@@ -9438,8 +9438,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char msg_label[64];
                 snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
                 char rodata_buf[256];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
-                         readonly_section, msg_label);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, msg_label, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
@@ -9450,8 +9450,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char fn_label[64];
                 snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
                 char rodata_buf[256];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
-                         readonly_section, fn_label);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, fn_label, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
                 inst_list = add_inst(inst_list, buffer);

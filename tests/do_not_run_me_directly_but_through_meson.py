@@ -240,6 +240,31 @@ FPC_RTL_FLAGS = [
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
 
+# Codegen object cache: the compiler assembles full .o on cache miss,
+# then uses --skip-unit-codegen on cache hit (all handled internally).
+_FPC_RTL_CODEGEN_CACHE_DIR = None
+if FPC_RTL_MODE:
+    _FPC_RTL_CODEGEN_CACHE_DIR = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_codegen_cache"
+    )
+    # The compiler includes its own mtime in the cache key, so old entries
+    # are never matched. Clean out the directory on compiler rebuild to
+    # avoid unbounded growth.
+    _cg_sentinel = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), ".codegen_cache_mtime"
+    )
+    _cg_old_mtime = ""
+    if os.path.exists(_cg_sentinel):
+        with open(_cg_sentinel) as f:
+            _cg_old_mtime = f.read().strip()
+    if _compiler_mtime != _cg_old_mtime and os.path.isdir(_FPC_RTL_CODEGEN_CACHE_DIR):
+        shutil.rmtree(_FPC_RTL_CODEGEN_CACHE_DIR, ignore_errors=True)
+    os.makedirs(_FPC_RTL_CODEGEN_CACHE_DIR, exist_ok=True)
+    if _compiler_mtime:
+        with open(_cg_sentinel, "w") as f:
+            f.write(_compiler_mtime)
+    FPC_RTL_FLAGS.append("--codegen-cache-dir=" + _FPC_RTL_CODEGEN_CACHE_DIR)
+
 # ---------------------------------------------------------------------------
 # Test result cache — skip compile/link/run when nothing changed.
 # Cache key = hash of: compiler binary, test .p file, .expected file,
@@ -1238,6 +1263,7 @@ def read_file_content(filepath):
 
 
 class TestCompiler(unittest.TestCase):
+
     def __init__(self, methodName="runTest"):
         super().__init__(methodName)
         self._artifact_context = None
@@ -1292,16 +1318,16 @@ class TestCompiler(unittest.TestCase):
                 run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
                 print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
                 sys.stderr.flush()
-                # Also try to warm SysUtils/Classes/Math caches (may fail
+                # Also try to warm SysUtils/Classes/Math AST caches (may fail
                 # due to unsupported constructs, but AST caches are still
                 # written for successfully parsed units).
                 with open(dummy_src, "w") as f:
                     f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
                 try:
                     run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
-                    print("--- FPC RTL extended cache warmed ---", file=sys.stderr)
+                    print("--- FPC RTL extended AST cache warmed ---", file=sys.stderr)
                 except Exception:
-                    print("--- FPC RTL extended cache partially warmed ---", file=sys.stderr)
+                    print("--- FPC RTL extended AST cache partially warmed ---", file=sys.stderr)
                 sys.stderr.flush()
             except Exception as e:
                 print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
@@ -3735,12 +3761,12 @@ def _discover_and_add_fpc_rtl_tests():
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
-                # Check test result cache
                 if _test_cache_check(input_file, expected_output_file, FPC_RTL_FLAGS):
                     return  # cached pass — skip
 
                 try:
-                    compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
+                    compiler_output = run_compiler(input_file, asm_file,
+                                                   flags=FPC_RTL_FLAGS)
                 except subprocess.CalledProcessError:
                     self.fail(f"FPC RTL compilation failed for {test_base_name}")
                     return

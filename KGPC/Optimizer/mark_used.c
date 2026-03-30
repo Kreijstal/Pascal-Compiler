@@ -15,6 +15,7 @@
 #include <ctype.h>
 #include "identifier_utils.h"
 #include "compilation_context.h"
+#include "flags.h"
 
 /* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
 #define SUBPROG_MAP_BUCKETS 8191
@@ -1246,10 +1247,45 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         }
     }
     
+    /* When --function-sections is active, mark ALL unit subprograms as used
+     * so the linker can do dead-code elimination instead of the compiler.
+     * This must happen AFTER the transitive scan passes above so that
+     * scope setup and body discovery are properly applied. */
+    if (function_sections_flag()) {
+        ListNode_t *mark_all = program->tree_data.program_data.subprograms;
+        while (mark_all != NULL) {
+            if (mark_all->type == LIST_TREE && mark_all->cur != NULL) {
+                Tree_t *sub = (Tree_t *)mark_all->cur;
+                if (sub->type == TREE_SUBPROGRAM &&
+                    sub->tree_data.subprogram_data.statement_list != NULL)
+                    sub->tree_data.subprogram_data.is_used = 1;
+            }
+            mark_all = mark_all->next;
+        }
+        CompilationContext *fs_ctx = compilation_context_get_active();
+        if (fs_ctx != NULL) {
+            for (int ui = 0; ui < fs_ctx->loaded_unit_count; ++ui) {
+                Tree_t *unit_tree = fs_ctx->loaded_units[ui].unit_tree;
+                if (unit_tree == NULL || unit_tree->type != TREE_UNIT)
+                    continue;
+                ListNode_t *usub = unit_tree->tree_data.unit_data.subprograms;
+                while (usub != NULL) {
+                    if (usub->type == LIST_TREE && usub->cur != NULL) {
+                        Tree_t *sub = (Tree_t *)usub->cur;
+                        if (sub->type == TREE_SUBPROGRAM &&
+                            sub->tree_data.subprogram_data.statement_list != NULL)
+                            sub->tree_data.subprogram_data.is_used = 1;
+                    }
+                    usub = usub->next;
+                }
+            }
+        }
+    }
+
     #ifdef DEBUG_OPTIMIZER
         fprintf(stderr, "DEBUG mark_used_functions: Reachability analysis complete\n");
     #endif
-    
+
     map_destroy(&map);
 }
 

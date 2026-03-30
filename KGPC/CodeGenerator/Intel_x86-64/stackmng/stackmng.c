@@ -558,6 +558,16 @@ RegStack_t *get_reg_stack()
     return global_stackmng->reg_stack;
 }
 
+/* Reset register allocator to a fresh state (used to recover from codegen
+ * errors that leak registers). */
+void reset_reg_stack(void)
+{
+    assert(global_stackmng != NULL);
+    if (global_stackmng->reg_stack != NULL)
+        free_reg_stack(global_stackmng->reg_stack);
+    global_stackmng->reg_stack = init_reg_stack();
+}
+
 /* Finds variable on temp in current stack */
 /* Returns NULL if not found */
 StackNode_t *find_in_temp(char *label)

@@ -1357,13 +1357,13 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
                     int32_t i;
                 } converter;
                 converter.f = (float)operand_expr->expr_data.r_num;
-                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.long %d\n\t.text\n",
-                    readonly_section, label, (int)converter.i);
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.long %d\n%s\n",
+                    readonly_section, label, (int)converter.i, codegen_text_section_resume());
             }
             else
             {
-                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                    readonly_section, label, operand + 1);
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n%s\n",
+                    readonly_section, label, operand + 1, codegen_text_section_resume());
             }
             inst_list = add_inst(inst_list, rodata_buffer);
 
@@ -1446,8 +1446,8 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
         snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
         const char *readonly_section = codegen_readonly_section_directive();
         char rodata_buffer[192];
-        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %lld\n\t.text\n",
-            readonly_section, label, (long long)converter.i);
+        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %lld\n%s\n",
+            readonly_section, label, (long long)converter.i, codegen_text_section_resume());
         inst_list = add_inst(inst_list, rodata_buffer);
 
         snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
@@ -3787,17 +3787,17 @@ cleanup_constructor:
             char *escaped_string = escape_string_for_assembly(node->const_string_value);
             if (escaped_string != NULL)
             {
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                    readonly_section, label, escaped_string);
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                    readonly_section, label, escaped_string, codegen_text_section_resume());
                 free(escaped_string);
             }
             else
             {
                 /* Fallback: use original string if escaping fails */
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                    readonly_section, label, node->const_string_value);
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                    readonly_section, label, node->const_string_value, codegen_text_section_resume());
             }
-            
+
             inst_list = add_inst(inst_list, add_rodata);
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
             return add_inst(inst_list, buffer);
@@ -3842,15 +3842,15 @@ cleanup_constructor:
         char *escaped_string = escape_string_for_assembly(expr->expr_data.string);
         if (escaped_string != NULL)
         {
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                readonly_section, label, escaped_string);
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, escaped_string, codegen_text_section_resume());
             free(escaped_string);
         }
         else
         {
             /* Fallback: use original string if escaping fails */
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                readonly_section, label, expr->expr_data.string);
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, expr->expr_data.string, codegen_text_section_resume());
         }
         
         inst_list = add_inst(inst_list, add_rodata);
@@ -4770,8 +4770,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             char add_rodata[1024];
                             const char *readonly_section = codegen_readonly_section_directive();
                             char *escaped = escape_string_for_assembly(node->const_string_value);
-                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                                readonly_section, label, escaped ? escaped : node->const_string_value);
+                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                                readonly_section, label, escaped ? escaped : node->const_string_value, codegen_text_section_resume());
                             if (escaped) free(escaped);
                             inst_list = add_inst(inst_list, add_rodata);
                             snprintf(buffer, buf_len, "%s(%%rip)", label);
@@ -6051,8 +6051,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                             const char *readonly_section = codegen_readonly_section_directive();
                             char rodata_buffer[192];
-                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                                readonly_section, label, right + 1);
+                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n%s\n",
+                                readonly_section, label, right + 1, codegen_text_section_resume());
                             inst_list = add_inst(inst_list, rodata_buffer);
 
                             snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);
