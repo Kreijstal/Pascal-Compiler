@@ -13714,7 +13714,6 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
     }
 }
 
-
 static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
 {
     int return_val = 0;
@@ -15384,6 +15383,28 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     /* Pre-push trivially evaluable constants (just integer/string values) */
     prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls);
     prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls);
+
+    /* Decls-only also needs typed const declarations lowered from const sections
+     * into interface/implementation var/array decls. Without this, dependent units
+     * can miss typed const arrays like gas_needsuffix during semantic analysis. */
+    {
+        ListNode_t *typed_iface_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.interface_var_decls, 1);
+        if (typed_iface_consts != NULL)
+        {
+            return_val += semcheck_decls(symtab, typed_iface_consts);
+            DestroyList(typed_iface_consts);
+        }
+    }
+    {
+        ListNode_t *typed_impl_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.implementation_var_decls, 1);
+        if (typed_impl_consts != NULL)
+        {
+            return_val += semcheck_decls(symtab, typed_impl_consts);
+            DestroyList(typed_impl_consts);
+        }
+    }
 
     semcheck_unit_names_reset();
     return return_val;
