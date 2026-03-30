@@ -5902,9 +5902,15 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                                     const char *label = var->static_label;
                                                     /* Use RIP-relative addressing for AT&T syntax
                                                      * to avoid 32-bit absolute relocation failures
-                                                     * on Windows x64 (image base > 4GB). */
+                                                     * on Windows x64 (image base > 4GB).
+                                                     * But skip if the template already has (%rip)
+                                                     * immediately after the identifier. */
+                                                    int already_has_rip = (si + 6 <= clen &&
+                                                        strncmp(cleaned + si, "(%rip)", 6) == 0);
+                                                    const char *fmt = (is_intel_syntax || already_has_rip)
+                                                        ? "%s" : "%s(%%rip)";
                                                     int n = snprintf(substituted + sj, sub_alloc - sj,
-                                                        is_intel_syntax ? "%s" : "%s(%%rip)", label);
+                                                        fmt, label);
                                                     if (n > 0) {
                                                         sj += (size_t)n;
                                                         did_substitute = 1;
