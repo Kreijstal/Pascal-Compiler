@@ -742,6 +742,22 @@ int semcheck_arrayaccess(int *type_return,
         if (property_result >= 0)
             return return_val + property_result;
 
+        /* Allow chained bracket access for multi-dimensional arrays:
+         * arr[x][y] where arr[x] is an EXPR_ARRAY_ACCESS whose result
+         * is not marked as an array (because the type system stores
+         * multi-dimensional arrays as flat, not nested).  Treat the
+         * result of the inner access as indexable. */
+        if (array_expr->type == EXPR_ARRAY_ACCESS)
+        {
+            /* Treat as array access — element type/size carries over
+             * from the inner array access expression. */
+            element_type = array_expr->array_element_type;
+            if (element_type == UNKNOWN_TYPE)
+                element_type = LONGINT_TYPE;
+            *type_return = element_type;
+            return return_val;
+        }
+
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, expression is not indexable as an array.\n\n",
             expr->line_num);
         *type_return = UNKNOWN_TYPE;

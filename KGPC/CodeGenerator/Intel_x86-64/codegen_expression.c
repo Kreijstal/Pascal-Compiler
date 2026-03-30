@@ -7848,37 +7848,48 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     if (!base_is_array && !base_is_string && !base_is_pointer)
     {
-        if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        /* Allow chained bracket access for multi-dimensional arrays:
+         * arr[x][y] where arr[x] was a valid array access that yielded
+         * a scalar result (because the type system stores multi-dim
+         * arrays as flat, not nested). Treat it as a continued array access. */
+        if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
         {
-            fprintf(stderr,
-                "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
-                array_expr != NULL ? array_expr->type : -1,
-                array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
-                base_is_array, base_is_string, base_is_pointer);
-            if (ctx != NULL && ctx->current_subprogram_id != NULL)
-                fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
-            if (array_expr != NULL)
+            base_is_array = 1;
+        }
+        else
+        {
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
             {
-                if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
-                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
-                if (array_expr->resolved_kgpc_type != NULL)
-                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
-                        kgpc_type_to_string(array_expr->resolved_kgpc_type));
-                if (ctx != NULL && ctx->symtab != NULL &&
-                    array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
+                    array_expr != NULL ? array_expr->type : -1,
+                    array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
+                    base_is_array, base_is_string, base_is_pointer);
+                if (ctx != NULL && ctx->current_subprogram_id != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
+                if (array_expr != NULL)
                 {
-                    HashNode_t *dbg_node = NULL;
-                    if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
-                        dbg_node != NULL && dbg_node->type != NULL)
+                    if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
+                    if (array_expr->resolved_kgpc_type != NULL)
+                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
+                            kgpc_type_to_string(array_expr->resolved_kgpc_type));
+                    if (ctx != NULL && ctx->symtab != NULL &&
+                        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
                     {
-                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
-                            kgpc_type_to_string(dbg_node->type));
+                        HashNode_t *dbg_node = NULL;
+                        if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+                            dbg_node != NULL && dbg_node->type != NULL)
+                        {
+                            fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
+                                kgpc_type_to_string(dbg_node->type));
+                        }
                     }
                 }
             }
+            codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
+            return inst_list;
         }
-        codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
-        return inst_list;
     }
 
     Register_t *index_reg = NULL;

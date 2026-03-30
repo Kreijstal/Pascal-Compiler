@@ -17698,11 +17698,13 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
                        child->typ == PASCAL_T_STRING ||
                        child->typ == PASCAL_T_RANGE) {
                 append_case_label(&labels_builder, child);
-            } else if (child->typ == PASCAL_T_STATEMENT ||
-                       child->typ == PASCAL_T_ASSIGNMENT ||
-                               child->typ == PASCAL_T_FUNC_CALL ||
-                               child->typ == PASCAL_T_BEGIN_BLOCK) {
-                /* This is the statement for this branch */
+            } else {
+                /* Any other child type is the statement for this branch
+                 * (e.g. PASCAL_T_STATEMENT, PASCAL_T_ASSIGNMENT,
+                 * PASCAL_T_FUNC_CALL, PASCAL_T_BEGIN_BLOCK,
+                 * PASCAL_T_IF_STMT, PASCAL_T_FOR_STMT, PASCAL_T_WHILE_STMT,
+                 * PASCAL_T_REPEAT_STMT, PASCAL_T_CASE_STMT, PASCAL_T_WITH_STMT,
+                 * PASCAL_T_EXIT_STMT, PASCAL_T_BREAK_STMT, etc.) */
                 branch_stmt = convert_statement(child);
                 break; /* Statement is last */
                     }
@@ -18393,25 +18395,16 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
     }
     else if (method_name != NULL)
     {
-        /* Fallback only for symbolic operators to keep legacy parser cases working. */
+        /* Fallback only for symbolic operators to keep legacy parser cases working.
+         * Named operators (Equal, Add, etc.) must NOT be matched here because
+         * regular methods with those names (e.g. tdynamicarray.equal) would be
+         * misclassified as operators and lose their implicit Self parameter. */
         if (strcmp(method_name, "+") == 0 || strcmp(method_name, "-") == 0 ||
             strcmp(method_name, "*") == 0 || strcmp(method_name, "/") == 0 ||
             strcmp(method_name, "=") == 0 || strcmp(method_name, "<>") == 0 ||
             strcmp(method_name, "<") == 0 || strcmp(method_name, ">") == 0 ||
             strcmp(method_name, "<=") == 0 || strcmp(method_name, ">=") == 0 ||
-            strcmp(method_name, "**") == 0 ||
-            strcasecmp(method_name, "div") == 0 || strcasecmp(method_name, "mod") == 0 ||
-            strcasecmp(method_name, "and") == 0 || strcasecmp(method_name, "or") == 0 ||
-            strcasecmp(method_name, "not") == 0 || strcasecmp(method_name, "xor") == 0 ||
-            strcasecmp(method_name, "shl") == 0 || strcasecmp(method_name, "shr") == 0 ||
-            strcasecmp(method_name, "in") == 0 || strcasecmp(method_name, "is") == 0 ||
-            strcasecmp(method_name, "as") == 0 || strcmp(method_name, ":=") == 0 ||
-            strcasecmp(method_name, "Implicit") == 0 || strcasecmp(method_name, "Explicit") == 0 ||
-            strcasecmp(method_name, "Equal") == 0 || strcasecmp(method_name, "NotEqual") == 0 ||
-            strcasecmp(method_name, "GreaterThan") == 0 ||
-            strcasecmp(method_name, "GreaterThanOrEqual") == 0 ||
-            strcasecmp(method_name, "LessThan") == 0 ||
-            strcasecmp(method_name, "LessThanOrEqual") == 0) {
+            strcmp(method_name, "**") == 0 || strcmp(method_name, ":=") == 0) {
             is_class_operator = 1;
         }
     }
