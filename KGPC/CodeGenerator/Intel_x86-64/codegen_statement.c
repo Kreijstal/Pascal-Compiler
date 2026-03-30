@@ -5900,10 +5900,13 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             if (var != NULL) {
                                                 if (var->is_static && var->static_label != NULL) {
                                                     const char *label = var->static_label;
-                                                    size_t llen = strlen(label);
-                                                    if (sj + llen < sub_alloc - 64) {
-                                                        memcpy(substituted + sj, label, llen);
-                                                        sj += llen;
+                                                    /* Use RIP-relative addressing for AT&T syntax
+                                                     * to avoid 32-bit absolute relocation failures
+                                                     * on Windows x64 (image base > 4GB). */
+                                                    int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                        is_intel_syntax ? "%s" : "%s(%%rip)", label);
+                                                    if (n > 0) {
+                                                        sj += (size_t)n;
                                                         did_substitute = 1;
                                                     }
                                                 } else if (var->offset > 0) {
