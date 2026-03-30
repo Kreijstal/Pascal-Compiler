@@ -5690,6 +5690,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                         if (*p == '}') { in_brace_comment = 0; continue; }
                         if (in_brace_comment) continue;
                         if (*p == '[') {
+                            /* Skip Pascal asm clobber lists: end ['eax','edx']
+                             * These have [ followed by ' — Intel memory operands
+                             * use [reg] or [reg+offset], never ['...'] */
+                            if (*(p + 1) == '\'')
+                                continue;
                             /* Found a bracket — this is Intel memory syntax */
                             is_intel_syntax = 1;
                             break;
