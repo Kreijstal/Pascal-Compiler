@@ -485,7 +485,7 @@ ListNode_t *FindAllIdentsInTable_Prehashed(HashTable_t *table, const char *canon
     assert(table != NULL);
     assert(canonical_id != NULL);
 
-    ListNode_t *list = table->table[hash % TABLE_SIZE];
+    ListNode_t *list = table->table[hash];
     ListNode_t *cur = list;
     ListNode_t *found_list = NULL;
     ListNode_t *found_tail = NULL;  /* track tail for O(1) append */
