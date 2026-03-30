@@ -32,4 +32,9 @@ char *pascal_preprocess_file(PascalPreprocessor *pp,
                              size_t *out_length,
                              char **error_message);
 
+/* Get the list of files that were included during preprocessing.
+ * Returns the count; *out_files points to an internal array of paths. */
+size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
+                                               const char *const **out_files);
+
 #endif /* PASCAL_PREPROCESSOR_H */

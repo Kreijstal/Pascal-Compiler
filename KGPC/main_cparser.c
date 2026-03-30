@@ -2310,11 +2310,14 @@ static int compile_single_program(
                 codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
+        /* Clear cache-mode flags so they don't leak into later compilations. */
+        clear_codegen_cache_miss_flag();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        clear_codegen_cache_miss_flag();
     }
 
     DestroySymTab(symtab);
@@ -2399,6 +2402,21 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
             {
                 struct stat st;
                 if (stat(path, &st) == 0)
+                    hash = hash * 33 + (unsigned long)st.st_mtime;
+            }
+        }
+    }
+
+    /* Hash include file mtimes (covers {$i ...} dependencies) */
+    if (ctx != NULL)
+    {
+        for (int i = 0; i < ctx->include_file_count; i++)
+        {
+            const char *ipath = ctx->include_files[i];
+            if (ipath != NULL)
+            {
+                struct stat st;
+                if (stat(ipath, &st) == 0)
                     hash = hash * 33 + (unsigned long)st.st_mtime;
             }
         }
@@ -3548,11 +3566,14 @@ int main(int argc, char **argv)
                 codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
+        /* Clear cache-mode flags so they don't leak into later compilations. */
+        clear_codegen_cache_miss_flag();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        clear_codegen_cache_miss_flag();
     }
 
     DestroySymTab(symtab);
