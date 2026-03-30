@@ -509,21 +509,27 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
     if (file->private_data != 0)
     {
         FILE *cached = (FILE *)(uintptr_t)file->private_data;
-        /* Validate that the cached stream is still valid.
-         * Two modes of operation:
-         * (1) KGPC RTL: FILE* owns the fd directly (fileno(cached)==handle).
-         *     Cache is always valid unless explicitly cleared by close_stream.
-         * (2) FPC RTL: FILE* wraps a dup'd fd (fileno(cached)!=handle).
-         *     Detect stale cache via handle+mode comparison with side-table. */
         int cached_fd = fileno(cached);
         if (cached_fd >= 0 && cached_fd == h)
             return cached;  /* KGPC RTL: direct ownership, always valid */
         /* FPC RTL path: validate via side-table */
         int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
         int idx = kgpc_stream_cache_find(file);
+        int cache_valid = 0;
         if (!is_closed && h >= 0 && idx >= 0 &&
             h == kgpc_stream_cache[idx].original_handle &&
             file->mode == kgpc_stream_cache[idx].original_mode)
+        {
+            /* The FPC RTL may have closed and reopened the same fd number
+             * (e.g. reset on a text file).  Detect this by comparing the
+             * real fd position with the cached stream's position.  If they
+             * diverge, the fd was recycled and the cache is stale. */
+            off_t fd_pos = lseek(h, 0, SEEK_CUR);
+            long stream_pos = ftell(cached);
+            if (fd_pos < 0 || stream_pos < 0 || fd_pos == stream_pos)
+                cache_valid = 1;
+        }
+        if (cache_valid)
             return cached;
         /* Stale cache: close the old stream and clear */
         fclose(cached);
