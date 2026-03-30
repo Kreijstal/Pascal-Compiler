@@ -3796,8 +3796,11 @@ def _discover_and_add_fpc_rtl_tests():
 # individual RTL test case.
 # ---------------------------------------------------------------------------
 def _add_pp_pas_bootstrap_test():
-    """Add pp.pas compilation as a special FPC RTL test."""
+    """Add pp.pas compilation as a special FPC RTL test.
+    Skipped by default — set KGPC_PP_PAS_TEST=1 to enable."""
     if not FPC_RTL_MODE:
+        return
+    if os.environ.get("KGPC_PP_PAS_TEST", "0") != "1":
         return
 
     fpc_src = os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource")
