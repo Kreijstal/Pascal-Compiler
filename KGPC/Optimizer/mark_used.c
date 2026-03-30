@@ -17,7 +17,7 @@
 #include "compilation_context.h"
 
 /* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
-#define SUBPROG_MAP_BUCKETS 211
+#define SUBPROG_MAP_BUCKETS 8191
 
 typedef struct SubprogramEntry {
     char *canonical_id;
