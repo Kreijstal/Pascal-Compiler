@@ -3355,6 +3355,10 @@ def _discover_and_add_auto_tests():
                 """Auto-discovered test case."""
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
+                # Skip tests with hardcoded SysV ABI inline asm on Windows
+                if test_base_name in ("nostackframe_asm_regsizing", "asm_clobber_list") and IS_WINDOWS_ABI:
+                    self.skipTest("Inline asm test uses hardcoded SysV ABI registers")
+
                 if test_base_name == "unix_wait_helpers_demo":
                     # Check if we're targeting MinGW (not Cygwin/MSYS)
                     # MinGW defines _WIN32 but not __CYGWIN__
