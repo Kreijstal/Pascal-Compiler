@@ -4936,6 +4936,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
                 fprintf(ctx->output_file, "\t.data\n");
                 fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, ".globl\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
                 fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
                 fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
                 continue;
@@ -4943,6 +4944,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s\n", class_label, iface_name);
             fprintf(ctx->output_file, "\t.data\n");
             fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, ".globl\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
             fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
             /* Iterate interface method_templates directly — inherited parent
              * methods were already prepended during semcheck. */
@@ -4962,7 +4964,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char thunk_label[768];
                         snprintf(thunk_label, sizeof(thunk_label), "%s_INTF_%s_THUNK_%s",
                             class_label, iface_name, vtbl_imethod->name);
-                        fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
+                        /* Thunks must always be in an executable .text section.
+                         * codegen_text_section_resume() uses .previous when
+                         * --function-sections is active, but .previous may
+                         * return to .rodata (non-executable) here. */
+                        fprintf(ctx->output_file, "\t.text\n");
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
                         /* If the method returns a large type (SRET), Self
                          * shifts from the first to the second arg register. */
@@ -6732,6 +6738,79 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
+    /* Pre-pass: propagate cname_override from forward declarations to their
+     * matching implementations so that codegen_function_header emits both labels
+     * directly (e.g., FPC_INTERLOCKEDCOMPAREEXCHANGE64: and
+     * interlockedcompareexchange64_i64_i64_i64:).  This eliminates the need
+     * for .set alias post-passes and ensures the cache .o has all needed symbols. */
+    {
+        /* Build a flat list of all subprograms (units + program) */
+        ListNode_t *all_subs_head = NULL;
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit == NULL || unit->type != TREE_UNIT) continue;
+                ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
+                while (usubs != NULL) {
+                    ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
+                    if (copy != NULL) { copy->next = all_subs_head; all_subs_head = copy; }
+                    usubs = usubs->next;
+                }
+            }
+        }
+        {
+            ListNode_t *psubs = data->subprograms;
+            while (psubs != NULL) {
+                ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
+                if (copy != NULL) { copy->next = all_subs_head; all_subs_head = copy; }
+                psubs = psubs->next;
+            }
+        }
+
+        /* Pass 1: propagate cname_override from forward decls to implementations.
+         * Forward decls have [Alias:'FPC_XYZ'] but no body; the impl has a body
+         * but no cname_override.  Copy the alias so the impl header emits both labels. */
+        for (ListNode_t *fwd = all_subs_head; fwd != NULL; fwd = fwd->next) {
+            if (fwd->type != LIST_TREE || fwd->cur == NULL) continue;
+            Tree_t *fwd_sub = (Tree_t *)fwd->cur;
+            if (fwd_sub->type != TREE_SUBPROGRAM) continue;
+            const char *alias = fwd_sub->tree_data.subprogram_data.cname_override;
+            if (alias == NULL) continue;
+            if (fwd_sub->tree_data.subprogram_data.statement_list != NULL) continue; /* has body — not a forward decl */
+            /* Only propagate FPC_/KGPC_ internal aliases */
+            if (strncmp(alias, "FPC_", 4) != 0 && strncmp(alias, "KGPC_", 5) != 0) continue;
+            const char *fwd_id = fwd_sub->tree_data.subprogram_data.id;
+            if (fwd_id == NULL) continue;
+
+            for (ListNode_t *impl = all_subs_head; impl != NULL; impl = impl->next) {
+                if (impl->type != LIST_TREE || impl->cur == NULL) continue;
+                Tree_t *impl_sub = (Tree_t *)impl->cur;
+                if (impl_sub == fwd_sub || impl_sub->type != TREE_SUBPROGRAM) continue;
+                if (impl_sub->tree_data.subprogram_data.statement_list == NULL) continue;
+                if (impl_sub->tree_data.subprogram_data.cname_override != NULL) continue; /* already has alias */
+                const char *impl_id = impl_sub->tree_data.subprogram_data.id;
+                if (impl_id == NULL) continue;
+                int matched = (strcasecmp(fwd_id, impl_id) == 0);
+                if (!matched && impl_sub->tree_data.subprogram_data.cname_override != NULL &&
+                    strcasecmp(impl_sub->tree_data.subprogram_data.cname_override, alias) == 0)
+                    matched = 1;
+                if (matched) {
+                    impl_sub->tree_data.subprogram_data.cname_override = strdup(fwd_sub->tree_data.subprogram_data.cname_override);
+                    break;
+                }
+            }
+        }
+
+        /* Free the temporary list (shallow copies only) */
+        ListNode_t *tmp = all_subs_head;
+        while (tmp != NULL) {
+            ListNode_t *next = tmp->next;
+            tmp->cur = NULL;
+            free(tmp);
+            tmp = next;
+        }
+    }
+
     /* Emit program subprograms first (they override unit versions with the
      * same mangled_id), then unit subprograms.
      * Units are iterated in REVERSE load order so that more fundamental units
@@ -6750,230 +6829,10 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
-    /* Build hash set of emitted subprogram labels for O(1) lookups */
-    CodeGenStringSet emitted_labels;
-    memset(&emitted_labels, 0, sizeof(emitted_labels));
-    {
-        ListNode_t *_s = ctx->emitted_subprograms;
-        while (_s != NULL) {
-            if (_s->type == LIST_STRING && _s->cur != NULL)
-                codegen_set_insert(&emitted_labels, (const char *)_s->cur);
-            _s = _s->next;
-        }
-    }
-
-    /* Build a temporary combined subprogram list for alias post-passes.
-     * The alias passes need to scan all subprograms (units + program) to find
-     * forward decl → implementation matches across unit boundaries. */
-    ListNode_t *all_subprograms = NULL;
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit == NULL || unit->type != TREE_UNIT)
-                continue;
-            ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
-            while (usubs != NULL) {
-                ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
-                if (copy != NULL) {
-                    copy->next = all_subprograms;
-                    all_subprograms = copy;
-                }
-                usubs = usubs->next;
-            }
-        }
-    }
-    {
-        ListNode_t *psubs = data->subprograms;
-        while (psubs != NULL) {
-            ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
-            if (copy != NULL) {
-                copy->next = all_subprograms;
-                all_subprograms = copy;
-            }
-            psubs = psubs->next;
-        }
-    }
-
-    /* Post-pass: emit .set aliases for cname_override values.
-       Forward declarations with [Alias:'FPC_DO_EXIT'] have cname_override set
-       but no body; the matching implementation has a body but no cname_override.
-       Scan for forward decls with aliases and match them to implementations by id. */
-    CodeGenStringSet emitted_cname_aliases;
-    memset(&emitted_cname_aliases, 0, sizeof(emitted_cname_aliases));
-    if (ctx->output_file != NULL) {
-        int debug_alias = (getenv("KGPC_DEBUG_ALIAS") != NULL);
-        ListNode_t *alias_scan = all_subprograms;
-        while (alias_scan != NULL) {
-            if (alias_scan->type == LIST_TREE && alias_scan->cur != NULL) {
-                Tree_t *sub = (Tree_t *)alias_scan->cur;
-                if (sub->type == TREE_SUBPROGRAM) {
-                    const char *alias = sub->tree_data.subprogram_data.cname_override;
-                    if (debug_alias && alias != NULL) {
-                        fprintf(stderr, "[ALIAS] id=%s mangled=%s alias=%s has_body=%d\n",
-                            sub->tree_data.subprogram_data.id ? sub->tree_data.subprogram_data.id : "<null>",
-                            sub->tree_data.subprogram_data.mangled_id ? sub->tree_data.subprogram_data.mangled_id : "<null>",
-                            alias, sub->tree_data.subprogram_data.statement_list != NULL);
-                    }
-                    if (alias != NULL) {
-                        const char *mangled = sub->tree_data.subprogram_data.mangled_id;
-                        const char *id = sub->tree_data.subprogram_data.id;
-                        const char *label = (mangled != NULL) ? mangled : id;
-
-                        /* Skip aliases that don't start with FPC_ or KGPC_ —
-                           these are `external name` imports (getenv, read, time, etc.)
-                           and emitting .set for them would override C library symbols. */
-                        int is_internal_alias = (strncmp(alias, "FPC_", 4) == 0 ||
-                                                 strncmp(alias, "KGPC_", 5) == 0);
-
-                        /* If this node has a body AND was emitted, emit alias directly. */
-                        if (is_internal_alias &&
-                            sub->tree_data.subprogram_data.statement_list != NULL &&
-                            label != NULL && strcmp(alias, label) != 0 &&
-                            codegen_set_contains(&emitted_labels, label) &&
-                            !codegen_set_contains(&emitted_cname_aliases, alias)) {
-                            codegen_set_insert(&emitted_cname_aliases, alias);
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
-                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
-                        }
-                        /* If this is a forward decl (no body), find the implementation.
-                           Match by id, or by cname_override (e.g. `external name 'FPC_DO_EXIT'`
-                           referencing a function that has [Alias:'FPC_DO_EXIT']). */
-                        else if (is_internal_alias &&
-                                 sub->tree_data.subprogram_data.statement_list == NULL) {
-                            ListNode_t *impl_scan = all_subprograms;
-                            while (impl_scan != NULL) {
-                                if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
-                                    Tree_t *impl = (Tree_t *)impl_scan->cur;
-                                    if (impl != sub && impl->type == TREE_SUBPROGRAM &&
-                                        impl->tree_data.subprogram_data.statement_list != NULL) {
-                                        /* Match by id */
-                                        int matched = 0;
-                                        if (id != NULL && impl->tree_data.subprogram_data.id != NULL &&
-                                            strcasecmp(impl->tree_data.subprogram_data.id, id) == 0)
-                                            matched = 1;
-                                        /* Match by alias matching impl's cname_override */
-                                        if (!matched && impl->tree_data.subprogram_data.cname_override != NULL &&
-                                            strcasecmp(impl->tree_data.subprogram_data.cname_override, alias) == 0)
-                                            matched = 1;
-                                        if (matched) {
-                                            const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
-                                            const char *impl_label = (impl_mangled != NULL) ? impl_mangled : impl->tree_data.subprogram_data.id;
-                                            if (impl_label != NULL && strcmp(alias, impl_label) != 0 &&
-                                                codegen_set_contains(&emitted_labels, impl_label) &&
-                                                !codegen_set_contains(&emitted_cname_aliases, alias)) {
-                                                codegen_set_insert(&emitted_cname_aliases, alias);
-                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
-                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
-                                            }
-                                            /* Also emit alias from the forward decl's mangled_id to the impl.
-                                               e.g., `int_finalize_p_p` → `fpc_finalize_p_p` so that
-                                               `leaq int_finalize_p_p(%rip)` resolves correctly. */
-                                            if (label != NULL && impl_label != NULL &&
-                                                strcmp(label, impl_label) != 0 &&
-                                                strcmp(label, alias) != 0 &&
-                                                codegen_set_contains(&emitted_labels, impl_label) &&
-                                                !codegen_set_contains(&emitted_cname_aliases, label)) {
-                                                codegen_set_insert(&emitted_cname_aliases, label);
-                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), label);
-                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", label, impl_label);
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                impl_scan = impl_scan->next;
-                            }
-                        }
-                    }
-                }
-            }
-            alias_scan = alias_scan->next;
-        }
-    }
-
-    /* Post-pass: emit .set aliases for forward declarations whose implementation
-       has a different mangled_id (e.g. forward "runerror_i" → impl "FPC_RUNERROR").
-       Call sites reference the forward's mangled_id, so we need an alias. */
-    if (ctx->output_file != NULL) {
-        ListNode_t *fwd_scan = all_subprograms;
-        while (fwd_scan != NULL) {
-            if (fwd_scan->type == LIST_TREE && fwd_scan->cur != NULL) {
-                Tree_t *fwd = (Tree_t *)fwd_scan->cur;
-                if (fwd->type == TREE_SUBPROGRAM &&
-                    fwd->tree_data.subprogram_data.statement_list == NULL) {
-                    const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
-                    const char *fwd_id = fwd->tree_data.subprogram_data.id;
-                    /* Skip external imports (`external name 'getenv'` etc.) — their
-                       mangled_id IS the external C symbol name.  Aliasing it to an
-                       internal Pascal implementation would shadow the C library symbol
-                       and cause infinite recursion when the Pascal implementation
-                       tries to call the C function. */
-                    const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
-                    int is_external_import = (fwd_cname != NULL &&
-                        strncmp(fwd_cname, "FPC_", 4) != 0 &&
-                        strncmp(fwd_cname, "KGPC_", 5) != 0);
-                    if (fwd_mangled != NULL && fwd_id != NULL &&
-                        !is_external_import &&
-                        !codegen_set_contains(&emitted_labels, fwd_mangled) &&
-                        !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
-                        /* Find matching implementation by id.
-                         * Skip overloaded functions — aliasing one overload to
-                         * another (e.g. fileexists_rbs_b → fileexists_us_b)
-                         * causes infinite recursion when the target calls the
-                         * aliased overload. */
-                        ListNode_t *impl_scan = all_subprograms;
-                        while (impl_scan != NULL) {
-                            if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
-                                Tree_t *impl = (Tree_t *)impl_scan->cur;
-                                if (impl != fwd && impl->type == TREE_SUBPROGRAM &&
-                                    impl->tree_data.subprogram_data.statement_list != NULL &&
-                                    impl->tree_data.subprogram_data.id != NULL &&
-                                    strcasecmp(impl->tree_data.subprogram_data.id, fwd_id) == 0) {
-                                    const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
-                                    if (impl_mangled != NULL &&
-                                        strcasecmp(fwd_mangled, impl_mangled) != 0 &&
-                                        codegen_set_contains(&emitted_labels, impl_mangled)) {
-                                        /* Only alias when the impl used a cname_override
-                                         * (e.g. [Alias:'FPC_ANSISTR_DECR_REF']) so the
-                                         * label name differs from the mangled name purely
-                                         * due to aliasing, NOT different overload signatures.
-                                         * If neither has cname_override, the different
-                                         * mangled names mean different parameter types
-                                         * (e.g. fileexists_rbs_b vs fileexists_us_b). */
-                                        if (fwd_cname == NULL &&
-                                            impl->tree_data.subprogram_data.cname_override == NULL)
-                                            goto next_fwd;
-                                        codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
-                                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), fwd_mangled);
-                                        fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
-                                        break;
-                                    }
-                                }
-                            }
-                            impl_scan = impl_scan->next;
-                        }
-                    }
-                }
-            }
-            next_fwd:
-            fwd_scan = fwd_scan->next;
-        }
-    }
-
-    codegen_set_destroy(&emitted_labels);
-    codegen_set_destroy(&emitted_cname_aliases);
-
-    /* Free the temporary combined subprograms list (shallow copies only) */
-    {
-        ListNode_t *tmp = all_subprograms;
-        while (tmp != NULL) {
-            ListNode_t *next = tmp->next;
-            tmp->cur = NULL;  /* Don't free the Tree_t — we don't own it */
-            free(tmp);
-            tmp = next;
-        }
-        all_subprograms = NULL;
-    }
+    /* The cname_override pre-pass above propagated aliases from forward
+     * declarations to their matching implementations, so codegen_function_header
+     * now emits both the alias and mangled_id labels directly.  No .set
+     * aliases needed — the cache .o is self-contained. */
 
     inst_list = NULL;
     /* Emit var initializers from loaded units first, then program. */
