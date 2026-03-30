@@ -115,6 +115,7 @@ jobs:
         if-no-files-found: ignore
 
   profile-large-unit-graph:
+    if: false  # temporarily disabled
     runs-on: ubuntu-latest
 
     steps:
