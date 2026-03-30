@@ -96,7 +96,10 @@ kgpc_cparser_exe = executable('kgpc', kgpc_cparser_sources,
 
 gmp_dep = dependency('gmp', required: get_option('with_gmp'))
 
-runtime_sources = ['runtime.c']
+runtime_sources = [
+  'runtime.c',
+  'runtime_baseunix.c',
+]
 if not host_machine.system().startswith('windows')
   runtime_sources += 'runtime_unix.c'
   runtime_sources += 'runtime_fpc_abstract_stubs.S'
