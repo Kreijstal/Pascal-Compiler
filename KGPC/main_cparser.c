@@ -159,26 +159,34 @@ static void mark_program_subs_used(Tree_t *program)
 
 static void print_usage(const char *prog_name)
 {
-    fprintf(stderr, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
-    fprintf(stderr, "  Compiles Pascal source to x86-64 assembly\n");
-    fprintf(stderr, "  Flags:\n");
-    fprintf(stderr, "    -O1, -O2              Enable optimizations\n");
-    fprintf(stderr, "    -non-local            Enable non-local variable chasing (experimental)\n");
-    fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
-    fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
-    fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
-    fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
-    fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
-    fprintf(stderr, "    --disable-dce         Emit unused subprograms (debugging)\n");
-    fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
-    fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
-    fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
-    fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
-    fprintf(stderr, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
-    fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
-    fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
-    fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
+    FILE *out = stdout;
+    fprintf(out, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
+    fprintf(out, "  Compiles Pascal source to x86-64 assembly\n");
+    fprintf(out, "  Flags:\n");
+    fprintf(out, "    -h, --help            Show this help text and exit\n");
+    fprintf(out, "    -O1, -O2              Enable optimizations\n");
+    fprintf(out, "    -non-local            Enable non-local variable chasing (experimental)\n");
+    fprintf(out, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
+    fprintf(out, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
+    fprintf(out, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
+    fprintf(out, "    --time-passes         Print timing information for major compiler stages\n");
+    fprintf(out, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
+    fprintf(out, "    --disable-dce         Emit unused subprograms (debugging)\n");
+    fprintf(out, "    -I<path>              Add include path for preprocessor\n");
+    fprintf(out, "    -Fu<path>             Add unit search path (FPC compatible)\n");
+    fprintf(out, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
+    fprintf(out, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
+    fprintf(out, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
+    fprintf(out, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
+    fprintf(out, "    -Us                   Compile System unit (FPC compatible)\n");
+    fprintf(out, "    -Sg                   Enable goto statements (FPC compatible)\n");
 }
+
+typedef enum
+{
+    SET_FLAGS_CONTINUE = 0,
+    SET_FLAGS_HELP = 1
+} SetFlagsResult;
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
 {
@@ -535,12 +543,14 @@ static void emit_timing_summary(void)
             g_time_semantic + g_time_codegen);
 }
 
-static void set_flags(char **optional_args, int count)
+static SetFlagsResult set_flags(char **optional_args, int count)
 {
     int i = 0;
     while (count > 0)
     {
         const char *arg = optional_args[i];
+        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0 || strcmp(arg, "help") == 0)
+            return SET_FLAGS_HELP;
         if (strcmp(arg, "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");
@@ -730,6 +740,8 @@ static void set_flags(char **optional_args, int count)
         --count;
         ++i;
     }
+
+    return SET_FLAGS_CONTINUE;
 }
 
 static void mark_stdlib_var_params(ListNode_t *subprograms)
@@ -2315,7 +2327,17 @@ int main(int argc, char **argv)
      * This allows flags like --no-stdlib to appear anywhere in the command line. */
     unit_search_paths_init(&g_unit_paths);
     if (argc > 1)
-        set_flags(argv + 1, argc - 1);
+    {
+        SetFlagsResult flag_result = set_flags(argv + 1, argc - 1);
+        if (flag_result == SET_FLAGS_HELP)
+        {
+            print_usage(argv[0]);
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            arena_destroy(arena);
+            return 0;
+        }
+    }
 
     /* Record compiler binary mtime for AST cache invalidation */
     {
