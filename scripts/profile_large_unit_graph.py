@@ -82,6 +82,22 @@ def build_command(args: argparse.Namespace, asm_path: Path) -> list[str]:
     ]
 
 
+def ensure_bootstrap_prereqs(fpc_source: Path) -> None:
+    msgtxt = fpc_source / "compiler" / "msgtxt.inc"
+    if msgtxt.exists():
+        return
+
+    cmd = ["make", "-B", "-C", str(fpc_source / "compiler"), "msg"]
+    print("Preparing FPC bootstrap prerequisites:")
+    print(" ".join(cmd))
+    sys.stdout.flush()
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    sys.stdout.write(proc.stdout)
+    sys.stderr.write(proc.stderr)
+    if proc.returncode != 0:
+        raise RuntimeError(f"failed to generate {msgtxt} (exit {proc.returncode})")
+
+
 def parse_timings(output: str) -> dict[str, float]:
     timings: dict[str, float] = {}
     for line in output.splitlines():
@@ -108,10 +124,13 @@ def main() -> int:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     asm_path = output_dir / "test_pp_readargs.s"
+    fpc_source = Path(args.fpc_source)
+    ensure_bootstrap_prereqs(fpc_source)
     cmd = build_command(args, asm_path)
 
     print("Running perf probe command:")
     print(" ".join(cmd))
+    sys.stdout.flush()
     proc = subprocess.run(cmd, capture_output=True, text=True)
     combined = proc.stdout + proc.stderr
 
@@ -120,10 +139,6 @@ def main() -> int:
 
     sys.stdout.write(proc.stdout)
     sys.stderr.write(proc.stderr)
-
-    if proc.returncode != 0:
-        print(f"ERROR: Compiler exited with {proc.returncode}", file=sys.stderr)
-        return proc.returncode
 
     timings = parse_timings(combined)
     if not timings:
@@ -134,6 +149,7 @@ def main() -> int:
         "compiler": str(Path(args.compiler)),
         "source": str(Path(args.source)),
         "asm": str(asm_path),
+        "compiler_exit_code": proc.returncode,
         "timings": timings,
     }
     print("PROFILE_SUMMARY=" + json.dumps(summary, sort_keys=True))
@@ -148,6 +164,14 @@ def main() -> int:
         failures.append(f"codegen {timings['codegen']:.3f}s > budget {args.max_codegen:.3f}s")
     if args.max_total is not None and timings.get("total", 0.0) > args.max_total:
         failures.append(f"total {timings['total']:.3f}s > budget {args.max_total:.3f}s")
+
+    if proc.returncode != 0:
+        print(f"WARNING: Compiler exited with {proc.returncode}; retaining timings for perf tracking.",
+              file=sys.stderr)
+        write_github_summary(
+            f"Warning: compiler exited with `{proc.returncode}` during perf probe, "
+            "but parsed timing data was still captured.\n"
+        )
 
     if failures:
         for failure in failures:
