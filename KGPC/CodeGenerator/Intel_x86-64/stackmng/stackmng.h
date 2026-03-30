@@ -80,6 +80,7 @@ StackNode_t *find_label(char *);
 /* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
 StackNode_t *find_label_with_depth(char *label, int *depth);
 RegStack_t *get_reg_stack();
+void reset_reg_stack(void);
 void free_stackmng();
 
 /********* RegStack_t **********/

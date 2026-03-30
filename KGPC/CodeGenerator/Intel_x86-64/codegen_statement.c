@@ -66,6 +66,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message);
+static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx);
 
 static ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
     CodeGenContext *ctx, int compare_as_qword, long long imm_value,
@@ -424,7 +425,7 @@ ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_lis
         }
 
         if (pos + 16 < sizeof(rodata))
-            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "\t.text\n");
+            pos += (size_t)snprintf(rodata + pos, sizeof(rodata) - pos, "%s\n", codegen_text_section_resume());
 
         inst_list = add_inst(inst_list, rodata);
         node->const_set_label = strdup(label);
@@ -1593,6 +1594,45 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
+        if (codegen_is_current_return_var_id(expr, ctx))
+        {
+            StackNode_t *return_var = ctx->current_return_slot;
+            if (return_var != NULL)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Unable to allocate register for return variable address.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                if (return_var->is_static)
+                {
+                    const char *label = (return_var->static_label != NULL) ?
+                        return_var->static_label : return_var->label;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                }
+                else if (return_var->is_reference)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
@@ -1739,8 +1779,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     char add_rodata[1024];
                     const char *readonly_section = codegen_readonly_section_directive();
                     /* Simple assembly-safe emit — control chars are rare in constants */
-                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                        readonly_section, label, str_const_node->const_string_value);
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                        readonly_section, label, str_const_node->const_string_value, codegen_text_section_resume());
                     inst_list = add_inst(inst_list, add_rodata);
 
                     char buffer[96];
@@ -2062,7 +2102,8 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                         }
                         field_storage = next_off - field->field_offset;
                     }
-                    if (field_storage > 0 && field_storage < 4)
+                    if (field_storage > 0 && field_storage != 4 &&
+                        field_storage <= INT_MAX)
                         field_access->resolved_kgpc_type =
                             create_primitive_type_with_size(field->field_type, (int)field_storage);
                     else
@@ -2873,6 +2914,49 @@ static int codegen_shortstring_capacity_from_type_local(KgpcType *type)
     return 0;
 }
 
+static int codegen_shortstring_capacity_from_array_element_local(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+
+    KgpcType *base_type = expr_get_kgpc_type(base_expr);
+    if (base_type == NULL &&
+        base_expr->type == EXPR_VAR_ID &&
+        ctx != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            base_type = node->type;
+        }
+    }
+
+    if (base_type != NULL && kgpc_type_is_array(base_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+        int capacity = codegen_shortstring_capacity_from_type_local(elem_type);
+        if (capacity > 0)
+            return capacity;
+    }
+
+    if (base_expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(base_expr->expr_data.id, &scope_depth);
+        if (stack_node != NULL && stack_node->element_size > 1)
+            return stack_node->element_size;
+    }
+
+    return 0;
+}
+
 static int codegen_record_field_shortstring_capacity(const struct Expression *expr,
     CodeGenContext *ctx)
 {
@@ -2919,6 +3003,7 @@ static int codegen_is_current_return_var_id(const struct Expression *expr, CodeG
     const char *expr_id = NULL;
     const char *current_id = NULL;
     const char *suffix = NULL;
+    HashNode_t *shadow_node = NULL;
 
     if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID)
         return 0;
@@ -2928,13 +3013,28 @@ static int codegen_is_current_return_var_id(const struct Expression *expr, CodeG
         return 0;
 
     if (pascal_identifier_equals(expr_id, "Result"))
+    {
+        /* A real local/parameter named Result must win over the implicit
+         * function-result designator. Only treat bare Result as implicit when
+         * semantic lookup did not bind it to an actual symbol. */
+        if (ctx->symtab != NULL &&
+            FindSymbol(&shadow_node, ctx->symtab, expr_id) != 0 &&
+            shadow_node != NULL)
+            return 0;
         return 1;
+    }
 
     current_id = ctx->current_subprogram_id;
     if (current_id == NULL)
         return 0;
 
     if (pascal_identifier_equals(expr_id, current_id))
+        return 1;
+    if (ctx->current_subprogram_method_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_method_name))
+        return 1;
+    if (ctx->current_subprogram_result_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
         return 1;
 
     suffix = strstr(current_id, "__");
@@ -3173,6 +3273,10 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
         int record_field_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
         if (record_field_capacity > 1)
             return record_field_capacity;
+
+        int array_element_capacity = codegen_shortstring_capacity_from_array_element_local(expr, ctx);
+        if (array_element_capacity > 1)
+            return array_element_capacity;
 
         KgpcType *expr_type = expr_get_kgpc_type(expr);
         if (expr_type != NULL &&
@@ -4361,7 +4465,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                             /* Pass remaining arguments starting from index 1 (skip class type argument) */
                             inst_list = codegen_pass_arguments(
                                 src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
-                                func_type, func_id, 1, src_expr);
+                                func_type, func_id, 1, src_expr, 0);
 
                             /* Emit Self AFTER argument evaluation so that arg-passing code
                              * cannot clobber the Self register (e.g. %rdi on SysV). */
@@ -4422,7 +4526,7 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                     inst_list = codegen_pass_arguments(
                         src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
                         func_type,
-                        src_expr->expr_data.function_call_data.id, 1, src_expr);
+                        src_expr->expr_data.function_call_data.id, 1, src_expr, 0);
 
                     snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                         dest_save_slot->offset, ret_ptr_reg);
@@ -4662,8 +4766,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
             /* Use larger buffer for string literal embedding to avoid truncation */
             char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                     readonly_section, label, escaped_str);
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                     readonly_section, label, escaped_str, codegen_text_section_resume());
             inst_list = add_inst(inst_list, str_literal_buffer);
             
             /* Get register for string literal address */
@@ -5251,11 +5355,7 @@ static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
     if (ctx == NULL)
         return;
 
-    StackNode_t *return_var = find_label("Result");
-    if (return_var == NULL && ctx->current_subprogram_id != NULL)
-        return_var = find_label((char *)ctx->current_subprogram_id);
-    if (return_var == NULL && ctx->current_subprogram_mangled != NULL)
-        return_var = find_label((char *)ctx->current_subprogram_mangled);
+    StackNode_t *return_var = ctx->current_return_slot;
     if (return_var == NULL)
         return;
 
@@ -5564,13 +5664,45 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             if (src != NULL)
             {
                 /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
-                 * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
-                 * "qword ptr" would be rejected by the assembler.  Skip the body entirely
-                 * and let the runtime library's stub override the empty function body. */
+                 * KGPC targets AT&T syntax; Intel-syntax asm needs wrapping with
+                 * .intel_syntax noprefix / .att_syntax prefix directives.
+                 *
+                 * Detection heuristics (any match → Intel syntax):
+                 *   1. Memory operand keywords: "dword ptr", "qword ptr", etc.
+                 *   2. Bracket memory operands: [...] (AT&T uses parentheses)
+                 *   3. Bare register operands without '%' prefix in operand position
+                 * Heuristic 2 is the strongest signal since AT&T never uses [] for
+                 * memory addressing, while Intel always does. */
+                int is_intel_syntax = 0;
                 if (pascal_strcasestr(src, "dword ptr") != NULL ||
                     pascal_strcasestr(src, "qword ptr") != NULL ||
                     pascal_strcasestr(src, "byte ptr")  != NULL ||
                     pascal_strcasestr(src, "word ptr")  != NULL)
+                    is_intel_syntax = 1;
+
+                /* Check for Intel-style bracket memory operands: [reg], [reg+off] etc.
+                 * AT&T syntax uses parentheses for memory: (%reg), off(%reg) etc.
+                 * Skip [...] inside comments {...} and strings. */
+                if (!is_intel_syntax) {
+                    int in_brace_comment = 0;
+                    for (const char *p = src; *p != '\0'; p++) {
+                        if (*p == '{') { in_brace_comment = 1; continue; }
+                        if (*p == '}') { in_brace_comment = 0; continue; }
+                        if (in_brace_comment) continue;
+                        if (*p == '[') {
+                            /* Skip Pascal asm clobber lists: end ['eax','edx']
+                             * These have [ followed by ' — Intel memory operands
+                             * use [reg] or [reg+offset], never ['...'] */
+                            if (*(p + 1) == '\'')
+                                continue;
+                            /* Found a bracket — this is Intel memory syntax */
+                            is_intel_syntax = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_intel_syntax)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
                      * fpc_in_sin_real / fpc_in_cos_real so the function body is not empty.
@@ -5620,8 +5752,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             break;
                         }
                     }
-                    fprintf(ctx->output_file,
-                        "\t# Intel-mode asm block skipped (not supported by AT&T assembler)\n");
+                    /* For other Intel-syntax asm blocks, wrap with GAS
+                     * syntax-switching directives so they assemble correctly
+                     * in the otherwise AT&T-syntax output file. */
+                    inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
+                    inst_list = add_inst(inst_list, strdup(src));
+                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
                     break;
                 }
 
@@ -5739,7 +5875,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             for (int pi = 0; pi < ctx->asm_param_count; pi++) {
                                                 if (ctx->asm_params[pi].name != NULL &&
                                                     strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
-                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    /* Pick register width from parameter type size */
+                                                    int ri = ctx->asm_params[pi].reg_index;
+                                                    int sz = ctx->asm_params[pi].size_bytes;
+                                                    const char *reg;
+                                                    switch (sz) {
+                                                    case 1:  reg = current_arg_reg8(ri); break;
+                                                    case 2:  reg = current_arg_reg16(ri); break;
+                                                    case 4:  reg = current_arg_reg32(ri); break;
+                                                    default: reg = current_arg_reg64(ri); break;
+                                                    }
                                                     if (reg != NULL) {
                                                         int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
                                                         sj += (n > 0 ? (size_t)n : 0);
@@ -5755,10 +5900,19 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             if (var != NULL) {
                                                 if (var->is_static && var->static_label != NULL) {
                                                     const char *label = var->static_label;
-                                                    size_t llen = strlen(label);
-                                                    if (sj + llen < sub_alloc - 64) {
-                                                        memcpy(substituted + sj, label, llen);
-                                                        sj += llen;
+                                                    /* Use RIP-relative addressing for AT&T syntax
+                                                     * to avoid 32-bit absolute relocation failures
+                                                     * on Windows x64 (image base > 4GB).
+                                                     * But skip if the template already has (%rip)
+                                                     * immediately after the identifier. */
+                                                    int already_has_rip = (si + 6 <= clen &&
+                                                        strncmp(cleaned + si, "(%rip)", 6) == 0);
+                                                    const char *fmt = (is_intel_syntax || already_has_rip)
+                                                        ? "%s" : "%s(%%rip)";
+                                                    int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                        fmt, label);
+                                                    if (n > 0) {
+                                                        sj += (size_t)n;
                                                         did_substitute = 1;
                                                     }
                                                 } else if (var->offset > 0) {
@@ -5896,9 +6050,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             }
             else
             {
-                StackNode_t *return_var = find_label("Result");
-                if (return_var == NULL && ctx != NULL && ctx->current_subprogram_id != NULL)
-                    return_var = find_label((char *)ctx->current_subprogram_id);
+                StackNode_t *return_var = ctx != NULL ? ctx->current_return_slot : NULL;
 
                 if (return_var != NULL)
                 {
@@ -9099,7 +9251,7 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     dst_node->next = src_node;
     src_node->next = count_node;
 
-    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL);
+    inst_list = codegen_pass_arguments(dst_node, inst_list, ctx, NULL, "Move", 0, NULL, 0);
     DestroyList(dst_node);
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
@@ -9327,8 +9479,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char escaped_msg[CODEGEN_MAX_INST_BUF];
                 escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
                 char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                         readonly_section, msg_label, escaped_msg);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                         readonly_section, msg_label, escaped_msg, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
@@ -9340,8 +9492,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char msg_label[64];
                 snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
                 char rodata_buf[256];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
-                         readonly_section, msg_label);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, msg_label, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
                 inst_list = add_inst(inst_list, buffer);
@@ -9352,8 +9504,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
                 char fn_label[64];
                 snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
                 char rodata_buf[256];
-                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n\t.text\n",
-                         readonly_section, fn_label);
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, fn_label, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, rodata_buf);
                 snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
                 inst_list = add_inst(inst_list, buffer);
@@ -9390,8 +9542,8 @@ ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, 
     if (proc_name_hint == NULL)
         proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
 
-    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL, 
-        proc_name_hint, 0, NULL);
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
+        proc_name_hint, 0, NULL, 0);
     inst_list = codegen_vect_reg(inst_list, 0);
     const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
     if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
@@ -9651,6 +9803,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             if (field_is_static_array && src_is_static_array)
                 return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+
+            /* Large set fields (> 4 bytes, e.g. set of enum with > 32 elements)
+             * need memory-based construction via codegen_assign_record_value,
+             * which will force the set literal into the 32-byte path. */
+            if (field->type == SET_TYPE && field->has_cached_layout && field->cached_size > 4)
+                return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
         }
     }
 
@@ -11226,7 +11384,7 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             {
                 char call_buffer[CODEGEN_MAX_INST_BUF];
                 inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
-                    unmangled_name, 0, NULL);
+                    unmangled_name, 0, NULL, 0);
                 snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", call_target);
                 inst_list = add_inst(inst_list, call_buffer);
             }
@@ -11480,8 +11638,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 4. Pass arguments as usual */
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, 0, NULL);
-        
+            proc_name_hint, 0, NULL, 0);
+
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
         
@@ -11593,7 +11751,8 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         int arg_start_index = should_pass_static_link ? 1 : 0;
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, arg_start_index, NULL);
+            proc_name_hint, arg_start_index, NULL,
+            stmt->stmt_data.procedure_call_data.is_class_method_call);
 
         if (should_pass_static_link)
         {
@@ -13243,6 +13402,28 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     // Increment label (for continue statements)
     snprintf(buffer, sizeof(buffer), "%s:\n", incr_label);
     inst_list = add_inst(inst_list, buffer);
+
+    // Overflow guard: if the loop variable already equals the limit,
+    // skip the increment to prevent wrap-around for small types
+    // (e.g., Byte 255 + 1 wraps to 0, causing an infinite loop).
+    {
+        Register_t *guard_reg = NULL;
+        inst_list = codegen_evaluate_expr(for_var, inst_list, ctx, &guard_reg);
+        if (!codegen_had_error(ctx) && guard_reg != NULL) {
+            if (limit_is_qword)
+                snprintf(buffer, sizeof(buffer), "\tcmpq\t-%d(%%rbp), %s\n",
+                         limit_temp->offset, guard_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tcmpl\t-%d(%%rbp), %s\n",
+                         limit_temp->offset, guard_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), guard_reg);
+            snprintf(buffer, sizeof(buffer), "\tje\t%s\n", exit_label);
+            inst_list = add_inst(inst_list, buffer);
+        } else if (guard_reg != NULL) {
+            free_reg(get_reg_stack(), guard_reg);
+        }
+    }
 
     inst_list = codegen_stmt(update_stmt, inst_list, ctx, symtab);
     inst_list = gencode_jmp(NORMAL_JMP, 0, cond_label, inst_list);

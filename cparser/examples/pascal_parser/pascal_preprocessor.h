@@ -32,4 +32,12 @@ char *pascal_preprocess_file(PascalPreprocessor *pp,
                              size_t *out_length,
                              char **error_message);
 
+/* Get the list of files that were included during preprocessing.
+ * Returns the count; *out_files points to an internal array of paths. */
+size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
+                                               const char *const **out_files);
+
+/* Returns true if {$ASMMODE INTEL} was the last asmmode directive seen. */
+bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp);
+
 #endif /* PASCAL_PREPROCESSOR_H */

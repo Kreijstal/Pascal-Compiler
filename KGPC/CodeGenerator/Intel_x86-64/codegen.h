@@ -128,6 +128,15 @@ static inline const char *codegen_readonly_section_directive(void)
     return codegen_target_is_windows() ? "\t.section\t.rdata,\"dr\"" : "\t.section\t.rodata";
 }
 
+/* Return the directive to switch back to the current text section.
+ * With --function-sections, each function is in its own .text.funcname section;
+ * use .previous to return to it after a .rodata detour instead of the bare .text
+ * which would incorrectly place code in the default .text section. */
+static inline const char *codegen_text_section_resume(void)
+{
+    return function_sections_flag() ? "\t.previous" : "\t.text";
+}
+
 void codegen_sanitize_identifier_for_label(const char *value, char *buffer, size_t size);
 
 #define NORMAL_JMP -1
@@ -261,9 +270,12 @@ typedef struct CodeGenContext {
     const char *current_subprogram_id;
     const char *current_subprogram_mangled;
     const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
+    const char *current_subprogram_result_name;   /* Explicit Pascal result variable alias (NULL if none) */
     const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
+    StackNode_t *current_return_slot;
+    KgpcType *current_return_type;
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.
@@ -277,6 +289,7 @@ typedef struct CodeGenContext {
     StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
     ListNode_t *emitted_subprograms;
+    FILE *cache_output; /* When populating codegen cache: unit function sections written here */
     CodeGenWithContext *with_stack;
     int with_depth;
     int with_capacity;
@@ -288,6 +301,7 @@ typedef struct CodeGenContext {
     struct {
         const char *name;   /* Pascal parameter name */
         int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+        int size_bytes;     /* Parameter size: 1,2,4,8 (0 = unknown → 64-bit) */
     } asm_params[16];
 
     /* Callee-saved register save slot offsets (from %rbp).

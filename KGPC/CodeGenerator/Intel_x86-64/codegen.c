@@ -61,6 +61,8 @@ static void codegen_register_record_field_enum_literals(SymTab_t *symtab,
     struct RecordType *record);
 static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t *symtab);
 static ListNode_t *g_codegen_available_subprograms = NULL;
+/* g_available_subprograms_set and g_available_subprograms_tail declared after
+ * CodeGenStringSet definition below */
 
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
 {
@@ -275,7 +277,12 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
             if (cand == NULL || cand->mangled_id == NULL || cand->type == NULL ||
                 cand->type->kind != TYPE_KIND_PROCEDURE)
                 continue;
-            if (strncmp(cand->mangled_id, stale_target, prefix_len) != 0)
+            /* Strip unit$$ prefix from candidate mangled_id for comparison */
+            const char *cand_base = cand->mangled_id;
+            const char *cand_sep = strstr(cand_base, "$$");
+            if (cand_sep != NULL)
+                cand_base = cand_sep + 2;
+            if (strncmp(cand_base, stale_target, prefix_len) != 0)
                 continue;
             Tree_t *def = cand->type->info.proc_info.definition;
             if (def == NULL || def->tree_data.subprogram_data.statement_list == NULL)
@@ -412,6 +419,46 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
 
     if (call_target == NULL)
         call_target = expr->expr_data.function_call_data.id;
+
+    /* Final fixup: if call_target is an unprefixed mangled name but all
+     * definitions with that base name have been unit-qualified by the
+     * codegen_apply_unit_mangled_prefixes pre-pass, look up the correct
+     * unit-qualified label.  This handles cases where semcheck cached a
+     * mangled_id before codegen added the unit$$ prefix. */
+    if (call_target != NULL && strstr(call_target, "$$") == NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.function_call_data.id != NULL)
+    {
+        ListNode_t *candidates = FindAllIdents(ctx->symtab,
+            expr->expr_data.function_call_data.id);
+        for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *cand = (HashNode_t *)cur->cur;
+            if (cand == NULL || cand->mangled_id == NULL)
+                continue;
+            /* Check if cand->mangled_id has the form "unit$$call_target" */
+            const char *sep = strstr(cand->mangled_id, "$$");
+            if (sep == NULL)
+                continue;
+            const char *base = sep + 2;
+            if (strcmp(base, call_target) == 0)
+            {
+                /* Verify this candidate has a real implementation */
+                if (cand->type != NULL &&
+                    cand->type->kind == TYPE_KIND_PROCEDURE &&
+                    cand->type->info.proc_info.definition != NULL &&
+                    cand->type->info.proc_info.definition
+                        ->tree_data.subprogram_data.statement_list != NULL)
+                {
+                    call_target = cand->mangled_id;
+                    break;
+                }
+            }
+        }
+        if (candidates != NULL)
+            DestroyList(candidates);
+    }
+
     return call_target;
 }
 
@@ -596,7 +643,7 @@ int codegen_tag_from_kgpc(const KgpcType *type)
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
 /* ---- Simple string hash set for O(1) label/name lookups ---- */
-#define CODEGEN_HASHSET_SIZE 211
+#define CODEGEN_HASHSET_SIZE 8191
 
 typedef struct CodeGenHashEntry {
     const char *key;
@@ -608,6 +655,8 @@ typedef struct {
 } CodeGenStringSet;
 
 static CodeGenStringSet g_codegen_callable_exports;
+static CodeGenStringSet g_available_subprograms_set;
+static ListNode_t *g_available_subprograms_tail = NULL;
 
 static unsigned codegen_hash(const char *s)
 {
@@ -673,6 +722,18 @@ static void codegen_set_destroy(CodeGenStringSet *set)
 }
 /* ---- End string hash set ---- */
 
+/* Module-level emitted-subprograms hash set + tail pointer for O(1) operations.
+ * Reset in codegen() before each compilation. */
+static CodeGenStringSet g_emitted_set;
+static ListNode_t *g_emitted_tail = NULL;
+
+static void codegen_reset_emitted_set(void)
+{
+    codegen_set_destroy(&g_emitted_set);
+    memset(&g_emitted_set, 0, sizeof(g_emitted_set));
+    g_emitted_tail = NULL;
+}
+
 /* ---- String constant collection for local const strings ---- */
 /* String constants from local const declarations (e.g. `const S = '...'`
  * inside function bodies) are registered into the symbol table via
@@ -694,15 +755,198 @@ static void codegen_keep_subprogram_label(const char *label)
 {
     if (label == NULL)
         return;
-    if (g_codegen_available_subprograms != NULL &&
-        codegen_list_contains_string(g_codegen_available_subprograms, label))
+    if (codegen_set_contains(&g_available_subprograms_set, label))
         return;
 
+    codegen_set_insert(&g_available_subprograms_set, label);
     ListNode_t *node = CreateListNode((void *)label, LIST_STRING);
-    if (g_codegen_available_subprograms == NULL)
+    if (g_codegen_available_subprograms == NULL) {
         g_codegen_available_subprograms = node;
-    else
-        g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+        g_available_subprograms_tail = node;
+    } else {
+        g_available_subprograms_tail->next = node;
+        g_available_subprograms_tail = node;
+    }
+}
+
+/* Build a unit-qualified mangled name: "unitname$$base_mangled".  Returns a
+ * malloc'd string.  The caller must free it. */
+static char *codegen_build_unit_qualified_mangled(const char *base_mangled,
+                                                   int source_unit_index)
+{
+    if (base_mangled == NULL || source_unit_index <= 0)
+        return NULL;
+    const char *unit_name = unit_registry_get(source_unit_index);
+    if (unit_name == NULL || unit_name[0] == '\0')
+        return NULL;
+    size_t ulen = strlen(unit_name);
+    size_t blen = strlen(base_mangled);
+    char *result = malloc(ulen + 2 + blen + 1);
+    if (result == NULL)
+        return NULL;
+    for (size_t i = 0; i < ulen; i++)
+        result[i] = (char)tolower((unsigned char)unit_name[i]);
+    result[ulen] = '$';
+    result[ulen + 1] = '$';
+    memcpy(result + ulen + 2, base_mangled, blen + 1);
+    return result;
+}
+
+/* Returns 1 if a subprogram tree node is eligible for unit-prefix qualification
+ * (non-method, non-external, non-internproc, has a mangled_id, from a unit). */
+static int codegen_subprogram_is_prefix_eligible(Tree_t *sub)
+{
+    if (sub == NULL || sub->type != TREE_SUBPROGRAM)
+        return 0;
+    struct Subprogram *data = &sub->tree_data.subprogram_data;
+    if (data->source_unit_index <= 0)
+        return 0;
+    if (data->owner_class != NULL)
+        return 0;
+    if (data->cname_override != NULL || data->cname_flag)
+        return 0;
+    if (data->mangled_id == NULL || data->mangled_id[0] == '\0')
+        return 0;
+    if (data->internproc_id != NULL && data->internproc_id[0] != '\0')
+        return 0;
+    return 1;
+}
+
+/* Collision map: tracks mangled names and which unit they belong to.
+ * A mangled_id that appears with two different source_unit_indices is
+ * "colliding" and needs the unit$$ prefix. */
+typedef struct CgCollisionEntry {
+    char *mangled_id;
+    int first_unit_index;
+    int is_colliding;
+    struct CgCollisionEntry *next;
+} CgCollisionEntry;
+
+#define CG_COLLISION_BUCKETS 256
+
+typedef struct {
+    CgCollisionEntry *buckets[CG_COLLISION_BUCKETS];
+} CgCollisionMap;
+
+static unsigned cg_collision_hash(const char *s)
+{
+    unsigned h = 0;
+    for (; *s; s++)
+        h = h * 31 + (unsigned char)*s;
+    return h % CG_COLLISION_BUCKETS;
+}
+
+/* Record a (mangled_id, unit_index) pair.  If the same mangled_id is seen with
+ * a different unit_index, mark it as colliding. */
+static void cg_collision_record(CgCollisionMap *map, const char *mangled_id,
+                                 int unit_index)
+{
+    unsigned idx = cg_collision_hash(mangled_id);
+    for (CgCollisionEntry *e = map->buckets[idx]; e != NULL; e = e->next) {
+        if (strcmp(e->mangled_id, mangled_id) == 0) {
+            if (e->first_unit_index != unit_index)
+                e->is_colliding = 1;
+            return;
+        }
+    }
+    CgCollisionEntry *entry = malloc(sizeof(CgCollisionEntry));
+    if (entry == NULL)
+        return;
+    entry->mangled_id = strdup(mangled_id);
+    entry->first_unit_index = unit_index;
+    entry->is_colliding = 0;
+    entry->next = map->buckets[idx];
+    map->buckets[idx] = entry;
+}
+
+static int cg_collision_is_colliding(const CgCollisionMap *map,
+                                      const char *mangled_id)
+{
+    unsigned idx = cg_collision_hash(mangled_id);
+    for (CgCollisionEntry *e = map->buckets[idx]; e != NULL; e = e->next) {
+        if (strcmp(e->mangled_id, mangled_id) == 0)
+            return e->is_colliding;
+    }
+    return 0;
+}
+
+static void cg_collision_destroy(CgCollisionMap *map)
+{
+    for (int i = 0; i < CG_COLLISION_BUCKETS; i++) {
+        CgCollisionEntry *e = map->buckets[i];
+        while (e != NULL) {
+            CgCollisionEntry *next = e->next;
+            free(e->mangled_id);
+            free(e);
+            e = next;
+        }
+        map->buckets[i] = NULL;
+    }
+}
+
+/* First pass: collect (mangled_id, source_unit_index) pairs from all eligible
+ * subprograms to detect cross-unit mangled name collisions. */
+static void codegen_collect_mangled_collisions(ListNode_t *sub_list,
+                                                CgCollisionMap *map)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (codegen_subprogram_is_prefix_eligible(sub)) {
+            cg_collision_record(map, sub->tree_data.subprogram_data.mangled_id,
+                sub->tree_data.subprogram_data.source_unit_index);
+        }
+        if (sub != NULL && sub->type == TREE_SUBPROGRAM &&
+            sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_collect_mangled_collisions(
+                sub->tree_data.subprogram_data.subprograms, map);
+        sub_list = sub_list->next;
+    }
+}
+
+/* Second pass: for subprograms whose mangled_id collides across units, apply
+ * the unit$$ prefix to both the tree node and the corresponding HashNode. */
+static void codegen_apply_collision_prefixes(ListNode_t *sub_list,
+                                              SymTab_t *symtab,
+                                              const CgCollisionMap *map)
+{
+    while (sub_list != NULL) {
+        Tree_t *sub = (Tree_t *)sub_list->cur;
+        if (codegen_subprogram_is_prefix_eligible(sub)) {
+            struct Subprogram *data = &sub->tree_data.subprogram_data;
+            if (cg_collision_is_colliding(map, data->mangled_id)) {
+                char *prefixed = codegen_build_unit_qualified_mangled(
+                    data->mangled_id, data->source_unit_index);
+                if (prefixed != NULL) {
+                    /* Update corresponding HashNode in the symbol table. */
+                    if (symtab != NULL && data->id != NULL) {
+                        ListNode_t *candidates = FindAllIdents(symtab, data->id);
+                        for (ListNode_t *c = candidates; c != NULL; c = c->next) {
+                            HashNode_t *hn = (HashNode_t *)c->cur;
+                            if (hn == NULL || hn->type == NULL ||
+                                hn->type->kind != TYPE_KIND_PROCEDURE)
+                                continue;
+                            Tree_t *def = hn->type->info.proc_info.definition;
+                            if (def != sub)
+                                continue;
+                            if (hn->mangled_id != NULL)
+                                free(hn->mangled_id);
+                            hn->mangled_id = strdup(prefixed);
+                            break;
+                        }
+                        if (candidates != NULL)
+                            DestroyList(candidates);
+                    }
+                    free(data->mangled_id);
+                    data->mangled_id = prefixed;
+                }
+            }
+        }
+        if (sub != NULL && sub->type == TREE_SUBPROGRAM &&
+            sub->tree_data.subprogram_data.subprograms != NULL)
+            codegen_apply_collision_prefixes(
+                sub->tree_data.subprogram_data.subprograms, symtab, map);
+        sub_list = sub_list->next;
+    }
 }
 
 static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
@@ -760,12 +1004,16 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
             continue;
         }
 
-        if (mangled_id != NULL && !codegen_list_contains_string(g_codegen_available_subprograms, mangled_id)) {
+        if (mangled_id != NULL && !codegen_set_contains(&g_available_subprograms_set, mangled_id)) {
+            codegen_set_insert(&g_available_subprograms_set, mangled_id);
             ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
-            if (g_codegen_available_subprograms == NULL)
+            if (g_codegen_available_subprograms == NULL) {
                 g_codegen_available_subprograms = node;
-            else
-                g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+                g_available_subprograms_tail = node;
+            } else {
+                g_available_subprograms_tail->next = node;
+                g_available_subprograms_tail = node;
+            }
         }
 
         if (sub->tree_data.subprogram_data.subprograms != NULL)
@@ -1672,12 +1920,63 @@ static int codegen_real_param_storage_size(Tree_t *arg_decl,
     return 8;
 }
 
+static int codegen_shortstring_storage_size(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    int primitive_shortstring = (type->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(type) == SHORTSTRING_TYPE);
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->is_shortstring)
+    {
+        if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+        if (alias->array_end >= alias->array_start && alias->array_end >= 0)
+        {
+            int alias_size = alias->array_end - alias->array_start + 1;
+            if (alias_size > 1)
+                return alias_size;
+        }
+        if (primitive_shortstring)
+            return 256;
+    }
+
+    if (kgpc_type_is_shortstring(type))
+    {
+        long long size = kgpc_type_sizeof(type);
+        if (size > 1 && size <= INT_MAX)
+            return (int)size;
+        return 256;
+    }
+
+    return 0;
+}
+
 /* Helper function to determine variable storage size (for stack allocation)
  * Returns size in bytes, or -1 on error */
 static inline int get_var_storage_size(HashNode_t *node)
 {
     if (node == NULL)
         return -1;
+
+    struct TypeAlias *node_alias = get_type_alias_from_node(node);
+    if (node_alias != NULL)
+    {
+        if (node_alias->is_pointer || node_alias->is_class_reference)
+            return 8;
+        if (node_alias->is_shortstring)
+        {
+            if (node_alias->storage_size > 1 && node_alias->storage_size <= INT_MAX)
+                return (int)node_alias->storage_size;
+            if (node_alias->array_end >= node_alias->array_start && node_alias->array_end >= 0)
+                return node_alias->array_end - node_alias->array_start + 1;
+            return 256;
+        }
+        if (node_alias->storage_size > 0 && node_alias->storage_size <= INT_MAX)
+            return (int)node_alias->storage_size;
+    }
     
     /* Check KgpcType first */
     if (node->type != NULL)
@@ -1689,7 +1988,10 @@ static inline int get_var_storage_size(HashNode_t *node)
             if (alias != NULL)
             {
                 if (alias->is_shortstring)
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(node->type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 if (alias->storage_size > 0)
                     return (int)alias->storage_size;
             }
@@ -1713,7 +2015,10 @@ static inline int get_var_storage_size(HashNode_t *node)
                 case PROCEDURE:
                     return 8;
                 case SHORTSTRING_TYPE:
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(node->type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 case FILE_TYPE:
                 case TEXT_TYPE:
                 {
@@ -1761,6 +2066,91 @@ static inline int get_var_storage_size(HashNode_t *node)
         }
     }
     return DOUBLEWORD;
+}
+
+static int codegen_storage_size_from_type(KgpcType *type)
+{
+    if (type == NULL)
+        return -1;
+
+    if (kgpc_type_is_shortstring(type))
+    {
+        int short_size = codegen_shortstring_storage_size(type);
+        return short_size > 0 ? short_size : 256;
+    }
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL)
+    {
+        if (alias->is_pointer || alias->is_class_reference)
+            return 8;
+        if (alias->is_shortstring)
+        {
+            int short_size = codegen_shortstring_storage_size(type);
+            return short_size > 0 ? short_size : 256;
+        }
+        if (alias->storage_size > 0 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+    }
+
+    long long size = kgpc_type_sizeof(type);
+    if (size > 0 && size <= INT_MAX)
+        return (int)size;
+
+    if (type->kind == TYPE_KIND_POINTER || type->kind == TYPE_KIND_PROCEDURE)
+        return 8;
+
+    if (type->kind == TYPE_KIND_PRIMITIVE)
+    {
+        switch (kgpc_type_get_primitive_tag(type))
+        {
+            case CHAR_TYPE:
+            case BOOL:
+                return 1;
+            case LONGINT_TYPE:
+                return 4;
+            case INT64_TYPE:
+            case QWORD_TYPE:
+            case STRING_TYPE:
+            case POINTER_TYPE:
+            case PROCEDURE:
+            case REAL_TYPE:
+                return 8;
+            case SHORTSTRING_TYPE:
+                return 256;
+            default:
+                return DOUBLEWORD;
+        }
+    }
+
+    return -1;
+}
+
+static int codegen_storage_size_from_type_alias(const struct TypeAlias *alias)
+{
+    if (alias == NULL)
+        return -1;
+
+    if (alias->is_pointer || alias->is_class_reference)
+        return 8;
+
+    if (alias->is_shortstring)
+    {
+        if (alias->storage_size > 1 && alias->storage_size <= INT_MAX)
+            return (int)alias->storage_size;
+        if (alias->array_end >= alias->array_start && alias->array_end >= 0)
+        {
+            int alias_size = alias->array_end - alias->array_start + 1;
+            if (alias_size > 1)
+                return alias_size;
+        }
+        return 256;
+    }
+
+    if (alias->storage_size > 0 && alias->storage_size <= INT_MAX)
+        return (int)alias->storage_size;
+
+    return -1;
 }
 
 ListNode_t *codegen_var_initializers(ListNode_t *decls, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
@@ -2976,9 +3366,10 @@ void codegen_common_record_typeinfo_label(const char *type_id, char *buffer, siz
     if (type_id == NULL || type_id[0] == '\0')
         return;
 
-    char sanitized[CODEGEN_MAX_INST_BUF];
-    codegen_sanitize_identifier_for_label(type_id, sanitized, sizeof(sanitized));
-    snprintf(buffer, size, "%s_TYPEINFO", sanitized);
+    /* Use type_id directly without sanitization — dots are valid in
+     * assembly labels and the TYPEINFO label emission uses dots for
+     * nested types (e.g. "tcgprocinfo.ttempinfo_flags_entry"). */
+    snprintf(buffer, size, "%s_TYPEINFO", type_id);
 }
 
 void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
@@ -3003,10 +3394,19 @@ void codegen_common_typeinfo_label_for_type_id(SymTab_t *symtab, const char *typ
             return;
         }
 
-        if (hashnode_get_record_type(type_node) != NULL)
         {
-            codegen_common_record_typeinfo_label(type_id, buffer, size);
-            return;
+            struct RecordType *record = hashnode_get_record_type(type_node);
+            if (record != NULL)
+            {
+                /* Use record->type_id when available — for nested types the
+                 * type_id is the full qualified name (e.g. "tcgprocinfo.ttempinfo_flags_entry")
+                 * which matches how the label is emitted.  Fall back to the
+                 * caller's type_id if record->type_id is not set. */
+                const char *label_name = (record->type_id != NULL) ?
+                    record->type_id : type_id;
+                codegen_common_record_typeinfo_label(label_name, buffer, size);
+                return;
+            }
         }
     }
 
@@ -3186,7 +3586,7 @@ static void codegen_emit_enum_typeinfo(CodeGenContext *ctx, SymTab_t *symtab, in
     }
 
     if (emitted_any)
-        fprintf(ctx->output_file, ".text\n");
+        fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
 
     for (int i = 0; i < emitted_count; ++i)
         free((void *)emitted_labels[i]);
@@ -3494,6 +3894,7 @@ ListNode_t *gencode_jmp(int type, int inverse, char *label, ListNode_t *inst_lis
 
 /* Forward declaration */
 void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, int nostackframe, const char *cname_override, int emit_weak);
+void codegen_stack_space_for_inst_list(ListNode_t *inst_list, CodeGenContext *ctx);
 
 /* Generates a function header.
  * If nostackframe is set, only emits the label without prologue (push %rbp / mov %rsp, %rbp).
@@ -3512,16 +3913,26 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
     assert(func_name != NULL);
     assert(ctx != NULL);
     codegen_emit_function_debug_comments(func_name, ctx);
-    /* All functions use .globl — the compiler produces a single .s file but
-     * the runtime library (.a) needs to call many unit-defined functions. */
+    /* Emit per-function .text section when --function-sections is enabled,
+     * allowing the linker's --gc-sections to strip unused functions. */
+    if (function_sections_flag())
+        fprintf(ctx->output_file, "\t.section\t.text.%s,\"ax\",@progbits\n", func_name);
+    /* When using cached unit .o (skip-unit-codegen), program-level functions
+     * (defined_in_unit == 0) must be local to avoid clashing with same-named
+     * unit functions in the cache .o.  All program code is in the same .s,
+     * so local binding still resolves correctly.  Unit functions in the cache
+     * are .globl so the runtime can call them. */
     const char *vis = ".globl";
-    (void)emit_weak;
+    if (skip_unit_codegen_flag() && emit_weak == 0)
+        vis = NULL;
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
-        fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
+        if (vis != NULL)
+            fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
         fprintf(ctx->output_file, "%s:\n", cname_override);
     }
-    fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
+    if (vis != NULL)
+        fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
     if (nostackframe) {
@@ -3614,6 +4025,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     ctx->emitted_subprograms = NULL;
     ctx->comp_ctx = comp_ctx;
     g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
@@ -3627,6 +4041,38 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+
+    /* Reset emitted-subprograms O(1) tracking for this compilation */
+    codegen_reset_emitted_set();
+
+    /* Detect and resolve cross-unit mangled name collisions (e.g.
+     * comptty.IsATTY vs termio.IsATTY both producing "isatty_t").
+     * Two passes: first collect all (mangled_id, unit) pairs, then
+     * prefix only colliding names with "unit$$". */
+    {
+        CgCollisionMap collision_map;
+        memset(&collision_map, 0, sizeof(collision_map));
+        /* Pass 1: collect collisions from all units */
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit != NULL && unit->type == TREE_UNIT)
+                    codegen_collect_mangled_collisions(
+                        unit->tree_data.unit_data.subprograms, &collision_map);
+            }
+        }
+        /* Pass 2: apply prefixes to colliding names */
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit != NULL && unit->type == TREE_UNIT)
+                    codegen_apply_collision_prefixes(
+                        unit->tree_data.unit_data.subprograms, symtab,
+                        &collision_map);
+            }
+        }
+        cg_collision_destroy(&collision_map);
+    }
 
     /* Collect callable export names from loaded units, then program */
     if (comp_ctx != NULL) {
@@ -3654,6 +4100,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_vmt(ctx, symtab, tree, comp_ctx);
 
     prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
+
     codegen_main(prgm_name, ctx);
 
     /* Emit weak stubs for method labels that were referenced (e.g., via
@@ -3673,6 +4120,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     {
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
 
@@ -3705,6 +4155,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
@@ -3717,6 +4170,8 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+    /* No collision detection needed for single-unit codegen — collisions
+     * only occur when multiple units are merged in program codegen. */
     codegen_collect_callable_export_names(tree->tree_data.unit_data.subprograms);
     codegen_rodata(ctx, symtab);
     codegen_emit_enum_typeinfo(ctx, symtab, 1);
@@ -3764,7 +4219,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "%s:\n", init_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -3826,7 +4281,7 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
         fprintf(ctx->output_file, "%s:\n", final_label);
         fprintf(ctx->output_file, "\tpushq\t%%rbp\n");
         fprintf(ctx->output_file, "\tmovq\t%%rsp, %%rbp\n");
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
         codegen_inst_list(inst_list, ctx);
         if (ctx->callee_save_rbx_offset > 0)
             fprintf(ctx->output_file, "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
@@ -3861,6 +4316,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     {
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
 
@@ -4178,6 +4636,8 @@ static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
     ScopeNode *saved_scope = symtab->current_scope;
     int saved_unit_index = symtab->current_unit_index;
     ScopeNode *unit_scope = GetOrCreateUnitScope(symtab, source_unit_index);
+    if (unit_scope != NULL && unit_scope->codegen_unit_scope_registered)
+        return;
     if (unit_scope != NULL)
         symtab->current_scope = unit_scope;
     symtab->current_unit_index = source_unit_index;
@@ -4188,6 +4648,8 @@ static void codegen_register_owner_unit_scope(CodeGenContext *ctx,
     codegen_register_decl_list(unit->tree_data.unit_data.implementation_var_decls, symtab, 0);
     codegen_register_const_decls(unit->tree_data.unit_data.interface_const_decls, symtab);
     codegen_register_const_decls(unit->tree_data.unit_data.implementation_const_decls, symtab);
+    if (unit_scope != NULL)
+        unit_scope->codegen_unit_scope_registered = 1;
 
     symtab->current_scope = saved_scope;
     symtab->current_unit_index = saved_unit_index;
@@ -4222,7 +4684,7 @@ void codegen_rodata(CodeGenContext *ctx, SymTab_t *symtab)
     fprintf(ctx->output_file, ".string \"%%d\\n\"\n");
     fprintf(ctx->output_file, ".format_str_n:\n");
     fprintf(ctx->output_file, ".string \"\\n\"\n");
-    fprintf(ctx->output_file, ".text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
     codegen_emit_integer_const_equivs(ctx, symtab);
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -4259,6 +4721,64 @@ static int codegen_method_uses_sret(CodeGenContext *ctx, SymTab_t *symtab,
             return 1;
     }
     return 0;
+}
+
+/* Emit a GUID constant and pguid reference pointer for an interface.
+ * Handles dedup checking/adding via the emitted_classes set, section
+ * selection (Windows COFF vs ELF), and emits both the 16-byte GUID
+ * data constant and the __kgpc_guidref_ pointer.
+ * Returns 1 if emitted, 0 if skipped (already emitted or error). */
+static int codegen_emit_interface_guid(CodeGenContext *ctx,
+    const char *iface_name, uint32_t d1, uint16_t d2, uint16_t d3,
+    const uint8_t d4[8], const char *comment_suffix,
+    EmittedClassSet *emitted_classes)
+{
+    if (ctx == NULL || iface_name == NULL || emitted_classes == NULL)
+        return 0;
+
+    char guid_dedup_buf[512];
+    snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
+             "__kgpc_guid_%s", iface_name);
+    if (emitted_class_set_contains(emitted_classes, guid_dedup_buf))
+        return 0;
+
+    char *guid_dedup_key = strdup(guid_dedup_buf);
+    if (guid_dedup_key == NULL)
+        return 0;
+    emitted_class_set_add(emitted_classes, guid_dedup_key);
+
+    int is_win = codegen_target_is_windows();
+    fprintf(ctx->output_file, "\n# GUID constant for interface %s%s\n",
+            iface_name, comment_suffix != NULL ? comment_suffix : "");
+    if (is_win) {
+        fprintf(ctx->output_file,
+                "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n", iface_name);
+        fprintf(ctx->output_file, "\t.linkonce discard\n");
+    } else {
+        fprintf(ctx->output_file, "\t.data\n");
+    }
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n", iface_name);
+    fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
+    fprintf(ctx->output_file, "\t.long\t0x%08X\n", d1);
+    fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
+    fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
+    fprintf(ctx->output_file,
+            "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
+            "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
+            d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
+    /* Emit pguid pointer */
+    if (is_win) {
+        fprintf(ctx->output_file,
+                "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n", iface_name);
+        fprintf(ctx->output_file, "\t.linkonce discard\n");
+    }
+    fprintf(ctx->output_file, "\t.align 8\n");
+    fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n", iface_name);
+    fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
+    fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", iface_name);
+    fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    return 1;
 }
 
 static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
@@ -4309,16 +4829,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         for (int iidx = 0; iidx < effective_iface_count; iidx++) {
             const char *iface_name = effective_iface_names[iidx];
             if (iface_name == NULL) continue;
-            /* Check if we already emitted this interface's GUID */
-            char guid_dedup_buf[512];
-            snprintf(guid_dedup_buf, sizeof(guid_dedup_buf), "__kgpc_guid_%s", iface_name);
-            if (emitted_class_set_contains(emitted_classes, guid_dedup_buf))
-                continue;
-            /* The set stores pointers without copying, so strdup the key
-             * to avoid dangling stack references. */
-            char *guid_dedup_key = strdup(guid_dedup_buf);
-            if (guid_dedup_key == NULL) continue;
-            emitted_class_set_add(emitted_classes, guid_dedup_key);
             /* Look up the interface type to get its GUID.
              * Use FindAllIdents to handle forward-declared interfaces where
              * the forward decl (without GUID) and full decl (with GUID) are
@@ -4330,35 +4840,8 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             unsigned char d4[8] = {0};
             if (iface_record != NULL)
                 codegen_resolve_record_guid(symtab, iface_record, &d1, &d2, &d3, d4);
-            /* Emit GUID data constant (deduplicated within this TU by emitted_classes set).
-             * Use .globl everywhere; dedup is handled by the emitted_classes set within
-             * the single TU, and on COFF by .linkonce discard sections. */
-            int is_win = codegen_target_is_windows();
-            fprintf(ctx->output_file, "\n# GUID constant for interface %s\n", iface_name);
-            if (is_win) {
-                fprintf(ctx->output_file, "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n", iface_name);
-                fprintf(ctx->output_file, "\t.linkonce discard\n");
-            } else {
-                fprintf(ctx->output_file, "\t.data\n");
-            }
-            fprintf(ctx->output_file, "\t.align 8\n");
-            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n", iface_name);
-            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
-            fprintf(ctx->output_file, "\t.long\t0x%08X\n", d1);
-            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d2);
-            fprintf(ctx->output_file, "\t.short\t0x%04X\n", (unsigned)d3);
-            fprintf(ctx->output_file, "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
-                d4[0], d4[1], d4[2], d4[3], d4[4], d4[5], d4[6], d4[7]);
-            /* Emit pguid pointer */
-            if (is_win) {
-                fprintf(ctx->output_file, "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n", iface_name);
-                fprintf(ctx->output_file, "\t.linkonce discard\n");
-            }
-            fprintf(ctx->output_file, "\t.align 8\n");
-            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n", iface_name);
-            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
-            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n", iface_name);
-            fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+            codegen_emit_interface_guid(ctx, iface_name, d1, d2, d3, d4,
+                NULL, emitted_classes);
         }
 
         /* Count valid interfaces */
@@ -4459,6 +4942,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s (empty)\n", class_label, iface_name);
                 fprintf(ctx->output_file, "\t.data\n");
                 fprintf(ctx->output_file, "\t.align 8\n");
+                fprintf(ctx->output_file, ".globl\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
                 fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
                 fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
                 continue;
@@ -4466,6 +4950,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
             fprintf(ctx->output_file, "\n# Interface vtable for %s implementing %s\n", class_label, iface_name);
             fprintf(ctx->output_file, "\t.data\n");
             fprintf(ctx->output_file, "\t.align 8\n");
+            fprintf(ctx->output_file, ".globl\t%s_INTF_%s_VTABLE\n", class_label, iface_name);
             fprintf(ctx->output_file, "%s_INTF_%s_VTABLE:\n", class_label, iface_name);
             /* Iterate interface method_templates directly — inherited parent
              * methods were already prepended during semcheck. */
@@ -4485,6 +4970,10 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         char thunk_label[768];
                         snprintf(thunk_label, sizeof(thunk_label), "%s_INTF_%s_THUNK_%s",
                             class_label, iface_name, vtbl_imethod->name);
+                        /* Thunks must always be in an executable .text section.
+                         * codegen_text_section_resume() uses .previous when
+                         * --function-sections is active, but .previous may
+                         * return to .rodata (non-executable) here. */
                         fprintf(ctx->output_file, "\t.text\n");
                         fprintf(ctx->output_file, "%s:\n", thunk_label);
                         /* If the method returns a large type (SRET), Self
@@ -4733,11 +5222,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 const char *fallback_mangled = method->mangled_name;
                 const char *slot_label = NULL;
                 if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, full_mangled))
+                    codegen_set_contains(&g_available_subprograms_set,full_mangled))
                     slot_label = full_mangled;
                 if (slot_label == NULL && fallback_mangled != NULL &&
                     g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, fallback_mangled))
+                    codegen_set_contains(&g_available_subprograms_set,fallback_mangled))
                     slot_label = fallback_mangled;
                 if (slot_label != NULL) {
                     fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
@@ -4919,6 +5408,18 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
 
         fprintf(ctx->output_file, "%s\n", codegen_readonly_section_directive());
+    }
+
+    /* Emit GUID for standalone interfaces (their VMT is emitted above but
+     * a separate GUID pass may miss them if they are not in the main scope). */
+    if (record_info->is_interface && class_label != NULL)
+    {
+        uint32_t gd1 = 0;
+        uint16_t gd2 = 0, gd3 = 0;
+        uint8_t gd4[8] = {0};
+        codegen_resolve_record_guid(symtab, record_info, &gd1, &gd2, &gd3, gd4);
+        codegen_emit_interface_guid(ctx, class_label, gd1, gd2, gd3, gd4,
+            " (from VMT emission)", emitted_classes);
     }
 
     if (free_effective_iface_names)
@@ -5227,7 +5728,7 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
                     (void *)cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list);
             }
             if (g_codegen_available_subprograms != NULL &&
-                codegen_list_contains_string(g_codegen_available_subprograms, emit_target)) {
+                codegen_set_contains(&g_available_subprograms_set,emit_target)) {
                 resolved_id = emit_target;
                 resolved_def = def;
                 break;
@@ -5525,7 +6026,7 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Skip if a concrete implementation exists */
             if (g_codegen_available_subprograms != NULL &&
-                codegen_list_contains_string(g_codegen_available_subprograms, mangled_id))
+                codegen_set_contains(&g_available_subprograms_set,mangled_id))
                 continue;
 
             if (method->resolved_mangled_id != NULL &&
@@ -5545,11 +6046,13 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Emit abstract method stub — this is the correct implementation
              * for virtual;abstract methods in old-style objects.  The dedup
-             * check above ensures we don't emit when a concrete impl exists. */
+             * check above ensures we don't emit when a concrete impl exists.
+             * Use .weak so the real implementation (e.g. from a codegen cache
+             * .o) takes precedence and avoids multiple-definition errors. */
             fprintf(ctx->output_file,
                     "\n# Abstract method stub: %s\n", mangled_id);
-            fprintf(ctx->output_file, "\t.text\n");
-            fprintf(ctx->output_file, ".globl %s\n", mangled_id);
+            fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
+            fprintf(ctx->output_file, ".weak %s\n", mangled_id);
             fprintf(ctx->output_file, "%s:\n", mangled_id);
             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
         }
@@ -5568,73 +6071,21 @@ static void codegen_emit_guids_from_type_list(CodeGenContext *ctx,
         Tree_t *type_tree = (Tree_t *)cur->cur;
         if (type_tree != NULL && type_tree->type == TREE_TYPE_DECL) {
             struct RecordType *record_info = codegen_record_from_type_decl(type_tree);
-            uint32_t guid_d1 = 0;
-            uint16_t guid_d2 = 0, guid_d3 = 0;
-            uint8_t guid_d4[8] = {0};
-            if (record_info != NULL && record_info->is_interface &&
-                codegen_resolve_record_guid(ctx->symtab, record_info,
-                    &guid_d1, &guid_d2, &guid_d3, guid_d4))
+            if (record_info != NULL && record_info->is_interface)
             {
+                uint32_t guid_d1 = 0;
+                uint16_t guid_d2 = 0, guid_d3 = 0;
+                uint8_t guid_d4[8] = {0};
+                codegen_resolve_record_guid(ctx->symtab, record_info,
+                    &guid_d1, &guid_d2, &guid_d3, guid_d4);
+
                 const char *iface_name = record_info->type_id;
                 if (iface_name == NULL)
                     iface_name = type_tree->tree_data.type_decl_data.id;
                 if (iface_name == NULL) { cur = cur->next; continue; }
 
-                char guid_dedup_buf[512];
-                snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
-                         "__kgpc_guid_%s", iface_name);
-                if (!emitted_class_set_contains(emitted_classes, guid_dedup_buf))
-                {
-                    char *guid_dedup_key = strdup(guid_dedup_buf);
-                    if (guid_dedup_key != NULL)
-                        emitted_class_set_add(emitted_classes, guid_dedup_key);
-
-                    unsigned long d1 = (unsigned long)guid_d1;
-                    unsigned int d2 = (unsigned int)guid_d2;
-                    unsigned int d3 = (unsigned int)guid_d3;
-                    unsigned char d4[8];
-                    memcpy(d4, guid_d4, sizeof(d4));
-
-                    int is_win = codegen_target_is_windows();
-                    fprintf(ctx->output_file,
-                            "\n# GUID constant for interface %s (from unit)\n",
-                            iface_name);
-                    if (is_win) {
-                        fprintf(ctx->output_file,
-                                "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n",
-                                iface_name);
-                        fprintf(ctx->output_file, "\t.linkonce discard\n");
-                    } else {
-                        fprintf(ctx->output_file, "\t.data\n");
-                    }
-                    fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n",
-                            iface_name);
-                    fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
-                    fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
-                    fprintf(ctx->output_file, "\t.short\t0x%04X\n", d2);
-                    fprintf(ctx->output_file, "\t.short\t0x%04X\n", d3);
-                    fprintf(ctx->output_file,
-                            "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
-                            "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
-                            d4[0], d4[1], d4[2], d4[3],
-                            d4[4], d4[5], d4[6], d4[7]);
-                    /* Emit pguid pointer */
-                    if (is_win) {
-                        fprintf(ctx->output_file,
-                                "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n",
-                                iface_name);
-                        fprintf(ctx->output_file, "\t.linkonce discard\n");
-                    }
-                    fprintf(ctx->output_file, "\t.align 8\n");
-                    fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n",
-                            iface_name);
-                    fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
-                    fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n",
-                            iface_name);
-                    fprintf(ctx->output_file, "%s\n",
-                            codegen_readonly_section_directive());
-                }
+                codegen_emit_interface_guid(ctx, iface_name, guid_d1, guid_d2,
+                    guid_d3, guid_d4, " (from unit)", emitted_classes);
             }
         }
         cur = cur->next;
@@ -5649,7 +6100,7 @@ static void codegen_emit_global_jump_stub(CodeGenContext *ctx,
     if (ctx == NULL || exported_symbol == NULL || target_symbol == NULL)
         return;
 
-    fprintf(ctx->output_file, "\t.text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
     fprintf(ctx->output_file, ".globl %s\n", exported_symbol);
     fprintf(ctx->output_file, "%s:\n", exported_symbol);
     fprintf(ctx->output_file, "\tjmp\t%s\n", target_symbol);
@@ -5723,7 +6174,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     EmittedClassSet emitted_classes = {0};
 
-    /* Emit VMTs from loaded units first */
+    /* Emit VMTs from loaded units */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -5738,7 +6189,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     /* Emit VMTs from the current compilation unit/program declarations.
      * When compiling a unit directly, it is not yet present in loaded_units,
-     * so we must emit from the current TREE_UNIT explicitly. */
+     * so we must emit from the current TREE_UNIT explicitly.
+     * When --skip-unit-codegen is active, codegen_vmt returns early above. */
     if (tree->type == TREE_PROGRAM_TYPE)
         codegen_vmt_from_type_list(ctx, symtab,
             tree->tree_data.program_data.type_declaration, &emitted_classes);
@@ -5754,7 +6206,8 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
      * (e.g., specializations pulled in from units like FGL).
      * Restrict this fallback to whole-program codegen. Direct unit codegen
      * should emit from the unit's own declared types, not arbitrary symtab
-     * entries that may include incomplete or transient records. */
+     * entries that may include incomplete or transient records.
+     * When --skip-unit-codegen is active, codegen_vmt returns early above. */
     if (tree->type == TREE_PROGRAM_TYPE)
     {
         for (ScopeNode *scope = symtab->current_scope; scope != NULL; scope = scope->parent)
@@ -5797,73 +6250,67 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
                              hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
                         record_info = hash_node->type->info.points_to->info.record_info;
 
-                    uint32_t guid_d1 = 0;
-                    uint16_t guid_d2 = 0, guid_d3 = 0;
-                    uint8_t guid_d4[8] = {0};
-                    if (record_info != NULL && record_info->is_interface &&
-                        codegen_resolve_record_guid(symtab, record_info,
-                            &guid_d1, &guid_d2, &guid_d3, guid_d4))
+                    if (record_info != NULL && record_info->is_interface)
                     {
+                        uint32_t guid_d1 = 0;
+                        uint16_t guid_d2 = 0, guid_d3 = 0;
+                        uint8_t guid_d4[8] = {0};
+                        codegen_resolve_record_guid(symtab, record_info,
+                            &guid_d1, &guid_d2, &guid_d3, guid_d4);
                         const char *iface_name = record_info->type_id;
                         if (iface_name == NULL)
                             iface_name = hash_node->id;
-                        if (iface_name == NULL) { node = node->next; continue; }
+                        if (iface_name != NULL)
+                            codegen_emit_interface_guid(ctx, iface_name,
+                                guid_d1, guid_d2, guid_d3, guid_d4,
+                                " (standalone)", &emitted_classes);
+                    }
+                }
+                node = node->next;
+            }
+        }
+    }
 
-                        char guid_dedup_buf[512];
-                        snprintf(guid_dedup_buf, sizeof(guid_dedup_buf),
-                                 "__kgpc_guid_%s", iface_name);
-                        if (!emitted_class_set_contains(&emitted_classes, guid_dedup_buf))
-                        {
-                            char *guid_dedup_key = strdup(guid_dedup_buf);
-                            if (guid_dedup_key != NULL)
-                                emitted_class_set_add(&emitted_classes, guid_dedup_key);
+    /* Also walk unit_scopes for interfaces (parallel to the VMT walk above). */
+    for (int ui = 0; ui < SYMTAB_MAX_UNITS; ui++)
+    {
+        ScopeNode *unit_scope = symtab->unit_scopes[ui];
+        if (unit_scope == NULL)
+            continue;
+        HashTable_t *table = unit_scope->table;
+        if (table == NULL)
+            continue;
+        for (int b = 0; b < TABLE_SIZE; b++)
+        {
+            ListNode_t *node = table->table[b];
+            while (node != NULL)
+            {
+                HashNode_t *hash_node = (HashNode_t *)node->cur;
+                if (hash_node != NULL && hash_node->hash_type == HASHTYPE_TYPE &&
+                    hash_node->type != NULL)
+                {
+                    struct RecordType *record_info = NULL;
+                    if (hash_node->type->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.record_info;
+                    else if (hash_node->type->kind == TYPE_KIND_POINTER &&
+                             hash_node->type->info.points_to != NULL &&
+                             hash_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                        record_info = hash_node->type->info.points_to->info.record_info;
 
-                            unsigned long d1 = (unsigned long)guid_d1;
-                            unsigned int d2 = (unsigned int)guid_d2;
-                            unsigned int d3 = (unsigned int)guid_d3;
-                            unsigned char d4[8];
-                            memcpy(d4, guid_d4, sizeof(d4));
-
-                            int is_win = codegen_target_is_windows();
-                            fprintf(ctx->output_file,
-                                    "\n# GUID constant for interface %s (standalone)\n",
-                                    iface_name);
-                            if (is_win) {
-                                fprintf(ctx->output_file,
-                                        "\t.section\t.rdata$__kgpc_guid_%s,\"dr\"\n",
-                                        iface_name);
-                                fprintf(ctx->output_file, "\t.linkonce discard\n");
-                            } else {
-                                fprintf(ctx->output_file, "\t.data\n");
-                            }
-                            fprintf(ctx->output_file, "\t.align 8\n");
-                            fprintf(ctx->output_file, ".globl __kgpc_guid_%s\n",
-                                    iface_name);
-                            fprintf(ctx->output_file, "__kgpc_guid_%s:\n", iface_name);
-                            fprintf(ctx->output_file, "\t.long\t0x%08lX\n", d1);
-                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d2);
-                            fprintf(ctx->output_file, "\t.short\t0x%04X\n", d3);
-                            fprintf(ctx->output_file,
-                                    "\t.byte\t0x%02X, 0x%02X, 0x%02X, 0x%02X, "
-                                    "0x%02X, 0x%02X, 0x%02X, 0x%02X\n",
-                                    d4[0], d4[1], d4[2], d4[3],
-                                    d4[4], d4[5], d4[6], d4[7]);
-                            /* Emit pguid pointer */
-                            if (is_win) {
-                                fprintf(ctx->output_file,
-                                        "\t.section\t.rdata$__kgpc_guidref_%s,\"dr\"\n",
-                                        iface_name);
-                                fprintf(ctx->output_file, "\t.linkonce discard\n");
-                            }
-                            fprintf(ctx->output_file, "\t.align 8\n");
-                            fprintf(ctx->output_file, ".globl __kgpc_guidref_%s\n",
-                                    iface_name);
-                            fprintf(ctx->output_file, "__kgpc_guidref_%s:\n", iface_name);
-                            fprintf(ctx->output_file, "\t.quad\t__kgpc_guid_%s\n",
-                                    iface_name);
-                            fprintf(ctx->output_file, "%s\n",
-                                    codegen_readonly_section_directive());
-                        }
+                    if (record_info != NULL && record_info->is_interface)
+                    {
+                        uint32_t guid_d1 = 0;
+                        uint16_t guid_d2 = 0, guid_d3 = 0;
+                        uint8_t guid_d4[8] = {0};
+                        codegen_resolve_record_guid(symtab, record_info,
+                            &guid_d1, &guid_d2, &guid_d3, guid_d4);
+                        const char *iface_name = record_info->type_id;
+                        if (iface_name == NULL)
+                            iface_name = hash_node->id;
+                        if (iface_name != NULL)
+                            codegen_emit_interface_guid(ctx, iface_name,
+                                guid_d1, guid_d2, guid_d3, guid_d4,
+                                " (from unit scope)", &emitted_classes);
                     }
                 }
                 node = node->next;
@@ -5924,7 +6371,7 @@ void codegen_vmt(CodeGenContext *ctx, SymTab_t *symtab, Tree_t *tree,
 
     emitted_class_set_destroy(&emitted_classes);
 
-    fprintf(ctx->output_file, ".text\n");
+    fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
 
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
@@ -6003,14 +6450,7 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     }
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_endprologue\n");
-    if (codegen_target_is_windows())
-    {
-        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
-    }
-    else
-    {
-        fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
-    }
+    fprintf(ctx->output_file, "\tcall\tkgpc_init_args\n");
     fprintf(ctx->output_file, "\tcall\t%s\n", prgm_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\txor\t%%ecx, %%ecx\n");
@@ -6023,24 +6463,118 @@ void codegen_main(char *prgm_name, CodeGenContext *ctx)
     #endif
 }
 
+static int codegen_max_rbp_stack_ref(ListNode_t *inst_list)
+{
+    int max_offset = 0;
+
+    while (inst_list != NULL)
+    {
+        if (inst_list->type == LIST_STRING && inst_list->cur != NULL)
+        {
+            const char *text = (const char *)inst_list->cur;
+            const char *cursor = text;
+
+            while ((cursor = strchr(cursor, '-')) != NULL)
+            {
+                const char *digits = cursor + 1;
+                char *endptr = NULL;
+                long offset;
+
+                if (!isdigit((unsigned char)*digits))
+                {
+                    ++cursor;
+                    continue;
+                }
+
+                offset = strtol(digits, &endptr, 10);
+                if (endptr != NULL &&
+                    strncmp(endptr, "(%rbp)", 6) == 0 &&
+                    offset > 0 && offset <= INT_MAX &&
+                    (int)offset > max_offset)
+                {
+                    max_offset = (int)offset;
+                }
+
+                cursor = digits;
+            }
+        }
+
+        inst_list = inst_list->next;
+    }
+
+    return max_offset;
+}
+
+static int codegen_compute_stack_space_from_insts(ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    int needed_space = codegen_max_rbp_stack_ref(inst_list);
+    int div;
+    int rem;
+
+    assert(ctx != NULL);
+
+    if (ctx->callee_save_rbx_offset > needed_space)
+        needed_space = ctx->callee_save_rbx_offset;
+    if (ctx->callee_save_r12_offset > needed_space)
+        needed_space = ctx->callee_save_r12_offset;
+    if (ctx->callee_save_r13_offset > needed_space)
+        needed_space = ctx->callee_save_r13_offset;
+    if (ctx->callee_save_r14_offset > needed_space)
+        needed_space = ctx->callee_save_r14_offset;
+    if (ctx->callee_save_r15_offset > needed_space)
+        needed_space = ctx->callee_save_r15_offset;
+
+    needed_space += current_stack_home_space();
+    if (needed_space <= 0)
+        return 0;
+
+    div = needed_space / REQUIRED_OFFSET;
+    rem = needed_space % REQUIRED_OFFSET;
+    if (rem > 0)
+        ++div;
+
+    return div * REQUIRED_OFFSET;
+}
+
 /* Generates code to allocate needed stack space */
-void codegen_stack_space(CodeGenContext *ctx)
+void codegen_stack_space_for_inst_list(ListNode_t *inst_list, CodeGenContext *ctx)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
     #endif
     int needed_space;
+    const int stack_probe_page = 4096;
 
     assert(ctx != NULL);
 
-    needed_space = get_full_stack_offset();
+    needed_space = codegen_compute_stack_space_from_insts(inst_list, ctx);
     assert(needed_space >= 0);
 
     int aligned_space = align_to_multiple(needed_space, REQUIRED_OFFSET);
 
     if(aligned_space != 0)
     {
-        fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        if (aligned_space > stack_probe_page)
+        {
+            int remaining = aligned_space;
+
+            while (remaining > stack_probe_page)
+            {
+                fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", stack_probe_page);
+                fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+                remaining -= stack_probe_page;
+            }
+
+            if (remaining > 0)
+            {
+                fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", remaining);
+                fprintf(ctx->output_file, "\tmovq\t$0, (%%rsp)\n");
+            }
+        }
+        else
+        {
+            fprintf(ctx->output_file, "\tsubq\t$%d, %%rsp\n", aligned_space);
+        }
         if (codegen_target_is_windows())
             fprintf(ctx->output_file, "\t.seh_stackalloc\t%d\n", aligned_space);
 
@@ -6104,6 +6638,11 @@ void codegen_stack_space(CodeGenContext *ctx)
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
     #endif
+}
+
+void codegen_stack_space(CodeGenContext *ctx)
+{
+    codegen_stack_space_for_inst_list(NULL, ctx);
 }
 
 /* Writes instruction list to file */
@@ -6174,7 +6713,9 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
 
     push_stackscope();
 
-    /* Process var/const declarations from loaded units first, then program */
+    /* Process var/const declarations from loaded units first, then program.
+     * These are always needed — even with --skip-unit-codegen, the per-test
+     * compilation must emit unit globals and run unit init code. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6203,6 +6744,79 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         ctx->callee_save_r15_offset = r15_slot->offset;
     }
 
+    /* Pre-pass: propagate cname_override from forward declarations to their
+     * matching implementations so that codegen_function_header emits both labels
+     * directly (e.g., FPC_INTERLOCKEDCOMPAREEXCHANGE64: and
+     * interlockedcompareexchange64_i64_i64_i64:).  This eliminates the need
+     * for .set alias post-passes and ensures the cache .o has all needed symbols. */
+    {
+        /* Build a flat list of all subprograms (units + program) */
+        ListNode_t *all_subs_head = NULL;
+        if (comp_ctx != NULL) {
+            for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
+                Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
+                if (unit == NULL || unit->type != TREE_UNIT) continue;
+                ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
+                while (usubs != NULL) {
+                    ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
+                    if (copy != NULL) { copy->next = all_subs_head; all_subs_head = copy; }
+                    usubs = usubs->next;
+                }
+            }
+        }
+        {
+            ListNode_t *psubs = data->subprograms;
+            while (psubs != NULL) {
+                ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
+                if (copy != NULL) { copy->next = all_subs_head; all_subs_head = copy; }
+                psubs = psubs->next;
+            }
+        }
+
+        /* Pass 1: propagate cname_override from forward decls to implementations.
+         * Forward decls have [Alias:'FPC_XYZ'] but no body; the impl has a body
+         * but no cname_override.  Copy the alias so the impl header emits both labels. */
+        for (ListNode_t *fwd = all_subs_head; fwd != NULL; fwd = fwd->next) {
+            if (fwd->type != LIST_TREE || fwd->cur == NULL) continue;
+            Tree_t *fwd_sub = (Tree_t *)fwd->cur;
+            if (fwd_sub->type != TREE_SUBPROGRAM) continue;
+            const char *alias = fwd_sub->tree_data.subprogram_data.cname_override;
+            if (alias == NULL) continue;
+            if (fwd_sub->tree_data.subprogram_data.statement_list != NULL) continue; /* has body — not a forward decl */
+            /* Only propagate FPC_/KGPC_ internal aliases */
+            if (strncmp(alias, "FPC_", 4) != 0 && strncmp(alias, "KGPC_", 5) != 0) continue;
+            const char *fwd_id = fwd_sub->tree_data.subprogram_data.id;
+            if (fwd_id == NULL) continue;
+
+            for (ListNode_t *impl = all_subs_head; impl != NULL; impl = impl->next) {
+                if (impl->type != LIST_TREE || impl->cur == NULL) continue;
+                Tree_t *impl_sub = (Tree_t *)impl->cur;
+                if (impl_sub == fwd_sub || impl_sub->type != TREE_SUBPROGRAM) continue;
+                if (impl_sub->tree_data.subprogram_data.statement_list == NULL) continue;
+                if (impl_sub->tree_data.subprogram_data.cname_override != NULL) continue; /* already has alias */
+                const char *impl_id = impl_sub->tree_data.subprogram_data.id;
+                if (impl_id == NULL) continue;
+                int matched = (strcasecmp(fwd_id, impl_id) == 0);
+                if (!matched && impl_sub->tree_data.subprogram_data.cname_override != NULL &&
+                    strcasecmp(impl_sub->tree_data.subprogram_data.cname_override, alias) == 0)
+                    matched = 1;
+                if (matched) {
+                    impl_sub->tree_data.subprogram_data.cname_override = strdup(fwd_sub->tree_data.subprogram_data.cname_override);
+                    break;
+                }
+            }
+        }
+
+        /* Free the temporary list (shallow copies only) */
+        ListNode_t *tmp = all_subs_head;
+        while (tmp != NULL) {
+            ListNode_t *next = tmp->next;
+            tmp->cur = NULL;
+            free(tmp);
+            tmp = next;
+        }
+    }
+
     /* Emit program subprograms first (they override unit versions with the
      * same mangled_id), then unit subprograms.
      * Units are iterated in REVERSE load order so that more fundamental units
@@ -6212,7 +6826,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
      * return from load_unit(), so the most fundamental unit has the highest
      * array index.  Iterating in reverse processes fundamentals first. */
     codegen_subprograms(data->subprograms, ctx, symtab);
-    if (comp_ctx != NULL) {
+    if (comp_ctx != NULL && !skip_unit_codegen_flag()) {
         for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
             if (unit == NULL || unit->type != TREE_UNIT)
@@ -6221,233 +6835,13 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
-    /* Build hash set of emitted subprogram labels for O(1) lookups */
-    CodeGenStringSet emitted_labels;
-    memset(&emitted_labels, 0, sizeof(emitted_labels));
-    {
-        ListNode_t *_s = ctx->emitted_subprograms;
-        while (_s != NULL) {
-            if (_s->type == LIST_STRING && _s->cur != NULL)
-                codegen_set_insert(&emitted_labels, (const char *)_s->cur);
-            _s = _s->next;
-        }
-    }
-
-    /* Build a temporary combined subprogram list for alias post-passes.
-     * The alias passes need to scan all subprograms (units + program) to find
-     * forward decl → implementation matches across unit boundaries. */
-    ListNode_t *all_subprograms = NULL;
-    if (comp_ctx != NULL) {
-        for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
-            Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
-            if (unit == NULL || unit->type != TREE_UNIT)
-                continue;
-            ListNode_t *usubs = unit->tree_data.unit_data.subprograms;
-            while (usubs != NULL) {
-                ListNode_t *copy = CreateListNode(usubs->cur, usubs->type);
-                if (copy != NULL) {
-                    copy->next = all_subprograms;
-                    all_subprograms = copy;
-                }
-                usubs = usubs->next;
-            }
-        }
-    }
-    {
-        ListNode_t *psubs = data->subprograms;
-        while (psubs != NULL) {
-            ListNode_t *copy = CreateListNode(psubs->cur, psubs->type);
-            if (copy != NULL) {
-                copy->next = all_subprograms;
-                all_subprograms = copy;
-            }
-            psubs = psubs->next;
-        }
-    }
-
-    /* Post-pass: emit .set aliases for cname_override values.
-       Forward declarations with [Alias:'FPC_DO_EXIT'] have cname_override set
-       but no body; the matching implementation has a body but no cname_override.
-       Scan for forward decls with aliases and match them to implementations by id. */
-    CodeGenStringSet emitted_cname_aliases;
-    memset(&emitted_cname_aliases, 0, sizeof(emitted_cname_aliases));
-    if (ctx->output_file != NULL) {
-        int debug_alias = (getenv("KGPC_DEBUG_ALIAS") != NULL);
-        ListNode_t *alias_scan = all_subprograms;
-        while (alias_scan != NULL) {
-            if (alias_scan->type == LIST_TREE && alias_scan->cur != NULL) {
-                Tree_t *sub = (Tree_t *)alias_scan->cur;
-                if (sub->type == TREE_SUBPROGRAM) {
-                    const char *alias = sub->tree_data.subprogram_data.cname_override;
-                    if (debug_alias && alias != NULL) {
-                        fprintf(stderr, "[ALIAS] id=%s mangled=%s alias=%s has_body=%d\n",
-                            sub->tree_data.subprogram_data.id ? sub->tree_data.subprogram_data.id : "<null>",
-                            sub->tree_data.subprogram_data.mangled_id ? sub->tree_data.subprogram_data.mangled_id : "<null>",
-                            alias, sub->tree_data.subprogram_data.statement_list != NULL);
-                    }
-                    if (alias != NULL) {
-                        const char *mangled = sub->tree_data.subprogram_data.mangled_id;
-                        const char *id = sub->tree_data.subprogram_data.id;
-                        const char *label = (mangled != NULL) ? mangled : id;
-
-                        /* Skip aliases that don't start with FPC_ or KGPC_ —
-                           these are `external name` imports (getenv, read, time, etc.)
-                           and emitting .set for them would override C library symbols. */
-                        int is_internal_alias = (strncmp(alias, "FPC_", 4) == 0 ||
-                                                 strncmp(alias, "KGPC_", 5) == 0);
-
-                        /* If this node has a body AND was emitted, emit alias directly. */
-                        if (is_internal_alias &&
-                            sub->tree_data.subprogram_data.statement_list != NULL &&
-                            label != NULL && strcmp(alias, label) != 0 &&
-                            codegen_set_contains(&emitted_labels, label) &&
-                            !codegen_set_contains(&emitted_cname_aliases, alias)) {
-                            codegen_set_insert(&emitted_cname_aliases, alias);
-                            fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
-                            fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, label);
-                        }
-                        /* If this is a forward decl (no body), find the implementation.
-                           Match by id, or by cname_override (e.g. `external name 'FPC_DO_EXIT'`
-                           referencing a function that has [Alias:'FPC_DO_EXIT']). */
-                        else if (is_internal_alias &&
-                                 sub->tree_data.subprogram_data.statement_list == NULL) {
-                            ListNode_t *impl_scan = all_subprograms;
-                            while (impl_scan != NULL) {
-                                if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
-                                    Tree_t *impl = (Tree_t *)impl_scan->cur;
-                                    if (impl != sub && impl->type == TREE_SUBPROGRAM &&
-                                        impl->tree_data.subprogram_data.statement_list != NULL) {
-                                        /* Match by id */
-                                        int matched = 0;
-                                        if (id != NULL && impl->tree_data.subprogram_data.id != NULL &&
-                                            strcasecmp(impl->tree_data.subprogram_data.id, id) == 0)
-                                            matched = 1;
-                                        /* Match by alias matching impl's cname_override */
-                                        if (!matched && impl->tree_data.subprogram_data.cname_override != NULL &&
-                                            strcasecmp(impl->tree_data.subprogram_data.cname_override, alias) == 0)
-                                            matched = 1;
-                                        if (matched) {
-                                            const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
-                                            const char *impl_label = (impl_mangled != NULL) ? impl_mangled : impl->tree_data.subprogram_data.id;
-                                            if (impl_label != NULL && strcmp(alias, impl_label) != 0 &&
-                                                codegen_set_contains(&emitted_labels, impl_label) &&
-                                                !codegen_set_contains(&emitted_cname_aliases, alias)) {
-                                                codegen_set_insert(&emitted_cname_aliases, alias);
-                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), alias);
-                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", alias, impl_label);
-                                            }
-                                            /* Also emit alias from the forward decl's mangled_id to the impl.
-                                               e.g., `int_finalize_p_p` → `fpc_finalize_p_p` so that
-                                               `leaq int_finalize_p_p(%rip)` resolves correctly. */
-                                            if (label != NULL && impl_label != NULL &&
-                                                strcmp(label, impl_label) != 0 &&
-                                                strcmp(label, alias) != 0 &&
-                                                codegen_set_contains(&emitted_labels, impl_label) &&
-                                                !codegen_set_contains(&emitted_cname_aliases, label)) {
-                                                codegen_set_insert(&emitted_cname_aliases, label);
-                                                fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), label);
-                                                fprintf(ctx->output_file, "\t.set\t%s, %s\n", label, impl_label);
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                impl_scan = impl_scan->next;
-                            }
-                        }
-                    }
-                }
-            }
-            alias_scan = alias_scan->next;
-        }
-    }
-
-    /* Post-pass: emit .set aliases for forward declarations whose implementation
-       has a different mangled_id (e.g. forward "runerror_i" → impl "FPC_RUNERROR").
-       Call sites reference the forward's mangled_id, so we need an alias. */
-    if (ctx->output_file != NULL) {
-        ListNode_t *fwd_scan = all_subprograms;
-        while (fwd_scan != NULL) {
-            if (fwd_scan->type == LIST_TREE && fwd_scan->cur != NULL) {
-                Tree_t *fwd = (Tree_t *)fwd_scan->cur;
-                if (fwd->type == TREE_SUBPROGRAM &&
-                    fwd->tree_data.subprogram_data.statement_list == NULL) {
-                    const char *fwd_mangled = fwd->tree_data.subprogram_data.mangled_id;
-                    const char *fwd_id = fwd->tree_data.subprogram_data.id;
-                    /* Skip external imports (`external name 'getenv'` etc.) — their
-                       mangled_id IS the external C symbol name.  Aliasing it to an
-                       internal Pascal implementation would shadow the C library symbol
-                       and cause infinite recursion when the Pascal implementation
-                       tries to call the C function. */
-                    const char *fwd_cname = fwd->tree_data.subprogram_data.cname_override;
-                    int is_external_import = (fwd_cname != NULL &&
-                        strncmp(fwd_cname, "FPC_", 4) != 0 &&
-                        strncmp(fwd_cname, "KGPC_", 5) != 0);
-                    if (fwd_mangled != NULL && fwd_id != NULL &&
-                        !is_external_import &&
-                        !codegen_set_contains(&emitted_labels, fwd_mangled) &&
-                        !codegen_set_contains(&emitted_cname_aliases, fwd_mangled)) {
-                        /* Find matching implementation by id.
-                         * Skip overloaded functions — aliasing one overload to
-                         * another (e.g. fileexists_rbs_b → fileexists_us_b)
-                         * causes infinite recursion when the target calls the
-                         * aliased overload. */
-                        ListNode_t *impl_scan = all_subprograms;
-                        while (impl_scan != NULL) {
-                            if (impl_scan->type == LIST_TREE && impl_scan->cur != NULL) {
-                                Tree_t *impl = (Tree_t *)impl_scan->cur;
-                                if (impl != fwd && impl->type == TREE_SUBPROGRAM &&
-                                    impl->tree_data.subprogram_data.statement_list != NULL &&
-                                    impl->tree_data.subprogram_data.id != NULL &&
-                                    strcasecmp(impl->tree_data.subprogram_data.id, fwd_id) == 0) {
-                                    const char *impl_mangled = impl->tree_data.subprogram_data.mangled_id;
-                                    if (impl_mangled != NULL &&
-                                        strcasecmp(fwd_mangled, impl_mangled) != 0 &&
-                                        codegen_set_contains(&emitted_labels, impl_mangled)) {
-                                        /* Only alias when the impl used a cname_override
-                                         * (e.g. [Alias:'FPC_ANSISTR_DECR_REF']) so the
-                                         * label name differs from the mangled name purely
-                                         * due to aliasing, NOT different overload signatures.
-                                         * If neither has cname_override, the different
-                                         * mangled names mean different parameter types
-                                         * (e.g. fileexists_rbs_b vs fileexists_us_b). */
-                                        if (fwd_cname == NULL &&
-                                            impl->tree_data.subprogram_data.cname_override == NULL)
-                                            goto next_fwd;
-                                        codegen_set_insert(&emitted_cname_aliases, fwd_mangled);
-                                        fprintf(ctx->output_file, "%s\t%s\n", codegen_weak_or_globl(), fwd_mangled);
-                                        fprintf(ctx->output_file, "\t.set\t%s, %s\n", fwd_mangled, impl_mangled);
-                                        break;
-                                    }
-                                }
-                            }
-                            impl_scan = impl_scan->next;
-                        }
-                    }
-                }
-            }
-            next_fwd:
-            fwd_scan = fwd_scan->next;
-        }
-    }
-
-    codegen_set_destroy(&emitted_labels);
-    codegen_set_destroy(&emitted_cname_aliases);
-
-    /* Free the temporary combined subprograms list (shallow copies only) */
-    {
-        ListNode_t *tmp = all_subprograms;
-        while (tmp != NULL) {
-            ListNode_t *next = tmp->next;
-            tmp->cur = NULL;  /* Don't free the Tree_t — we don't own it */
-            free(tmp);
-            tmp = next;
-        }
-        all_subprograms = NULL;
-    }
+    /* The cname_override pre-pass above propagated aliases from forward
+     * declarations to their matching implementations, so codegen_function_header
+     * now emits both the alias and mangled_id labels directly.  No .set
+     * aliases needed — the cache .o is self-contained. */
 
     inst_list = NULL;
-    /* Emit var initializers from loaded units first, then program */
+    /* Emit var initializers from loaded units first, then program. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6459,7 +6853,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_var_initializers(data->var_declaration, inst_list, ctx, symtab);
 
-    /* Emit unit initialization blocks in dependency (load) order */
+    /* Emit unit initialization blocks in dependency (load) order. */
     if (comp_ctx != NULL) {
         for (int i = 0; i < comp_ctx->loaded_unit_count; ++i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6487,7 +6881,7 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
     inst_list = codegen_stmt(data->body_statement, inst_list, ctx, symtab);
 
-    /* Emit unit finalization blocks in reverse dependency order (LIFO) */
+    /* Emit unit finalization blocks in reverse dependency order (LIFO). */
     if (comp_ctx != NULL) {
         for (int i = comp_ctx->loaded_unit_count - 1; i >= 0; --i) {
             Tree_t *unit = comp_ctx->loaded_units[i].unit_tree;
@@ -6501,14 +6895,15 @@ char * codegen_program(Tree_t *prgm, CodeGenContext *ctx, SymTab_t *symtab,
     }
 
     codegen_function_header(prgm_name, ctx);
-    codegen_stack_space(ctx);
+    codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(prgm_name, ctx);
     free_inst_list(inst_list);
 
     /* Emit INITFINAL table — FPC system unit references this to run unit
        init/finalization.  KGPC inlines that code into main, so emit a
-       minimal table with TableCount = 0. */
+       minimal table with TableCount = 0.
+       */
     if (ctx->output_file != NULL) {
         fprintf(ctx->output_file, "\n.data\n");
         fprintf(ctx->output_file, ".globl\tINITFINAL\n");
@@ -6594,9 +6989,9 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     FindSymbol(&var_info, symtab, id_list->cur);
 
                 HashNode_t *effective_type_node = type_node;
-                if (decl_type != NULL && kgpc_type_is_array(decl_type))
+                if (decl_type != NULL)
                     effective_type_node = &decl_type_node;
-                if (effective_type_node == NULL)
+                else if (effective_type_node == NULL)
                     effective_type_node = fallback_type_node;
 
                 KgpcType *param_type = NULL;
@@ -6801,7 +7196,25 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     }
                     
                     /* Get allocation size using helper */
-                    if (size_node != NULL)
+                    int decl_storage_size = -1;
+                    decl_storage_size = codegen_storage_size_from_type_alias(
+                        tree->tree_data.var_decl_data.inline_type_alias);
+                    if (decl_type != NULL)
+                    {
+                        int type_size = codegen_storage_size_from_type(decl_type);
+                        if (decl_storage_size <= 0)
+                            decl_storage_size = type_size;
+                    }
+                    if (decl_storage_size <= 0 && cached_type != NULL)
+                        decl_storage_size = codegen_storage_size_from_type(cached_type);
+                    if (decl_storage_size <= 0 && type_node != NULL)
+                        decl_storage_size = get_var_storage_size(type_node);
+
+                    if (decl_storage_size > 0)
+                    {
+                        alloc_size = decl_storage_size;
+                    }
+                    else if (size_node != NULL)
                     {
                         int size = get_var_storage_size(size_node);
                         if (size > 0)
@@ -6897,7 +7310,6 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                         char *static_label = NULL;
                         int is_external_var = tree->tree_data.var_decl_data.is_external;
                         char *cname_override = tree->tree_data.var_decl_data.cname_override;
-                        
                         if (cname_override != NULL) {
                             /* Use the external/public name directly */
                             static_label = strdup(cname_override);
@@ -6987,7 +7399,28 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                             }
                         }
 
-                        add_l_x((char *)id_list->cur, alloc_size);
+                        /* Local typed constants need static storage so their
+                         * address remains valid after the function returns. */
+                        if (tree->tree_data.var_decl_data.has_static_storage &&
+                            tree->tree_data.var_decl_data.static_label != NULL)
+                        {
+                            char *static_label = tree->tree_data.var_decl_data.static_label;
+                            if (!tree->tree_data.var_decl_data.static_storage_emitted)
+                            {
+                                if (ctx->output_file != NULL)
+                                {
+                                    int alignment = alloc_size >= 16 ? 16 : (alloc_size >= 8 ? 8 : DOUBLEWORD);
+                                    fprintf(ctx->output_file, "\t.comm\t%s,%d,%d\n",
+                                        static_label, alloc_size, alignment);
+                                }
+                                tree->tree_data.var_decl_data.static_storage_emitted = 1;
+                            }
+                            add_static_var((char *)id_list->cur, alloc_size, static_label);
+                        }
+                        else
+                        {
+                            add_l_x((char *)id_list->cur, alloc_size);
+                        }
                     }
                 }
                 id_list = id_list->next;
@@ -7127,12 +7560,12 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     if (FindSymbol(&var_node, symtab, var_name) && var_node != NULL && var_node->type != NULL) {
                         KgpcArrayDimensionInfo dim_info;
                         if (kgpc_type_get_array_dimension_info(var_node->type, symtab, &dim_info) == 0) {
-                            if (dim_info.strides[0] > element_size &&
+                            if (dim_info.strides[0] > 0 &&
                                 dim_info.strides[0] <= INT_MAX)
                             {
                                 element_size = (int)dim_info.strides[0];
                             }
-                            if (dim_info.total_size > total_size)
+                            if (dim_info.total_size > 0)
                                 total_size = (int)dim_info.total_size;
                         } else {
                             long long kgpc_size = kgpc_type_sizeof(var_node->type);
@@ -7298,27 +7731,22 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub->tree_data.subprogram_data.is_generic_template);
         }
 
-        if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
+        /* When --skip-unit-codegen is active, skip subprograms that belong
+         * to a unit (source_unit_index != 0).  Their code comes from the
+         * pre-compiled warmup .o file. */
+        if (skip_unit_codegen_flag() &&
+            sub->tree_data.subprogram_data.source_unit_index != 0)
         {
-            ListNode_t *seen = ctx->emitted_subprograms;
-            int already_emitted = 0;
-            while (seen != NULL)
-            {
-                if (seen->type == LIST_STRING && seen->cur != NULL &&
-                    strcmp((const char *)seen->cur, mangled_id) == 0)
-                {
-                    already_emitted = 1;
-                    break;
-                }
-                seen = seen->next;
-            }
-            if (already_emitted)
-            {
-                if (trace_tfplistenum || trace_missing_calls)
-                    fprintf(stderr, "[codegen] skip already emitted %s\n", mangled_id);
-                sub_list = sub_list->next;
-                continue;
-            }
+            sub_list = sub_list->next;
+            continue;
+        }
+
+        if (mangled_id != NULL && codegen_set_contains(&g_emitted_set, mangled_id))
+        {
+            if (trace_tfplistenum || trace_missing_calls)
+                fprintf(stderr, "[codegen] skip already emitted %s\n", mangled_id);
+            sub_list = sub_list->next;
+            continue;
         }
 
         if (sub->tree_data.subprogram_data.statement_list == NULL)
@@ -7410,22 +7838,99 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         if (mangled_id != NULL)
         {
             ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
-            if (ctx->emitted_subprograms == NULL)
+            if (ctx->emitted_subprograms == NULL) {
                 ctx->emitted_subprograms = node;
-            else
-                ctx->emitted_subprograms = PushListNodeBack(ctx->emitted_subprograms, node);
+                g_emitted_tail = node;
+            } else {
+                g_emitted_tail->next = node;
+                g_emitted_tail = node;
+            }
+            codegen_set_insert(&g_emitted_set, mangled_id);
         }
 
-        switch(sub->tree_data.subprogram_data.sub_type)
+        /* When populating the codegen cache, buffer each function's output
+         * so we can discard broken functions (those with codegen errors like
+         * unresolved non-locals).  The broken section gets a ud2 stub;
+         * --gc-sections removes it at link time. Also write successful unit
+         * functions to ctx->cache_output for the cache artifact. */
+#ifndef _WIN32
+        if (codegen_cache_miss_flag())
         {
-            case TREE_SUBPROGRAM_PROC:
-                codegen_procedure(sub, ctx, symtab);
-                break;
-            case TREE_SUBPROGRAM_FUNC:
-                codegen_function(sub, ctx, symtab);
-                break;
-            default:
-                assert(0 && "Unrecognized subprogram type in codegen!");
+            int source_unit_index = sub->tree_data.subprogram_data.source_unit_index;
+            FILE *real_output = ctx->output_file;
+            char *membuf = NULL;
+            size_t membuf_size = 0;
+            FILE *mem_output = open_memstream(&membuf, &membuf_size);
+            ctx->output_file = mem_output;
+            int had_error_before = ctx->had_error;
+            ctx->had_error = 0;
+
+            switch(sub->tree_data.subprogram_data.sub_type)
+            {
+                case TREE_SUBPROGRAM_PROC:
+                    codegen_procedure(sub, ctx, symtab);
+                    break;
+                case TREE_SUBPROGRAM_FUNC:
+                    codegen_function(sub, ctx, symtab);
+                    break;
+                default:
+                    assert(0 && "Unrecognized subprogram type in codegen!");
+            }
+
+            fflush(mem_output);
+            fclose(mem_output);
+            ctx->output_file = real_output;
+
+            if (ctx->had_error)
+            {
+                /* Write the (broken) output to the main .s normally —
+                 * it's a used function, codegen error is reported. */
+                fwrite(membuf, 1, membuf_size, real_output);
+                /* Emit a ud2 stub in cache so the symbol exists but
+                 * broken code isn't cached. */
+                if (mangled_id != NULL && ctx->cache_output != NULL && source_unit_index != 0)
+                {
+                    fprintf(ctx->cache_output,
+                        "\t.section\t.text.%s,\"ax\",@progbits\n"
+                        "\t.globl\t%s\n"
+                        "%s:\n"
+                        "\tud2\n",
+                        mangled_id, mangled_id, mangled_id);
+                }
+                /* Reset register allocator to recover from leaked registers */
+                reset_reg_stack();
+            }
+            else
+            {
+                /* Good output — write to real file */
+                fwrite(membuf, 1, membuf_size, real_output);
+                /* Write unit functions to cache output with per-function
+                 * section headers so --gc-sections can strip unused ones. */
+                if (ctx->cache_output != NULL && source_unit_index != 0 && mangled_id != NULL)
+                {
+                    fprintf(ctx->cache_output,
+                        "\t.section\t.text.%s,\"ax\",@progbits\n",
+                        mangled_id);
+                    fwrite(membuf, 1, membuf_size, ctx->cache_output);
+                }
+            }
+            ctx->had_error = had_error_before;
+            free(membuf);
+        }
+        else
+#endif /* _WIN32 */
+        {
+            switch(sub->tree_data.subprogram_data.sub_type)
+            {
+                case TREE_SUBPROGRAM_PROC:
+                    codegen_procedure(sub, ctx, symtab);
+                    break;
+                case TREE_SUBPROGRAM_FUNC:
+                    codegen_function(sub, ctx, symtab);
+                    break;
+                default:
+                    assert(0 && "Unrecognized subprogram type in codegen!");
+            }
         }
         sub_list = sub_list->next;
     }
@@ -7462,9 +7967,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_result_name = ctx->current_subprogram_result_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    StackNode_t *prev_return_slot = ctx->current_return_slot;
+    KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -7495,11 +8003,14 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = proc->id;
     ctx->current_subprogram_mangled = sub_id;
     ctx->current_subprogram_method_name = proc->method_name;
+    ctx->current_subprogram_result_name = proc->result_var_name;
     ctx->current_subprogram_owner_class = proc->owner_class;
     ctx->current_subprogram_owner_class_full = proc->owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method =
         (proc->owner_class != NULL && proc->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
+    ctx->current_return_slot = NULL;
+    ctx->current_return_type = NULL;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
@@ -7594,11 +8105,24 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (a->type == LIST_TREE && a->cur != NULL) {
                 Tree_t *param = (Tree_t *)a->cur;
                 if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    /* Determine parameter size for register width selection.
+                     * var/const params are always pointer-sized (8 bytes). */
+                    int param_size = 8;
+                    if (!param->tree_data.var_decl_data.is_var_param &&
+                        !param->tree_data.var_decl_data.is_const_param) {
+                        KgpcType *kt = param->tree_data.var_decl_data.cached_kgpc_type;
+                        if (kt != NULL) {
+                            long long sz = kgpc_type_sizeof(kt);
+                            if (sz == 1 || sz == 2 || sz == 4 || sz == 8)
+                                param_size = (int)sz;
+                        }
+                    }
                     ListNode_t *id_node = param->tree_data.var_decl_data.ids;
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
                             ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_params[ctx->asm_param_count].size_bytes = param_size;
                             ctx->asm_param_count++;
                             pi++;
                         }
@@ -7649,7 +8173,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
     if (!proc->nostackframe)
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, proc->nostackframe);
     free_inst_list(inst_list);
@@ -7661,9 +8185,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_result_name = prev_result_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_return_slot = prev_return_slot;
+    ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -7715,9 +8242,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_result_name = ctx->current_subprogram_result_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    StackNode_t *prev_return_slot = ctx->current_return_slot;
+    KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -7748,11 +8278,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = func->id;
     ctx->current_subprogram_mangled = sub_id;
     ctx->current_subprogram_method_name = func->method_name;
+    ctx->current_subprogram_result_name = func->result_var_name;
     ctx->current_subprogram_owner_class = func->owner_class;
     ctx->current_subprogram_owner_class_full = func->owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method =
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
+    ctx->current_return_slot = NULL;
+    ctx->current_return_type = NULL;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
@@ -8121,6 +8654,34 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_size = shortstring_size > 0 ? shortstring_size : 256;
         }
     }
+    if (func_node != NULL && func_node->type != NULL &&
+        func_node->type->kind == TYPE_KIND_PROCEDURE)
+        ctx->current_return_type = kgpc_type_get_return_type(func_node->type);
+
+    /* Fallback: if the AST node's return_type tag is SHORTSTRING_TYPE (set during
+     * AST conversion under {$H-}), but the KgpcType on the symbol table didn't
+     * reflect it (because semcheck runs with the flag reset), force sret and
+     * patch the KgpcType so body codegen uses value-type access. */
+    if (!has_record_return && func->return_type == SHORTSTRING_TYPE)
+    {
+        has_record_return = 1;
+        record_return_size = 256;
+    }
+    if (func->return_type == SHORTSTRING_TYPE && func_node != NULL &&
+        func_node->type != NULL && func_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *ret = func_node->type->info.proc_info.return_type;
+        if (ret != NULL && ret->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc_type_get_primitive_tag(ret) == STRING_TYPE)
+        {
+            /* Patch STRING -> SHORTSTRING so body codegen uses value semantics */
+            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+        }
+        else if (ret == NULL)
+        {
+            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+        }
+    }
 
     /* Only nested functions receive static links (excluding class methods). */
     int will_need_static_link = (!is_class_method && lexical_depth > 1);
@@ -8223,6 +8784,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
+    ctx->current_return_slot = return_var;
+
+
     if (func->result_var_name != NULL &&
         !pascal_identifier_equals(func->result_var_name, func->id) &&
         !pascal_identifier_equals(func->result_var_name, "Result"))
@@ -8292,11 +8856,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (a->type == LIST_TREE && a->cur != NULL) {
                 Tree_t *param = (Tree_t *)a->cur;
                 if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    /* Determine parameter size for register width selection.
+                     * var/const params are always pointer-sized (8 bytes). */
+                    int param_size = 8;
+                    if (!param->tree_data.var_decl_data.is_var_param &&
+                        !param->tree_data.var_decl_data.is_const_param) {
+                        KgpcType *kt = param->tree_data.var_decl_data.cached_kgpc_type;
+                        if (kt != NULL) {
+                            long long sz = kgpc_type_sizeof(kt);
+                            if (sz == 1 || sz == 2 || sz == 4 || sz == 8)
+                                param_size = (int)sz;
+                        }
+                    }
                     ListNode_t *id_node = param->tree_data.var_decl_data.ids;
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
                             ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_params[ctx->asm_param_count].size_bytes = param_size;
                             ctx->asm_param_count++;
                             pi++;
                         }
@@ -8506,7 +9083,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
-        codegen_stack_space(ctx);
+        codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer_ex(sub_id, ctx, func->nostackframe);
     free_inst_list(inst_list);
@@ -8518,9 +9095,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_result_name = prev_result_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_return_slot = prev_return_slot;
+    ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -8847,7 +9427,10 @@ static int codegen_dynamic_array_element_size_from_type(CodeGenContext *ctx, Kgp
                 case POINTER_TYPE:
                     return 8;
                 case SHORTSTRING_TYPE:
-                    return 256;
+                {
+                    int short_size = codegen_shortstring_storage_size(element_type);
+                    return short_size > 0 ? short_size : 256;
+                }
                 case CHAR_TYPE:
                 case BOOL:
                     return 1;
@@ -9024,7 +9607,7 @@ void codegen_anonymous_method(struct Expression *expr, CodeGenContext *ctx, SymT
     
     /* Generate the function header, stack allocation, body, and footer */
     codegen_function_header(anon->generated_name, ctx);
-    codegen_stack_space(ctx);
+    codegen_stack_space_for_inst_list(inst_list, ctx);
     codegen_inst_list(inst_list, ctx);
     codegen_function_footer(anon->generated_name, ctx);
     

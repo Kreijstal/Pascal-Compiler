@@ -25,12 +25,23 @@ void compilation_context_destroy(CompilationContext *ctx)
         {
             if (ctx->loaded_units[i].unit_tree != NULL)
                 destroy_tree(ctx->loaded_units[i].unit_tree);
+            free(ctx->loaded_units[i].source_path);
         }
         free(ctx->loaded_units);
     }
     ctx->loaded_units = NULL;
     ctx->loaded_unit_count = 0;
     ctx->loaded_unit_capacity = 0;
+
+    if (ctx->include_files != NULL)
+    {
+        for (int i = 0; i < ctx->include_file_count; ++i)
+            free(ctx->include_files[i]);
+        free(ctx->include_files);
+    }
+    ctx->include_files = NULL;
+    ctx->include_file_count = 0;
+    ctx->include_file_capacity = 0;
 
     /* symtab and program are NOT owned by the context. */
 }
@@ -53,7 +64,27 @@ void compilation_context_add_unit(CompilationContext *ctx,
     }
     ctx->loaded_units[ctx->loaded_unit_count].unit_tree = unit_tree;
     ctx->loaded_units[ctx->loaded_unit_count].unit_idx = unit_idx;
+    ctx->loaded_units[ctx->loaded_unit_count].source_path = NULL;
     ctx->loaded_unit_count++;
+}
+
+void compilation_context_add_include_files(CompilationContext *ctx,
+                                            const char *const *files, int count)
+{
+    for (int i = 0; i < count; ++i)
+    {
+        if (ctx->include_file_count == ctx->include_file_capacity)
+        {
+            int new_cap = ctx->include_file_capacity == 0 ? 64 : ctx->include_file_capacity * 2;
+            char **new_arr = (char **)realloc(ctx->include_files, (size_t)new_cap * sizeof(char *));
+            if (new_arr == NULL) return;
+            ctx->include_files = new_arr;
+            ctx->include_file_capacity = new_cap;
+        }
+        char *copy = strdup(files[i]);
+        if (copy)
+            ctx->include_files[ctx->include_file_count++] = copy;
+    }
 }
 
 static CompilationContext *g_active_comp_ctx = NULL;

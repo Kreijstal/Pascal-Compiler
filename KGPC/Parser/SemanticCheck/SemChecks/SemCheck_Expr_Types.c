@@ -6634,6 +6634,7 @@ int semcheck_addressof(int *type_return,
                 expr->expr_data.addr_of_proc_data.proc_mangled_id =
                     semcheck_dup_proc_target_symbol(symtab, proc_symbol);
                 expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                expr->expr_data.addr_of_proc_data.source_unit_index = proc_symbol->source_unit_index;
                 /* Resolve the type NOW while the symbol is still alive,
                  * instead of relying on procedure_symbol later. */
                 if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
@@ -6686,6 +6687,7 @@ int semcheck_addressof(int *type_return,
                     expr->expr_data.addr_of_proc_data.proc_mangled_id =
                         semcheck_dup_proc_target_symbol(symtab, proc_symbol);
                     expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                    expr->expr_data.addr_of_proc_data.source_unit_index = proc_symbol->source_unit_index;
                     /* Resolve the type NOW while the symbol is still alive. */
                     if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
                     {
@@ -6737,6 +6739,7 @@ int semcheck_addressof(int *type_return,
                         semcheck_dup_proc_target_symbol(symtab, method_node);
                     expr->expr_data.addr_of_proc_data.proc_id =
                         method_node->id ? strdup(method_node->id) : NULL;
+                    expr->expr_data.addr_of_proc_data.source_unit_index = method_node->source_unit_index;
                     if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
                     {
                         kgpc_type_retain(method_node->type);
@@ -6764,6 +6767,7 @@ int semcheck_addressof(int *type_return,
                 semcheck_dup_proc_target_symbol(symtab, resolved_proc_symbol);
             expr->expr_data.addr_of_proc_data.proc_id =
                 resolved_proc_symbol->id ? strdup(resolved_proc_symbol->id) : NULL;
+            expr->expr_data.addr_of_proc_data.source_unit_index = resolved_proc_symbol->source_unit_index;
             if (resolved_proc_symbol->type != NULL &&
                 resolved_proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
             {
@@ -6824,6 +6828,7 @@ int semcheck_addressof(int *type_return,
                 expr->type = EXPR_ADDR_OF_PROC;
                 expr->expr_data.addr_of_proc_data.proc_id = strdup(synth_name);
                 expr->expr_data.addr_of_proc_data.proc_mangled_id = strdup(synth_name);
+                expr->expr_data.addr_of_proc_data.source_unit_index = 0;
                 free(synth_name);
             }
             if (expr->resolved_kgpc_type != NULL)

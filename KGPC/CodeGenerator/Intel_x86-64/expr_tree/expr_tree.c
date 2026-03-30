@@ -25,6 +25,8 @@
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
 #include "../../../Parser/SemanticCheck/SemCheck.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
+#include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
@@ -507,20 +509,134 @@ static int codegen_builtin_lowhigh_try_value(struct Expression *expr, CodeGenCon
         if (codegen_builtin_lowhigh_try_alias_value(alias, is_high,
                 value_out, use_qword_out))
             return 1;
+
+        /* Enums with explicit values: scan literals in the symbol table
+         * to find the actual min/max ordinal values. */
+        if (alias != NULL && alias->is_enum && alias->enum_literals != NULL &&
+            alias->enum_has_explicit_values && ctx != NULL && ctx->symtab != NULL)
+        {
+            long long enum_min = LLONG_MAX;
+            long long enum_max = LLONG_MIN;
+            int found_any = 0;
+            for (ListNode_t *lit = alias->enum_literals; lit != NULL; lit = lit->next)
+            {
+                const char *name = (const char *)lit->cur;
+                if (name == NULL)
+                    continue;
+                HashNode_t *lit_node = NULL;
+                if (FindSymbol(&lit_node, ctx->symtab, name) != 0 &&
+                    lit_node != NULL && lit_node->is_constant)
+                {
+                    long long val = lit_node->const_int_value;
+                    if (val < enum_min)
+                        enum_min = val;
+                    if (val > enum_max)
+                        enum_max = val;
+                    found_any = 1;
+                }
+            }
+            if (found_any)
+            {
+                *value_out = is_high ? enum_max : enum_min;
+                *use_qword_out = (enum_min < INT32_MIN || enum_max > INT32_MAX);
+                return 1;
+            }
+        }
     }
 
     long long low = 0;
     long long high = 0;
     int use_qword = 0;
-    if (!codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
+    if (codegen_builtin_lowhigh_bounds_from_tag(expr_get_type_tag(arg_expr),
             &low, &high, &use_qword))
     {
-        return 0;
+        *value_out = is_high ? high : low;
+        *use_qword_out = use_qword;
+        return 1;
     }
 
-    *value_out = is_high ? high : low;
-    *use_qword_out = use_qword;
-    return 1;
+    /* Look up the argument variable in the symbol table and try to get
+     * bounds from its declared type's TypeAlias (covers enums, subranges,
+     * and arrays whose element type aliases weren't propagated to the
+     * expression). */
+    if (ctx != NULL && ctx->symtab != NULL &&
+        arg_expr->type == EXPR_VAR_ID && arg_expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        int found_sym = FindSymbol(&var_node, ctx->symtab, arg_expr->expr_data.id);
+        if (found_sym != 0 && var_node != NULL &&
+            (var_node->hash_type == HASHTYPE_VAR ||
+             var_node->hash_type == HASHTYPE_ARRAY ||
+             var_node->hash_type == HASHTYPE_CONST ||
+             var_node->hash_type == HASHTYPE_FUNCTION))
+        {
+            /* Try the variable's KgpcType alias */
+            if (var_node->type != NULL)
+            {
+                struct TypeAlias *var_alias = kgpc_type_get_type_alias(var_node->type);
+                if (codegen_builtin_lowhigh_try_alias_value(var_alias, is_high,
+                        value_out, use_qword_out))
+                    return 1;
+
+                /* For arrays, return the index bounds */
+                if (kgpc_type_is_array(var_node->type))
+                {
+                    long long arr_low = var_node->type->info.array_info.start_index;
+                    long long arr_high = var_node->type->info.array_info.end_index;
+                    if (arr_high >= arr_low)
+                    {
+                        *value_out = is_high ? arr_high : arr_low;
+                        *use_qword_out = (arr_low < INT32_MIN || arr_high > INT32_MAX);
+                        return 1;
+                    }
+                }
+
+                /* Try primitive tag from the variable's type */
+                int var_tag = codegen_tag_from_kgpc(var_node->type);
+                if (codegen_builtin_lowhigh_bounds_from_tag(var_tag,
+                        &low, &high, &use_qword))
+                {
+                    *value_out = is_high ? high : low;
+                    *use_qword_out = use_qword;
+                    return 1;
+                }
+            }
+
+            /* Try the hash node's inline type alias (for var decl aliases) */
+            struct TypeAlias *node_alias = hashnode_get_type_alias(var_node);
+            if (codegen_builtin_lowhigh_try_alias_value(node_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+        }
+    }
+
+    /* Last resort: try to get bounds from the function call's resolved
+     * procedure type.  For Low/High the return type matches the argument
+     * type, so we can derive bounds from the return type's primitive tag. */
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL)
+    {
+        KgpcType *proc_type = expr->expr_data.function_call_data.call_kgpc_type;
+        if (proc_type->kind == TYPE_KIND_PROCEDURE &&
+            proc_type->info.proc_info.return_type != NULL)
+        {
+            KgpcType *ret_type = proc_type->info.proc_info.return_type;
+            struct TypeAlias *ret_alias = kgpc_type_get_type_alias(ret_type);
+            if (codegen_builtin_lowhigh_try_alias_value(ret_alias, is_high,
+                    value_out, use_qword_out))
+                return 1;
+            int ret_tag = codegen_tag_from_kgpc(ret_type);
+            if (codegen_builtin_lowhigh_bounds_from_tag(ret_tag,
+                    &low, &high, &use_qword))
+            {
+                *value_out = is_high ? high : low;
+                *use_qword_out = use_qword;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
 }
 
 static ListNode_t *codegen_builtin_lowhigh_fallback(struct Expression *expr,
@@ -1241,13 +1357,13 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
                     int32_t i;
                 } converter;
                 converter.f = (float)operand_expr->expr_data.r_num;
-                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.long %d\n\t.text\n",
-                    readonly_section, label, (int)converter.i);
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.long %d\n%s\n",
+                    readonly_section, label, (int)converter.i, codegen_text_section_resume());
             }
             else
             {
-                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                    readonly_section, label, operand + 1);
+                snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n%s\n",
+                    readonly_section, label, operand + 1, codegen_text_section_resume());
             }
             inst_list = add_inst(inst_list, rodata_buffer);
 
@@ -1330,8 +1446,8 @@ static ListNode_t *load_real_operand_into_xmm(CodeGenContext *ctx,
         snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
         const char *readonly_section = codegen_readonly_section_directive();
         char rodata_buffer[192];
-        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %lld\n\t.text\n",
-            readonly_section, label, (long long)converter.i);
+        snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %lld\n%s\n",
+            readonly_section, label, (long long)converter.i, codegen_text_section_resume());
         inst_list = add_inst(inst_list, rodata_buffer);
 
         snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %s\n", label, xmm_reg);
@@ -1495,7 +1611,23 @@ expr_node_t *build_expr_tree(struct Expression *expr)
     assert(expr != NULL);
 
     if (expr->type == EXPR_TYPECAST && expr->expr_data.typecast_data.expr != NULL)
-        return build_expr_tree(expr->expr_data.typecast_data.expr);
+    {
+        /* When a typecast converts an array to a pointer type (e.g. PByte(top^.data)
+         * where data is array[0..0] of byte), the result should be the ADDRESS of
+         * the array, not its element value.  Keep the TYPECAST node as a leaf so
+         * gencode_case0 can emit an address computation instead of a value load. */
+        struct Expression *tc_inner = expr->expr_data.typecast_data.expr;
+        int tc_target = expr->expr_data.typecast_data.target_type;
+        if (tc_target == POINTER_TYPE && tc_inner->is_array_expr &&
+            codegen_expr_is_addressable(tc_inner))
+        {
+            /* Fall through to create a leaf TYPECAST node */
+        }
+        else
+        {
+            return build_expr_tree(tc_inner);
+        }
+    }
 
     expr_node_t *new_node;
 
@@ -2494,6 +2626,10 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 return lowered;
         }
 
+        /* PopCnt builtin: redirect to the runtime's fpc_in_popcnt_x */
+        if (func_id != NULL && pascal_identifier_equals(func_id, "PopCnt"))
+            func_mangled_name = "fpc_in_popcnt_x";
+
         if (expr->expr_data.function_call_data.call_kgpc_type != NULL &&
             expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE &&
             expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition != NULL)
@@ -2948,7 +3084,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         }
 
         inst_list = codegen_pass_arguments(args_to_pass,
-            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr);
+            inst_list, ctx, func_type, proc_name_hint, arg_start_index, expr,
+            expr->expr_data.function_call_data.is_class_method_call);
 
         /* Invalidate static link cache after argument evaluation
          * because the static link register may have been clobbered
@@ -3230,6 +3367,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 }
             }
 
+            /* PopCnt builtin and mangled variants (e.g. popcnt_u64):
+             * redirect to runtime's fpc_in_popcnt_x */
+            if (call_target != NULL &&
+                (pascal_identifier_equals(call_target, "PopCnt") ||
+                 strncasecmp(call_target, "popcnt_", 7) == 0))
+            {
+                if (owned_call_target != NULL)
+                    free(owned_call_target);
+                owned_call_target = strdup("fpc_in_popcnt_x");
+                call_target = owned_call_target;
+            }
+
             if (call_target != NULL)
             {
                 CallerSaveState caller_state;
@@ -3357,6 +3506,30 @@ cleanup_constructor:
     {
         return codegen_record_access(expr, inst_list, ctx, target_reg);
     }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr->expr_data.typecast_data.expr->is_array_expr &&
+             codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
+    {
+        /* Array-to-pointer typecast (e.g. PByte(top^.data)):
+         * compute the ADDRESS of the array, not its value. */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.typecast_data.expr,
+            inst_list, ctx, &addr_reg);
+        if (addr_reg != NULL)
+        {
+            if (addr_reg != target_reg)
+            {
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                    addr_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), addr_reg);
+            }
+        }
+        return inst_list;
+    }
     else if (expr->type == EXPR_POINTER_DEREF)
     {
         return codegen_pointer_deref_leaf(expr, inst_list, ctx, target_reg);
@@ -3453,8 +3626,77 @@ cleanup_constructor:
                 }
             }
         }
+        /* If proc_label is an unprefixed mangled name but the definition was
+         * unit-qualified (unit$$ prefix), resolve to the prefixed version.
+         * When source_unit_index is set on the expression, prefer the
+         * candidate from the same unit to avoid cross-unit collisions
+         * (e.g. comprsrc.initglobals vs globals.initglobals). */
+        char *collision_label = NULL;
+        if (proc_label != NULL && strstr(proc_label, "$$") == NULL &&
+            ctx != NULL && ctx->symtab != NULL)
+        {
+            const char *lookup_id = expr->expr_data.addr_of_proc_data.proc_id;
+            int target_unit = expr->expr_data.addr_of_proc_data.source_unit_index;
+            if (lookup_id != NULL)
+            {
+                ListNode_t *candidates = FindAllIdents(ctx->symtab, lookup_id);
+                /* First pass: prefer candidate from the same unit as the
+                 * symbol that semcheck resolved. */
+                if (target_unit > 0)
+                {
+                    for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)c->cur;
+                        if (cand == NULL || cand->mangled_id == NULL)
+                            continue;
+                        if (cand->source_unit_index != target_unit)
+                            continue;
+                        const char *sep = strstr(cand->mangled_id, "$$");
+                        if (sep == NULL)
+                            continue;
+                        if (strcmp(sep + 2, proc_label) == 0 &&
+                            cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL &&
+                            cand->type->info.proc_info.definition
+                                ->tree_data.subprogram_data.statement_list != NULL)
+                        {
+                            collision_label = strdup(cand->mangled_id);
+                            proc_label = collision_label;
+                            break;
+                        }
+                    }
+                }
+                /* Fallback: take any candidate with a unit$$ prefix. */
+                if (collision_label == NULL)
+                {
+                    for (ListNode_t *c = candidates; c != NULL; c = c->next)
+                    {
+                        HashNode_t *cand = (HashNode_t *)c->cur;
+                        if (cand == NULL || cand->mangled_id == NULL)
+                            continue;
+                        const char *sep = strstr(cand->mangled_id, "$$");
+                        if (sep == NULL)
+                            continue;
+                        if (strcmp(sep + 2, proc_label) == 0 &&
+                            cand->type != NULL &&
+                            cand->type->kind == TYPE_KIND_PROCEDURE &&
+                            cand->type->info.proc_info.definition != NULL &&
+                            cand->type->info.proc_info.definition
+                                ->tree_data.subprogram_data.statement_list != NULL)
+                        {
+                            collision_label = strdup(cand->mangled_id);
+                            proc_label = collision_label;
+                            break;
+                        }
+                    }
+                }
+                if (candidates != NULL) DestroyList(candidates);
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
+        if (collision_label != NULL) free(collision_label);
         if (resolved_label != NULL) free(resolved_label);
         return add_inst(inst_list, buffer);
     }
@@ -3545,17 +3787,17 @@ cleanup_constructor:
             char *escaped_string = escape_string_for_assembly(node->const_string_value);
             if (escaped_string != NULL)
             {
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                    readonly_section, label, escaped_string);
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                    readonly_section, label, escaped_string, codegen_text_section_resume());
                 free(escaped_string);
             }
             else
             {
                 /* Fallback: use original string if escaping fails */
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                    readonly_section, label, node->const_string_value);
+                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                    readonly_section, label, node->const_string_value, codegen_text_section_resume());
             }
-            
+
             inst_list = add_inst(inst_list, add_rodata);
             snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
             return add_inst(inst_list, buffer);
@@ -3600,15 +3842,15 @@ cleanup_constructor:
         char *escaped_string = escape_string_for_assembly(expr->expr_data.string);
         if (escaped_string != NULL)
         {
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                readonly_section, label, escaped_string);
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, escaped_string, codegen_text_section_resume());
             free(escaped_string);
         }
         else
         {
             /* Fallback: use original string if escaping fails */
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                readonly_section, label, expr->expr_data.string);
+            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, expr->expr_data.string, codegen_text_section_resume());
         }
         
         inst_list = add_inst(inst_list, add_rodata);
@@ -3708,7 +3950,10 @@ cleanup_constructor:
          * Only apply when the identifier is not a local/stack variable in this scope,
          * otherwise this breaks function result variables that share the function name.
          * Skip if gencode_leaf_var already resolved the identifier to a constant immediate
-         * (e.g. Pi from FPC internproc shadowed by a builtin real constant). */
+         * (e.g. Pi from FPC internproc shadowed by a builtin real constant).
+         * Also skip when inside a class method and the bare name is a field of Self —
+         * otherwise a global function with the same name shadows the field (e.g.
+         * VarFreeMap.L0 field vs global function l0 from msg2inc). */
         if (stack_node == NULL &&
             symbol_node != NULL &&
             (symbol_node->hash_type == HASHTYPE_PROCEDURE ||
@@ -3716,9 +3961,36 @@ cleanup_constructor:
             symbol_node->mangled_id != NULL &&
             buf_leaf[0] != '$')
         {
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
-                symbol_node->mangled_id, target_reg->bit_64);
-            return add_inst(inst_list, buffer);
+            int is_self_field = 0;
+            if (ctx != NULL && ctx->current_subprogram_owner_class != NULL &&
+                ctx->symtab != NULL)
+            {
+                struct RecordType *owner_record = semcheck_lookup_record_type(
+                    ctx->symtab, ctx->current_subprogram_owner_class);
+                if (owner_record == NULL &&
+                    ctx->current_subprogram_owner_class_full != NULL)
+                {
+                    owner_record = semcheck_lookup_record_type(ctx->symtab,
+                        ctx->current_subprogram_owner_class_full);
+                }
+                if (owner_record != NULL)
+                {
+                    struct RecordField *field_desc = NULL;
+                    long long field_offset = 0;
+                    if (resolve_record_field(ctx->symtab, owner_record,
+                            expr->expr_data.id, &field_desc, &field_offset,
+                            0, 1) == 0 && field_desc != NULL)
+                    {
+                        is_self_field = 1;
+                    }
+                }
+            }
+            if (!is_self_field)
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    symbol_node->mangled_id, target_reg->bit_64);
+                return add_inst(inst_list, buffer);
+            }
         }
         /* Bare method name used as a procedural reference (e.g., @SetStatus
          * inside a class method).  The symtab might not have a procedure
@@ -4291,6 +4563,32 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int scope_depth = 0;
                 stack_node = NULL;
 
+                if (ctx != NULL && ctx->current_return_slot != NULL &&
+                    expr->expr_data.id != NULL)
+                {
+                    int is_current_result = 0;
+                    if (pascal_identifier_equals(expr->expr_data.id, "Result"))
+                    {
+                        HashNode_t *shadow_node = NULL;
+                        if (!(ctx->symtab != NULL &&
+                              FindSymbol(&shadow_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                              shadow_node != NULL))
+                            is_current_result = 1;
+                    }
+                    else if (ctx->current_subprogram_id != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_id))
+                        is_current_result = 1;
+                    else if (ctx->current_subprogram_method_name != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_method_name))
+                        is_current_result = 1;
+                    else if (ctx->current_subprogram_result_name != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_result_name))
+                        is_current_result = 1;
+
+                    if (is_current_result)
+                        stack_node = ctx->current_return_slot;
+                }
+
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
                 int found = (ctx != NULL && ctx->symtab != NULL &&
@@ -4373,7 +4671,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                 }
 
-                if (!(found && node != NULL &&
+                if (stack_node == NULL &&
+                    !(found && node != NULL &&
                       (node->hash_type == HASHTYPE_CONST || node->is_constant)))
                     stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
                 #ifdef DEBUG_CODEGEN
@@ -4471,8 +4770,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             char add_rodata[1024];
                             const char *readonly_section = codegen_readonly_section_directive();
                             char *escaped = escape_string_for_assembly(node->const_string_value);
-                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                                readonly_section, label, escaped ? escaped : node->const_string_value);
+                            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                                readonly_section, label, escaped ? escaped : node->const_string_value, codegen_text_section_resume());
                             if (escaped) free(escaped);
                             inst_list = add_inst(inst_list, add_rodata);
                             snprintf(buffer, buf_len, "%s(%%rip)", label);
@@ -4494,7 +4793,14 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                      /* Class type used as value -> Address of VMT
                       * Use RIP-relative addressing for cross-platform compatibility
                       * (Windows x64 doesn't support $symbol immediates) */
-                     snprintf(buffer, buf_len, "%s_VMT(%%rip)", expr->expr_data.id);
+                     /* Use the canonical type_id from the record_info for the VMT
+                      * label so it matches the emitted VMT definition (Pascal is
+                      * case-insensitive, so the expression id may differ in case). */
+                     const char *vmt_class_label =
+                         node->type->info.points_to->info.record_info->type_id;
+                     if (vmt_class_label == NULL)
+                         vmt_class_label = expr->expr_data.id;
+                     snprintf(buffer, buf_len, "%s_VMT(%%rip)", vmt_class_label);
                 }
                 else if(stack_node != NULL)
                 {
@@ -5351,23 +5657,31 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                 if (is_char_set)
                 {
-                    /* Char sets are 32 bytes in memory. If the right operand is in a register,
-                     * it holds a POINTER to the set — use btl %bit, (%addr).
-                     * If the right operand is already a memory reference (stack variable),
-                     * use it directly without extra parentheses. */
+                    /* Large sets (> 4 bytes) need the ADDRESS of the set, not its value.
+                     * The expr_tree evaluation loaded only 4 bytes into right_reg, which is
+                     * insufficient for sets > 32 elements.  Discard the value and re-evaluate
+                     * the set expression as an address via codegen_char_set_address. */
                     if (left32 != NULL && left8 != NULL)
                     {
+                        /* Free the incorrectly-loaded value register */
                         if (right_reg != NULL)
-                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left32, right_reg->bit_64);
-                        else if (right != NULL)
-                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left32, right);
-                        else
-                            break;
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
-                        inst_list = add_inst(inst_list, buffer);
-                        snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
-                        inst_list = add_inst(inst_list, buffer);
+                        {
+                            free_reg(get_reg_stack(), right_reg);
+                            right_reg = NULL;
+                        }
+
+                        Register_t *set_addr_reg = NULL;
+                        inst_list = codegen_char_set_address(right_expr, inst_list, ctx, &set_addr_reg);
+                        if (set_addr_reg != NULL)
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tbtl\t%s, (%s)\n", left32, set_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tsetc\t%s\n", left8);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovzbl\t%s, %s\n", left8, left32);
+                            inst_list = add_inst(inst_list, buffer);
+                            free_reg(get_reg_stack(), set_addr_reg);
+                        }
                     }
                 }
                 else
@@ -5583,15 +5897,24 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
                     inst_list = restore_spilled_reg64_operand(inst_list, left, spill_other);
 
-                    /* Promote char-typed operands (EXPR_CHAR_CODE or single-char
-                     * EXPR_STRING resolved to CHAR_TYPE) to string pointers.
-                     * The register holds a raw char integer, not a string pointer.
-                     * Convert via kgpc_char_to_string before kgpc_string_compare. */
-                    if (left_expr != NULL &&
+                    /* Promote char-typed operands to string pointers before
+                     * kgpc_string_compare.  Detect chars by expression type
+                     * (EXPR_CHAR_CODE), legacy type tag (CHAR_TYPE), or
+                     * resolved KgpcType (covers string-index expressions like
+                     * Result[L] which are char but not EXPR_CHAR_CODE). */
+                    int left_is_char_operand = (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
-                         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
-                         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)) &&
-                        left_reg != NULL)
+                         expr_get_type_tag(left_expr) == CHAR_TYPE ||
+                         (left_expr->resolved_kgpc_type != NULL &&
+                          kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
+                         codegen_expr_is_string_char_index(left_expr)));
+                    int right_is_char_operand = (right_expr != NULL &&
+                        (right_expr->type == EXPR_CHAR_CODE ||
+                         expr_get_type_tag(right_expr) == CHAR_TYPE ||
+                         (right_expr->resolved_kgpc_type != NULL &&
+                          kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
+                         codegen_expr_is_string_char_index(right_expr)));
+                    if (left_is_char_operand && left_reg != NULL)
                     {
                         StackNode_t *rhs_save = NULL;
                         if (right_reg != NULL)
@@ -5602,11 +5925,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
                         inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
                     }
-                    if (right_expr != NULL &&
-                        (right_expr->type == EXPR_CHAR_CODE ||
-                         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
-                         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)) &&
-                        right_reg != NULL)
+                    if (right_is_char_operand && right_reg != NULL)
                     {
                         StackNode_t *lhs_save = NULL;
                         if (left_reg != NULL)
@@ -5732,8 +6051,8 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                             const char *readonly_section = codegen_readonly_section_directive();
                             char rodata_buffer[192];
-                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n\t.text\n",
-                                readonly_section, label, right + 1);
+                            snprintf(rodata_buffer, sizeof(rodata_buffer), "%s\n%s:\n\t.quad %s\n%s\n",
+                                readonly_section, label, right + 1, codegen_text_section_resume());
                             inst_list = add_inst(inst_list, rodata_buffer);
 
                             snprintf(buffer, sizeof(buffer), "\tmovsd\t%s(%%rip), %%xmm0\n", label);

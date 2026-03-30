@@ -32,6 +32,10 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
                                    struct TypeAlias* type_alias);
 static int is_procedure_or_function(enum HashType hash_type);
 static int check_collision_allowance(HashNode_t* existing_node, enum HashType new_hash_type);
+static HashNode_t *find_ident_in_table_canonical_internal(HashTable_t *table,
+    const char *canonical_id, unsigned hash);
+static ListNode_t *find_all_idents_in_table_canonical_internal(HashTable_t *table,
+    const char *canonical_id, unsigned hash);
 
 /* Internal parameter structure to unify both APIs */
 typedef struct {
@@ -68,22 +72,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
     if (canonical_id == NULL)
         return 1;
 
-    int hash = hashpjw(canonical_id);
-
-    HashNode_t *node = FindIdentInTable(table, params->id);
-    if (node != NULL)
-    {
-        /* Check for collisions */
-        if (!check_collision_allowance(node, params->hash_type))
-        {
-            free(canonical_id);
-            return 1;
-        }
-        // If collision is allowed, we proceed to add it as a new entry in the list.
-        // The original code would have iterated through the list to find the collision,
-        // but FindIdentInTable already does that.
-    }
-
+    unsigned hash = (unsigned)hashpjw(canonical_id);
     ListNode_t *list = table->table[hash];
     
     if (list == NULL)
@@ -100,6 +89,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         }
         /* create_hash_node already retains type; no second retain needed */
         hash_node->canonical_id = canonical_id;
+        hash_node->hash_value = hash;
         table->table[hash] = CreateListNode(hash_node, LIST_UNSPECIFIED);
         return 0;
     }
@@ -112,7 +102,8 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         while (cur != NULL)
         {
             HashNode_t *existing_node = (HashNode_t *)cur->cur;
-            if (strcmp(existing_node->canonical_id, canonical_id) == 0)
+            if (existing_node->hash_value == hash &&
+                strcmp(existing_node->canonical_id, canonical_id) == 0)
             {
                 if (!check_collision_allowance(existing_node, params->hash_type))
                 {
@@ -141,6 +132,7 @@ static int add_ident_to_table_internal(HashTable_t *table, const HashTableParams
         }
         /* create_hash_node already retains type; no second retain needed */
         hash_node->canonical_id = canonical_id;
+        hash_node->hash_value = hash;
         if (append_after_type && last != NULL)
         {
             last->next = CreateListNode(hash_node, LIST_UNSPECIFIED);
@@ -171,10 +163,6 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
 {
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-
     assert(table != NULL);
     assert(id != NULL);
 
@@ -183,28 +171,17 @@ HashNode_t *FindIdentInTable(HashTable_t *table, const char *id)
     if (canonical_id == NULL)
         return NULL;
 
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-        return NULL;
-    }
-
-    cur = list;
-    while(cur != NULL)
-    {
-        hash_node = (HashNode_t *)cur->cur;
-        if(strcmp(hash_node->canonical_id, canonical_id) == 0)
-        {
-            pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-            return hash_node;
-        }
-        cur = cur->next;
-    }
-
+    unsigned hash = (unsigned)hashpjw(canonical_id);
+    HashNode_t *hash_node = find_ident_in_table_canonical_internal(table, canonical_id, hash);
     pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-    return NULL;
+    return hash_node;
+}
+
+HashNode_t *FindIdentInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash)
+{
+    assert(table != NULL);
+    assert(canonical_id != NULL);
+    return find_ident_in_table_canonical_internal(table, canonical_id, hash);
 }
 
 /* Check if a specific HashNode pointer exists in the given table.
@@ -214,7 +191,7 @@ int FindIdentPtrInTable(HashTable_t *table, HashNode_t *candidate)
     if (table == NULL || candidate == NULL || candidate->id == NULL)
         return 0;
 
-    int hash = hashpjw(candidate->canonical_id);
+    unsigned hash = candidate->hash_value;
     ListNode_t *cur = table->table[hash];
     while (cur != NULL)
     {
@@ -251,7 +228,9 @@ HashNode_t *FindIdentInTable_UnitOnly(HashTable_t *table, const char *id)
     while(cur != NULL)
     {
         hash_node = (HashNode_t *)cur->cur;
-        if(strcmp(hash_node->canonical_id, canonical_id) == 0 && hash_node->defined_in_unit)
+        if(hash_node->hash_value == (unsigned)hash &&
+           strcmp(hash_node->canonical_id, canonical_id) == 0 &&
+           hash_node->defined_in_unit)
         {
             pascal_identifier_lower_buf_free(canonical_id, stack_buf);
             return hash_node;
@@ -297,7 +276,8 @@ HashNode_t *FindIdentInTableForUnit(HashTable_t *table, const char *id, int call
     while (cur != NULL)
     {
         hash_node = (HashNode_t *)cur->cur;
-        if (strcmp(hash_node->canonical_id, canonical_id) == 0)
+        if (hash_node->hash_value == (unsigned)hash &&
+            strcmp(hash_node->canonical_id, canonical_id) == 0)
         {
             int priority = 1; /* any match */
             if (caller_unit_index > 0 && hash_node->source_unit_index == caller_unit_index)
@@ -466,12 +446,6 @@ HashNode_t *FindIdentByPrefixInTableForUnit(HashTable_t *table, const char *pref
 
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
 {
-    ListNode_t *list, *cur;
-    HashNode_t *hash_node;
-    int hash;
-    ListNode_t *found_list = NULL;
-    ListNode_t *found_tail = NULL;  /* track tail for O(1) append */
-
     assert(table != NULL);
     assert(id != NULL);
 
@@ -480,37 +454,17 @@ ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id)
     if (canonical_id == NULL)
         return NULL;
 
-    hash = hashpjw(canonical_id);
-    list = table->table[hash];
-    if(list == NULL)
-    {
-        pascal_identifier_lower_buf_free(canonical_id, stack_buf);
-        return NULL;
-    }
-
-    cur = list;
-    while(cur != NULL)
-    {
-        hash_node = (HashNode_t *)cur->cur;
-        if(strcmp(hash_node->canonical_id, canonical_id) == 0)
-        {
-            ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
-            if (found_list == NULL)
-            {
-                found_list = new_node;
-                found_tail = new_node;
-            }
-            else
-            {
-                found_tail->next = new_node;
-                found_tail = new_node;
-            }
-        }
-        cur = cur->next;
-    }
-
+    unsigned hash = (unsigned)hashpjw(canonical_id);
+    ListNode_t *found_list = find_all_idents_in_table_canonical_internal(table, canonical_id, hash);
     pascal_identifier_lower_buf_free(canonical_id, stack_buf);
     return found_list;
+}
+
+ListNode_t *FindAllIdentsInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash)
+{
+    assert(table != NULL);
+    assert(canonical_id != NULL);
+    return find_all_idents_in_table_canonical_internal(table, canonical_id, hash);
 }
 
 void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node)
@@ -518,7 +472,7 @@ void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node)
     if (table == NULL || node == NULL || node->canonical_id == NULL)
         return;
 
-    int hash = hashpjw(node->canonical_id);
+    unsigned hash = node->hash_value;
     ListNode_t *list = table->table[hash];
     if (list == NULL || list->next == NULL)
         return;
@@ -679,6 +633,52 @@ int hashpjw( const char *s )
     return h % TABLE_SIZE;
 }
 
+static HashNode_t *find_ident_in_table_canonical_internal(HashTable_t *table,
+    const char *canonical_id, unsigned hash)
+{
+    ListNode_t *cur = table->table[hash];
+    while (cur != NULL)
+    {
+        HashNode_t *hash_node = (HashNode_t *)cur->cur;
+        if (hash_node->hash_value == hash &&
+            strcmp(hash_node->canonical_id, canonical_id) == 0)
+            return hash_node;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+static ListNode_t *find_all_idents_in_table_canonical_internal(HashTable_t *table,
+    const char *canonical_id, unsigned hash)
+{
+    ListNode_t *cur = table->table[hash];
+    ListNode_t *found_list = NULL;
+    ListNode_t *found_tail = NULL;
+
+    while (cur != NULL)
+    {
+        HashNode_t *hash_node = (HashNode_t *)cur->cur;
+        if (hash_node->hash_value == hash &&
+            strcmp(hash_node->canonical_id, canonical_id) == 0)
+        {
+            ListNode_t *new_node = CreateListNode(hash_node, LIST_UNSPECIFIED);
+            if (found_list == NULL)
+            {
+                found_list = new_node;
+                found_tail = new_node;
+            }
+            else
+            {
+                found_tail->next = new_node;
+                found_tail = new_node;
+            }
+        }
+        cur = cur->next;
+    }
+
+    return found_list;
+}
+
 /* =============================================================================
  * Internal Helper Functions
  * ============================================================================= */
@@ -699,6 +699,7 @@ static HashNode_t* create_hash_node(char* id, char* mangled_id,
     /* Set basic fields */
     hash_node->hash_type = hash_type;
     hash_node->type = type;
+    hash_node->hash_value = 0;
     if (type != NULL)
         kgpc_type_retain(type);
     if (mangled_id != NULL)

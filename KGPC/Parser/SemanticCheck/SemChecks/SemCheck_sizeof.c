@@ -127,23 +127,22 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAl
     if (alias->storage_size > 0)
         return alias->storage_size;
 
+    long long result = 4;
+
     if (alias->set_element_type == CHAR_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
           pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
-        return 32;
-
-    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        result = 32;
+    }
+    else if (alias->is_enum_set && alias->inline_enum_values != NULL)
     {
         int count = list_length(alias->inline_enum_values);
         if (count > 0)
-            return fpc_default_set_storage_size_for_high((long long)count - 1);
+            result = fpc_default_set_storage_size_for_high((long long)count - 1);
     }
-
-    if (alias->set_element_type == BOOL)
-        return 4;
-
-    if (alias->set_element_type_id != NULL && symtab != NULL && depth <= SIZEOF_RECURSION_LIMIT)
+    else if (alias->set_element_type_id != NULL && symtab != NULL && depth <= SIZEOF_RECURSION_LIMIT)
     {
         HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab, alias->set_element_type_id);
         if (elem_node != NULL)
@@ -155,15 +154,18 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAl
                 {
                     int count = list_length(elem_alias->enum_literals);
                     if (count > 0)
-                        return fpc_default_set_storage_size_for_high((long long)count - 1);
+                        result = fpc_default_set_storage_size_for_high((long long)count - 1);
                 }
-                if (elem_alias->range_known)
-                    return fpc_default_set_storage_size_for_high(elem_alias->range_end);
+                else if (elem_alias->range_known)
+                    result = fpc_default_set_storage_size_for_high(elem_alias->range_end);
             }
         }
     }
 
-    return 4;
+    /* Cache the computed size so kgpc_type_sizeof returns the correct value
+       during code generation (it doesn't have access to the symbol table). */
+    alias->storage_size = result;
+    return result;
 }
 
 static long long fpc_enum_storage_size_from_alias(const struct TypeAlias *alias)
@@ -612,6 +614,35 @@ static int compute_field_size_uncached(SymTab_t *symtab, struct RecordField *fie
         }
     }
 
+    /* For set fields with a known element type, resolve the element enum
+     * to compute the correct set storage size (e.g. set of tsystemflags
+     * with 42 elements needs 32 bytes, not the default 4). */
+    if (field->type == SET_TYPE && field->set_element_type_id != NULL && symtab != NULL)
+    {
+        HashNode_t *elem_node = semcheck_find_preferred_type_node(symtab, field->set_element_type_id);
+        if (elem_node != NULL)
+        {
+            struct TypeAlias *elem_alias = get_type_alias_from_node(elem_node);
+            if (elem_alias != NULL)
+            {
+                if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+                {
+                    int count = list_length(elem_alias->enum_literals);
+                    if (count > 0)
+                    {
+                        *size_out = fpc_default_set_storage_size_for_high((long long)count - 1);
+                        return 0;
+                    }
+                }
+                if (elem_alias->range_known)
+                {
+                    *size_out = fpc_default_set_storage_size_for_high(elem_alias->range_end);
+                    return 0;
+                }
+            }
+        }
+    }
+
     return sizeof_from_type_ref(symtab, field->type, field->type_id, size_out, depth + 1, line_num);
 }
 
@@ -790,6 +821,7 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
         *found = 0;
 
     long long offset = start_offset;
+    long long classvar_offset = 0; /* separate running offset for class var fields within CLASSVAR storage */
     ListNode_t *cur = members;
     while (cur != NULL)
     {
@@ -798,22 +830,34 @@ static int find_field_in_members(SymTab_t *symtab, ListNode_t *members,
             struct RecordField *field = (struct RecordField *)cur->cur;
             if (field != NULL && !record_field_is_hidden(field))
             {
-                /* Class variables are stored as globals, not in the instance
-                 * layout.  They can still be looked up by name (for access
-                 * resolution) but must not contribute to the running offset. */
+                /* Class variables are stored as globals in CLASSVAR storage,
+                 * not in the instance layout.  Track their offset within the
+                 * CLASSVAR block separately so codegen can use it directly. */
                 if (field->is_class_var)
                 {
+                    /* Compute this class var's size and alignment.
+                     * Must match codegen's CLASSVAR data emission alignment
+                     * (codegen.c line ~4932): max alignment 8. */
+                    long long cv_field_size = 0;
+                    (void)compute_field_size(symtab, field, &cv_field_size, depth + 1, line_num);
+                    if (cv_field_size <= 0)
+                        cv_field_size = 8; /* default to pointer size */
+                    int cv_alignment = (cv_field_size >= 8) ? 8 :
+                                       (cv_field_size >= 4) ? 4 : 1;
+                    classvar_offset = (classvar_offset + cv_alignment - 1) & ~(cv_alignment - 1);
+
                     if (field->name != NULL &&
                         pascal_identifier_equals(field->name, field_name))
                     {
                         if (out_field != NULL)
                             *out_field = field;
                         if (offset_out != NULL)
-                            *offset_out = -1; /* sentinel: not an instance offset */
+                            *offset_out = classvar_offset;
                         if (found != NULL)
                             *found = 1;
                         return 0;
                     }
+                    classvar_offset += cv_field_size;
                     cur = cur->next;
                     continue;
                 }

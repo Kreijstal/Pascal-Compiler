@@ -1,0 +1,283 @@
+ Put + after a boolean switch option to enable it, - to disable it.
+  @<x>   Read compiler options from <x> in addition to the default fpc.cfg
+  -a     The compiler does not delete the generated assembler file, automatically switches to external assembler writer
+      -a5        Don't generate Big Obj COFF files for GNU Binutils older than 2.25 (Windows, NativeNT)
+      -al        List source code lines in assembler file
+      -an        List node info in assembler file (-dEXTDEBUG compiler)
+      -ao        Add an extra option to external assembler call (ignored for internal)
+      -ap        Use pipes instead of creating temporary assembler files
+      -ar        List register allocation/release info in assembler file
+      -aR        List RTTI info in assembler file
+      -at        List temp allocation/release info in assembler file
+  -A<x>  Output format:
+      -Adefault  Use default assembler
+      -Aas       Assemble using GNU AS
+      -Aas-darwin Assemble Darwin Mach-O using GNU GAS
+      -Aelf      ELF (Linux 64 bit) using internal writer
+      -Agas      Assemble using GNU GAS
+      -Amasm     Win64 object file using ml64 (Microsoft)
+      -Anasm     Assemble using Nasm (experimental)
+      -Anasmdarwin Assemble darwin macho64 object file using Nasm (experimental)
+      -Anasmelf  Assemble Linux 64 bit object file using Nasm (experimental)
+      -Anasmwin64 Assemble Win64 object file using Nasm (experimental)
+      -Apecoff   PE-COFF (Win64) using internal writer
+      -Ayasm     Assemble using Yasm (experimental)
+  -b     Generate browser info
+      -bl        Generate local symbol info
+  -B     Build all modules
+  -C<x>  Code generation options:
+      -C3        Turn on IEEE error checking for constants
+      -Ca<x>     Select ABI; see fpc -i or fpc -ia for possible values
+      -Cb        Generate code for a big-endian variant of the target architecture
+      -Cc<x>     Set default calling convention to <x>
+      -CD        Create also dynamic library (not supported)
+      -Ce        Compilation with emulated floating point opcodes
+      -CE        Generate FPU code which can raise exceptions
+      -Cf<x>     Select fpu instruction set to use; see fpc -i or fpc -if for possible values
+      -CF<x>     Minimal floating point constant precision (default, 32, 64)
+      -Cg        Generate PIC code
+      -Ch<n>[,m] <n> bytes min heap size (between 1023 and 67107840) and optionally [m] max heap size
+      -Ci        IO-checking
+      -Cn        Omit linking stage
+      -Co        Check overflow of integer operations
+      -CO        Check for possible overflow of integer operations
+      -Cp<x>     Select instruction set; see fpc -i or fpc -ic for possible values
+      -CP<x>=<y>  packing settings
+         -CPPACKENUM=<y>  <y> enum packing: 0, 1, 2 and 4 or DEFAULT or NORMAL
+         -CPPACKRECORD=<y>  <y> record packing: 0 or DEFAULT or NORMAL, 1, 2, 4, 8, 16 and 32
+         -CPPACKSET=<y>  <y> set allocation: 0, 1 or DEFAULT or NORMAL, 2, 4 and 8
+      -Cr        Range checking
+      -CR        Verify object method call validity
+      -Cs<n>     Set stack checking size to <n>
+      -Ct        Stack checking (for testing only, see manual)
+      -CT<x>     Target-specific code generation options
+         -CTcld                      Emit a CLD instruction before using the x86 string instructions
+      -CX        Create also smartlinked library
+  -d<x>  Defines the symbol <x>
+  -D     Generate a DEF file
+      -Dd<x>     Set description to <x>
+      -DD<x>     Set the date string returned by %DATE% to x, it is not checked for being a valid date string
+      -DT<x>     Set the time string returned by %TIME% to x, it is not checked for being a valid time string
+      -Dv<x>     Set DLL version to <x>
+  -e<x>  Set path to executable
+  -E     Same as -Cn
+  -fPIC  Same as -Cg
+  -F<x>  Set file names and paths:
+      -Fa<x>[,y] (for a program) load units <x> and [y] before uses is parsed
+      -Fc<x>     Set input codepage to <x>
+      -FC<x>     Set RC compiler binary name to <x>
+      -Fd        Disable the compiler's internal directory cache
+      -FD<x>     Set the directory where to search for compiler utilities
+      -Fe<x>     Redirect error output to <x>
+      -FE<x>     Set exe/unit output path to <x>
+      -Ff<x>     Add <x> to framework path (Darwin only), or set IDF path to <x> (Xtensa-FreeRTOS)
+      -FF        Use fpcres as RC to RES compiler instead of windres or gorc
+      -Fi<x>     Add <x> to include path
+      -Fl<x>     Add <x> to library path
+      -FL<x>     Use <x> as dynamic linker
+      -Fm<x>     Load unicode conversion table from <x>.txt in the compiler dir
+      -FM<x>     Set the directory where to search for unicode binary files
+      -FN<x>     Add <x> to list of default unit scopes (namespaces)
+      -Fo<x>     Add <x> to object path
+      -Fr<x>     Load error message file <x>
+      -FR<x>     Set resource (.res) linker to <x>
+      -Ft        Do not search uppercased or 8.3 unit filenames on case sensitive filesystems.
+      -Fu<x>     Add <x> to unit path
+      -FU<x>     Set unit output path to <x>, overrides -FE
+      -Fw<x>     Load previously stored whole-program optimization feedback from <x>
+      -FW<x>     Store generated whole-program optimization feedback in <x>
+  -g     Generate debug information (default format for target)
+      -gc        Generate checks for pointers (experimental, only available on some targets, might generate false positive)
+      -gh        Use heaptrace unit (for memory leak/corruption debugging)
+      -gl        Use line info unit (show more info with backtraces)
+      -gm        Generate Microsoft CodeView debug information (experimental)
+      -go<x>     Set debug information options
+         -godwarfcpp  Simulate C++ debug information in DWARF
+         -godwarfmethodclassprefix  Prefix method names in DWARF with class name
+         -godwarfomflinnum  Generate line number information in OMF LINNUM records in MS LINK format in addition to the DWARF debug information (Open Watcom Debugger/Linker compatibility)
+         -godwarfsets  Enable DWARF 'set' type debug information (breaks gdb < 6.5)
+         -gostabsabsincludes  Store absolute/full include file paths in Stabs
+      -gp        Preserve case in stabs symbol names
+      -gs        Generate Stabs debug information
+      -gt        Trash local variables (to detect uninitialized uses; multiple 't' changes the trashing value)
+      -gv        Generates programs traceable with Valgrind
+      -gw        Generate DWARFv2 debug information (same as -gw2)
+      -gw2       Generate DWARFv2 debug information
+      -gw3       Generate DWARFv3 debug information
+      -gw4       Generate DWARFv4 debug information (experimental)
+  -i     Information
+      -ia        Return list of supported ABI targets
+      -ib        Return the used code generation backend type
+      -ic        Return list of supported CPU instruction sets
+      -iD        Return compiler date
+      -if        Return list of supported FPU instruction sets
+      -ii        Return list of supported inline assembler modes
+      -im        Return list of supported modeswitches
+      -io        Return list of supported optimizations
+      -ir        Return list of recognized compiler and RTL features
+      -iSO       Return compiler OS
+      -iSP       Return compiler host processor
+      -it        Return list of supported targets
+      -iTO       Return target OS
+      -iTP       Return target processor
+      -iu        Return list of supported microcontroller types
+      -iV        Return short compiler version
+      -iw        Return list of supported whole program optimizations
+      -iW        Return full compiler version
+  -I<x>  Add <x> to include path
+  -k<x>  Pass <x> to the linker
+  -l     Write logo
+  -M<x>  Set language mode to <x> / enable modeswitch <x> (see option -im)
+      -Mdelphi   Delphi 7 compatibility mode
+      -Mdelphiunicode Delphi 2009 and later compatibility mode
+      -Mextendedpascal ISO 10206 mode
+      -Mfpc      Free Pascal dialect (default)
+      -Miso      ISO 7185 mode
+      -Mmacpas   Macintosh Pascal dialects compatibility mode
+      -Mobjfpc   FPC mode with Object Pascal support
+      -Mtp       TP/BP 7.0 compatibility mode
+      Each mode (as listed above) enables its default set of modeswitches.
+      Other modeswitches are disabled and need to be enabled one by another.
+  -M<x>- Disable modeswitch <x> (see option -im)
+  -n     Do not read the default config files
+  -o<x>  Change the name of the executable produced to <x>
+  -O<x>  Optimizations:
+      -O-        Disable optimizations
+      -O1        Level 1 optimizations (quick and debugger friendly)
+      -O2        Level 2 optimizations (-O1 + quick optimizations)
+      -O3        Level 3 optimizations (-O2 + slow optimizations)
+      -O4        Level 4 optimizations (-O3 + optimizations which might have unexpected side effects)
+      -Oa<x>=<y> Set alignment
+      -Oo[NO]<x> Enable or disable optimizations; see fpc -i or fpc -io for possible values
+      -Op<x>     Set target cpu for optimizing; see fpc -i or fpc -ic for possible values
+      -Os        Optimize for size rather than speed
+      -Ow<x>     Perform whole-program optimization <x>; see fpc -i or fpc -iw for possible values
+      -OW<x>     Generate whole-program optimization feedback for optimization <x>; see fpc -i or fpc -iw for possible values
+  -pg    Generate profile code for gprof (defines FPC_PROFILE)
+  -R<x>  Assembler reading style:
+      -Rdefault  Use default assembler for target
+      -Ratt      Read AT&T style assembler
+      -Rintel    Read Intel style assembler
+  -s     Do not call assembler and linker
+      -sh        Generate script to link on host, automatically switches to external assembler writer
+      -sr        Skip register allocation phase (use with -alr), automatically switches to external assembler writer
+      -st        Generate script to assemble and link on target, automatically switches to external assembler writer
+      -sT        Generate script only to link on target
+  -S<x>  Syntax options:
+      -S2        Same as -Mobjfpc
+      -Sa        Turn on assertions
+      -Sc        Support operators as in the C language (*=, +=, /= and -=)
+      -Sd        Same as -Mdelphi
+      -Se<x>     Error options. <x> is a combination of the following:
+         <n> : Compiler halts after the <n> errors (default is 1)
+         h : Compiler also halts after hints
+         n : Compiler also halts after notes
+         w : Compiler also halts after warnings
+      -Sf        Enable certain features in compiler and RTL; see fpc -i or fpc -ir for possible values)
+      -Sg        Enable LABEL and GOTO (default in -Mtp and -Mdelphi)
+      -Sh        Use reference counted strings (ansistring by default) instead of shortstrings
+      -Si        Turn on inlining of procedures/functions declared as "inline"
+      -SI<x>     Set interface style to <x>
+         -SIcom     COM compatible interface (default)
+         -SIcorba   CORBA compatible interface
+      -Sj        Allows typed constants to be writeable (default in all modes)
+      -Sk        Load fpcylix unit
+      -Sm        Support macros as in the C language (global)
+      -So        Same as -Mtp
+      -Sr        Transparent file names in ISO mode
+      -Ss        Constructor name must be "Init" (destructor name must be "Done")
+      -Sv        Support vector processing (use CPU vector extensions if available)
+      -Sx        Enable exception keywords (default in Delphi/ObjFPC modes)
+      -Sy        @<pointer> returns a typed pointer, same as $T+
+  -T<x>  Target operating system:
+      -Tandroid  Android
+      -Taros     AROS
+      -Tdarwin   Darwin/Mac OS X
+      -Tdragonfly DragonFly BSD
+      -Tembedded Embedded
+      -Tfreebsd  FreeBSD
+      -Thaiku    Haiku
+      -Tiphonesim iPhoneSimulator
+      -Tlinux    Linux
+      -Tnetbsd   NetBSD
+      -Topenbsd  OpenBSD
+      -Tsolaris  Solaris
+      -Twin64    Win64 (64 bit Windows systems)
+  -t<x>  Target architecture
+       * Defines FPC_SUBTARGET_<x> 
+       * Defines FPC_SUBTARGET as <arg>
+       * Additionally reads config file fpc-<subtarget>.cfg
+  -u<x>  Undefines the symbol <x>
+  -U     Unit options:
+      -Un        Do not check where the unit name matches the file name
+      -Ur        Generate release unit files (never automatically recompiled)
+      -Us        Compile a system unit
+  -v<x>  Be verbose. <x> is a combination of the following letters:
+      0 : Show nothing (except errors)
+      a : Show everything
+      b : Write file names messages with full path
+      c : Show conditionals
+      d : Show debug info
+      e : Show errors (default)
+      h : Show hints
+      i : Show general info
+      j : Always add main source (useful when run in parallel make)
+      l : Show line numbers
+      m<x>,<y> : Do not show messages numbered <x> and <y>
+      n : Show notes
+      p : Write tree.log with parse tree
+      q : Show message numbers
+      r : Rhide/GCC compatibility mode
+      s : Show time stamps
+      t : Show tried/used files
+      u : Show unit info
+      v : Write fpcdebug.txt with lots of debugging info
+      w : Show warnings
+      x : Show info about invoked tools
+      z : Write output to stderr
+  -W<x>  Target-specific options (targets)
+      -WA        Specify native type application (Windows)
+      -Wb        Create a bundle instead of a library (Darwin)
+      -WB        Create a relocatable image (Windows)
+      -WB<x>     Set image base to <x> (Windows)
+      -WC        Specify console type application (Windows)
+      -WD        Use DEFFILE to export functions of DLL or EXE (Windows)
+      -We        Use external resources (Darwin)
+      -WG        Specify graphic type application (Windows)
+      -Wi        Use internal resources (Darwin)
+      -WI        Turn on/off the usage of import sections (Windows)
+      -WM<x>     Minimum Mac OS X deployment version: 10.4, 10.5.1, ... (Darwin)
+      -WN        Do not generate relocation code, needed for debugging (Windows)
+      -WP<x>     Minimum iOS deployment version: 8.0, 8.0.2, ... (iphonesim)
+      -WR        Generate relocation code (Windows)
+      -WX        Enable executable stack (Linux)
+  -x<suff> Set suffix for compiler executable (fpc command only)
+  -X     Executable options:
+      -X9        Generate linkerscript for GNU Binutils ld older than version 2.19.1 (Linux)
+      -Xa        Generate code which allows to use more than 2 GB static data on 64 bit targets (Linux)
+      -Xc        Pass --shared/-dynamic to the linker (BeOS, Darwin, FreeBSD, Linux)
+      -Xd        Do not search default library path (sometimes required for cross-compiling when not using -XR)
+      -XD        Try to link units dynamically      (defines FPC_LINK_DYNAMIC)
+      -Xe        Use external linker
+      -Xf        Substitute pthread library name for linking (BSD)
+      -Xg        Create debuginfo in a separate file and add a debuglink section to executable
+      -Xi        Use internal linker
+      -XLA       Define library substitutions for linking
+      -XLD       Exclude default order of standard libraries
+      -XLO       Define order of library linking
+      -Xm        Generate link map
+      -XM<x>     Set the name of the 'main' program routine (default is 'main')
+      -Xn        Use target system native linker instead of GNU ld (Solaris, AIX)
+      -XP<x>     Prepend the binutils names with the prefix <x>
+      -Xr<x>     Set the linker's rlink-path to <x> (needed for cross compile, see the ld manual for more information) (BeOS, Linux)
+      -XR<x>     Prepend <x> to all linker search paths (BeOS, Darwin, FreeBSD, Linux, Mac OS, Solaris)
+      -Xs        Strip all symbols from executable
+      -XS        Try to link units statically (default, defines FPC_LINK_STATIC)
+      -Xt        Link with static libraries (-static is passed to linker)
+      -Xu        Generate executable in UF2 format  (embedded targets only)
+      -Xv        Generate table for Virtual Entry calls
+      -XV        Use VLink as external linker       (default on Amiga, Atari, Sinclair QL)
+      -XX        Try to smartlink units             (defines FPC_LINK_SMART)
+  
+  -?     Show this help
+  -h     Shows this help without waiting

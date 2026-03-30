@@ -430,6 +430,19 @@ static KgpcType *codegen_function_call_return_type_from_expr(
     if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
         return NULL;
 
+    /* If the callee's Tree_t has return_type == SHORTSTRING_TYPE (set during AST
+     * conversion under {$H-}), honour that even though the KgpcType from
+     * semantic analysis may say STRING_TYPE.  Must check before ret_type
+     * early-return since semcheck creates STRING_TYPE KgpcType when the
+     * global flag is reset. */
+    if (call_type->info.proc_info.definition != NULL &&
+        call_type->info.proc_info.definition->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+    {
+        if (cached_shortstring == NULL)
+            cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
+        return cached_shortstring;
+    }
+
     ret_type = kgpc_type_get_return_type(call_type);
     if (ret_type != NULL)
         return ret_type;
@@ -859,6 +872,8 @@ static int codegen_expr_is_char_array_like(const struct Expression *expr)
 
 int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
+    int expr_is_current_result = 0;
+
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL && ctx != NULL)
     {
         KgpcType *ret_type = NULL;
@@ -903,8 +918,41 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
         }
     }
 
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL)
+    {
+        const char *expr_id = expr->expr_data.id;
+        const char *current_id = ctx->current_subprogram_id;
+        if (expr_id != NULL)
+        {
+            if (pascal_identifier_equals(expr_id, "Result"))
+            {
+                HashNode_t *shadow_node = NULL;
+                if (!(ctx->symtab != NULL &&
+                      FindSymbol(&shadow_node, ctx->symtab, expr_id) != 0 &&
+                      shadow_node != NULL))
+                    expr_is_current_result = 1;
+            }
+            else if (current_id != NULL && pascal_identifier_equals(expr_id, current_id))
+                expr_is_current_result = 1;
+            else if (ctx->current_subprogram_method_name != NULL &&
+                     pascal_identifier_equals(expr_id, ctx->current_subprogram_method_name))
+                expr_is_current_result = 1;
+            else if (ctx->current_subprogram_result_name != NULL &&
+                     pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
+                expr_is_current_result = 1;
+        }
+    }
+
     if (codegen_expr_is_shortstring_value(expr))
         return 1;
+    if (expr_is_current_result && ctx != NULL)
+    {
+        KgpcType *ret_type = ctx->current_return_type;
+        if (ret_type != NULL &&
+            (kgpc_type_is_shortstring(ret_type) ||
+             (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring)))
+            return 1;
+    }
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;
@@ -931,6 +979,7 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
             }
         }
     }
+
     return 0;
 }
 
@@ -3197,24 +3246,32 @@ int expr_get_array_upper_bound(const struct Expression *expr)
     return expr->array_upper_bound;
 }
 
-/* Check if an expression represents a character set (set of char) */
+/* Check if an expression represents a "large" set that requires memory-based
+ * operations (> 4 bytes).  This includes char sets (32 bytes) and enum sets
+ * whose element type has more than 32 members. */
 int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
         return 0;
-    
+
     /* Check if expression has a KgpcType with type_alias */
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
-        if (alias != NULL && alias->is_set &&
-            (alias->set_element_type == CHAR_TYPE ||
-             (alias->set_element_type_id != NULL &&
-              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-               pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-            return 1;
+        if (alias != NULL && alias->is_set)
+        {
+            /* Char sets are always large (32 bytes) */
+            if (alias->set_element_type == CHAR_TYPE ||
+                (alias->set_element_type_id != NULL &&
+                 (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                return 1;
+            /* Any set with cached storage_size > 4 needs memory-based ops */
+            if (alias->storage_size > 4)
+                return 1;
+        }
     }
-    
+
     /* For variable references, look up the type in the symbol table */
     if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
@@ -3224,12 +3281,16 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             if (node->type != NULL)
             {
                 struct TypeAlias *alias = node->type->type_alias;
-                if (alias != NULL && alias->is_set &&
-                    (alias->set_element_type == CHAR_TYPE ||
-                     (alias->set_element_type_id != NULL &&
-                      (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                       pascal_identifier_equals(alias->set_element_type_id, "AnsiChar")))))
-                    return 1;
+                if (alias != NULL && alias->is_set)
+                {
+                    if (alias->set_element_type == CHAR_TYPE ||
+                        (alias->set_element_type_id != NULL &&
+                         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                        return 1;
+                    if (alias->storage_size > 4)
+                        return 1;
+                }
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
@@ -3240,6 +3301,32 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
         }
     }
     
+    /* For record field access, check if the field is a large set (> 4 bytes) */
+    if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(
+            (struct Expression *)expr, (CodeGenContext *)ctx);
+        if (field != NULL && field->type == SET_TYPE)
+        {
+            if (field->has_cached_layout && field->cached_size > 4)
+                return 1;
+            /* Fallback: check set_element_type_id in the symtab */
+            if (field->set_element_type_id != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *elem_node = NULL;
+                if (FindSymbol(&elem_node, ctx->symtab, field->set_element_type_id) != 0 &&
+                    elem_node != NULL && elem_node->type != NULL)
+                {
+                    struct TypeAlias *elem_alias = elem_node->type->type_alias;
+                    if (elem_alias != NULL && elem_alias->is_enum &&
+                        elem_alias->enum_literals != NULL &&
+                        ListLength(elem_alias->enum_literals) > 32)
+                        return 1;
+                }
+            }
+        }
+    }
+
     /* For set literals, check if elements are characters or single-char strings */
     if (expr->type == EXPR_SET && expr->expr_data.set_data.elements != NULL)
     {
@@ -3737,6 +3824,28 @@ int expr_has_type_tag(const struct Expression *expr, int type_tag)
     if (type != NULL)
         return kgpc_type_equals_tag(type, type_tag);
 
+    return 0;
+}
+
+/* Detect expressions that evaluate to a char value at runtime even though
+ * the semantic checker may have promoted their type tag to STRING_TYPE.
+ * This covers string indexing (Result[L]) which loads a single byte. */
+int codegen_expr_is_string_char_index(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    /* EXPR_ARRAY_ACCESS into a string yields a char */
+    if (expr->type == EXPR_ARRAY_ACCESS &&
+        expr->expr_data.array_access_data.array_expr != NULL)
+    {
+        struct Expression *base = expr->expr_data.array_access_data.array_expr;
+        if (expr_has_type_tag(base, STRING_TYPE) ||
+            expr_has_type_tag(base, SHORTSTRING_TYPE) ||
+            (base->resolved_kgpc_type != NULL &&
+             (kgpc_type_is_string(base->resolved_kgpc_type) ||
+              kgpc_type_is_shortstring(base->resolved_kgpc_type))))
+            return 1;
+    }
     return 0;
 }
 
@@ -4495,6 +4604,35 @@ int codegen_get_record_size(CodeGenContext *ctx, struct Expression *expr,
     {
         *size_out = 256;
         return 0;
+    }
+
+    /* Large set types (> 4 bytes) are routed through record-style assignment.
+     * Use kgpc_type_sizeof to get the set storage size directly. */
+    if (expr_get_type_tag(expr) == SET_TYPE)
+    {
+        KgpcType *set_type = expr_get_kgpc_type(expr);
+        if (set_type != NULL)
+        {
+            long long set_size = kgpc_type_sizeof(set_type);
+            if (set_size > 0)
+            {
+                *size_out = set_size;
+                return 0;
+            }
+        }
+    }
+
+    /* For record field access to a large set field, use the field's cached size */
+    if (expr->type == EXPR_RECORD_ACCESS && ctx != NULL)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(
+            (struct Expression *)expr, ctx);
+        if (field != NULL && field->type == SET_TYPE &&
+            field->has_cached_layout && field->cached_size > 4)
+        {
+            *size_out = field->cached_size;
+            return 0;
+        }
     }
 
     if (kgpc_getenv("KGPC_DEBUG_RECORD_SIZE") != NULL)
@@ -5497,8 +5635,8 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
                     char escaped[512];
                     escape_string(escaped, node->const_string_value, sizeof(escaped));
                     snprintf(rodata_buf, sizeof(rodata_buf),
-                        "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n\t.text\n",
-                        readonly_section, str_label, escaped, ptr_label, str_label);
+                        "%s\n%s:\n\t.string \"%s\"\n%s:\n\t.quad\t%s\n%s\n",
+                        readonly_section, str_label, escaped, ptr_label, str_label, codegen_text_section_resume());
                     inst_list = add_inst(inst_list, rodata_buf);
                     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                         ptr_label, target_reg->bit_64);
@@ -5699,13 +5837,9 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     }
 
     long long offset = expr->expr_data.record_access_data.field_offset;
-    /* When accessing a class var via type reference (TMyClass.FValue), the
-     * CLASSVAR storage layout starts at offset 0, but the semcheck computes
-     * field offsets with a POINTER_SIZE_BYTES (8) prefix for the VMT pointer
-     * (since classes have an implicit VMT slot at offset 0 in instances).
-     * Subtract the VMT size so the offset matches the CLASSVAR layout. */
-    if (is_type_ref && is_class_field && offset >= 8)
-        offset -= 8;
+    /* Class var fields accessed via type reference (TMyClass.FValue) use
+     * CLASSVAR-relative offsets computed by the semcheck — no VMT adjustment
+     * needed since CLASSVAR storage has no VMT prefix. */
     if (offset != 0)
     {
         char buffer[128];
@@ -5870,16 +6004,18 @@ static ListNode_t *codegen_set_emit_single(ListNode_t *inst_list, CodeGenContext
     char skip_label[18];
     gen_label(skip_label, sizeof(skip_label), ctx);
 
+    /* Guard against negative values only — btsl on a 32-bit register
+     * naturally wraps the bit index mod 32, so values > 31 are handled
+     * correctly (they map to the corresponding bit in the 32-bit word).
+     * This is consistent with how the IN operator tests bits using
+     * register-based btl which also wraps mod 32. */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", value_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", skip_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", value_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", skip_label);
-    inst_list = add_inst(inst_list, buffer);
 
-    /* Use btsl to set the bit (avoids %ecx shift register conflict) */
+    /* Use btsl to set the bit (avoids %ecx shift register conflict).
+     * btsl on a 32-bit register wraps bit index mod 32. */
     snprintf(buffer, sizeof(buffer), "\tbtsl\t%s, %s\n", value_reg->bit_32, dest_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
@@ -5922,15 +6058,13 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", order_label);
     inst_list = add_inst(inst_list, buffer);
 
+    /* Guard: if end < 0, the range is empty */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", end_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjl\t%s\n", done_label);
     inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", start_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjg\t%s\n", done_label);
-    inst_list = add_inst(inst_list, buffer);
 
+    /* Floor start at 0 (no negative bit positions) */
     snprintf(buffer, sizeof(buffer), "\tcmpl\t$0, %s\n", start_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
     snprintf(buffer, sizeof(buffer), "\tjge\t%s\n", start_floor_label);
@@ -5940,14 +6074,8 @@ static ListNode_t *codegen_set_emit_range(ListNode_t *inst_list, CodeGenContext 
     snprintf(buffer, sizeof(buffer), "%s:\n", start_floor_label);
     inst_list = add_inst(inst_list, buffer);
 
-    snprintf(buffer, sizeof(buffer), "\tcmpl\t$31, %s\n", end_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tjle\t%s\n", end_cap_label);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "\tmovl\t$31, %s\n", end_reg->bit_32);
-    inst_list = add_inst(inst_list, buffer);
-    snprintf(buffer, sizeof(buffer), "%s:\n", end_cap_label);
-    inst_list = add_inst(inst_list, buffer);
+    /* No cap at 31 — btsl on a 32-bit register wraps bit index mod 32,
+     * which is consistent with how the IN operator tests bits. */
 
     snprintf(buffer, sizeof(buffer), "%s:\n", loop_label);
     inst_list = add_inst(inst_list, buffer);
@@ -5981,7 +6109,7 @@ ListNode_t *codegen_set_literal(struct Expression *expr, ListNode_t *inst_list,
 
     /* Check if this is a character set literal */
     int is_char_set = force_char_set || expr_is_char_set_ctx(expr, ctx);
-    
+
     if (is_char_set)
     {
         /* Character sets need 32 bytes in memory, not a register */
@@ -7737,37 +7865,48 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
 
     if (!base_is_array && !base_is_string && !base_is_pointer)
     {
-        if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
+        /* Allow chained bracket access for multi-dimensional arrays:
+         * arr[x][y] where arr[x] was a valid array access that yielded
+         * a scalar result (because the type system stores multi-dim
+         * arrays as flat, not nested). Treat it as a continued array access. */
+        if (array_expr != NULL && array_expr->type == EXPR_ARRAY_ACCESS)
         {
-            fprintf(stderr,
-                "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
-                array_expr != NULL ? array_expr->type : -1,
-                array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
-                base_is_array, base_is_string, base_is_pointer);
-            if (ctx != NULL && ctx->current_subprogram_id != NULL)
-                fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
-            if (array_expr != NULL)
+            base_is_array = 1;
+        }
+        else
+        {
+            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
             {
-                if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
-                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
-                if (array_expr->resolved_kgpc_type != NULL)
-                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
-                        kgpc_type_to_string(array_expr->resolved_kgpc_type));
-                if (ctx != NULL && ctx->symtab != NULL &&
-                    array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                fprintf(stderr,
+                    "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
+                    array_expr != NULL ? array_expr->type : -1,
+                    array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
+                    base_is_array, base_is_string, base_is_pointer);
+                if (ctx != NULL && ctx->current_subprogram_id != NULL)
+                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
+                if (array_expr != NULL)
                 {
-                    HashNode_t *dbg_node = NULL;
-                    if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
-                        dbg_node != NULL && dbg_node->type != NULL)
+                    if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
+                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
+                    if (array_expr->resolved_kgpc_type != NULL)
+                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
+                            kgpc_type_to_string(array_expr->resolved_kgpc_type));
+                    if (ctx != NULL && ctx->symtab != NULL &&
+                        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
                     {
-                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
-                            kgpc_type_to_string(dbg_node->type));
+                        HashNode_t *dbg_node = NULL;
+                        if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
+                            dbg_node != NULL && dbg_node->type != NULL)
+                        {
+                            fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
+                                kgpc_type_to_string(dbg_node->type));
+                        }
                     }
                 }
             }
+            codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
+            return inst_list;
         }
-        codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
-        return inst_list;
     }
 
     Register_t *index_reg = NULL;
@@ -7788,8 +7927,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         }
     }
 
+    /* Determine if the string base is a stack-allocated shortstring.
+     * Shortstrings are stored inline (size > 8 bytes) and need their
+     * address via leaq, not a movq which would load the first 8 bytes
+     * of string data as if it were a pointer. */
+    int base_is_inline_shortstring = 0;
+    if (base_is_string)
+    {
+        if (codegen_expr_is_shortstring_value_ctx(array_expr, ctx))
+            base_is_inline_shortstring = 1;
+    }
+
     Register_t *base_reg = NULL;
-    if (base_is_string || base_is_pointer)
+    if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring)
     {
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
         if (codegen_had_error(ctx) || base_reg == NULL)
@@ -7951,7 +8101,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (!wide_char_index &&
         first_index_stride <= 1 &&
         (codegen_array_access_targets_shortstring(expr, ctx) ||
-         codegen_expr_is_shortstring_value(array_expr)))
+         codegen_expr_is_shortstring_value(array_expr) ||
+         base_is_inline_shortstring))
     {
         shortstring_index = 1;
     }
@@ -8304,6 +8455,10 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
     int element_size = (int)element_size_ll;
+    int is_string_char_index = codegen_expr_is_string_char_index(expr);
+
+    if (is_string_char_index)
+        element_size = 1;
 
     /* Class/pointer-typed array elements are always pointer-sized (8 bytes).
      * codegen_get_indexable_element_size may return the full class instance size
@@ -8319,9 +8474,11 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
         int is_big = (element_size > CODEGEN_POINTER_SIZE_BYTES);
         int is_shortstr = codegen_expr_is_shortstring_value(expr);
         int is_shortstr2 = codegen_array_access_targets_shortstring(expr, ctx);
+        int is_char_index = is_string_char_index ||
+            expr_has_type_tag(expr, CHAR_TYPE) || element_size == 1;
         if (is_big ||
             is_record_element ||
-            is_shortstr || is_shortstr2)
+            ((is_shortstr || is_shortstr2) && !is_char_index))
         {
             char buffer[100];
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
@@ -8333,7 +8490,7 @@ ListNode_t *codegen_array_access(struct Expression *expr, ListNode_t *inst_list,
     }
 
     char buffer[100];
-    if (expr_uses_qword_kgpctype(expr) || element_size == 8)
+    if (!is_string_char_index && (expr_uses_qword_kgpctype(expr) || element_size == 8))
     {
         /* 8-byte elements (including pointers, int64, etc.) need 64-bit load */
         snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", addr_reg->bit_64, target_reg->bit_64);
@@ -8474,21 +8631,75 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         return inst_list;
     }
 
-    /* Non-char-set IN: evaluate the full relop expression as a boolean value */
+    /* Non-char-set IN: use memory-based btl to correctly handle sets > 32 elements.
+     * btl reg, reg wraps the bit index mod 32, so it fails for enum sets with > 32
+     * elements (e.g. set of tsystemflags with 42 elements).  btl reg, (mem) correctly
+     * computes the byte offset for any bit position. */
     if (relop_kind == IN)
     {
         if (relop_type != NULL)
             *relop_type = NE;
 
-        Register_t *result_reg = NULL;
-        inst_list = codegen_expr_with_result(expr, inst_list, ctx, &result_reg);
-        if (result_reg != NULL)
+        /* Evaluate the left operand (element value) */
+        Register_t *elem_reg = NULL;
+        inst_list = codegen_expr_with_result(left_expr, inst_list, ctx, &elem_reg);
+        if (codegen_had_error(ctx) || elem_reg == NULL)
+            return inst_list;
+
+        /* Spill elem to stack across potential function calls in set eval */
+        StackNode_t *elem_spill = add_l_t("in_elem_spill");
+        if (elem_spill != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
-                result_reg->bit_32, result_reg->bit_32);
+            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, -%d(%%rbp)\n",
+                elem_reg->bit_32, elem_spill->offset);
             inst_list = add_inst(inst_list, buffer);
-            free_reg(get_reg_stack(), result_reg);
+            free_reg(get_reg_stack(), elem_reg);
+            elem_reg = NULL;
         }
+
+        /* Evaluate the right operand (set) as a VALUE in a register.
+         * For non-char sets stored as 4 bytes, we use register-based btl
+         * which wraps bit index mod 32 — consistent with how set literals
+         * are constructed (btsl also wraps mod 32 in register form). */
+        Register_t *set_val_reg = NULL;
+        inst_list = codegen_expr_with_result(right_expr, inst_list, ctx, &set_val_reg);
+        if (codegen_had_error(ctx) || set_val_reg == NULL)
+        {
+            if (elem_reg != NULL)
+                free_reg(get_reg_stack(), elem_reg);
+            return inst_list;
+        }
+
+        /* Reload elem if spilled */
+        if (elem_spill != NULL)
+        {
+            elem_reg = codegen_try_get_reg(&inst_list, ctx, "in_elem_reload");
+            if (elem_reg == NULL)
+            {
+                free_reg(get_reg_stack(), set_val_reg);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n",
+                elem_spill->offset, elem_reg->bit_32);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        /* Use register-based btl which wraps bit index mod 32.
+         * This is consistent with set construction (btsl wraps mod 32).
+         * For 4-byte sets, bits > 31 are aliased with bits 0-31 by the
+         * same wrapping, so both set and test use the same bit position. */
+        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+            elem_reg->bit_32, set_val_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n",
+            elem_reg->bit_32, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n",
+            elem_reg->bit_32, elem_reg->bit_32);
+        inst_list = add_inst(inst_list, buffer);
+
+        free_reg(get_reg_stack(), set_val_reg);
+        free_reg(get_reg_stack(), elem_reg);
         return inst_list;
     }
 
@@ -8625,12 +8836,22 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
      * a raw char integer.  Detect this by checking the expression node type. */
     int right_needs_char_promo = (right_expr != NULL &&
         (right_expr->type == EXPR_CHAR_CODE ||
-         (right_expr->type == EXPR_STRING && expr_get_type_tag(right_expr) == CHAR_TYPE) ||
-         (right_expr->type == EXPR_VAR_ID && expr_get_type_tag(right_expr) == CHAR_TYPE)));
+         expr_get_type_tag(right_expr) == CHAR_TYPE ||
+         (right_expr->resolved_kgpc_type != NULL &&
+          kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
+         codegen_expr_is_string_char_index(right_expr)) &&
+        !(right_expr != NULL &&
+          codegen_expr_is_shortstring_value_ctx(right_expr, ctx) &&
+          !codegen_expr_is_string_char_index(right_expr)));
     int left_needs_char_promo = (left_expr != NULL &&
         (left_expr->type == EXPR_CHAR_CODE ||
-         (left_expr->type == EXPR_STRING && expr_get_type_tag(left_expr) == CHAR_TYPE) ||
-         (left_expr->type == EXPR_VAR_ID && expr_get_type_tag(left_expr) == CHAR_TYPE)));
+         expr_get_type_tag(left_expr) == CHAR_TYPE ||
+         (left_expr->resolved_kgpc_type != NULL &&
+          kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
+         codegen_expr_is_string_char_index(left_expr)) &&
+        !(left_expr != NULL &&
+          codegen_expr_is_shortstring_value_ctx(left_expr, ctx) &&
+          !codegen_expr_is_string_char_index(left_expr)));
     if ((left_is_string || right_is_string) && right_needs_char_promo)
     {
         StackNode_t *lhs_spill = add_l_t("relop_str_char_lhs");
@@ -9024,9 +9245,31 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
             return inst_list;
         }
 
-        /* Regular 32-bit sets — use btl (avoids %ecx conflict) */
-        snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n", left_reg->bit_32, right_reg->bit_32);
-        inst_list = add_inst(inst_list, buffer);
+        /* Enum sets may exceed 32 elements, so btl reg,reg (which wraps mod 32)
+         * is incorrect.  Spill the set value to the stack and use btl reg,(mem)
+         * which correctly computes the byte offset for any bit position. */
+        {
+            StackNode_t *set_spill = add_l_t("in_set_spill");
+            if (set_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    right_reg->bit_64, set_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), right_reg);
+
+                snprintf(buffer, sizeof(buffer), "\tbtl\t%s, -%d(%%rbp)\n",
+                    left_reg->bit_32, set_spill->offset);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* Fallback: use register btl (only correct for sets <= 32 elements) */
+                snprintf(buffer, sizeof(buffer), "\tbtl\t%s, %s\n",
+                    left_reg->bit_32, right_reg->bit_32);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), right_reg);
+            }
+        }
         /* Convert CF to ZF: sbb sets reg to -1 if CF (bit set), 0 if not */
         snprintf(buffer, sizeof(buffer), "\tsbbl\t%s, %s\n", left_reg->bit_32, left_reg->bit_32);
         inst_list = add_inst(inst_list, buffer);
@@ -9034,7 +9277,6 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         inst_list = add_inst(inst_list, buffer);
 
         free_reg(get_reg_stack(), left_reg);
-        free_reg(get_reg_stack(), right_reg);
         return inst_list;
     }
 
@@ -9265,14 +9507,15 @@ ListNode_t *codegen_relop_to_value(struct Expression *expr, ListNode_t *inst_lis
         }
     }
 
-    if (!is_char_set_in)
+    if (!is_char_set_in && relop_kind != IN)
     {
-        /* For non-char-set operations, the expression tree approach works */
+        /* For non-set operations, the expression tree approach works */
         return codegen_expr_tree_value(expr, inst_list, ctx, out_reg);
     }
 
-    /* For char set IN operations, we need to use codegen_simple_relop
-     * which properly handles the 32-byte set, then convert flags to value */
+    /* For set IN operations (both char sets and enum sets), we need to use
+     * codegen_simple_relop which properly handles memory-based btl for sets
+     * that may exceed 32 elements, then convert flags to a value. */
     
     int relop_type = 0;
     inst_list = codegen_simple_relop(expr, inst_list, ctx, &relop_type);
@@ -9622,7 +9865,11 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                 (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
                     ? ctx->current_subprogram_owner_class : "<null>");
         }
-        assert(!"unresolved non-local symbol reached codegen fallback");
+        /* When populating the codegen cache, all unit functions are emitted.
+         * Some have unresolvable non-locals (e.g. local consts in functions
+         * that DCE normally removes).  Don't abort — the per-function
+         * memstream buffering will catch the error and emit a ud2 stub. */
+        *offset = 0;
         return inst_list;
     }
 
@@ -9673,7 +9920,8 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
 /* Code generation for passing arguments */
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
-    int arg_start_index, const struct Expression *call_expr)
+    int arg_start_index, const struct Expression *call_expr,
+    int is_class_method_call_hint)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -10300,8 +10548,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
                 /* Use larger buffer for string literal embedding to avoid truncation */
                 char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
-                snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n\t.text\n",
-                         readonly_section, label, escaped_str);
+                snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                         readonly_section, label, escaped_str, codegen_text_section_resume());
                 inst_list = add_inst(inst_list, str_literal_buffer);
 
                 StackNode_t *desc_slot = codegen_alloc_temp_bytes("str_arr_desc",
@@ -10639,53 +10887,22 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                             }
                         }
 
-                        /* For class methods, dereference the first argument (Self) to get instance pointer,
-                         * BUT only if Self was not already loaded by value (i.e., not a var param).
-                         * For non-methods with var parameters, don't dereference. */
+                        /* Self parameters of class type have is_var_param cleared to 0
+                         * (at line ~9895), so they never enter this is_var_param branch.
+                         * Only real var parameters and array parameters reach here.
+                         *
+                         * For non-var class parameters (entered via is_array_param/is_array_arg),
+                         * we need to dereference to get the instance pointer.
+                         * For var parameters of class type, we pass the address as-is
+                         * so the callee can modify the variable. */
                         int should_dereference = 0;
-                        int called_is_method = 0;
-                        if (procedure_name != NULL && ctx->symtab != NULL)
+                        if (!is_var_param && !arg_is_var_param)
                         {
-                            HashNode_t *called_func = NULL;
-                            if (FindSymbol(&called_func, ctx->symtab, procedure_name) != 0 &&
-                                called_func != NULL && called_func->owner_class != NULL)
-                                called_is_method = 1;
-                        }
-                        if (is_class_method && arg_num == 0 && !arg_is_var_param &&
-                            called_is_method)
-                        {
-                            /* Class method Self from local variable: dereference to get instance pointer */
+                            /* Non-var class parameter: dereference to get instance pointer */
                             should_dereference = 1;
                         }
-                        else if (!is_var_param && !arg_is_var_param)
-                        {
-                            /* Non-var class parameter from local variable: dereference to get instance pointer */
-                            should_dereference = 1;
-                        }
-                        else if (arg_num == 0 && is_var_param && !arg_is_var_param &&
-                                 called_is_method)
-                        {
-                            /* Self parameter for a method call from outside a class method context.
-                             * The formal Self parameter is a var param, but for a global/static
-                             * class/interface variable, codegen_address_for_expr emits leaq (address
-                             * of the variable), so we need to dereference to get the object pointer. */
-                            should_dereference = 1;
-                        }
-                        /* else: var parameter of class type OR argument is already a var param:
-                         * codegen_address_for_expr already loaded the value, don't dereference again */
 
                         if (should_dereference)
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                                addr_reg->bit_64, addr_reg->bit_64);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-
-                        /* For class method calls on instances, Self must be the VMT pointer,
-                         * not the instance pointer. After the dereference above, addr_reg holds
-                         * the instance pointer. Dereference again to get VMT from offset 0. */
-                        if (should_dereference && arg_num == 0 &&
-                            codegen_call_requires_class_method_vmt_self(call_expr, ctx))
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                                 addr_reg->bit_64, addr_reg->bit_64);

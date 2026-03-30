@@ -42,6 +42,7 @@ struct TypeAlias
     int array_element_type;
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;
+    int array_element_storage_size;  /* For shortstring elements: N+1 bytes for string[N] */
     int is_shortstring;
     int is_wide_string;
     int is_open_array;
@@ -115,6 +116,7 @@ struct RecordField
     char *pointer_type_id;
     struct TypeRef *pointer_type_ref;
     ListNode_t *enum_literals; /* Anonymous enum values for fields like `kind: (a, b, c)` */
+    char *set_element_type_id; /* For set fields: element type name (e.g. "tsystemflags") */
     long long cached_size;     /* Cached field size (valid when has_cached_layout=1) */
     int cached_alignment;      /* Cached field alignment (valid when has_cached_layout=1) */
     int has_cached_layout;     /* 1 if cached_size and cached_alignment are valid */
@@ -653,6 +655,7 @@ struct Expression
         {
             char *proc_mangled_id;  /* Owned copy, survives scope cleanup */
             char *proc_id;          /* Owned copy, survives scope cleanup */
+            int source_unit_index;  /* Unit where the symbol was resolved */
         } addr_of_proc_data;
 
         /* Anonymous function/procedure */

@@ -36,6 +36,10 @@
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
 
+/* Forward declarations — defined below kgpc_type_sizeof */
+static long long kgpc_default_set_storage_size_for_high(long long high);
+static int kgpc_list_length(ListNode_t *list);
+
 /* Check if a HashNode represents a class type (either a pointer to a class record
  * or a direct class record).  Used to prefer class types over plain record aliases
  * when the same name resolves to both (e.g. TTimeZone = timezone struct alias vs
@@ -650,7 +654,7 @@ KgpcType* create_primitive_type_with_size(int primitive_tag, int storage_size) {
         alias->base_type = primitive_tag;
         alias->is_array = 0;
         alias->is_pointer = 0;
-        alias->is_set = 0;
+        alias->is_set = (primitive_tag == SET_TYPE) ? 1 : 0;
         alias->is_enum = 0;
         alias->is_file = 0;
         alias->is_range = 0;
@@ -852,12 +856,25 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
                         alias->array_element_type_id, defined_in_unit);
                 if (element_node != NULL && element_node->type != NULL)
                 {
-                    element_type = element_node->type;
-                    kgpc_type_retain(element_type);
+                    /* If the alias carries a specific element storage size
+                       (e.g. string[19] → 20 bytes), prefer that over the
+                       generic symbol table entry (ShortString → 256). */
+                    if (alias->array_element_storage_size > 0) {
+                        element_type = create_primitive_type_with_size(
+                            element_type_tag, alias->array_element_storage_size);
+                    } else {
+                        element_type = element_node->type;
+                        kgpc_type_retain(element_type);
+                    }
                 }
             }
-            if (element_type == NULL)
-                element_type = create_primitive_type(element_type_tag);
+            if (element_type == NULL) {
+                if (alias->array_element_storage_size > 0)
+                    element_type = create_primitive_type_with_size(
+                        element_type_tag, alias->array_element_storage_size);
+                else
+                    element_type = create_primitive_type(element_type_tag);
+            }
         } else if ((alias->array_element_type_ref != NULL || alias->array_element_type_id != NULL) &&
             symtab != NULL) {
             /* Type reference - try to resolve it */
@@ -1249,6 +1266,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         var_decl->tree_data.var_decl_data.cached_kgpc_type != NULL)
     {
         struct TypeAlias *inline_alias = var_decl->tree_data.var_decl_data.inline_type_alias;
+        int var_type_tag = var_decl->tree_data.var_decl_data.type;
         if (inline_alias != NULL && inline_alias->is_array &&
             !kgpc_type_is_array(var_decl->tree_data.var_decl_data.cached_kgpc_type))
         {
@@ -1312,6 +1330,78 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                     kgpc_type_retain(type_node->type);
                     return type_node->type;
                 }
+            }
+        }
+
+        if (var_type_tag == POINTER_TYPE &&
+            !kgpc_type_is_pointer(var_decl->tree_data.var_decl_data.cached_kgpc_type) &&
+            decl_type_id != NULL)
+        {
+            KgpcType *pointee_type = NULL;
+            int pointee_shared = 0;
+            if (symtab != NULL)
+            {
+                struct HashNode *type_node = kgpc_find_type_node_with_unit_flag(symtab,
+                    decl_type_id, decl_defined_in_unit);
+                if (type_node != NULL && type_node->type != NULL)
+                {
+                    pointee_type = type_node->type;
+                    pointee_shared = 1;
+                }
+            }
+            if (pointee_type == NULL)
+            {
+                int builtin_tag = UNKNOWN_TYPE;
+                if (pascal_identifier_equals(decl_type_id, "String") || pascal_identifier_equals(decl_type_id, "AnsiString") ||
+                    pascal_identifier_equals(decl_type_id, "RawByteString") ||
+                    pascal_identifier_equals(decl_type_id, "UnicodeString") ||
+                    pascal_identifier_equals(decl_type_id, "WideString"))
+                    builtin_tag = STRING_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "ShortString"))
+                    builtin_tag = SHORTSTRING_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Integer"))
+                    builtin_tag = INT_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "LongInt"))
+                    builtin_tag = LONGINT_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Int64") ||
+                         pascal_identifier_equals(decl_type_id, "SizeUInt") || pascal_identifier_equals(decl_type_id, "QWord") ||
+                         pascal_identifier_equals(decl_type_id, "NativeUInt") || pascal_identifier_equals(decl_type_id, "NativeInt") ||
+                         pascal_identifier_equals(decl_type_id, "PtrInt") || pascal_identifier_equals(decl_type_id, "PtrUInt"))
+                    builtin_tag = INT64_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Byte"))
+                    builtin_tag = BYTE_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Word"))
+                    builtin_tag = WORD_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "LongWord") || pascal_identifier_equals(decl_type_id, "Cardinal"))
+                    builtin_tag = LONGWORD_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Real") || pascal_identifier_equals(decl_type_id, "Double"))
+                    builtin_tag = REAL_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Extended"))
+                    builtin_tag = EXTENDED_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Char") || pascal_identifier_equals(decl_type_id, "AnsiChar"))
+                    builtin_tag = CHAR_TYPE;
+                else if (pascal_identifier_equals(decl_type_id, "Boolean"))
+                    builtin_tag = BOOL;
+                else if (pascal_identifier_equals(decl_type_id, "Pointer"))
+                    builtin_tag = POINTER_TYPE;
+
+                if (builtin_tag != UNKNOWN_TYPE)
+                    pointee_type = create_primitive_type(builtin_tag);
+            }
+
+            if (pointee_type != NULL)
+            {
+                if (pointee_shared)
+                    kgpc_type_retain(pointee_type);
+                KgpcType *pointer_type = create_pointer_type(pointee_type);
+                if (pointer_type != NULL)
+                {
+                    if (owns_type != NULL)
+                        *owns_type = 1;
+                    return pointer_type;
+                }
+                if (!pointee_shared)
+                    destroy_kgpc_type(pointee_type);
             }
         }
         kgpc_type_retain(var_decl->tree_data.var_decl_data.cached_kgpc_type);
@@ -2896,7 +2986,7 @@ long long kgpc_type_sizeof(KgpcType *type)
         case TYPE_KIND_ARRAY:
         {
             if (kgpc_type_is_dynamic_array(type))
-                return 8;
+                return 16; /* Runtime uses 16-byte embedded descriptor (data ptr + length) */
             /* Use the KgpcType's concrete start_index/end_index.
              * Note: For multi-dimensional arrays defined via TypeAlias, the size computation
              * might be incorrect here because element_type may not be nested arrays.
@@ -3595,6 +3685,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     dst->array_start = src->array_start;
     dst->array_end = src->array_end;
     dst->array_element_type = src->array_element_type;
+    dst->array_element_storage_size = src->array_element_storage_size;
     dst->is_shortstring = src->is_shortstring;
     dst->is_wide_string = src->is_wide_string;
     dst->is_open_array = src->is_open_array;

@@ -186,7 +186,7 @@ ordering issues.
 ### pp.pas (current bootstrap attempt)
 ```bash
 ./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
-  -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED -Sg \
+  -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED -DFPC_BOOTSTRAP_INDIRECT_ENTRY -Sg \
   -IFPCSource/rtl/objpas \
   -IFPCSource/rtl/objpas/sysutils \
   -IFPCSource/rtl/objpas/classes \
@@ -215,6 +215,17 @@ Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 target
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
 `-DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED` are needed so `systemh.inc` defines `TExtended80Rec`
 (used by `math.pp`'s `Frexp`/`Ldexp`). These flags propagate to all unit preprocessing.
+
+`-DFPC_BOOTSTRAP_INDIRECT_ENTRY` makes the system unit declare `operatingsystem_parameter_argc`,
+`operatingsystem_parameter_argv`, and `operatingsystem_parameter_envp` as `public name` globals
+(emitted as `.comm` by codegen). Without it, they're declared `external name` and expected to come
+from ASM startup object files (`si_c.inc` via `{$L}`), which KGPC doesn't support.
+
+### Linking status
+
+Compilation succeeds (0 errors), but linking fails with **3033 undefined symbols** (#540).
+Most are class method bodies (destructors, constructors, ppuwrite, etc.) that the codegen
+doesn't emit. See #540 for breakdown.
 
 ### FPC RTL (56 units)
 

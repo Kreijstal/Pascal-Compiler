@@ -155,6 +155,7 @@ except ValueError:
     COMPILER_PARALLEL_LIMIT = DEFAULT_COMPILER_PARALLEL_LIMIT
 COMPILER_PARALLEL_LIMIT = max(1, COMPILER_PARALLEL_LIMIT)
 COMPILER_PARALLEL_SEMAPHORE = threading.BoundedSemaphore(COMPILER_PARALLEL_LIMIT)
+FPC_RTL_PARALLEL_RAMP_BATCH = 10
 
 DEFAULT_TAP_MAX_WORKERS = 8
 try:
@@ -239,6 +240,31 @@ FPC_RTL_FLAGS = [
 ]
 if _FPC_RTL_AST_CACHE_DIR is not None:
     FPC_RTL_FLAGS.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
+# Codegen object cache: the compiler assembles full .o on cache miss,
+# then uses --skip-unit-codegen on cache hit (all handled internally).
+_FPC_RTL_CODEGEN_CACHE_DIR = None
+if FPC_RTL_MODE:
+    _FPC_RTL_CODEGEN_CACHE_DIR = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_codegen_cache"
+    )
+    # The compiler includes its own mtime in the cache key, so old entries
+    # are never matched. Clean out the directory on compiler rebuild to
+    # avoid unbounded growth.
+    _cg_sentinel = os.path.join(
+        os.environ.get("MESON_BUILD_ROOT", "builddir"), ".codegen_cache_mtime"
+    )
+    _cg_old_mtime = ""
+    if os.path.exists(_cg_sentinel):
+        with open(_cg_sentinel) as f:
+            _cg_old_mtime = f.read().strip()
+    if _compiler_mtime != _cg_old_mtime and os.path.isdir(_FPC_RTL_CODEGEN_CACHE_DIR):
+        shutil.rmtree(_FPC_RTL_CODEGEN_CACHE_DIR, ignore_errors=True)
+    os.makedirs(_FPC_RTL_CODEGEN_CACHE_DIR, exist_ok=True)
+    if _compiler_mtime:
+        with open(_cg_sentinel, "w") as f:
+            f.write(_compiler_mtime)
+    FPC_RTL_FLAGS.append("--codegen-cache-dir=" + _FPC_RTL_CODEGEN_CACHE_DIR)
 
 # ---------------------------------------------------------------------------
 # Test result cache — skip compile/link/run when nothing changed.
@@ -692,12 +718,14 @@ def _run_helper_with_valgrind(command, *, timeout=None, text=True, input_data=No
     return run_executable_with_valgrind(command, **runner_kwargs)
 
 
-def run_compiler(input_file, output_file, flags=None):
+def run_compiler(input_file, output_file, flags=None, timeout=None):
     """Runs the KGPC compiler with the given arguments."""
     if flags is None:
         flags = []
     else:
         flags = list(flags)
+    if timeout is None:
+        timeout = COMPILER_TIMEOUT
 
     # Ensure the output directory exists
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -731,7 +759,7 @@ def run_compiler(input_file, output_file, flags=None):
             "check": True,
             "capture_output": True,
             "text": True,
-            "timeout": COMPILER_TIMEOUT,
+            "timeout": timeout,
         }
         with COMPILER_PARALLEL_SEMAPHORE:
             result = subprocess.run(command, **run_kwargs)
@@ -834,12 +862,15 @@ class TAPTestResult(unittest.TestResult):
         super().startTest(test)
         # Enforce per-test timeout in TAP mode to avoid hangs.
         if not IS_WINDOWS_ABI and hasattr(signal, "SIGALRM"):
+            method = getattr(test, test._testMethodName, None)
+            per_test_timeout = getattr(method, '_timeout', TEST_CASE_TIMEOUT)
+
             def _timeout_handler(_signum, _frame):
-                raise TimeoutError(f"Test timed out after {TEST_CASE_TIMEOUT} seconds")
+                raise TimeoutError(f"Test timed out after {per_test_timeout} seconds")
 
             self._prev_alarm_handler = signal.getsignal(signal.SIGALRM)
             signal.signal(signal.SIGALRM, _timeout_handler)
-            signal.alarm(TEST_CASE_TIMEOUT)
+            signal.alarm(per_test_timeout)
         self._test_index += 1
         self._test_states[test] = {"reported": False, "had_failure": False}
         self._test_start_times[test] = time.monotonic()
@@ -1078,24 +1109,56 @@ class ParallelTestRunner:
         setup_ok_classes = []
         try:
             class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
-                futures = {
-                    executor.submit(_run_single_test_with_timeout, t, self.timeout, self.stream): t
-                    for t in tests
-                    if t.__class__ not in class_errors
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    try:
-                        test_case, result_type, err_info, elapsed = future.result()
-                        result.add_result(test_case, result_type, err_info, elapsed)
-                        result.testsRun += 1
-                    except Exception as e:
-                        test_case = futures[future]
-                        result.errors.append((test_case, traceback.format_exc()))
-                        result.testsRun += 1
-                for t in tests:
-                    if t.__class__ in class_errors:
-                        result.add_result(t, "error", class_errors[t.__class__], 0.0)
+            runnable_tests = [t for t in tests if t.__class__ not in class_errors]
+            if FPC_RTL_MODE and self.workers > 1:
+                for batch_index, start in enumerate(range(0, len(runnable_tests), FPC_RTL_PARALLEL_RAMP_BATCH)):
+                    batch = runnable_tests[start:start + FPC_RTL_PARALLEL_RAMP_BATCH]
+                    batch_workers = max(1, min(self.workers, batch_index + 1))
+                    self.stream.write(
+                        f"[PARALLEL] FPC RTL ramp batch {batch_index + 1}: "
+                        f"{len(batch)} tests with {batch_workers} workers\n"
+                    )
+                    self.stream.flush()
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+                        futures = {
+                            executor.submit(
+                                _run_single_test_with_timeout, t,
+                                getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                                self.stream,
+                            ): t
+                            for t in batch
+                        }
+                        for future in concurrent.futures.as_completed(futures):
+                            try:
+                                test_case, result_type, err_info, elapsed = future.result()
+                                result.add_result(test_case, result_type, err_info, elapsed)
+                                result.testsRun += 1
+                            except Exception:
+                                test_case = futures[future]
+                                result.errors.append((test_case, traceback.format_exc()))
+                                result.testsRun += 1
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
+                    futures = {
+                        executor.submit(
+                            _run_single_test_with_timeout, t,
+                            getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                            self.stream,
+                        ): t
+                        for t in runnable_tests
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            test_case, result_type, err_info, elapsed = future.result()
+                            result.add_result(test_case, result_type, err_info, elapsed)
+                            result.testsRun += 1
+                        except Exception:
+                            test_case = futures[future]
+                            result.errors.append((test_case, traceback.format_exc()))
+                            result.testsRun += 1
+            for t in tests:
+                if t.__class__ in class_errors:
+                    result.add_result(t, "error", class_errors[t.__class__], 0.0)
         finally:
             _cleanup_parallel_class_fixtures(setup_ok_classes, self.stream)
             result.stopTestRun()
@@ -1178,30 +1241,67 @@ class TAPParallelTestRunner:
                 if t.__class__ in class_errors:
                     completed[idx] = (t, "error", class_errors[t.__class__], 0.0)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                future_to_index = {
-                    executor.submit(_run_single_test_with_timeout, t, self.timeout): idx
-                    for idx, t in enumerate(tests)
-                    if t.__class__ not in class_errors
-                }
-                for future in concurrent.futures.as_completed(future_to_index):
-                    idx = future_to_index[future]
-                    test_case = tests[idx]
-                    try:
-                        completed[idx] = future.result()
-                    except Exception:
-                        completed[idx] = (
-                            test_case,
-                            "error",
-                            traceback.format_exc(),
-                            0.0,
-                        )
-                    # Stream TAP lines for all consecutive completed tests
-                    while next_to_emit in completed:
-                        test_obj, result_type, err_info, elapsed = completed[next_to_emit]
-                        self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
-                        del completed[next_to_emit]
-                        next_to_emit += 1
+            runnable = [(idx, t) for idx, t in enumerate(tests) if t.__class__ not in class_errors]
+            if FPC_RTL_MODE and effective_workers > 1:
+                for batch_index, start in enumerate(range(0, len(runnable), FPC_RTL_PARALLEL_RAMP_BATCH)):
+                    batch = runnable[start:start + FPC_RTL_PARALLEL_RAMP_BATCH]
+                    batch_workers = max(1, min(effective_workers, batch_index + 1))
+                    self._emit(
+                        f"# FPC RTL ramp batch {batch_index + 1}: "
+                        f"{len(batch)} tests with {batch_workers} workers"
+                    )
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+                        future_to_index = {
+                            executor.submit(
+                                _run_single_test_with_timeout, t,
+                                getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                            ): idx
+                            for idx, t in batch
+                        }
+                        for future in concurrent.futures.as_completed(future_to_index):
+                            idx = future_to_index[future]
+                            test_case = tests[idx]
+                            try:
+                                completed[idx] = future.result()
+                            except Exception:
+                                completed[idx] = (
+                                    test_case,
+                                    "error",
+                                    traceback.format_exc(),
+                                    0.0,
+                                )
+                            while next_to_emit in completed:
+                                test_obj, result_type, err_info, elapsed = completed[next_to_emit]
+                                self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                                del completed[next_to_emit]
+                                next_to_emit += 1
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                    future_to_index = {
+                        executor.submit(
+                            _run_single_test_with_timeout, t,
+                            getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                        ): idx
+                        for idx, t in runnable
+                    }
+                    for future in concurrent.futures.as_completed(future_to_index):
+                        idx = future_to_index[future]
+                        test_case = tests[idx]
+                        try:
+                            completed[idx] = future.result()
+                        except Exception:
+                            completed[idx] = (
+                                test_case,
+                                "error",
+                                traceback.format_exc(),
+                                0.0,
+                            )
+                        # Stream TAP lines for all consecutive completed tests
+                        while next_to_emit in completed:
+                            test_obj, result_type, err_info, elapsed = completed[next_to_emit]
+                            self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                            del completed[next_to_emit]
+                            next_to_emit += 1
 
             # Emit any remaining results (class errors that were never submitted)
             while next_to_emit < len(tests):
@@ -1226,6 +1326,7 @@ def read_file_content(filepath):
 
 
 class TestCompiler(unittest.TestCase):
+
     def __init__(self, methodName="runTest"):
         super().__init__(methodName)
         self._artifact_context = None
@@ -1267,37 +1368,9 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
-        # Warm the AST cache for FPC RTL mode: compile a minimal dummy program
-        # so system.pp + objpas.pp are cached before individual tests run.
-        if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
-            dummy_src = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.p")
-            dummy_asm = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.s")
-            try:
-                with open(dummy_src, "w") as f:
-                    f.write("program _warmup; begin end.\n")
-                print("--- Warming FPC RTL AST cache ---", file=sys.stderr)
-                sys.stderr.flush()
-                run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
-                print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
-                sys.stderr.flush()
-                # Also try to warm SysUtils/Classes/Math caches (may fail
-                # due to unsupported constructs, but AST caches are still
-                # written for successfully parsed units).
-                with open(dummy_src, "w") as f:
-                    f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
-                try:
-                    run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
-                    print("--- FPC RTL extended cache warmed ---", file=sys.stderr)
-                except Exception:
-                    print("--- FPC RTL extended cache partially warmed ---", file=sys.stderr)
-                sys.stderr.flush()
-            except Exception as e:
-                print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
-                sys.stderr.flush()
-            finally:
-                for tmp in (dummy_src, dummy_asm):
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+        # FPC RTL mode uses on-demand AST/codegen caches per testcase.
+        # Do not prewarm here: an eager warm-up defeats the cache design and
+        # can time out before the suite even starts.
 
         cc_raw = os.environ.get("CC")
         if not cc_raw:
@@ -3317,6 +3390,10 @@ def _discover_and_add_auto_tests():
                 """Auto-discovered test case."""
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
+                # Skip tests with hardcoded SysV ABI inline asm on Windows
+                if test_base_name == "nostackframe_asm_regsizing" and IS_WINDOWS_ABI:
+                    self.skipTest("Inline asm test uses hardcoded SysV ABI registers")
+
                 if test_base_name == "unix_wait_helpers_demo":
                     # Check if we're targeting MinGW (not Cygwin/MSYS)
                     # MinGW defines _WIN32 but not __CYGWIN__
@@ -3723,12 +3800,12 @@ def _discover_and_add_fpc_rtl_tests():
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
-                # Check test result cache
                 if _test_cache_check(input_file, expected_output_file, FPC_RTL_FLAGS):
                     return  # cached pass — skip
 
                 try:
-                    compiler_output = run_compiler(input_file, asm_file, flags=FPC_RTL_FLAGS)
+                    compiler_output = run_compiler(input_file, asm_file,
+                                                   flags=FPC_RTL_FLAGS)
                 except subprocess.CalledProcessError:
                     self.fail(f"FPC RTL compilation failed for {test_base_name}")
                     return
@@ -3777,9 +3854,127 @@ def _discover_and_add_fpc_rtl_tests():
         setattr(TestCompiler, method_name, make_fpc_rtl_test(base_name))
 
 
+# ---------------------------------------------------------------------------
+# pp.pas bootstrap compilation test — added as a special FPC RTL test.
+# This verifies that the compiler can parse and codegen the FPC compiler
+# itself (pp.pas), which exercises far more of the language than any
+# individual RTL test case.
+# ---------------------------------------------------------------------------
+def _add_pp_pas_bootstrap_test():
+    """Add pp.pas compilation as a special FPC RTL test.
+    Skipped by default — set KGPC_PP_PAS_TEST=1 to enable."""
+    if not FPC_RTL_MODE:
+        return
+    if os.environ.get("KGPC_PP_PAS_TEST", "0") != "1":
+        return
+
+    fpc_src = os.environ.get("KGPC_FPC_RTL_DIR", "FPCSource")
+    pp_pas = os.path.join(fpc_src, "compiler", "pp.pas")
+    if not os.path.isfile(pp_pas):
+        return
+
+    # pp.pas needs additional -I/-Fu paths for the compiler source tree
+    pp_extra_flags = [
+        "-DCPU64", "-DCPUX86_64", "-Dx86_64", "-DFPC", "-DLINUX", "-DUNIX",
+        "-DFPC_HAS_TYPE_EXTENDED", "-DSUPPORT_EXTENDED", "-Sg",
+        "-I" + os.path.join(fpc_src, "rtl", "objpas"),
+        "-I" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        "-I" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        "-I" + os.path.join(fpc_src, "rtl", "linux"),
+        "-I" + os.path.join(fpc_src, "rtl", "unix"),
+        "-I" + os.path.join(fpc_src, "rtl", "inc"),
+        "-I" + os.path.join(fpc_src, "rtl", "x86_64"),
+        "-I" + os.path.join(fpc_src, "rtl", "linux", "x86_64"),
+        "-I" + os.path.join(fpc_src, "rtl", "unix", "x86_64"),
+        "-I" + os.path.join(fpc_src, "compiler"),
+        "-I" + os.path.join(fpc_src, "compiler", "x86"),
+        "-I" + os.path.join(fpc_src, "compiler", "x86_64"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+        "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+        "-Fu" + os.path.join(fpc_src, "compiler"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "x86"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "x86_64"),
+        "-Fu" + os.path.join(fpc_src, "compiler", "systems"),
+    ]
+
+    pp_flags = ["--no-stdlib"] + pp_extra_flags
+    if _FPC_RTL_AST_CACHE_DIR is not None:
+        pp_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
+    pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
+
+    def _strip_pp_header(output):
+        """Strip version/copyright/path lines from pp.pas -h output."""
+        lines = output.splitlines(True)
+        return "".join(
+            l for l in lines
+            if not l.startswith("Free Pascal Compiler version")
+            and not l.startswith("Copyright")
+            and "[options] <inputfile>" not in l
+        )
+
+    def test_pp_pas_bootstrap(self):
+        """pp.pas bootstrap compilation — compile the FPC compiler itself."""
+        asm_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap.s")
+        executable_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap" + EXE_EXT)
+
+        try:
+            run_compiler(pp_pas, asm_file, flags=pp_flags, timeout=600)
+        except subprocess.CalledProcessError as e:
+            self.fail(f"pp.pas compilation failed: {e}")
+            return
+
+        try:
+            self.compile_executable(asm_file, executable_file)
+        except Exception as e:
+            self.fail(f"pp.pas linking failed: {e}")
+            return
+
+        # Run the compiled compiler with -h and compare output
+        try:
+            process = subprocess.run(
+                [executable_file, "-h"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            self.fail("pp.pas binary timed out running with -h")
+            return
+
+        # Check exit code first — if the binary crashed, report that instead
+        # of a confusing empty-string-vs-expected diff.
+        if process.returncode != 0:
+            import signal as _signal
+            sig = -process.returncode if process.returncode < 0 else None
+            sig_name = ""
+            if sig is not None:
+                try:
+                    sig_name = f" ({_signal.Signals(sig).name})"
+                except (ValueError, AttributeError):
+                    pass
+            stderr_snippet = (process.stderr or "")[:2000]
+            self.fail(
+                f"pp.pas binary exited with code {process.returncode}{sig_name}\n"
+                f"stderr:\n{stderr_snippet}"
+            )
+
+        expected_output = read_file_content(pp_expected_file)
+        actual_output = _strip_pp_header(process.stdout or "")
+        self.assertEqual(actual_output, expected_output)
+
+    test_pp_pas_bootstrap.__name__ = "test_fpcrtl_pp_pas_bootstrap"
+    test_pp_pas_bootstrap.__doc__ = "pp.pas bootstrap — compile and link the FPC compiler"
+    test_pp_pas_bootstrap._timeout = 900  # pp.pas is much larger than regular tests
+    setattr(TestCompiler, "test_fpcrtl_pp_pas_bootstrap", test_pp_pas_bootstrap)
+
+
 # Auto-discover and add tests before loading the suite
 if FPC_RTL_MODE:
     _discover_and_add_fpc_rtl_tests()
+    _add_pp_pas_bootstrap_test()
 else:
     _discover_and_add_auto_tests()
 

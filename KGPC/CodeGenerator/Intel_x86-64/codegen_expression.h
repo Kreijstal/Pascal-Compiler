@@ -9,7 +9,8 @@
 
 ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     CodeGenContext *ctx, struct KgpcType *proc_type, const char *procedure_name,
-    int arg_start_index, const struct Expression *call_expr);
+    int arg_start_index, const struct Expression *call_expr,
+    int is_class_method_call_hint);
 ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *, CodeGenContext *);
 
@@ -70,6 +71,7 @@ int codegen_expr_involves_extended(const struct Expression *expr);
 /* Check if expression type matches a specific type tag, using KgpcType when available.
  * Returns 1 if match, 0 otherwise. */
 int expr_has_type_tag(const struct Expression *expr, int type_tag);
+int codegen_expr_is_string_char_index(const struct Expression *expr);
 
 /* Check if expression uses qword (64-bit) operations, using KgpcType when available.
  * Returns 1 if qword, 0 otherwise. */

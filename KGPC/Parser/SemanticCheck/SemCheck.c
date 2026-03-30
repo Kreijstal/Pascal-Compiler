@@ -878,21 +878,25 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
-static int semcheck_is_builtin_pointer_type_id(const char *id)
+/* Debug assertion: pointer type aliases (PInt64, PByte, PComp, etc.) are
+ * declared in systemh.inc and should resolve through normal type resolution.
+ * This function fires a warning if any of them fail to resolve, indicating
+ * a preprocessor or type registration bug. */
+static void semcheck_assert_pointer_type_resolved(const char *id)
 {
-    if (id == NULL)
-        return 0;
-    id = semcheck_base_type_name(id);
-    return (pascal_identifier_equals(id, "PInt64") ||
-            pascal_identifier_equals(id, "PByte") ||
-            pascal_identifier_equals(id, "PWord") ||
-            pascal_identifier_equals(id, "PLongInt") ||
-            pascal_identifier_equals(id, "PLongWord") ||
-            pascal_identifier_equals(id, "PInteger") ||
-            pascal_identifier_equals(id, "PCardinal") ||
-            pascal_identifier_equals(id, "PQWord") ||
-            pascal_identifier_equals(id, "PPointer") ||
-            pascal_identifier_equals(id, "PBoolean"));
+    if (id == NULL) return;
+    static const char *expected_pointer_types[] = {
+        "PInt64", "PByte", "PWord", "PLongInt", "PLongWord",
+        "PInteger", "PCardinal", "PQWord", "PPointer", "PBoolean",
+        "PComp", NULL
+    };
+    for (int i = 0; expected_pointer_types[i] != NULL; i++) {
+        if (pascal_identifier_equals(id, expected_pointer_types[i])) {
+            fprintf(stderr, "[KGPC] WARNING: pointer type '%s' not resolved through "
+                    "normal type paths — check systemh.inc preprocessing\n", id);
+            return;
+        }
+    }
 }
 
 static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t *candidate)
@@ -4491,7 +4495,6 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
 static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
-    const char *debug_env = kgpc_getenv("KGPC_DEBUG_RETURN_TYPE");
     KgpcType *builtin_return = NULL;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
@@ -4551,37 +4554,45 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
             }
             else
             {
-                subprogram->tree_data.subprogram_data.return_type = builtin_type;
-                builtin_return = create_primitive_type(builtin_type);
+                /* Preserve SHORTSTRING_TYPE set during AST conversion under {$H-};
+                 * semcheck_map_builtin_type_name_local maps bare "String" to
+                 * STRING_TYPE, but the per-file directive already chose correctly. */
+                if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+                    builtin_type == STRING_TYPE)
+                {
+                    builtin_return = create_primitive_type(SHORTSTRING_TYPE);
+                }
+                else
+                {
+                    subprogram->tree_data.subprogram_data.return_type = builtin_type;
+                    builtin_return = create_primitive_type(builtin_type);
+                }
             }
         }
-    }
-
-    if (debug_env != NULL)
-    {
-        const char *rt_id = subprogram->tree_data.subprogram_data.return_type_id;
-        int primitive_tag = subprogram->tree_data.subprogram_data.return_type;
-        const char *resolved_type = (type_node != NULL && type_node->type != NULL)
-            ? kgpc_type_to_string(type_node->type)
-            : "<null>";
-        fprintf(stderr,
-            "[KGPC] build_function_return_type: subprogram=%s return_type_id=%s primitive=%d type_node=%p kind=%d resolved=%s\n",
-            subprogram->tree_data.subprogram_data.id ? subprogram->tree_data.subprogram_data.id : "<anon>",
-            rt_id ? rt_id : "<null>",
-            primitive_tag,
-            (void *)type_node,
-            (type_node != NULL && type_node->type != NULL) ? type_node->type->kind : -1,
-            resolved_type);
     }
 
     if (builtin_return != NULL)
         return builtin_return;
 
-    return kgpc_type_build_function_return(
+    KgpcType *result = kgpc_type_build_function_return(
         subprogram->tree_data.subprogram_data.inline_return_type,
         type_node,
         subprogram->tree_data.subprogram_data.return_type,
         symtab);
+
+    /* Under {$H-}, from_cparser sets return_type = SHORTSTRING_TYPE on
+     * functions returning bare 'string'.  If the symbol table resolved
+     * "String" to the system unit's AnsiString alias (STRING_TYPE),
+     * override to SHORTSTRING so sret and value-type semantics apply. */
+    if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+        result != NULL && result->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(result) == STRING_TYPE)
+    {
+        destroy_kgpc_type(result);
+        result = create_primitive_type(SHORTSTRING_TYPE);
+    }
+
+    return result;
 }
 
 /* Forward declarations for type resolution helpers used in const evaluation. */
@@ -13703,7 +13714,6 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
     }
 }
 
-
 static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
 {
     int return_val = 0;
@@ -14696,11 +14706,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
     semcheck_timing_step("unit names", &t0);
 
-    /* Wire scope tree deps: program scope can see ALL loaded units.
-     * Unit declarations are already in per-unit scopes (from full
-     * semcheck_unit() during loading), so the program scope only needs
-     * dep edges to find them. */
-    wire_program_scope_all_units(symtab, symtab->current_scope);
+    /* Wire scope tree deps: program scope can see its directly-used units
+     * (matching FPC semantics — transitive deps are NOT visible).
+     * Unit declarations switch to per-unit scopes via source_unit_index,
+     * so each unit resolves its own deps independently. */
+    wire_scope_deps(symtab, symtab->current_scope,
+                    tree->tree_data.program_data.uses_units);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
     semcheck_timing_step("id check", &t0);
@@ -14882,6 +14893,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
                     (void*)tree->tree_data.program_data.body_statement);
         }
     }
+
+    /* After semcheck, wire all units to the program scope so that codegen
+     * (which uses skip_unit_filter=1) can find symbols from any unit.
+     * During semcheck above, only directly-used units were wired (FPC semantics). */
+    wire_program_scope_all_units(symtab, symtab->current_scope);
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
     semcheck_unit_names_reset();
@@ -15367,6 +15383,28 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     /* Pre-push trivially evaluable constants (just integer/string values) */
     prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls);
     prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls);
+
+    /* Decls-only also needs typed const declarations lowered from const sections
+     * into interface/implementation var/array decls. Without this, dependent units
+     * can miss typed const arrays like gas_needsuffix during semantic analysis. */
+    {
+        ListNode_t *typed_iface_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.interface_var_decls, 1);
+        if (typed_iface_consts != NULL)
+        {
+            return_val += semcheck_decls(symtab, typed_iface_consts);
+            DestroyList(typed_iface_consts);
+        }
+    }
+    {
+        ListNode_t *typed_impl_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.implementation_var_decls, 1);
+        if (typed_impl_consts != NULL)
+        {
+            return_val += semcheck_decls(symtab, typed_impl_consts);
+            DestroyList(typed_impl_consts);
+        }
+    }
 
     semcheck_unit_names_reset();
     return return_val;
@@ -15945,9 +15983,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         {
                             var_type = map_type_tag_to_var_type(tag);
                         }
-                        /* Handle FPC system pointer types (PInt64, PByte, etc.) */
-                        else if (semcheck_is_builtin_pointer_type_id(type_id))
-                            var_type = HASHVAR_POINTER;
                         else if (tree->tree_data.var_decl_data.type_ref != NULL &&
                                  tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                             var_type = HASHVAR_POINTER;
@@ -15971,6 +16006,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
+                            semcheck_assert_pointer_type_resolved(type_id);
                             semantic_error(tree->line_num, 0, "undefined type %s", type_id);
                             return_val++;
                             var_type = HASHVAR_UNTYPED;
@@ -16233,11 +16269,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 /* No further legacy handling needed */
                             }
-                            else if (type_id != NULL && semcheck_is_builtin_pointer_type_id(type_id))
-                            {
-                                var_type = HASHVAR_POINTER;
-                                var_kgpc_type = create_pointer_type(NULL);
-                            }
                             else if (record_type != NULL)
                             {
                                 /* Use the canonical RecordType, not a clone */
@@ -16397,6 +16428,42 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             fprintf(stderr, "[SemCheck] Processing inline array for var: %s\n",
                                 ids && ids->cur ? (char*)ids->cur : "<null>");
                         struct TypeAlias *alias = tree->tree_data.var_decl_data.inline_type_alias;
+
+                        /* Resolve enum-indexed array bounds (e.g., array[TMyEnum] of ...) */
+                        if (alias->array_dimensions != NULL &&
+                            alias->array_start == 0 && alias->array_end == 0 &&
+                            !alias->is_open_array)
+                        {
+                            ListNode_t *first_dim = alias->array_dimensions;
+                            const char *dim_str = (first_dim != NULL && first_dim->type == LIST_STRING) ?
+                                (const char *)first_dim->cur : NULL;
+                            if (dim_str != NULL)
+                            {
+                                HashNode_t *dim_type_node = NULL;
+                                if (FindSymbol(&dim_type_node, symtab, dim_str) != 0 &&
+                                    dim_type_node != NULL && dim_type_node->hash_type == HASHTYPE_TYPE)
+                                {
+                                    struct TypeAlias *dim_alias = get_type_alias_from_node(dim_type_node);
+                                    if (dim_alias != NULL && dim_alias->is_enum &&
+                                        dim_alias->enum_literals != NULL)
+                                    {
+                                        int count = ListLength(dim_alias->enum_literals);
+                                        if (count > 0)
+                                        {
+                                            alias->array_start = 0;
+                                            alias->array_end = count - 1;
+                                        }
+                                    }
+                                    else if (dim_alias != NULL && dim_alias->is_range &&
+                                             dim_alias->range_known)
+                                    {
+                                        alias->array_start = dim_alias->range_start;
+                                        alias->array_end = dim_alias->range_end;
+                                    }
+                                }
+                            }
+                        }
+
                         int start = alias->array_start;
                         int end = alias->array_end;
                         if (alias->is_open_array)
@@ -16875,6 +16942,68 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                 }
                 
+                /* Resolve enum-indexed array bounds (e.g., array[TMyEnum] of ...) */
+                if (start_bound == 0 && end_bound == 0 &&
+                    tree->tree_data.arr_decl_data.unresolved_index_type != NULL)
+                {
+                    const char *idx_type = tree->tree_data.arr_decl_data.unresolved_index_type;
+                    HashNode_t *idx_node = NULL;
+                    if (FindSymbol(&idx_node, symtab, idx_type) != 0 &&
+                        idx_node != NULL && idx_node->hash_type == HASHTYPE_TYPE)
+                    {
+                        struct TypeAlias *idx_alias = get_type_alias_from_node(idx_node);
+                        if (idx_alias != NULL && idx_alias->is_enum &&
+                            idx_alias->enum_literals != NULL)
+                        {
+                            int count = ListLength(idx_alias->enum_literals);
+                            if (count > 0)
+                            {
+                                start_bound = 0;
+                                end_bound = count - 1;
+                            }
+                        }
+                        else if (idx_alias != NULL && idx_alias->is_range &&
+                                 idx_alias->range_known)
+                        {
+                            start_bound = idx_alias->range_start;
+                            end_bound = idx_alias->range_end;
+                        }
+                    }
+                }
+                /* Also check array_dimensions for single-identifier dimensions */
+                if (start_bound == 0 && end_bound == 0 &&
+                    tree->tree_data.arr_decl_data.array_dimensions != NULL)
+                {
+                    ListNode_t *first_dim = tree->tree_data.arr_decl_data.array_dimensions;
+                    const char *dim_str = (first_dim != NULL && first_dim->type == LIST_STRING) ?
+                        (const char *)first_dim->cur : NULL;
+                    if (dim_str != NULL)
+                    {
+                        HashNode_t *dim_node = NULL;
+                        if (FindSymbol(&dim_node, symtab, dim_str) != 0 &&
+                            dim_node != NULL && dim_node->hash_type == HASHTYPE_TYPE)
+                        {
+                            struct TypeAlias *dim_alias = get_type_alias_from_node(dim_node);
+                            if (dim_alias != NULL && dim_alias->is_enum &&
+                                dim_alias->enum_literals != NULL)
+                            {
+                                int count = ListLength(dim_alias->enum_literals);
+                                if (count > 0)
+                                {
+                                    start_bound = 0;
+                                    end_bound = count - 1;
+                                }
+                            }
+                            else if (dim_alias != NULL && dim_alias->is_range &&
+                                     dim_alias->range_known)
+                            {
+                                start_bound = dim_alias->range_start;
+                                end_bound = dim_alias->range_end;
+                            }
+                        }
+                    }
+                }
+
                 /* CRITICAL FIX: Update the tree's s_range and e_range fields with the resolved bounds.
                  * Downstream code (especially the x86-64 code generator) checks arr->e_range < arr->s_range
                  * to determine if an array is dynamic. Without updating these fields, arrays declared with
@@ -17324,6 +17453,8 @@ next_identifier:
                                         proc_target != NULL ? strdup(proc_target) : NULL;
                                     init_expr->expr_data.addr_of_proc_data.proc_id =
                                         proc_symbol->id ? strdup(proc_symbol->id) : NULL;
+                                    init_expr->expr_data.addr_of_proc_data.source_unit_index =
+                                        proc_symbol->source_unit_index;
                                 }
                                 /* Resolve the type NOW while the symbol is still alive. */
                                 if (expr_type != NULL)

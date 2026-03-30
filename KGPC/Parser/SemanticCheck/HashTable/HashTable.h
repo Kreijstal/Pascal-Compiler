@@ -9,7 +9,7 @@
 
 #ifndef HASH_TABLE_H
 #define HASH_TABLE_H
-#define TABLE_SIZE	4099
+#define TABLE_SIZE	65537
 
 #include <stdio.h>
 #include <assert.h>
@@ -53,6 +53,7 @@ typedef struct HashNode
 {
     char *id;
     char *canonical_id;
+    unsigned hash_value;
     char *mangled_id;
     enum HashType hash_type;
     
@@ -124,6 +125,7 @@ int AddIdentToTable(HashTable_t *table, char *id, char *mangled_id,
 /* Searches for the given identifier in the table. Returns NULL if not found */
 /* Mutating tells whether it's being referenced in an assignment context */
 HashNode_t *FindIdentInTable(HashTable_t *table, const char *id);
+HashNode_t *FindIdentInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash);
 
 /* Like FindIdentInTable but skips program-local symbols (defined_in_unit==0).
  * Used for scope isolation: when unit code looks up a name at PROGRAM scope,
@@ -150,6 +152,7 @@ HashNode_t *FindTypeBySuffixInTable(HashTable_t *table, const char *suffix);
 
 /* Searches for all instances of a given identifier in the table. Returns a list of HashNode_t* or NULL if not found */
 ListNode_t *FindAllIdentsInTable(HashTable_t *table, const char *id);
+ListNode_t *FindAllIdentsInTableCanonical(HashTable_t *table, const char *canonical_id, unsigned hash);
 
 /* Move an existing hash node to the back of its bucket list */
 void HashTable_MoveNodeToBack(HashTable_t *table, HashNode_t *node);

@@ -94,6 +94,14 @@ static bool g_skip_stdlib = false;
 static int g_requires_gmp = 0;
 static int g_emit_link_args = 0;
 static int g_ast_cache_explicit = 0;
+static const char *g_codegen_cache_dir = NULL;
+static char g_codegen_cache_obj_path[4096]; /* path to the cached .o used/created */
+static char g_codegen_cache_asm_path[4096]; /* path to the cache .s (unit functions only) */
+static int g_codegen_cache_hit = 0; /* 1 if cache hit, 0 if miss */
+static int g_codegen_cache_forced_function_sections = 0;
+static int g_codegen_cache_forced_skip_unit_codegen = 0;
+static int g_saved_argc = 0;
+static char **g_saved_argv = NULL;
 static int g_batch_mode = 0;
 static int g_batch_max_parallel = 0; /* 0 = auto (nproc) */
 
@@ -159,26 +167,34 @@ static void mark_program_subs_used(Tree_t *program)
 
 static void print_usage(const char *prog_name)
 {
-    fprintf(stderr, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
-    fprintf(stderr, "  Compiles Pascal source to x86-64 assembly\n");
-    fprintf(stderr, "  Flags:\n");
-    fprintf(stderr, "    -O1, -O2              Enable optimizations\n");
-    fprintf(stderr, "    -non-local            Enable non-local variable chasing (experimental)\n");
-    fprintf(stderr, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
-    fprintf(stderr, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
-    fprintf(stderr, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
-    fprintf(stderr, "    --time-passes         Print timing information for major compiler stages\n");
-    fprintf(stderr, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
-    fprintf(stderr, "    --disable-dce         Emit unused subprograms (debugging)\n");
-    fprintf(stderr, "    -I<path>              Add include path for preprocessor\n");
-    fprintf(stderr, "    -Fu<path>             Add unit search path (FPC compatible)\n");
-    fprintf(stderr, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
-    fprintf(stderr, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
-    fprintf(stderr, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
-    fprintf(stderr, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
-    fprintf(stderr, "    -Us                   Compile System unit (FPC compatible)\n");
-    fprintf(stderr, "    -Sg                   Enable goto statements (FPC compatible)\n");
+    FILE *out = stdout;
+    fprintf(out, "Usage: %s <input.p> <output.s> [flags]\n", prog_name);
+    fprintf(out, "  Compiles Pascal source to x86-64 assembly\n");
+    fprintf(out, "  Flags:\n");
+    fprintf(out, "    -h, --help            Show this help text and exit\n");
+    fprintf(out, "    -O1, -O2              Enable optimizations\n");
+    fprintf(out, "    -non-local            Enable non-local variable chasing (experimental)\n");
+    fprintf(out, "    --target=windows      Generate assembly for the Windows x64 ABI\n");
+    fprintf(out, "    --target=sysv         Generate assembly for the System V AMD64 ABI\n");
+    fprintf(out, "    --dump-ast=<file>     Write the parsed AST to <file>\n");
+    fprintf(out, "    --time-passes         Print timing information for major compiler stages\n");
+    fprintf(out, "    --asm-debug           Annotate emitted assembly with semantic/codegen info\n");
+    fprintf(out, "    --disable-dce         Emit unused subprograms (debugging)\n");
+    fprintf(out, "    -I<path>              Add include path for preprocessor\n");
+    fprintf(out, "    -Fu<path>             Add unit search path (FPC compatible)\n");
+    fprintf(out, "    --no-vendor-units     Disable built-in KGPC vendor units\n");
+    fprintf(out, "    --no-stdlib           Disable KGPC stdlib; load minimal prelude instead\n");
+    fprintf(out, "    --pp-cache-dir=<dir>  Cache parsed unit ASTs to <dir> for faster re-compilation\n");
+    fprintf(out, "    -D<symbol>[=<value>]  Define preprocessor symbol\n");
+    fprintf(out, "    -Us                   Compile System unit (FPC compatible)\n");
+    fprintf(out, "    -Sg                   Enable goto statements (FPC compatible)\n");
 }
+
+typedef enum
+{
+    SET_FLAGS_CONTINUE = 0,
+    SET_FLAGS_HELP = 1
+} SetFlagsResult;
 
 static bool dump_ast_to_requested_path(Tree_t *tree)
 {
@@ -535,12 +551,14 @@ static void emit_timing_summary(void)
             g_time_semantic + g_time_codegen);
 }
 
-static void set_flags(char **optional_args, int count)
+static SetFlagsResult set_flags(char **optional_args, int count)
 {
     int i = 0;
     while (count > 0)
     {
         const char *arg = optional_args[i];
+        if (strcmp(arg, "-h") == 0 || strcmp(arg, "--help") == 0 || strcmp(arg, "help") == 0)
+            return SET_FLAGS_HELP;
         if (strcmp(arg, "-non-local") == 0)
         {
             fprintf(stderr, "Non-local codegen support enabled\n");
@@ -650,6 +668,18 @@ static void set_flags(char **optional_args, int count)
             fprintf(stderr, "Dead-code elimination disabled (emit unused subprograms).\n\n");
             set_disable_dce_flag();
         }
+        else if (strcmp(arg, "--function-sections") == 0)
+        {
+            set_function_sections_flag();
+        }
+        else if (strcmp(arg, "--skip-unit-codegen") == 0)
+        {
+            set_skip_unit_codegen_flag();
+        }
+        else if (strncmp(arg, "--codegen-cache-dir=", 20) == 0)
+        {
+            g_codegen_cache_dir = &arg[20];
+        }
         else if (arg[0] == '-' && arg[1] == 'I' && arg[2] != '\0')
         {
             /* Include path: -I/path/to/include */
@@ -730,6 +760,8 @@ static void set_flags(char **optional_args, int count)
         --count;
         ++i;
     }
+
+    return SET_FLAGS_CONTINUE;
 }
 
 static void mark_stdlib_var_params(ListNode_t *subprograms)
@@ -1692,14 +1724,14 @@ static void load_unit(CompilationContext *comp_ctx, const char *unit_name, UnitS
         file_to_parse = saved_file_to_parse;
     }
 
-    free(path);
-    path = NULL;
-
     /* Store the unit in the loaded-units array.  build_combined_program_view()
      * will merge declarations into the target tree before semcheck. */
     {
         int unit_idx = unit_registry_add(unit_tree->tree_data.unit_data.unit_id);
         compilation_context_add_unit(comp_ctx, unit_tree, unit_idx);
+        /* Record source path for cache key computation */
+        comp_ctx->loaded_units[comp_ctx->loaded_unit_count - 1].source_path = path;
+        path = NULL; /* ownership transferred */
     }
 }
 
@@ -1995,6 +2027,9 @@ static int batch_mode_main(int argc, char **argv)
 #endif /* !_WIN32 */
 
 static void emit_link_args(void); /* forward declaration */
+static void codegen_cache_check(void);
+static void codegen_cache_populate(const char *asm_file);
+static void codegen_cache_clear_transient_flags(void);
 
 /* Compile a single Pascal program.  Used by both normal mode and batch mode.
  * Returns 0 on success, non-zero on error. */
@@ -2159,6 +2194,10 @@ static int compile_single_program(
     file_to_parse = (char *)input_file;
     semcheck_set_source_path(input_file);
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
+    /* Reset {$H-} flag before semantic analysis.  The flag is only meaningful
+     * during per-file AST conversion (from_cparser.c); the merged AST already
+     * has the correct return types (SHORTSTRING_TYPE where appropriate). */
+    pascal_frontend_set_default_shortstring(false);
 
     debug_check_type_presence(user_tree);
     report_rss("after loading all units");
@@ -2203,6 +2242,9 @@ static int compile_single_program(
 
     if (sem_result <= 0)
     {
+        /* Check codegen cache after semcheck (units are fully loaded) */
+        codegen_cache_check();
+
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
         CodeGenContext ctx;
@@ -2225,6 +2267,14 @@ static int compile_single_program(
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
 
+        /* Open cache .s file for unit function sections on cache miss */
+        if (codegen_cache_miss_flag() && g_codegen_cache_asm_path[0] != '\0')
+        {
+            ctx.cache_output = fopen(g_codegen_cache_asm_path, "w");
+            if (ctx.cache_output == NULL)
+                fprintf(stderr, "WARNING: cannot open cache asm file: %s\n", g_codegen_cache_asm_path);
+        }
+
         extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
         double mark_used_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         mark_used_functions(user_tree, symtab);
@@ -2246,7 +2296,9 @@ static int compile_single_program(
         report_rss("after code generation");
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
-        if (codegen_failed)
+        if (ctx.cache_output != NULL)
+            fclose(ctx.cache_output);
+        if (codegen_failed && !codegen_cache_miss_flag())
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
@@ -2254,13 +2306,21 @@ static int compile_single_program(
         }
         else
         {
+            if (codegen_failed)
+                fprintf(stderr, "WARNING: codegen had errors; keeping output for cache (--gc-sections will discard broken sections).\n");
+            /* On cache miss, assemble the unit functions .s into the cache .o */
+            if (!codegen_failed)
+                codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
+        /* Clear transient cache-mode flags so they don't leak into later compilations. */
+        codegen_cache_clear_transient_flags();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        codegen_cache_clear_transient_flags();
     }
 
     DestroySymTab(symtab);
@@ -2271,13 +2331,424 @@ static int compile_single_program(
     return exit_code;
 }
 
+static void hash_string(unsigned long *hash, const char *s)
+{
+    for (const char *p = s; *p; p++)
+        *hash = *hash * 33 + (unsigned char)*p;
+    *hash = *hash * 33 + '\0';
+}
+
+/* Compute a cache key from flags, loaded unit names, unit source mtimes, and compiler mtime.
+ * The key deliberately excludes the input/output file paths (positional args)
+ * since the cached unit functions are the same regardless of which program uses them. */
+static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
+{
+    unsigned long hash = 5381;
+
+    /* Hash only flag arguments (starting with -), skipping positional args
+     * (input file, output file) and --codegen-cache-dir.  The positional args
+     * are per-test and don't affect unit codegen output. */
+    for (int i = 1; i < g_saved_argc; i++)
+    {
+        const char *arg = g_saved_argv[i];
+        if (arg[0] != '-')
+            continue; /* skip positional args (input file, output file) */
+        if (strncmp(arg, "--codegen-cache-dir=", 20) == 0)
+            continue;
+        if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
+            continue;
+        hash_string(&hash, arg);
+    }
+
+    /* Hash sorted unit names */
+    int count = unit_registry_count();
+    const char **names = calloc((size_t)(count > 0 ? count : 1), sizeof(const char *));
+    int n = 0;
+    for (int i = 1; i <= count; i++)
+    {
+        const char *name = unit_registry_get(i);
+        if (name != NULL)
+            names[n++] = name;
+    }
+    for (int i = 1; i < n; i++)
+    {
+        const char *tmp = names[i];
+        int j = i - 1;
+        while (j >= 0 && strcasecmp(names[j], tmp) > 0)
+        {
+            names[j + 1] = names[j];
+            j--;
+        }
+        names[j + 1] = tmp;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        const char *p = names[i];
+        for (; *p; p++)
+        {
+            unsigned char c = (unsigned char)*p;
+            if (c >= 'A' && c <= 'Z') c = c - 'A' + 'a';
+            hash = hash * 33 + c;
+        }
+        hash = hash * 33 + '\0';
+    }
+    free(names);
+
+    /* Hash unit source file mtimes */
+    CompilationContext *ctx = compilation_context_get_active();
+    if (ctx != NULL)
+    {
+        for (int i = 0; i < ctx->loaded_unit_count; i++)
+        {
+            const char *path = ctx->loaded_units[i].source_path;
+            if (path != NULL)
+            {
+                struct stat st;
+                if (stat(path, &st) == 0)
+                    hash = hash * 33 + (unsigned long)st.st_mtime;
+            }
+        }
+    }
+
+    /* Hash include file mtimes (covers {$i ...} dependencies) */
+    if (ctx != NULL)
+    {
+        for (int i = 0; i < ctx->include_file_count; i++)
+        {
+            const char *ipath = ctx->include_files[i];
+            if (ipath != NULL)
+            {
+                struct stat st;
+                if (stat(ipath, &st) == 0)
+                    hash = hash * 33 + (unsigned long)st.st_mtime;
+            }
+        }
+    }
+
+    /* Include compiler binary mtime */
+    {
+        char exe_path[PATH_MAX];
+        ssize_t len = get_executable_path(exe_path, sizeof(exe_path), NULL);
+        if (len > 0)
+        {
+            struct stat st;
+            if (stat(exe_path, &st) == 0)
+                hash = hash * 33 + (unsigned long)st.st_mtime;
+        }
+    }
+
+    snprintf(key_buf, key_buf_size, "%016lx", hash);
+}
+
+/* Check if a codegen cache entry exists for the current unit set.
+ * Cache hit: enables skip-unit-codegen + function-sections.
+ * Cache miss: enables function-sections + codegen_cache_miss_flag. */
+static void codegen_cache_check(void)
+{
+    if (g_codegen_cache_dir == NULL)
+        return;
+
+    g_codegen_cache_forced_function_sections = 0;
+    g_codegen_cache_forced_skip_unit_codegen = 0;
+
+    char key[32];
+    codegen_cache_compute_key(key, sizeof(key));
+    snprintf(g_codegen_cache_obj_path, sizeof(g_codegen_cache_obj_path),
+             "%s/%s.o", g_codegen_cache_dir, key);
+    snprintf(g_codegen_cache_asm_path, sizeof(g_codegen_cache_asm_path),
+             "%s/%s.s", g_codegen_cache_dir, key);
+
+    if (access(g_codegen_cache_obj_path, R_OK) == 0)
+    {
+        fprintf(stderr, "Codegen cache hit: %s\n", g_codegen_cache_obj_path);
+        if (!skip_unit_codegen_flag())
+        {
+            set_skip_unit_codegen_flag();
+            g_codegen_cache_forced_skip_unit_codegen = 1;
+        }
+        if (!function_sections_flag())
+        {
+            set_function_sections_flag();
+            g_codegen_cache_forced_function_sections = 1;
+        }
+        g_codegen_cache_hit = 1;
+    }
+    else
+    {
+        fprintf(stderr, "Codegen cache miss; will populate: %s\n", g_codegen_cache_obj_path);
+        if (!function_sections_flag())
+        {
+            set_function_sections_flag();
+            g_codegen_cache_forced_function_sections = 1;
+        }
+        set_codegen_cache_miss_flag();
+        g_codegen_cache_hit = 0;
+    }
+}
+
+static void codegen_cache_clear_transient_flags(void)
+{
+    clear_codegen_cache_miss_flag();
+    if (g_codegen_cache_forced_skip_unit_codegen)
+        clear_skip_unit_codegen_flag();
+    if (g_codegen_cache_forced_function_sections)
+        clear_function_sections_flag();
+    g_codegen_cache_forced_skip_unit_codegen = 0;
+    g_codegen_cache_forced_function_sections = 0;
+}
+
+/* Replace broken sections in cache .s with ud2 stubs.
+ * Reads error line numbers from `as` stderr, finds which .section/.text.X
+ * blocks contain those lines, and replaces their content with a ud2 stub.
+ * Returns 1 if patching was done, 0 if nothing to patch. */
+static int codegen_cache_patch_broken_sections(const char *cache_asm_file,
+                                                const char *err_output)
+{
+    /* Parse error line numbers from as output like "file.s:123: Error: ..." */
+    int error_lines[512];
+    int num_errors = 0;
+    const char *p = err_output;
+    while (p != NULL && num_errors < 512)
+    {
+        const char *colon = strstr(p, ".s:");
+        if (colon == NULL)
+            break;
+        colon += 3; /* skip ".s:" */
+        int line = atoi(colon);
+        if (line > 0)
+            error_lines[num_errors++] = line;
+        p = strchr(colon, '\n');
+    }
+    if (num_errors == 0)
+        return 0;
+
+    /* Read the .s file */
+    FILE *f = fopen(cache_asm_file, "r");
+    if (f == NULL)
+        return 0;
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    char *content = malloc((size_t)fsize + 1);
+    if (content == NULL) { fclose(f); return 0; }
+    fsize = (long)fread(content, 1, (size_t)fsize, f);
+    content[fsize] = '\0';
+    fclose(f);
+
+    /* Split into lines */
+    int line_count = 1;
+    for (long i = 0; i < fsize; i++)
+        if (content[i] == '\n') line_count++;
+
+    /* For each line, record its offset and find section boundaries */
+    /* A section starts at ".section\t.text.NAME" and ends at the next section directive */
+    /* Mark sections containing error lines */
+    int *line_offsets = calloc((size_t)(line_count + 1), sizeof(int));
+    if (line_offsets == NULL) { free(content); return 0; }
+    int cur_line = 1;
+    line_offsets[1] = 0;
+    for (long i = 0; i < fsize; i++)
+    {
+        if (content[i] == '\n')
+        {
+            cur_line++;
+            if (cur_line <= line_count)
+                line_offsets[cur_line] = (int)(i + 1);
+        }
+    }
+
+    /* Find section starts and mark broken ones */
+    typedef struct { int start_line; int end_line; char name[256]; int broken; } Section;
+    Section *sections = calloc((size_t)line_count, sizeof(Section));
+    int num_sections = 0;
+    cur_line = 1;
+    for (long i = 0; i < fsize; )
+    {
+        /* Find end of this line */
+        long eol = i;
+        while (eol < fsize && content[eol] != '\n') eol++;
+
+        if (strncmp(content + i, "\t.section\t.text.", 16) == 0)
+        {
+            /* Extract section name */
+            const char *name_start = content + i + 16;
+            const char *comma = strchr(name_start, ',');
+            size_t name_len = comma ? (size_t)(comma - name_start) : (size_t)(eol - (long)(name_start - content));
+            if (name_len >= 256) name_len = 255;
+
+            if (num_sections > 0)
+                sections[num_sections - 1].end_line = cur_line - 1;
+
+            sections[num_sections].start_line = cur_line;
+            memcpy(sections[num_sections].name, name_start, name_len);
+            sections[num_sections].name[name_len] = '\0';
+            sections[num_sections].broken = 0;
+            num_sections++;
+        }
+
+        i = eol + 1;
+        cur_line++;
+    }
+    if (num_sections > 0)
+        sections[num_sections - 1].end_line = line_count;
+
+    /* Mark sections that contain error lines */
+    for (int e = 0; e < num_errors; e++)
+    {
+        for (int s = 0; s < num_sections; s++)
+        {
+            if (error_lines[e] >= sections[s].start_line &&
+                error_lines[e] <= sections[s].end_line)
+            {
+                sections[s].broken = 1;
+                break;
+            }
+        }
+    }
+
+    /* Rewrite the file, replacing broken sections with ud2 stubs */
+    f = fopen(cache_asm_file, "w");
+    if (f == NULL) { free(content); free(line_offsets); free(sections); return 0; }
+
+    int patched = 0;
+    cur_line = 1;
+    for (long i = 0; i < fsize; )
+    {
+        long eol = i;
+        while (eol < fsize && content[eol] != '\n') eol++;
+
+        /* Check if this line starts a broken section */
+        int in_broken = 0;
+        int broken_idx = -1;
+        for (int s = 0; s < num_sections; s++)
+        {
+            if (cur_line >= sections[s].start_line &&
+                cur_line <= sections[s].end_line &&
+                sections[s].broken)
+            {
+                in_broken = 1;
+                broken_idx = s;
+                break;
+            }
+        }
+
+        if (in_broken && cur_line == sections[broken_idx].start_line)
+        {
+            /* Emit ud2 stub for this section */
+            fprintf(f,
+                "\t.section\t.text.%s,\"ax\",@progbits\n"
+                "\t.globl\t%s\n"
+                "%s:\n"
+                "\tud2\n",
+                sections[broken_idx].name,
+                sections[broken_idx].name,
+                sections[broken_idx].name);
+            /* Skip all lines until end of this section */
+            while (cur_line < sections[broken_idx].end_line)
+            {
+                i = eol + 1;
+                eol = i;
+                while (eol < fsize && content[eol] != '\n') eol++;
+                cur_line++;
+            }
+            patched = 1;
+        }
+        else if (!in_broken)
+        {
+            fwrite(content + i, 1, (size_t)(eol - i), f);
+            fputc('\n', f);
+        }
+
+        i = eol + 1;
+        cur_line++;
+    }
+
+    fclose(f);
+    free(content);
+    free(line_offsets);
+    free(sections);
+    return patched;
+}
+
+/* After a cache-miss compile, assemble the unit-functions-only .s into the cache .o.
+ * The cache_asm_file contains only unit subprogram .text.* sections (written by
+ * codegen via ctx->cache_output).  No main, no vars, no init/finalization.
+ * If assembly fails due to broken inline asm, those sections are replaced with
+ * ud2 stubs and assembly is retried.  --gc-sections removes them at link time. */
+static void codegen_cache_populate(const char *cache_asm_file)
+{
+    if (g_codegen_cache_dir == NULL || g_codegen_cache_hit)
+        return;
+    if (cache_asm_file == NULL || cache_asm_file[0] == '\0')
+        return;
+
+    char err_file[4200];
+    snprintf(err_file, sizeof(err_file), "%s.err", cache_asm_file);
+
+    char cmd[8500];
+    snprintf(cmd, sizeof(cmd), "as '%s' -o '%s' 2>'%s'",
+             cache_asm_file, g_codegen_cache_obj_path, err_file);
+    int rc = system(cmd);
+
+    if (rc != 0)
+    {
+        /* Read error output and try to patch broken sections */
+        FILE *ef = fopen(err_file, "r");
+        char err_buf[8192] = {0};
+        if (ef != NULL)
+        {
+            size_t n = fread(err_buf, 1, sizeof(err_buf) - 1, ef);
+            err_buf[n] = '\0';
+            fclose(ef);
+        }
+
+        if (codegen_cache_patch_broken_sections(cache_asm_file, err_buf))
+        {
+            /* Retry assembly with patched file */
+            snprintf(cmd, sizeof(cmd), "as '%s' -o '%s' 2>/dev/null",
+                     cache_asm_file, g_codegen_cache_obj_path);
+            rc = system(cmd);
+        }
+
+        if (rc != 0)
+        {
+            fprintf(stderr, "WARNING: codegen cache: as failed (rc=%d), cache not populated\n", rc);
+            remove(g_codegen_cache_obj_path);
+            g_codegen_cache_obj_path[0] = '\0';
+            remove(err_file);
+            return;
+        }
+    }
+
+    remove(err_file);
+    fprintf(stderr, "Codegen cache populated: %s\n", g_codegen_cache_obj_path);
+}
+
 static void emit_link_args(void)
 {
     if (!g_emit_link_args)
         return;
 
-    char buffer[256];
+    char buffer[4096];
     size_t used = 0;
+
+    /* On cache hit, include the cached .o and gc-sections.
+     * On cache miss, the main .s has all unit functions (marked used for cache
+     * completeness), so gc-sections is needed to strip unused ones with bad refs.
+     * The cache .o is only populated for future runs, not linked this time. */
+    if (g_codegen_cache_hit && g_codegen_cache_obj_path[0] != '\0')
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " %s -Wl,--gc-sections",
+                                 g_codegen_cache_obj_path);
+    }
+    else if (g_codegen_cache_dir != NULL)
+    {
+        /* Cache miss: --function-sections was forced, so gc-sections is needed
+         * to remove unused unit functions that have unresolvable references. */
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " -Wl,--gc-sections");
+    }
 
     if (!target_windows_flag())
     {
@@ -2302,6 +2773,8 @@ static void emit_link_args(void)
 int main(int argc, char **argv)
 {
     install_stack_trace_handler();
+    g_saved_argc = argc;
+    g_saved_argv = argv;
 
         // Initialize global arena with 1MB blocks
     arena_t* arena = arena_create(1024 * 1024);
@@ -2311,7 +2784,17 @@ int main(int argc, char **argv)
      * This allows flags like --no-stdlib to appear anywhere in the command line. */
     unit_search_paths_init(&g_unit_paths);
     if (argc > 1)
-        set_flags(argv + 1, argc - 1);
+    {
+        SetFlagsResult flag_result = set_flags(argv + 1, argc - 1);
+        if (flag_result == SET_FLAGS_HELP)
+        {
+            print_usage(argv[0]);
+            clear_dump_ast_path();
+            unit_search_paths_destroy(&g_unit_paths);
+            arena_destroy(arena);
+            return 0;
+        }
+    }
 
     /* Record compiler binary mtime for AST cache invalidation */
     {
@@ -2746,6 +3229,7 @@ int main(int argc, char **argv)
         file_to_parse = (char *)input_file;
         semcheck_set_source_path(input_file);
         semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
+        pascal_frontend_set_default_shortstring(false);
 
         int sem_result = 0;
         double sem_start = track_time ? current_time_seconds() : 0.0;
@@ -2984,7 +3468,8 @@ int main(int argc, char **argv)
     file_to_parse = (char *)input_file;
     semcheck_set_source_path(input_file);
     semcheck_set_source_buffer(preprocessed_source, preprocessed_length);
-    
+    pascal_frontend_set_default_shortstring(false);
+
     debug_check_type_presence(user_tree);
     /* Build the combined program view from loaded unit records.
      * Loaded units are stored in the context during load_unit() and merged
@@ -3036,6 +3521,9 @@ int main(int argc, char **argv)
 
     if (sem_result <= 0)
     {
+        /* Check codegen cache after semcheck (units are fully loaded) */
+        codegen_cache_check();
+
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
         CodeGenContext ctx;
@@ -3061,6 +3549,14 @@ int main(int argc, char **argv)
         ctx.loop_frames = NULL;
         ctx.loop_depth = 0;
         ctx.loop_capacity = 0;
+
+        /* Open cache .s file for unit function sections on cache miss */
+        if (codegen_cache_miss_flag() && g_codegen_cache_asm_path[0] != '\0')
+        {
+            ctx.cache_output = fopen(g_codegen_cache_asm_path, "w");
+            if (ctx.cache_output == NULL)
+                fprintf(stderr, "WARNING: cannot open cache asm file: %s\n", g_codegen_cache_asm_path);
+        }
 
         /* Mark which functions are actually used (dead code elimination) */
         extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
@@ -3090,7 +3586,9 @@ int main(int argc, char **argv)
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
-        if (codegen_failed)
+        if (ctx.cache_output != NULL)
+            fclose(ctx.cache_output);
+        if (codegen_failed && !codegen_cache_miss_flag())
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
@@ -3098,13 +3596,21 @@ int main(int argc, char **argv)
         }
         else
         {
+            if (codegen_failed)
+                fprintf(stderr, "WARNING: codegen had errors; keeping output for cache (--gc-sections will discard broken sections).\n");
+            /* On cache miss, assemble the unit functions .s into the cache .o */
+            if (!codegen_failed)
+                codegen_cache_populate(g_codegen_cache_asm_path);
             emit_link_args();
         }
+        /* Clear transient cache-mode flags so they don't leak into later compilations. */
+        codegen_cache_clear_transient_flags();
     }
     else
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        codegen_cache_clear_transient_flags();
     }
 
     DestroySymTab(symtab);

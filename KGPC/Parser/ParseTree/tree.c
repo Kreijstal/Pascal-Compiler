@@ -1369,6 +1369,8 @@ void destroy_tree(Tree_t *tree)
               free(tree->tree_data.var_decl_data.absolute_field_id);
           if (tree->tree_data.var_decl_data.cname_override != NULL)
               free(tree->tree_data.var_decl_data.cname_override);
+          if (tree->tree_data.var_decl_data.static_label != NULL)
+              free(tree->tree_data.var_decl_data.static_label);
           break;
 
         case TREE_ARR_DECL:
