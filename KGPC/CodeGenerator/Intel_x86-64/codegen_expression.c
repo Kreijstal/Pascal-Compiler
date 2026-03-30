@@ -944,6 +944,25 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
             }
         }
     }
+
+    /* Fallback: check the stack node for the variable.  For function return
+     * variables (Result, function-name aliases) under {$H-}, the symtab may
+     * not have the shortstring type, but the stack allocation reflects the
+     * true storage: a shortstring occupies 2-256 bytes on the stack rather
+     * than 8 bytes like a dynamic string pointer.  If the stack node shows
+     * a value-type allocation matching shortstring size, treat it as such. */
+    if (expr != NULL && expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        StackNode_t *stack_node = find_label(expr->expr_data.id);
+        if (stack_node != NULL && !stack_node->is_array && !stack_node->is_dynamic &&
+            !stack_node->is_reference && !stack_node->is_static &&
+            stack_node->size > 8 && stack_node->size <= 256)
+        {
+            /* Size > 8 rules out pointer-based strings (8 bytes).
+             * Size <= 256 matches shortstring (max 256 = length byte + 255 chars). */
+            return 1;
+        }
+    }
     return 0;
 }
 
@@ -7880,8 +7899,21 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         }
     }
 
+    /* Determine if the string base is a stack-allocated shortstring.
+     * Shortstrings are stored inline (size > 8 bytes) and need their
+     * address via leaq, not a movq which would load the first 8 bytes
+     * of string data as if it were a pointer. */
+    int base_is_inline_shortstring = 0;
+    if (base_is_string)
+    {
+        if (codegen_expr_is_shortstring_value_ctx(array_expr, ctx))
+            base_is_inline_shortstring = 1;
+        else if (array_stack_node != NULL && array_stack_node->size > CODEGEN_POINTER_SIZE_BYTES)
+            base_is_inline_shortstring = 1;
+    }
+
     Register_t *base_reg = NULL;
-    if (base_is_string || base_is_pointer)
+    if ((base_is_string || base_is_pointer) && !base_is_inline_shortstring)
     {
         inst_list = codegen_expr_with_result(array_expr, inst_list, ctx, &base_reg);
         if (codegen_had_error(ctx) || base_reg == NULL)
@@ -8043,7 +8075,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (!wide_char_index &&
         first_index_stride <= 1 &&
         (codegen_array_access_targets_shortstring(expr, ctx) ||
-         codegen_expr_is_shortstring_value(array_expr)))
+         codegen_expr_is_shortstring_value(array_expr) ||
+         base_is_inline_shortstring))
     {
         shortstring_index = 1;
     }
