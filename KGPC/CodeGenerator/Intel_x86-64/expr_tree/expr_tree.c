@@ -4563,6 +4563,32 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 int scope_depth = 0;
                 stack_node = NULL;
 
+                if (ctx != NULL && ctx->current_return_slot != NULL &&
+                    expr->expr_data.id != NULL)
+                {
+                    int is_current_result = 0;
+                    if (pascal_identifier_equals(expr->expr_data.id, "Result"))
+                    {
+                        HashNode_t *shadow_node = NULL;
+                        if (!(ctx->symtab != NULL &&
+                              FindSymbol(&shadow_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                              shadow_node != NULL))
+                            is_current_result = 1;
+                    }
+                    else if (ctx->current_subprogram_id != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_id))
+                        is_current_result = 1;
+                    else if (ctx->current_subprogram_method_name != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_method_name))
+                        is_current_result = 1;
+                    else if (ctx->current_subprogram_result_name != NULL &&
+                             pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_result_name))
+                        is_current_result = 1;
+
+                    if (is_current_result)
+                        stack_node = ctx->current_return_slot;
+                }
+
                 /* First check if this is a constant - constants don't need non-local access */
                 HashNode_t *node = NULL;
                 int found = (ctx != NULL && ctx->symtab != NULL &&
@@ -4645,7 +4671,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     }
                 }
 
-                if (!(found && node != NULL &&
+                if (stack_node == NULL &&
+                    !(found && node != NULL &&
                       (node->hash_type == HASHTYPE_CONST || node->is_constant)))
                     stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
                 #ifdef DEBUG_CODEGEN

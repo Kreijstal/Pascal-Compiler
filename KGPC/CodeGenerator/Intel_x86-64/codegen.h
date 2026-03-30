@@ -261,9 +261,12 @@ typedef struct CodeGenContext {
     const char *current_subprogram_id;
     const char *current_subprogram_mangled;
     const char *current_subprogram_method_name;   /* Bare method name (NULL for non-methods) */
+    const char *current_subprogram_result_name;   /* Explicit Pascal result variable alias (NULL if none) */
     const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
+    StackNode_t *current_return_slot;
+    KgpcType *current_return_type;
     ListNode_t *static_link_procs;
 
     /* Flag indicating current function returns a dynamic array.

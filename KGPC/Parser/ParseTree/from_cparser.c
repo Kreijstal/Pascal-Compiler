@@ -11385,13 +11385,19 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
                 open_tuple = uw;
             }
         }
-        if (open_tuple == NULL || open_tuple->typ != PASCAL_T_TUPLE) {
-            fprintf(stderr, "ERROR: Open array typed const %s must have a tuple initializer.\n", *id_ptr);
-            return -1;
-        }
         int elem_count = 0;
-        for (ast_t *e = open_tuple->child; e != NULL; e = e->next)
-            ++elem_count;
+        if (open_tuple == NULL) {
+            fprintf(stderr, "ERROR: Open array typed const %s has no elements.\n", *id_ptr);
+            return -1;
+        } else if (open_tuple->typ == PASCAL_T_TUPLE) {
+            for (ast_t *e = open_tuple->child; e != NULL; e = e->next)
+                ++elem_count;
+        } else {
+            /* Single-element parenthesized initializers like "(42)" are parsed
+             * as parenthesized expressions rather than one-element tuples. The
+             * normal tuple-wrapping path below will canonicalize the AST. */
+            elem_count = 1;
+        }
         if (elem_count == 0) {
             fprintf(stderr, "ERROR: Open array typed const %s has no elements.\n", *id_ptr);
             return -1;

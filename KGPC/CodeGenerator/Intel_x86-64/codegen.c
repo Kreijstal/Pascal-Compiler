@@ -7976,9 +7976,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_result_name = ctx->current_subprogram_result_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    StackNode_t *prev_return_slot = ctx->current_return_slot;
+    KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -8009,6 +8012,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = proc->id;
     ctx->current_subprogram_mangled = sub_id;
     ctx->current_subprogram_method_name = proc->method_name;
+    ctx->current_subprogram_result_name = proc->result_var_name;
     ctx->current_subprogram_owner_class = proc->owner_class;
     ctx->current_subprogram_owner_class_full = proc->owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method =
@@ -8175,9 +8179,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_result_name = prev_result_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_return_slot = prev_return_slot;
+    ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -8229,9 +8236,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_id = ctx->current_subprogram_id;
     const char *prev_sub_mangled = ctx->current_subprogram_mangled;
     const char *prev_sub_method_name = ctx->current_subprogram_method_name;
+    const char *prev_result_name = ctx->current_subprogram_result_name;
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    StackNode_t *prev_return_slot = ctx->current_return_slot;
+    KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -8262,11 +8272,14 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = func->id;
     ctx->current_subprogram_mangled = sub_id;
     ctx->current_subprogram_method_name = func->method_name;
+    ctx->current_subprogram_result_name = func->result_var_name;
     ctx->current_subprogram_owner_class = func->owner_class;
     ctx->current_subprogram_owner_class_full = func->owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method =
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
+    ctx->current_return_slot = NULL;
+    ctx->current_return_type = NULL;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
@@ -8635,6 +8648,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_size = shortstring_size > 0 ? shortstring_size : 256;
         }
     }
+    if (func_node != NULL && func_node->type != NULL &&
+        func_node->type->kind == TYPE_KIND_PROCEDURE)
+        ctx->current_return_type = kgpc_type_get_return_type(func_node->type);
 
     /* Fallback: if the AST node's return_type tag is SHORTSTRING_TYPE (set during
      * AST conversion under {$H-}), but the KgpcType on the symbol table didn't
@@ -8762,26 +8778,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
-
-    /* If this function returns a shortstring (value type, uses sret),
-     * register "Result" in the symtab with SHORTSTRING_TYPE so that
-     * codegen_expr_is_shortstring_value_ctx can find it via FindSymbol
-     * and correctly use leaq (address) instead of movq (dereference). */
-    if (has_record_return && symtab != NULL)
-    {
-        int is_shortstring_return = (func->return_type == SHORTSTRING_TYPE);
-        if (!is_shortstring_return && func_node != NULL && func_node->type != NULL)
-        {
-            KgpcType *ret = kgpc_type_get_return_type(func_node->type);
-            if (ret != NULL && kgpc_type_is_shortstring(ret))
-                is_shortstring_return = 1;
-        }
-        if (is_shortstring_return)
-        {
-            PushVarOntoScope_Typed(symtab, strdup("Result"),
-                create_primitive_type(SHORTSTRING_TYPE));
-        }
-    }
+    ctx->current_return_slot = return_var;
 
     if (func->result_var_name != NULL &&
         !pascal_identifier_equals(func->result_var_name, func->id) &&
@@ -9078,9 +9075,12 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_id = prev_sub_id;
     ctx->current_subprogram_mangled = prev_sub_mangled;
     ctx->current_subprogram_method_name = prev_sub_method_name;
+    ctx->current_subprogram_result_name = prev_result_name;
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_return_slot = prev_return_slot;
+    ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;

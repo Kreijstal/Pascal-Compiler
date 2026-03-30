@@ -872,6 +872,8 @@ static int codegen_expr_is_char_array_like(const struct Expression *expr)
 
 int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
+    int expr_is_current_result = 0;
+
     if (expr != NULL && expr->type == EXPR_FUNCTION_CALL && ctx != NULL)
     {
         KgpcType *ret_type = NULL;
@@ -916,8 +918,41 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
         }
     }
 
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL)
+    {
+        const char *expr_id = expr->expr_data.id;
+        const char *current_id = ctx->current_subprogram_id;
+        if (expr_id != NULL)
+        {
+            if (pascal_identifier_equals(expr_id, "Result"))
+            {
+                HashNode_t *shadow_node = NULL;
+                if (!(ctx->symtab != NULL &&
+                      FindSymbol(&shadow_node, ctx->symtab, expr_id) != 0 &&
+                      shadow_node != NULL))
+                    expr_is_current_result = 1;
+            }
+            else if (current_id != NULL && pascal_identifier_equals(expr_id, current_id))
+                expr_is_current_result = 1;
+            else if (ctx->current_subprogram_method_name != NULL &&
+                     pascal_identifier_equals(expr_id, ctx->current_subprogram_method_name))
+                expr_is_current_result = 1;
+            else if (ctx->current_subprogram_result_name != NULL &&
+                     pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
+                expr_is_current_result = 1;
+        }
+    }
+
     if (codegen_expr_is_shortstring_value(expr))
         return 1;
+    if (expr_is_current_result && ctx != NULL)
+    {
+        KgpcType *ret_type = ctx->current_return_type;
+        if (ret_type != NULL &&
+            (kgpc_type_is_shortstring(ret_type) ||
+             (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring)))
+            return 1;
+    }
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         HashNode_t *node = NULL;

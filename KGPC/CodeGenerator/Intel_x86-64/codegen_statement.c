@@ -66,6 +66,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
 
 static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message);
+static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx);
 
 static ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
     CodeGenContext *ctx, int compare_as_qword, long long imm_value,
@@ -1593,6 +1594,45 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
 
     if (expr->type == EXPR_VAR_ID)
     {
+        if (codegen_is_current_return_var_id(expr, ctx))
+        {
+            StackNode_t *return_var = ctx->current_return_slot;
+            if (return_var != NULL)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Unable to allocate register for return variable address.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                if (return_var->is_static)
+                {
+                    const char *label = (return_var->static_label != NULL) ?
+                        return_var->static_label : return_var->label;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                }
+                else if (return_var->is_reference)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
@@ -2963,6 +3003,7 @@ static int codegen_is_current_return_var_id(const struct Expression *expr, CodeG
     const char *expr_id = NULL;
     const char *current_id = NULL;
     const char *suffix = NULL;
+    HashNode_t *shadow_node = NULL;
 
     if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID)
         return 0;
@@ -2972,13 +3013,28 @@ static int codegen_is_current_return_var_id(const struct Expression *expr, CodeG
         return 0;
 
     if (pascal_identifier_equals(expr_id, "Result"))
+    {
+        /* A real local/parameter named Result must win over the implicit
+         * function-result designator. Only treat bare Result as implicit when
+         * semantic lookup did not bind it to an actual symbol. */
+        if (ctx->symtab != NULL &&
+            FindSymbol(&shadow_node, ctx->symtab, expr_id) != 0 &&
+            shadow_node != NULL)
+            return 0;
         return 1;
+    }
 
     current_id = ctx->current_subprogram_id;
     if (current_id == NULL)
         return 0;
 
     if (pascal_identifier_equals(expr_id, current_id))
+        return 1;
+    if (ctx->current_subprogram_method_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_method_name))
+        return 1;
+    if (ctx->current_subprogram_result_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
         return 1;
 
     suffix = strstr(current_id, "__");
@@ -5299,11 +5355,7 @@ static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
     if (ctx == NULL)
         return;
 
-    StackNode_t *return_var = find_label("Result");
-    if (return_var == NULL && ctx->current_subprogram_id != NULL)
-        return_var = find_label((char *)ctx->current_subprogram_id);
-    if (return_var == NULL && ctx->current_subprogram_mangled != NULL)
-        return_var = find_label((char *)ctx->current_subprogram_mangled);
+    StackNode_t *return_var = ctx->current_return_slot;
     if (return_var == NULL)
         return;
 
@@ -5944,9 +5996,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             }
             else
             {
-                StackNode_t *return_var = find_label("Result");
-                if (return_var == NULL && ctx != NULL && ctx->current_subprogram_id != NULL)
-                    return_var = find_label((char *)ctx->current_subprogram_id);
+                StackNode_t *return_var = ctx != NULL ? ctx->current_return_slot : NULL;
 
                 if (return_var != NULL)
                 {
