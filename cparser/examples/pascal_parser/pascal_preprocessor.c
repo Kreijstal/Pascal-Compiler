@@ -2740,14 +2740,34 @@ static bool symbol_is_declared_in_source(const char *source, size_t source_len, 
                     pos++;
                 }
                 if (pos >= end) break;
-                
+
+                /* Skip comments: { }, (* *), and // */
+                if (*pos == '{') {
+                    pos++;
+                    while (pos < end && *pos != '}') pos++;
+                    if (pos < end) pos++;
+                    continue;
+                }
+                if (pos + 1 < end && *pos == '(' && *(pos + 1) == '*') {
+                    pos += 2;
+                    while (pos + 1 < end && !(*pos == '*' && *(pos + 1) == ')')) pos++;
+                    if (pos + 1 < end) pos += 2;
+                    continue;
+                }
+                if (pos + 1 < end && *pos == '/' && *(pos + 1) == '/') {
+                    pos += 2;
+                    while (pos < end && *pos != '\n') pos++;
+                    if (pos < end) pos++;
+                    continue;
+                }
+
                 /* Check if we hit a new section keyword */
                 bool is_section = false;
-                const char *section_keywords[] = { "var", "const", "type", "begin", "end", 
+                const char *section_keywords[] = { "var", "const", "type", "begin", "end",
                     "implementation", "interface", "uses", "unit", "program", NULL };
                 for (int i = 0; section_keywords[i] != NULL; i++) {
                     size_t kw_len = strlen(section_keywords[i]);
-                    if ((size_t)(end - pos) >= kw_len && 
+                    if ((size_t)(end - pos) >= kw_len &&
                         ascii_strncasecmp(pos, section_keywords[i], kw_len) == 0 &&
                         (pos + kw_len >= end || !isalnum((unsigned char)pos[kw_len]))) {
                         is_section = true;
@@ -2755,7 +2775,21 @@ static bool symbol_is_declared_in_source(const char *source, size_t source_len, 
                     }
                 }
                 if (is_section) break;
-                
+
+                /* Skip string literals */
+                if (*pos == '\'') {
+                    pos++;
+                    while (pos < end) {
+                        if (*pos == '\'') {
+                            pos++;
+                            if (pos < end && *pos == '\'') { pos++; continue; }
+                            break;
+                        }
+                        pos++;
+                    }
+                    continue;
+                }
+
                 /* Extract identifier */
                 if (isalpha((unsigned char)*pos) || *pos == '_') {
                     const char *ident_start = pos;
@@ -2763,12 +2797,12 @@ static bool symbol_is_declared_in_source(const char *source, size_t source_len, 
                         pos++;
                     }
                     size_t ident_len = (size_t)(pos - ident_start);
-                    
+
                     /* Check if this identifier matches */
                     if (ident_len == sym_len && ascii_strncasecmp(ident_start, symbol, sym_len) == 0) {
                         return true;
                     }
-                    
+
                     /* Skip until semicolon or next identifier (comma-separated list) */
                     while (pos < end && *pos != ';' && *pos != ',') {
                         if (*pos == '(') {
@@ -2780,6 +2814,11 @@ static bool symbol_is_declared_in_source(const char *source, size_t source_len, 
                                 else if (*pos == ')') depth--;
                                 pos++;
                             }
+                        } else if (*pos == '{') {
+                            /* Skip brace comments inside declarations */
+                            pos++;
+                            while (pos < end && *pos != '}') pos++;
+                            if (pos < end) pos++;
                         } else {
                             pos++;
                         }

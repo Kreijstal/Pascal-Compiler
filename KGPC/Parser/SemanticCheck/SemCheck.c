@@ -878,21 +878,25 @@ static int semcheck_map_builtin_type_name_local(const char *id)
     return UNKNOWN_TYPE;
 }
 
-static int semcheck_is_builtin_pointer_type_id(const char *id)
+/* Debug assertion: pointer type aliases (PInt64, PByte, PComp, etc.) are
+ * declared in systemh.inc and should resolve through normal type resolution.
+ * This function fires a warning if any of them fail to resolve, indicating
+ * a preprocessor or type registration bug. */
+static void semcheck_assert_pointer_type_resolved(const char *id)
 {
-    if (id == NULL)
-        return 0;
-    id = semcheck_base_type_name(id);
-    return (pascal_identifier_equals(id, "PInt64") ||
-            pascal_identifier_equals(id, "PByte") ||
-            pascal_identifier_equals(id, "PWord") ||
-            pascal_identifier_equals(id, "PLongInt") ||
-            pascal_identifier_equals(id, "PLongWord") ||
-            pascal_identifier_equals(id, "PInteger") ||
-            pascal_identifier_equals(id, "PCardinal") ||
-            pascal_identifier_equals(id, "PQWord") ||
-            pascal_identifier_equals(id, "PPointer") ||
-            pascal_identifier_equals(id, "PBoolean"));
+    if (id == NULL) return;
+    static const char *expected_pointer_types[] = {
+        "PInt64", "PByte", "PWord", "PLongInt", "PLongWord",
+        "PInteger", "PCardinal", "PQWord", "PPointer", "PBoolean",
+        "PComp", NULL
+    };
+    for (int i = 0; expected_pointer_types[i] != NULL; i++) {
+        if (pascal_identifier_equals(id, expected_pointer_types[i])) {
+            fprintf(stderr, "[KGPC] WARNING: pointer type '%s' not resolved through "
+                    "normal type paths — check systemh.inc preprocessing\n", id);
+            return;
+        }
+    }
 }
 
 static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t *candidate)
@@ -14703,11 +14707,12 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
     semcheck_unit_names_add_list(tree->tree_data.program_data.uses_units);
     semcheck_timing_step("unit names", &t0);
 
-    /* Wire scope tree deps: program scope can see ALL loaded units.
-     * Unit declarations are already in per-unit scopes (from full
-     * semcheck_unit() during loading), so the program scope only needs
-     * dep edges to find them. */
-    wire_program_scope_all_units(symtab, symtab->current_scope);
+    /* Wire scope tree deps: program scope can see its directly-used units
+     * (matching FPC semantics — transitive deps are NOT visible).
+     * Unit declarations switch to per-unit scopes via source_unit_index,
+     * so each unit resolves its own deps independently. */
+    wire_scope_deps(symtab, symtab->current_scope,
+                    tree->tree_data.program_data.uses_units);
 
     return_val += semcheck_id_not_main(tree->tree_data.program_data.program_id);
     semcheck_timing_step("id check", &t0);
@@ -14889,6 +14894,11 @@ int semcheck_program(SymTab_t *symtab, Tree_t *tree)
                     (void*)tree->tree_data.program_data.body_statement);
         }
     }
+
+    /* After semcheck, wire all units to the program scope so that codegen
+     * (which uses skip_unit_filter=1) can find symbols from any unit.
+     * During semcheck above, only directly-used units were wired (FPC semantics). */
+    wire_program_scope_all_units(symtab, symtab->current_scope);
 
     /* Keep the outermost scope alive for code generation. DestroySymTab will clean it up. */
     semcheck_unit_names_reset();
@@ -15952,9 +15962,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         {
                             var_type = map_type_tag_to_var_type(tag);
                         }
-                        /* Handle FPC system pointer types (PInt64, PByte, etc.) */
-                        else if (semcheck_is_builtin_pointer_type_id(type_id))
-                            var_type = HASHVAR_POINTER;
                         else if (tree->tree_data.var_decl_data.type_ref != NULL &&
                                  tree->tree_data.var_decl_data.type_ref->num_generic_args > 0)
                             var_type = HASHVAR_POINTER;
@@ -15978,6 +15985,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         else
                         {
+                            semcheck_assert_pointer_type_resolved(type_id);
                             semantic_error(tree->line_num, 0, "undefined type %s", type_id);
                             return_val++;
                             var_type = HASHVAR_UNTYPED;
@@ -16239,11 +16247,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             if (var_kgpc_type != NULL)
                             {
                                 /* No further legacy handling needed */
-                            }
-                            else if (type_id != NULL && semcheck_is_builtin_pointer_type_id(type_id))
-                            {
-                                var_type = HASHVAR_POINTER;
-                                var_kgpc_type = create_pointer_type(NULL);
                             }
                             else if (record_type != NULL)
                             {

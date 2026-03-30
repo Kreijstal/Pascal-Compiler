@@ -212,9 +212,6 @@ int main(int argc, char **argv)
     pascal_preprocessor_define(preprocessor, "SUPPORT_EXTENDED");
     pascal_preprocessor_define(preprocessor, "SUPPORT_COMP");
 
-    /* Define Comp as Comp to satisfy {$if not declared(Comp)} check in systemh.inc */
-    pascal_preprocessor_define_macro(preprocessor, "Comp", "Comp");
-
     /* Auto-define platform macros based on host compiler */
 #if defined(__linux__)
     pascal_preprocessor_define(preprocessor, "LINUX");
