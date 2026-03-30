@@ -22,6 +22,7 @@
 typedef struct {
     Tree_t *unit_tree;   /* The parsed unit AST (owned by the context) */
     int     unit_idx;    /* Unit registry index (1-based) */
+    char   *source_path; /* Source file path (owned, may be NULL) */
 } LoadedUnit;
 
 /* The compilation context owns all per-compilation state that is not

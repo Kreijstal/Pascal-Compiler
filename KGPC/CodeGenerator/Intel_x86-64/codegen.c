@@ -7977,12 +7977,14 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             codegen_set_insert(&g_emitted_set, mangled_id);
         }
 
-        /* When --function-sections is active, buffer each function's output
+        /* When populating the codegen cache, buffer each function's output
          * so we can discard broken functions (those with codegen errors like
-         * unresolved non-locals).  The broken section would produce invalid
-         * assembly; --gc-sections removes the stub at link time. */
-        if (function_sections_flag())
+         * unresolved non-locals).  The broken section gets a ud2 stub;
+         * --gc-sections removes it at link time. Also write successful unit
+         * functions to ctx->cache_output for the cache artifact. */
+        if (codegen_cache_miss_flag())
         {
+            int source_unit_index = sub->tree_data.subprogram_data.source_unit_index;
             FILE *real_output = ctx->output_file;
             char *membuf = NULL;
             size_t membuf_size = 0;
@@ -8009,11 +8011,14 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
 
             if (ctx->had_error)
             {
-                /* Discard broken output; emit a minimal stub so the symbol
-                 * exists (linker --gc-sections will remove it if unused). */
-                if (mangled_id != NULL)
+                /* Write the (broken) output to the main .s normally —
+                 * it's a used function, codegen error is reported. */
+                fwrite(membuf, 1, membuf_size, real_output);
+                /* Emit a ud2 stub in cache so the symbol exists but
+                 * broken code isn't cached. */
+                if (mangled_id != NULL && ctx->cache_output != NULL && source_unit_index != 0)
                 {
-                    fprintf(real_output,
+                    fprintf(ctx->cache_output,
                         "\t.section\t.text.%s,\"ax\",@progbits\n"
                         "\t.globl\t%s\n"
                         "%s:\n"
@@ -8027,6 +8032,15 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             {
                 /* Good output — write to real file */
                 fwrite(membuf, 1, membuf_size, real_output);
+                /* Write unit functions to cache output with per-function
+                 * section headers so --gc-sections can strip unused ones. */
+                if (ctx->cache_output != NULL && source_unit_index != 0 && mangled_id != NULL)
+                {
+                    fprintf(ctx->cache_output,
+                        "\t.section\t.text.%s,\"ax\",@progbits\n",
+                        mangled_id);
+                    fwrite(membuf, 1, membuf_size, ctx->cache_output);
+                }
             }
             ctx->had_error = had_error_before;
             free(membuf);

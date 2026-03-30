@@ -36,6 +36,10 @@ static int FLAG_FUNCTION_SECTIONS = 0;
 /* Flag for skipping unit codegen (only emit program code; units come from cached .o) */
 static int FLAG_SKIP_UNIT_CODEGEN = 0;
 
+/* Flag indicating we're populating the codegen cache (cache miss).
+ * Gates per-function error isolation, non-fatal codegen, and mark-all-used. */
+static int FLAG_CODEGEN_CACHE_MISS = 0;
+
 static kgpc_target_abi_t FLAG_TARGET_ABI =
 #if defined(_WIN32) || defined(__CYGWIN__)
     KGPC_TARGET_ABI_WINDOWS;
@@ -208,4 +212,19 @@ void set_skip_unit_codegen_flag(void)
 int skip_unit_codegen_flag(void)
 {
     return FLAG_SKIP_UNIT_CODEGEN;
+}
+
+void set_codegen_cache_miss_flag(void)
+{
+    FLAG_CODEGEN_CACHE_MISS = 1;
+}
+
+void clear_codegen_cache_miss_flag(void)
+{
+    FLAG_CODEGEN_CACHE_MISS = 0;
+}
+
+int codegen_cache_miss_flag(void)
+{
+    return FLAG_CODEGEN_CACHE_MISS;
 }

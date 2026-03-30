@@ -25,6 +25,7 @@ void compilation_context_destroy(CompilationContext *ctx)
         {
             if (ctx->loaded_units[i].unit_tree != NULL)
                 destroy_tree(ctx->loaded_units[i].unit_tree);
+            free(ctx->loaded_units[i].source_path);
         }
         free(ctx->loaded_units);
     }
@@ -53,6 +54,7 @@ void compilation_context_add_unit(CompilationContext *ctx,
     }
     ctx->loaded_units[ctx->loaded_unit_count].unit_tree = unit_tree;
     ctx->loaded_units[ctx->loaded_unit_count].unit_idx = unit_idx;
+    ctx->loaded_units[ctx->loaded_unit_count].source_path = NULL;
     ctx->loaded_unit_count++;
 }
 
