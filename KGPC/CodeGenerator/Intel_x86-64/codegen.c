@@ -7982,6 +7982,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
          * unresolved non-locals).  The broken section gets a ud2 stub;
          * --gc-sections removes it at link time. Also write successful unit
          * functions to ctx->cache_output for the cache artifact. */
+#ifndef _WIN32
         if (codegen_cache_miss_flag())
         {
             int source_unit_index = sub->tree_data.subprogram_data.source_unit_index;
@@ -8046,6 +8047,7 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
             free(membuf);
         }
         else
+#endif /* _WIN32 */
         {
             switch(sub->tree_data.subprogram_data.sub_type)
             {
