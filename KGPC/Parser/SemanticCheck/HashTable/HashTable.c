@@ -191,7 +191,7 @@ HashNode_t *FindIdentInTable_Prehashed(HashTable_t *table, const char *canonical
     assert(table != NULL);
     assert(canonical_id != NULL);
 
-    ListNode_t *list = table->table[hash % TABLE_SIZE];
+    ListNode_t *list = table->table[hash];
     ListNode_t *cur = list;
     while(cur != NULL)
     {
