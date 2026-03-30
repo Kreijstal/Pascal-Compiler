@@ -6034,11 +6034,13 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Emit abstract method stub — this is the correct implementation
              * for virtual;abstract methods in old-style objects.  The dedup
-             * check above ensures we don't emit when a concrete impl exists. */
+             * check above ensures we don't emit when a concrete impl exists.
+             * Use .weak so the real implementation (e.g. from a codegen cache
+             * .o) takes precedence and avoids multiple-definition errors. */
             fprintf(ctx->output_file,
                     "\n# Abstract method stub: %s\n", mangled_id);
             fprintf(ctx->output_file, "%s\n", codegen_text_section_resume());
-            fprintf(ctx->output_file, ".globl %s\n", mangled_id);
+            fprintf(ctx->output_file, ".weak %s\n", mangled_id);
             fprintf(ctx->output_file, "%s:\n", mangled_id);
             fprintf(ctx->output_file, "\tjmp\t__kgpc_abstract_method_error\n");
         }
@@ -8918,6 +8920,26 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
     ctx->current_return_slot = return_var;
+
+    /* If this function returns a shortstring (value type, uses sret),
+     * register "Result" in the symtab with SHORTSTRING_TYPE so that
+     * codegen_expr_is_shortstring_value_ctx can find it via FindSymbol
+     * and correctly use leaq (address) instead of movq (dereference). */
+    if (has_record_return && symtab != NULL)
+    {
+        int is_shortstring_return = (func->return_type == SHORTSTRING_TYPE);
+        if (!is_shortstring_return && func_node != NULL && func_node->type != NULL)
+        {
+            KgpcType *ret = kgpc_type_get_return_type(func_node->type);
+            if (ret != NULL && kgpc_type_is_shortstring(ret))
+                is_shortstring_return = 1;
+        }
+        if (is_shortstring_return)
+        {
+            PushVarOntoScope_Typed(symtab, strdup("Result"),
+                create_primitive_type(SHORTSTRING_TYPE));
+        }
+    }
 
     if (func->result_var_name != NULL &&
         !pascal_identifier_equals(func->result_var_name, func->id) &&
