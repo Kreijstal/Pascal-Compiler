@@ -8238,11 +8238,24 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (a->type == LIST_TREE && a->cur != NULL) {
                 Tree_t *param = (Tree_t *)a->cur;
                 if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    /* Determine parameter size for register width selection.
+                     * var/const params are always pointer-sized (8 bytes). */
+                    int param_size = 8;
+                    if (!param->tree_data.var_decl_data.is_var_param &&
+                        !param->tree_data.var_decl_data.is_const_param) {
+                        KgpcType *kt = param->tree_data.var_decl_data.cached_kgpc_type;
+                        if (kt != NULL) {
+                            long long sz = kgpc_type_sizeof(kt);
+                            if (sz == 1 || sz == 2 || sz == 4 || sz == 8)
+                                param_size = (int)sz;
+                        }
+                    }
                     ListNode_t *id_node = param->tree_data.var_decl_data.ids;
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
                             ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_params[ctx->asm_param_count].size_bytes = param_size;
                             ctx->asm_param_count++;
                             pi++;
                         }
@@ -8975,11 +8988,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             if (a->type == LIST_TREE && a->cur != NULL) {
                 Tree_t *param = (Tree_t *)a->cur;
                 if (param->type == TREE_VAR_DECL && param->tree_data.var_decl_data.ids != NULL) {
+                    /* Determine parameter size for register width selection.
+                     * var/const params are always pointer-sized (8 bytes). */
+                    int param_size = 8;
+                    if (!param->tree_data.var_decl_data.is_var_param &&
+                        !param->tree_data.var_decl_data.is_const_param) {
+                        KgpcType *kt = param->tree_data.var_decl_data.cached_kgpc_type;
+                        if (kt != NULL) {
+                            long long sz = kgpc_type_sizeof(kt);
+                            if (sz == 1 || sz == 2 || sz == 4 || sz == 8)
+                                param_size = (int)sz;
+                        }
+                    }
                     ListNode_t *id_node = param->tree_data.var_decl_data.ids;
                     while (id_node != NULL && pi < 16) {
                         if (id_node->cur != NULL) {
                             ctx->asm_params[ctx->asm_param_count].name = (const char *)id_node->cur;
                             ctx->asm_params[ctx->asm_param_count].reg_index = pi;
+                            ctx->asm_params[ctx->asm_param_count].size_bytes = param_size;
                             ctx->asm_param_count++;
                             pi++;
                         }
