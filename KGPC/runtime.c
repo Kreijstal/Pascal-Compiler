@@ -234,44 +234,29 @@ int threadingalreadyused_void(void)
     return kgpc_threading_already_used();
 }
 
+#define KGPC_ATOMIC_INC_RET(target, val) __sync_add_and_fetch(target, val)
+#define KGPC_ATOMIC_DEC_RET(target, val) __sync_sub_and_fetch(target, val)
+#define KGPC_ATOMIC_EXCHANGE(target, val) __atomic_exchange_n(target, val, __ATOMIC_SEQ_CST)
+#define KGPC_ATOMIC_CMP_EXCHANGE(target, val, comp) __sync_val_compare_and_swap(target, comp, val)
+
 int32_t kgpc_interlockedincrement(int32_t *target)
 {
-#if defined(__GNUC__) || defined(__clang__)
-    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
-#else
-    *target += 1;
-    return *target;
-#endif
+    return (int32_t)KGPC_ATOMIC_INC_RET(target, 1);
 }
 
 int32_t kgpc_interlockeddecrement(int32_t *target)
 {
-#if defined(__GNUC__) || defined(__clang__)
-    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
-#else
-    *target -= 1;
-    return *target;
-#endif
+    return (int32_t)KGPC_ATOMIC_DEC_RET(target, 1);
 }
 
 int64_t kgpc_interlockedincrement64(int64_t *target)
 {
-#if defined(__GNUC__) || defined(__clang__)
-    return __atomic_add_fetch(target, 1, __ATOMIC_SEQ_CST);
-#else
-    *target += 1;
-    return *target;
-#endif
+    return (int64_t)KGPC_ATOMIC_INC_RET(target, 1);
 }
 
 int64_t kgpc_interlockeddecrement64(int64_t *target)
 {
-#if defined(__GNUC__) || defined(__clang__)
-    return __atomic_sub_fetch(target, 1, __ATOMIC_SEQ_CST);
-#else
-    *target -= 1;
-    return *target;
-#endif
+    return (int64_t)KGPC_ATOMIC_DEC_RET(target, 1);
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
@@ -2440,16 +2425,49 @@ void kgpc_dynarray_setlength(void *descriptor_ptr, int64_t new_length, int64_t e
     descriptor->length = new_length;
 }
 
-void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
+static FILE *kgpc_get_write_stream(KGPCTextRec *file, int *width)
 {
     FILE *dest = kgpc_text_output_stream(file);
     if (dest == NULL)
-        return;
+        return NULL;
 
-    if (width > 1024 || width < -1024)
-        width = 0;
-    if (width == -1)
-        width = 0;
+    if (*width > 1024 || *width < -1024)
+        *width = 0;
+    if (*width == -1)
+        *width = 0;
+    return dest;
+}
+
+static void kgpc_write_padded_buf(FILE *dest, const char *buf, size_t len, int width)
+{
+    if (width > 0)
+    {
+        size_t pad = ((size_t)width > len) ? (size_t)width - len : 0;
+        for (size_t i = 0; i < pad; ++i)
+            fputc(' ', dest);
+        if (len > 0)
+            fwrite(buf, 1, len, dest);
+    }
+    else if (width < 0)
+    {
+        size_t target = (size_t)(-width);
+        if (len > 0)
+            fwrite(buf, 1, len, dest);
+        size_t pad = (target > len) ? target - len : 0;
+        for (size_t i = 0; i < pad; ++i)
+            fputc(' ', dest);
+    }
+    else if (len > 0)
+    {
+        fwrite(buf, 1, len, dest);
+    }
+}
+
+void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
+{
+    FILE *dest = kgpc_get_write_stream(file, &width);
+    if (dest == NULL)
+        return;
 
     if (width > 0)
         fprintf(dest, "%*lld", width, (long long)value);
@@ -2462,14 +2480,9 @@ void kgpc_write_integer(KGPCTextRec *file, int width, int64_t value)
 
 void kgpc_write_unsigned(KGPCTextRec *file, int width, uint64_t value)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL)
         return;
-
-    if (width > 1024 || width < -1024)
-        width = 0;
-    if (width == -1)
-        width = 0;
 
     if (width > 0)
         fprintf(dest, "%*llu", width, (unsigned long long)value);
@@ -2493,103 +2506,42 @@ int64_t kgpc_widechar_length(const uint16_t *value);
 
 void kgpc_write_string(KGPCTextRec *file, int width, const char *value)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL)
         return;
 
-    if (value == NULL)
-        value = "";
-    if (width > 1024 || width < -1024)
-        width = 0;
-
-    size_t len = kgpc_string_known_length(value);
-    if (len == 0 && width <= 0)
-        return;
-    if (width > 0)
-    {
-        size_t pad = (width > (int)len) ? (size_t)width - len : 0;
-        for (size_t i = 0; i < pad; ++i)
-            fputc(' ', dest);
-        if (len > 0)
-            fwrite(value, 1, len, dest);
-    }
-    else if (width < 0)
-    {
-        if (width == -1)
-        {
-            if (len > 0)
-                fwrite(value, 1, len, dest);
-        }
-        else
-        {
-            size_t target = (size_t)(-width);
-            if (len > 0)
-                fwrite(value, 1, len, dest);
-            size_t pad = (target > len) ? target - len : 0;
-            for (size_t i = 0; i < pad; ++i)
-                fputc(' ', dest);
-        }
-    }
-    else if (len > 0)
-    {
-        fwrite(value, 1, len, dest);
-    }
+    size_t len = kgpc_string_known_length(value ? value : "");
+    kgpc_write_padded_buf(dest, value ? value : "", len, width);
     kgpc_flush_text_output_stream(dest);
 }
 
 /* Write a char array with specified maximum length (for Pascal char arrays) */
 void kgpc_write_char_array(KGPCTextRec *file, int width, const char *value, size_t max_len)
 {
-    FILE *dest = kgpc_text_output_stream(file);
-    if (dest == NULL)
+    FILE *dest = kgpc_get_write_stream(file, &width);
+    if (dest == NULL || value == NULL)
         return;
 
-    if (value == NULL)
-        return;
-    
     /* Find the actual length: either max_len or until first null, whichever comes first */
     size_t actual_len = 0;
     while (actual_len < max_len && value[actual_len] != '\0')
         actual_len++;
-    
-    /* Use precision specifier to limit output */
-    if (width > 1024 || width < -1024)
-        width = 0;
-    if (width == -1)
-        width = 0;
-    if (width > 0)
-        fprintf(dest, "%*.*s", width, (int)actual_len, value);
-    else if (width < 0)
-        fprintf(dest, "%-*.*s", -width, (int)actual_len, value);
-    else
-        fprintf(dest, "%.*s", (int)actual_len, value);
+
+    kgpc_write_padded_buf(dest, value, actual_len, width);
     kgpc_flush_text_output_stream(dest);
 }
 
 /* Write ShortString (Pascal string with length byte at index 0) */
 void kgpc_write_shortstring(KGPCTextRec *file, int width, const char *value)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL || value == NULL)
         return;
-    
+
     /* Read length from index 0 */
     unsigned char len = (unsigned char)value[0];
-    
     /* String data starts at index 1 */
-    const char *str_data = value + 1;
-    
-    /* Use precision specifier to limit output to the stored length */
-    if (width > 1024 || width < -1024)
-        width = 0;
-    if (width == -1)
-        width = 0;
-    if (width > 0)
-        fprintf(dest, "%*.*s", width, (int)len, str_data);
-    else if (width < 0)
-        fprintf(dest, "%-*.*s", -width, (int)len, str_data);
-    else
-        fprintf(dest, "%.*s", (int)len, str_data);
+    kgpc_write_padded_buf(dest, value + 1, (size_t)len, width);
     kgpc_flush_text_output_stream(dest);
 }
 
@@ -2623,37 +2575,25 @@ void kgpc_write_char(KGPCTextRec *file, int width, int value)
 
 void kgpc_write_boolean(KGPCTextRec *file, int width, int value)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL)
         return;
 
     const char *text = value ? "TRUE" : "FALSE";
-    if (width > 1024 || width < -1024)
-        width = 0;
-    if (width > 0)
-        fprintf(dest, "%*s", width, text);
-    else if (width < 0)
-        fprintf(dest, "%-*s", -width, text);
-    else
-        fprintf(dest, "%s", text);
+    kgpc_write_padded_buf(dest, text, strlen(text), width);
     kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_write_real(KGPCTextRec *file, int width, int precision, int64_t value_bits)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL)
         return;
 
-    if (width < -1024 || width > 1024)
-        width = 0;
     if (precision < -1)
         precision = -1;
     if (precision > 18)
         precision = 18;
-
-    if (width == -1)
-        width = 0;
 
     double value = kgpc_bits_to_double(value_bits);
 
@@ -3481,14 +3421,12 @@ void kgpc_setstring_unicode(uint16_t **target, const uint16_t *buffer, int64_t l
 
 void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *value)
 {
-    FILE *dest = kgpc_text_output_stream(file);
+    FILE *dest = kgpc_get_write_stream(file, &width);
     if (dest == NULL)
         return;
 
     if (value == NULL)
         value = kgpc_alloc_empty_unicodestring();
-    if (width > 1024 || width < -1024)
-        width = 0;
 
     /* KGPC may still carry "unicode" values in single-byte managed-string
      * storage (elementsize=1). In that case, print through string writer
@@ -3498,13 +3436,12 @@ void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *valu
         if (hdr != NULL && hdr->elementsize == 1)
         {
             kgpc_write_string(file, width, (const char *)value);
-            kgpc_flush_text_output_stream(dest);
             return;
         }
     }
 
     int64_t len = kgpc_unicode_known_length(value);
-    if (len <= 0 && width <= 0)
+    if (len <= 0 && width == 0)
         return;
 
     char *ansi = NULL;
@@ -3520,7 +3457,6 @@ void kgpc_write_unicodestring(KGPCTextRec *file, int width, const uint16_t *valu
 
     if (ansi != NULL)
         kgpc_string_release(ansi);
-    kgpc_flush_text_output_stream(dest);
 }
 
 void kgpc_string_delete(char **target, int64_t index, int64_t count)
@@ -5028,399 +4964,151 @@ char *kgpc_strpas_len(const char *p, int64_t length)
     return kgpc_string_duplicate_length(p, actual);
 }
 
-int64_t kgpc_string_pos_ca(unsigned char ch, const char *value)
+static int64_t kgpc_pos_internal(const char *hay, size_t hay_len, const char *needle, size_t needle_len, int64_t start_index)
 {
-    if (value == NULL)
-        value = "";
-
-    size_t hay_len = kgpc_string_known_length(value);
-    if (hay_len == 0)
+    if (needle_len == 0)
+    {
+        if (start_index < 1) start_index = 1;
+        return (size_t)start_index > hay_len + 1 ? 0 : start_index;
+    }
+    if (needle_len > hay_len)
         return 0;
 
-    for (size_t i = 0; i < hay_len; ++i)
+    if (start_index < 1) start_index = 1;
+    size_t start = (size_t)(start_index - 1);
+    if (start >= hay_len)
+        return 0;
+
+    for (size_t i = start; i + needle_len <= hay_len; ++i)
     {
-        if ((unsigned char)value[i] == ch)
+        if (memcmp(hay + i, needle, needle_len) == 0)
             return (int64_t)(i + 1);
     }
-
     return 0;
+}
+
+int64_t kgpc_string_pos_ca(unsigned char ch, const char *value)
+{
+    char needle[1] = { (char)ch };
+    return kgpc_pos_internal(value ? value : "", kgpc_string_known_length(value ? value : ""), needle, 1, 1);
 }
 
 int64_t kgpc_string_pos_cs(unsigned char ch, const char *value)
 {
-    if (value == NULL)
-        return 0;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    if (hay_len == 0)
-        return 0;
-
-    const char *hay_data = value + 1;
-    for (size_t i = 0; i < hay_len; ++i)
-    {
-        if ((unsigned char)hay_data[i] == ch)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    char needle[1] = { (char)ch };
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, needle, 1, 1);
 }
 
 int64_t kgpc_string_pos_cc(unsigned char substr, unsigned char value)
 {
-    return substr == value ? 1 : 0;
+    char needle[1] = { (char)substr };
+    char hay[1] = { (char)value };
+    return kgpc_pos_internal(hay, 1, needle, 1, 1);
 }
 
 int64_t kgpc_string_pos_ac(const char *substr, unsigned char value)
 {
-    if (substr == NULL)
-        substr = "";
-
-    size_t needle_len = kgpc_string_known_length(substr);
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > 1)
-        return 0;
-    return ((unsigned char)substr[0] == value) ? 1 : 0;
+    char hay[1] = { (char)value };
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(hay, 1, substr ? substr : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos_sc(const char *substr, unsigned char value)
 {
-    if (substr == NULL)
-        return 0;
-
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > 1)
-        return 0;
-    return ((unsigned char)substr[1] == value) ? 1 : 0;
+    char hay[1] = { (char)value };
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(hay, 1, substr ? substr + 1 : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos_sa(const char *substr, const char *value)
 {
-    if (value == NULL)
-        value = "";
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = kgpc_string_known_length(value);
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > hay_len)
-        return 0;
-
-    const char *needle_data = substr + 1;
-    for (size_t i = 0; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(value + i, needle_data, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = kgpc_string_known_length(value ? value : "");
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr + 1 : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos_as(const char *substr, const char *value)
 {
-    if (value == NULL)
-        return 0;
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    size_t needle_len = kgpc_string_known_length(substr);
-
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > hay_len)
-        return 0;
-
-    const char *hay_data = value + 1;
-    for (size_t i = 0; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(hay_data + i, substr, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos_ss(const char *substr, const char *value)
 {
-    if (value == NULL)
-        return 0;
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > hay_len)
-        return 0;
-
-    const char *hay_data = value + 1;
-    const char *needle_data = substr + 1;
-    for (size_t i = 0; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr + 1 : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos(const char *substr, const char *value)
 {
-    if (value == NULL)
-        value = "";
-    if (substr == NULL)
-        substr = "";
-
-    size_t hay_len = kgpc_string_known_length(value);
-    size_t needle_len = kgpc_string_known_length(substr);
-
-    if (needle_len == 0)
-        return 1;
-    if (needle_len > hay_len)
-        return 0;
-
-    for (size_t i = 0; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(value + i, substr, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
-}
-
-static int64_t kgpc_pos_empty_result(int64_t start_index, size_t hay_len)
-{
-    if (start_index < 1)
-        start_index = 1;
-    if ((size_t)start_index > hay_len + 1)
-        return 0;
-    return start_index;
+    size_t hay_len = kgpc_string_known_length(value ? value : "");
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr : "", needle_len, 1);
 }
 
 int64_t kgpc_string_pos_sa_from(const char *substr, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        value = "";
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = kgpc_string_known_length(value);
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, hay_len);
-    if (needle_len > hay_len)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    const char *needle_data = substr + 1;
-    for (size_t i = start; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(value + i, needle_data, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = kgpc_string_known_length(value ? value : "");
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr + 1 : "", needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_as_from(const char *substr, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        return 0;
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    size_t needle_len = kgpc_string_known_length(substr);
-
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, hay_len);
-    if (needle_len > hay_len)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    const char *hay_data = value + 1;
-    for (size_t i = start; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(hay_data + i, substr, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr : "", needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_ss_from(const char *substr, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        return 0;
-    if (substr == NULL)
-        return 1;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, hay_len);
-    if (needle_len > hay_len)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    const char *hay_data = value + 1;
-    const char *needle_data = substr + 1;
-    for (size_t i = start; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(hay_data + i, needle_data, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr + 1 : "", needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        value = "";
-    if (substr == NULL)
-        substr = "";
-
-    size_t hay_len = kgpc_string_known_length(value);
-    size_t needle_len = kgpc_string_known_length(substr);
-
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, hay_len);
-    if (needle_len > hay_len)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    for (size_t i = start; i + needle_len <= hay_len; ++i)
-    {
-        if (memcmp(value + i, substr, needle_len) == 0)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    size_t hay_len = kgpc_string_known_length(value ? value : "");
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr : "", needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_ca_from(unsigned char ch, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        value = "";
-
-    size_t hay_len = kgpc_string_known_length(value);
-    if (hay_len == 0)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    for (size_t i = start; i < hay_len; ++i)
-    {
-        if ((unsigned char)value[i] == ch)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    char needle[1] = { (char)ch };
+    return kgpc_pos_internal(value ? value : "", kgpc_string_known_length(value ? value : ""), needle, 1, start_index);
 }
 
 int64_t kgpc_string_pos_cs_from(unsigned char ch, const char *value, int64_t start_index)
 {
-    if (value == NULL)
-        return 0;
-
-    size_t hay_len = (size_t)(unsigned char)value[0];
-    if (hay_len == 0)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    size_t start = (size_t)(start_index - 1);
-    if (start >= hay_len)
-        return 0;
-
-    const char *hay_data = value + 1;
-    for (size_t i = start; i < hay_len; ++i)
-    {
-        if ((unsigned char)hay_data[i] == ch)
-            return (int64_t)(i + 1);
-    }
-
-    return 0;
+    char needle[1] = { (char)ch };
+    size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, needle, 1, start_index);
 }
 
 int64_t kgpc_string_pos_cc_from(unsigned char substr, unsigned char value, int64_t start_index)
 {
-    if (start_index < 1)
-        start_index = 1;
-    if (start_index > 1)
-        return 0;
-    return substr == value ? 1 : 0;
+    char needle[1] = { (char)substr };
+    char hay[1] = { (char)value };
+    return kgpc_pos_internal(hay, 1, needle, 1, start_index);
 }
 
 int64_t kgpc_string_pos_ac_from(const char *substr, unsigned char value, int64_t start_index)
 {
-    if (substr == NULL)
-        substr = "";
-
-    size_t needle_len = kgpc_string_known_length(substr);
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, 1);
-    if (needle_len > 1)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    if (start_index > 1)
-        return 0;
-    return ((unsigned char)substr[0] == value) ? 1 : 0;
+    char hay[1] = { (char)value };
+    size_t needle_len = kgpc_string_known_length(substr ? substr : "");
+    return kgpc_pos_internal(hay, 1, substr ? substr : "", needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_sc_from(const char *substr, unsigned char value, int64_t start_index)
 {
-    if (substr == NULL)
-        return 0;
-
-    size_t needle_len = (size_t)(unsigned char)substr[0];
-    if (needle_len == 0)
-        return kgpc_pos_empty_result(start_index, 1);
-    if (needle_len > 1)
-        return 0;
-
-    if (start_index < 1)
-        start_index = 1;
-    if (start_index > 1)
-        return 0;
-    return ((unsigned char)substr[1] == value) ? 1 : 0;
+    char hay[1] = { (char)value };
+    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
+    return kgpc_pos_internal(hay, 1, substr ? substr + 1 : "", needle_len, start_index);
 }
 
 static int kgpc_is_path_delim_char(char ch)
@@ -6094,152 +5782,56 @@ void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **ta
 
 /* Str for ShortString targets - copies result to a fixed-size Pascal ShortString array.
  * ShortString has format: first byte = length, followed by up to 255 characters. */
+static void kgpc_str_to_shortstring_final(char *target, char *result, int64_t max_length)
+{
+    if (target == NULL || result == NULL)
+        return;
+    if (max_length < 1) max_length = 1;
+    if (max_length > 256) max_length = 256;
+    kgpc_string_to_shortstring(target, result, (size_t)max_length);
+    kgpc_string_release(result);
+}
+
 void kgpc_str_int64_shortstring(int64_t value, char *target)
 {
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    /* Copy to ShortString format */
-    kgpc_string_to_shortstring(target, result, 256);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), 256);
 }
 
 void kgpc_str_int64_bounded_shortstring(int64_t value, char *target, int64_t max_length)
 {
-    if (target == NULL)
-        return;
-
-    if (max_length < 1)
-        max_length = 1;
-    if (max_length > 256)
-        max_length = 256;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    kgpc_string_to_shortstring(target, result, max_length);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_int_to_str(value), max_length);
 }
 
 void kgpc_str_int64_fmt_shortstring(int64_t value, int64_t width, char *target)
 {
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-    if (result == NULL)
-        return;
-
-    /* Copy to ShortString format */
-    kgpc_string_to_shortstring(target, result, 256);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_int_to_str(value), width), 256);
 }
 
-void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width, char *target,
-    int64_t max_length)
+void kgpc_str_int64_fmt_bounded_shortstring(int64_t value, int64_t width, char *target, int64_t max_length)
 {
-    if (target == NULL)
-        return;
-
-    if (max_length < 1)
-        max_length = 1;
-    if (max_length > 256)
-        max_length = 256;
-
-    char *result = kgpc_int_to_str(value);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-    if (result == NULL)
-        return;
-
-    kgpc_string_to_shortstring(target, result, max_length);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_int_to_str(value), width), max_length);
 }
 
 void kgpc_str_real_shortstring(double value, char *target)
 {
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_float_to_string(value, -1);
-    if (result == NULL)
-        return;
-
-    /* Copy to ShortString format */
-    kgpc_string_to_shortstring(target, result, 256);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1), 256);
 }
 
 void kgpc_str_real_bounded_shortstring(double value, char *target, int64_t max_length)
 {
-    if (target == NULL)
-        return;
-
-    if (max_length < 1)
-        max_length = 1;
-    if (max_length > 256)
-        max_length = 256;
-
-    char *result = kgpc_float_to_string(value, -1);
-    if (result == NULL)
-        return;
-
-    kgpc_string_to_shortstring(target, result, max_length);
-    kgpc_string_release(result);
+    kgpc_str_to_shortstring_final(target, kgpc_float_to_string(value, -1), max_length);
 }
 
 void kgpc_str_real_fmt_shortstring(double value, int64_t width, int64_t precision, char *target)
 {
-    if (target == NULL)
-        return;
-
-    char *result = kgpc_float_to_string(value, (int)precision);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-    if (result == NULL)
-        return;
-
-    /* Copy to ShortString format */
-    kgpc_string_to_shortstring(target, result, 256);
-    free(result);
+    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision), width), 256);
 }
 
-void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width, char *target,
-    int64_t precision_and_max)
+void kgpc_str_real_fmt_bounded_shortstring(double value, int64_t width, char *target, int64_t precision_and_max)
 {
-    if (target == NULL)
-        return;
-
     int64_t precision = (int32_t)(precision_and_max & 0xffffffffu);
     int64_t max_length = (uint32_t)((uint64_t)precision_and_max >> 32);
-    if (max_length < 1)
-        max_length = 1;
-    if (max_length > 256)
-        max_length = 256;
-
-    char *result = kgpc_float_to_string(value, (int)precision);
-    if (result == NULL)
-        return;
-
-    result = kgpc_apply_field_width(result, width);
-    if (result == NULL)
-        return;
-
-    kgpc_string_to_shortstring(target, result, max_length);
-    free(result);
+    kgpc_str_to_shortstring_final(target, kgpc_apply_field_width(kgpc_float_to_string(value, (int)precision), width), max_length);
 }
 
 double kgpc_now(void)
@@ -7961,145 +7553,6 @@ void kgpc_sincos_bits(int64_t angle_bits, double *sin_out, double *cos_out)
 #endif
 }
 
-/* BaseUnix wrapper functions */
-#ifndef _WIN32
-int fpOpen(const char *path, int flags)
-{
-    return open(path, flags);
-}
-
-int fpOpen_i_i_i(const char *path, int flags, int mode)
-{
-    return open(path, flags, (mode_t)mode);
-}
-
-int fpClose(int fd)
-{
-    return close(fd);
-}
-
-int fpClose_i(int fd)
-{
-    return close(fd);
-}
-
-ssize_t fpRead(int fd, void *buf, size_t count)
-{
-    return read(fd, buf, count);
-}
-
-ssize_t fpWrite(int fd, const void *buf, size_t count)
-{
-    return write(fd, buf, count);
-}
-
-char *fpGetCwd(char *path, size_t len)
-{
-    return getcwd(path, len);
-}
-
-off_t fplSeek(int fd, off_t offset, int whence)
-{
-    return lseek(fd, offset, whence);
-}
-
-int fpchmod(const char *path, mode_t mode)
-{
-    return chmod(path, mode);
-}
-#else
-/* Windows implementations using POSIX-like functions from io.h */
-/* Translate Unix paths to Windows equivalents */
-static const char* translate_unix_path(const char *path)
-{
-    /* Map /dev/null to NUL */
-    if (path != NULL && strcmp(path, "/dev/null") == 0)
-        return "NUL";
-    return path;
-}
-
-/* Linux open flag constants for cross-platform translation */
-#define LINUX_O_CREAT  0x40
-#define LINUX_O_TRUNC  0x200
-
-/* Translate Unix open flags to Windows _open flags */
-static int translate_flags(int flags)
-{
-    int wflags = _O_BINARY;  /* Always use binary mode on Windows */
-    
-    /* O_RDONLY = 0, O_WRONLY = 1, O_RDWR = 2 */
-    int accmode = flags & 3;
-    if (accmode == 0)       /* O_RDONLY */
-        wflags |= _O_RDONLY;
-    else if (accmode == 1)  /* O_WRONLY */
-        wflags |= _O_WRONLY;
-    else if (accmode == 2)  /* O_RDWR */
-        wflags |= _O_RDWR;
-    
-    if (flags & LINUX_O_CREAT)
-        wflags |= _O_CREAT;
-    
-    if (flags & LINUX_O_TRUNC)
-        wflags |= _O_TRUNC;
-    
-    return wflags;
-}
-
-int fpOpen(const char *path, int flags)
-{
-    const char *wpath = translate_unix_path(path);
-    int wflags = translate_flags(flags);
-    return _open(wpath, wflags);
-}
-
-int fpOpen_i_i_i(const char *path, int flags, int mode)
-{
-    const char *wpath = translate_unix_path(path);
-    int wflags = translate_flags(flags);
-    return _open(wpath, wflags, mode);
-}
-
-int fpClose(int fd)
-{
-    return _close(fd);
-}
-
-int fpClose_i(int fd)
-{
-    return _close(fd);
-}
-
-ssize_t fpRead(int fd, void *buf, size_t count)
-{
-    /* _read takes unsigned int count on Windows, handle large counts by capping */
-    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
-    return (ssize_t)_read(fd, buf, safe_count);
-}
-
-ssize_t fpWrite(int fd, const void *buf, size_t count)
-{
-    /* _write takes unsigned int count on Windows, handle large counts by capping */
-    unsigned int safe_count = (count > UINT_MAX) ? UINT_MAX : (unsigned int)count;
-    return (ssize_t)_write(fd, buf, safe_count);
-}
-
-char *fpGetCwd(char *path, size_t len)
-{
-    if (path == NULL || len == 0)
-        return NULL;
-    return _getcwd(path, (int)len);
-}
-
-off_t fplSeek(int fd, off_t offset, int whence)
-{
-    return (off_t)_lseeki64(fd, (__int64)offset, whence);
-}
-
-int fpchmod(const char *path, int mode)
-{
-    return _chmod(path, mode);
-}
-#endif
 
 void Halt(int64_t code)
 {
@@ -8135,147 +7588,46 @@ void *kgpc_get_frame_p(void *frame)
 
 /* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
  * no Pascal body.  KGPC emits calls to the mangled names below. */
-long atomicincrement_i_i(long *target, long value)
-{
-    return __sync_add_and_fetch(target, value);
-}
-
-uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value)
-{
-    return __sync_add_and_fetch(target, value);
-}
+long atomicincrement_i_i(long *target, long value) { return (long)KGPC_ATOMIC_INC_RET(target, value); }
+uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value) { return (uint32_t)KGPC_ATOMIC_INC_RET(target, value); }
 
 /* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1 */
-long atomicincrement_i(long *target)
-{
-    return __sync_add_and_fetch(target, 1);
-}
+long atomicincrement_i(long *target) { return (long)KGPC_ATOMIC_INC_RET(target, 1); }
+uint32_t atomicincrement_u32(uint32_t *target) { return (uint32_t)KGPC_ATOMIC_INC_RET(target, 1); }
 
-uint32_t atomicincrement_u32(uint32_t *target)
-{
-    return __sync_add_and_fetch(target, 1);
-}
+/* LongInt (32-bit signed) overloads for compiler intrinsics. */
+int32_t atomicincrement_li(int32_t *target) { return (int32_t)KGPC_ATOMIC_INC_RET(target, 1); }
+int32_t atomicincrement_li_li(int32_t *target, int32_t value) { return (int32_t)KGPC_ATOMIC_INC_RET(target, value); }
 
-/* LongInt (32-bit signed) overloads for compiler intrinsics.
- * AtomicIncrement/AtomicDecrement/AtomicExchange/AtomicCmpExchange are true
- * compiler intrinsics (like Ord, Chr) — they have no Pascal source body.
- * The runtime provides all type-specific implementations. */
-int32_t atomicincrement_li(int32_t *target)
-{
-    return __sync_add_and_fetch(target, 1);
-}
+long atomicdecrement_i(long *target) { return (long)KGPC_ATOMIC_DEC_RET(target, 1); }
+uint32_t atomicdecrement_u32(uint32_t *target) { return (uint32_t)KGPC_ATOMIC_DEC_RET(target, 1); }
+int32_t atomicdecrement_li(int32_t *target) { return (int32_t)KGPC_ATOMIC_DEC_RET(target, 1); }
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value) { return (int32_t)KGPC_ATOMIC_DEC_RET(target, value); }
 
-int32_t atomicincrement_li_li(int32_t *target, int32_t value)
-{
-    return __sync_add_and_fetch(target, value);
-}
-
-long atomicdecrement_i(long *target)
-{
-    return __sync_sub_and_fetch(target, 1);
-}
-
-uint32_t atomicdecrement_u32(uint32_t *target)
-{
-    return __sync_sub_and_fetch(target, 1);
-}
-
-int32_t atomicdecrement_li(int32_t *target)
-{
-    return __sync_sub_and_fetch(target, 1);
-}
-
-int32_t atomicdecrement_li_li(int32_t *target, int32_t value)
-{
-    return __sync_sub_and_fetch(target, value);
-}
-
-int32_t atomicexchange_li_li(int32_t *target, int32_t new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
-
-int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
-
-void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
-
-void *atomicexchange_p_p(void **target, void *new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val) { return (int32_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand) { return (int32_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand) { return (void *)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+void *atomicexchange_p_p(void **target, void *new_val) { return (void *)KGPC_ATOMIC_EXCHANGE(target, new_val); }
 
 /* [internproc] AtomicExchange for integer types */
-long atomicexchange_i_i(long *target, long new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
-
-uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
+long atomicexchange_i_i(long *target, long new_val) { return (long)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val) { return (uint32_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
 
 /* Int64 overloads of atomic intrinsics */
-long long atomicincrement_i64(long long *target)
-{
-    return __sync_add_and_fetch(target, 1);
-}
+long long atomicincrement_i64(long long *target) { return (long long)KGPC_ATOMIC_INC_RET(target, 1); }
+uint64_t atomicincrement_u64(uint64_t *target) { return (uint64_t)KGPC_ATOMIC_INC_RET(target, 1); }
+long long atomicincrement_i64_i64(long long *target, long long value) { return (long long)KGPC_ATOMIC_INC_RET(target, value); }
+uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value) { return (uint64_t)KGPC_ATOMIC_INC_RET(target, value); }
 
-uint64_t atomicincrement_u64(uint64_t *target)
-{
-    return __sync_add_and_fetch(target, 1);
-}
+long long atomicdecrement_i64(long long *target) { return (long long)KGPC_ATOMIC_DEC_RET(target, 1); }
+uint64_t atomicdecrement_u64(uint64_t *target) { return (uint64_t)KGPC_ATOMIC_DEC_RET(target, 1); }
 
-long long atomicincrement_i64_i64(long long *target, long long value)
-{
-    return __sync_add_and_fetch(target, value);
-}
+long long atomicexchange_i64_i64(long long *target, long long new_val) { return (long long)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val) { return (uint64_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
 
-uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value)
-{
-    return __sync_add_and_fetch(target, value);
-}
-
-long long atomicdecrement_i64(long long *target)
-{
-    return __sync_sub_and_fetch(target, 1);
-}
-
-uint64_t atomicdecrement_u64(uint64_t *target)
-{
-    return __sync_sub_and_fetch(target, 1);
-}
-
-long long atomicexchange_i64_i64(long long *target, long long new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
-
-uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val)
-{
-    return __atomic_exchange_n(target, new_val, __ATOMIC_SEQ_CST);
-}
-
-long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
-
-uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
-
-uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
+long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand) { return (long long)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand) { return (uint32_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand) { return (uint64_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
 
 /* FPC_INTERLOCKEDEXCHANGEADD / FPC_INTERLOCKEDCOMPAREEXCHANGE64:
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
@@ -8357,10 +7709,7 @@ void _haltproc(int exitcode)
 
 /* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.
    No Pascal body exists — this is a compiler intrinsic. */
-int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand)
-{
-    return __sync_val_compare_and_swap(target, comparand, new_val);
-}
+int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand) { return (int)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
 
 /* =====================================================================
  * TUnicodeStringManager (widestringmanager) initialization.

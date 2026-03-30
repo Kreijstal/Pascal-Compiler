@@ -7,9 +7,9 @@
 
 char *fpGetCwd(char *path, size_t len)
 {
-#ifdef _WIN32
     if (path == NULL || len == 0)
         return NULL;
+#ifdef _WIN32
     return _getcwd(path, (int)len);
 #else
     return getcwd(path, len);

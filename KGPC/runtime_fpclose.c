@@ -1,7 +1,7 @@
-#ifdef _WIN32
-#include <io.h>
-#else
+#ifndef _WIN32
 #include <unistd.h>
+#else
+#include <io.h>
 #endif
 
 int fpClose(int fd)

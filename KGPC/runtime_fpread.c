@@ -2,9 +2,12 @@
 #ifdef _WIN32
 #include <io.h>
 #include <limits.h>
-typedef long long ssize_t;
 #else
 #include <unistd.h>
+#endif
+
+#ifdef _WIN32
+typedef long long ssize_t;
 #endif
 
 ssize_t fpRead(int fd, void *buf, size_t count)
