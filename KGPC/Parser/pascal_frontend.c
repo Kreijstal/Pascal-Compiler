@@ -18,6 +18,7 @@
 #include "SemanticCheck/SemCheck.h"
 #include "ast_cache.h"
 #include "../string_intern.h"
+#include "../compilation_context.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -1275,6 +1276,16 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                                                          length,
                                                          &preprocessed_length,
                                                          &preprocess_error);
+    /* Record included files in the compilation context for cache key. */
+    {
+        const char *const *inc_files = NULL;
+        size_t inc_count = pascal_preprocessor_get_included_files(preprocessor, &inc_files);
+        if (inc_count > 0) {
+            CompilationContext *comp_ctx = compilation_context_get_active();
+            if (comp_ctx != NULL)
+                compilation_context_add_include_files(comp_ctx, inc_files, (int)inc_count);
+        }
+    }
     pascal_preprocessor_free(preprocessor);
 
     /* Temp debug: dump preprocessed output for system.pp */

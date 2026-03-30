@@ -28,6 +28,7 @@ typedef struct ScopeNode {
     HashTable_t *table;          /* Symbols declared in this scope (owned by this node, freed in DestroyScope) */
     struct ScopeNode *parent;    /* Walk this chain for FindIdent */
     int unit_index;              /* Which unit this scope belongs to (0 = program) */
+    int codegen_unit_scope_registered; /* Codegen-only lazy population of persistent unit scopes */
 
     /* Dependency edges from `uses` clause (only on unit/program scopes) */
     struct ScopeNode **dep_scopes;

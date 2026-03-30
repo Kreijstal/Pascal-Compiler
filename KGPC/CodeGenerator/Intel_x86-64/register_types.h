@@ -48,6 +48,28 @@ static inline const char *current_arg_reg32(int num)
     return regs[num];
 }
 
+static inline const char *current_arg_reg16(int num)
+{
+    static const char *const windows_regs[] = { "%cx", "%dx", "%r8w", "%r9w" };
+    static const char *const sysv_regs[] = { "%di", "%si", "%dx", "%cx", "%r8w", "%r9w" };
+    const char *const *regs = (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    int limit = kgpc_max_int_arg_regs();
+    if (num < 0 || num >= limit)
+        return NULL;
+    return regs[num];
+}
+
+static inline const char *current_arg_reg8(int num)
+{
+    static const char *const windows_regs[] = { "%cl", "%dl", "%r8b", "%r9b" };
+    static const char *const sysv_regs[] = { "%dil", "%sil", "%dl", "%cl", "%r8b", "%r9b" };
+    const char *const *regs = (g_current_codegen_abi == KGPC_TARGET_ABI_WINDOWS) ? windows_regs : sysv_regs;
+    int limit = kgpc_max_int_arg_regs();
+    if (num < 0 || num >= limit)
+        return NULL;
+    return regs[num];
+}
+
 static inline const char *current_arg_reg_xmm(int num)
 {
     static const char *const windows_regs[] = { "%xmm0", "%xmm1", "%xmm2", "%xmm3" };

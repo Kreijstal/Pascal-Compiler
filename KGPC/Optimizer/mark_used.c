@@ -1247,11 +1247,12 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         }
     }
     
-    /* When --function-sections is active, mark ALL unit subprograms as used
-     * so the linker can do dead-code elimination instead of the compiler.
-     * This must happen AFTER the transitive scan passes above so that
-     * scope setup and body discovery are properly applied. */
-    if (function_sections_flag()) {
+    /* When populating the codegen cache, mark ALL unit subprograms as used
+     * so the cached .o contains every function.  The cache miss compile
+     * takes longer but produces a complete cache that covers any test.
+     * The main .s also gets all unit functions, which is fine since the
+     * linker's --gc-sections (on cache hit) handles dead code. */
+    if (codegen_cache_miss_flag()) {
         ListNode_t *mark_all = program->tree_data.program_data.subprograms;
         while (mark_all != NULL) {
             if (mark_all->type == LIST_TREE && mark_all->cur != NULL) {

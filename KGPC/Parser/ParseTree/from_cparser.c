@@ -2231,6 +2231,7 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
 }
 
 static int typed_const_counter = 0;
+static const char *g_typed_const_unit_tag = "p"; /* set per unit in tree_from_pascal_ast */
 
 /* Mark a TREE_VAR_DECL as having static storage (for local typed constants) */
 static void mark_var_decl_static_storage(Tree_t *decl)
@@ -2238,8 +2239,8 @@ static void mark_var_decl_static_storage(Tree_t *decl)
     if (decl == NULL || decl->type != TREE_VAR_DECL)
         return;
     decl->tree_data.var_decl_data.has_static_storage = 1;
-    char label_buffer[64];
-    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_var_%d", typed_const_counter);
+    char label_buffer[128];
+    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_var_%s_%d", g_typed_const_unit_tag, typed_const_counter);
     decl->tree_data.var_decl_data.static_label = strdup(label_buffer);
     ++typed_const_counter;
 }
@@ -12137,10 +12138,10 @@ static int lower_const_array(ast_t *const_decl_node, char **id_ptr, TypeInfo *ty
     array_decl->tree_data.arr_decl_data.is_typed_const = 1;
     array_decl->tree_data.arr_decl_data.has_static_storage = 1;
 
-    char label_buffer[64];
-    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_array_%d", typed_const_counter);
+    char label_buffer[128];
+    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_array_%s_%d", g_typed_const_unit_tag, typed_const_counter);
     array_decl->tree_data.arr_decl_data.static_label = strdup(label_buffer);
-    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_guard_%d", typed_const_counter);
+    snprintf(label_buffer, sizeof(label_buffer), "__kgpc_tconst_guard_%s_%d", g_typed_const_unit_tag, typed_const_counter);
     array_decl->tree_data.arr_decl_data.init_guard_label = strdup(label_buffer);
     ++typed_const_counter;
 
@@ -17366,7 +17367,16 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return NULL;
     }
     case PASCAL_T_ASM_BLOCK: {
-        char *code = collect_asm_text(stmt_node->child);
+        /* stmt_node->child is the asm body (PASCAL_T_NONE with asm text
+         * in sym->name).  Its ->next siblings may include clobber reglist
+         * nodes ['eax', 'ebx', ...] which must NOT be collected as asm.
+         * Temporarily sever the sibling chain to isolate the body. */
+        ast_t *asm_body_node = stmt_node->child;
+        assert(asm_body_node != NULL && asm_body_node->typ == PASCAL_T_NONE);
+        ast_t *saved_next = asm_body_node->next;
+        asm_body_node->next = NULL;
+        char *code = collect_asm_text(asm_body_node);
+        asm_body_node->next = saved_next;
         return mk_asmblock(stmt_node->line, code);
     }
     case PASCAL_T_BREAK_STMT:
@@ -19768,6 +19778,8 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     if (program_ast == NULL)
         return NULL;
 
+    typed_const_counter = 0;
+    g_typed_const_unit_tag = "p";
     reset_const_sections();
     g_interface_type_section_ast = NULL;
     g_implementation_type_section_ast = NULL;
@@ -20096,6 +20108,11 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
     if (cur->typ == PASCAL_T_UNIT_DECL) {
         ast_t *unit_name_node = cur->child;
         char *unit_id = unit_name_node != NULL ? dup_symbol(unit_name_node) : strdup("unit");
+        /* Lowercase the unit tag for deterministic typed-const labels */
+        for (char *p = unit_id; p != NULL && *p != '\0'; p++)
+            *p = (char)tolower((unsigned char)*p);
+        g_typed_const_unit_tag = unit_id;
+        typed_const_counter = 0;
         ast_t *unit_scan_copy = copy_ast(cur);
 
         ListNode_t *interface_uses = NULL;

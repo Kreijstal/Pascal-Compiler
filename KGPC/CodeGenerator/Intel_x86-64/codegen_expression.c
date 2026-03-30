@@ -9865,10 +9865,10 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                 (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
                     ? ctx->current_subprogram_owner_class : "<null>");
         }
-        /* When emitting all unit functions for --function-sections warmup,
-         * some functions have unresolvable non-locals (e.g. local consts in
-         * functions that DCE normally removes).  Don't abort — emit broken
-         * code; --gc-sections will discard the unused section at link time. */
+        /* When populating the codegen cache, all unit functions are emitted.
+         * Some have unresolvable non-locals (e.g. local consts in functions
+         * that DCE normally removes).  Don't abort — the per-function
+         * memstream buffering will catch the error and emit a ud2 stub. */
         *offset = 0;
         return inst_list;
     }

@@ -564,6 +564,7 @@ ScopeNode *CreateScope(ScopeNode *parent, int unit_index, HashTable_t *table)
     scope->table = table;
     scope->parent = parent;
     scope->unit_index = unit_index;
+    scope->codegen_unit_scope_registered = 0;
     scope->dep_scopes = NULL;
     scope->dep_is_iface = NULL;
     scope->num_deps = 0;

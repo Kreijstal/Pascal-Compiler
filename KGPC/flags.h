@@ -88,7 +88,11 @@ void set_stdlib_loaded_flag(int loaded);
 void set_compile_system_unit_flag(void);
 void set_goto_enabled_flag(void);
 void set_function_sections_flag(void);
+void clear_function_sections_flag(void);
 void set_skip_unit_codegen_flag(void);
+void clear_skip_unit_codegen_flag(void);
+void set_codegen_cache_miss_flag(void);
+void clear_codegen_cache_miss_flag(void);
 
 int nonlocal_flag(void);
 int optimize_flag(void);
@@ -105,5 +109,6 @@ int compile_system_unit_flag(void);
 int goto_enabled_flag(void);
 int function_sections_flag(void);
 int skip_unit_codegen_flag(void);
+int codegen_cache_miss_flag(void);
 
 #endif

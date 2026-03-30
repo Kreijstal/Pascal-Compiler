@@ -22,6 +22,7 @@
 typedef struct {
     Tree_t *unit_tree;   /* The parsed unit AST (owned by the context) */
     int     unit_idx;    /* Unit registry index (1-based) */
+    char   *source_path; /* Source file path (owned, may be NULL) */
 } LoadedUnit;
 
 /* The compilation context owns all per-compilation state that is not
@@ -31,6 +32,11 @@ typedef struct CompilationContext {
     LoadedUnit *loaded_units;
     int         loaded_unit_count;
     int         loaded_unit_capacity;
+
+    /* --- Include files resolved during preprocessing (for cache keys) --- */
+    char      **include_files;
+    int         include_file_count;
+    int         include_file_capacity;
 
     /* --- Symbol table / scope tree (created early, survives until cleanup) --- */
     SymTab_t   *symtab;
@@ -50,6 +56,10 @@ void compilation_context_destroy(CompilationContext *ctx);
  * of `unit_tree`. */
 void compilation_context_add_unit(CompilationContext *ctx,
                                   Tree_t *unit_tree, int unit_idx);
+
+/* Record include files resolved during preprocessing (for cache key). */
+void compilation_context_add_include_files(CompilationContext *ctx,
+                                            const char *const *files, int count);
 
 /* Look up a loaded unit by its registry index.
  * Returns NULL if not found. */

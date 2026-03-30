@@ -25,9 +25,15 @@ struct PascalPreprocessor {
     char **include_paths;
     size_t include_path_count;
     size_t include_path_capacity;
+    /* Track resolved include files for cache invalidation */
+    char **included_files;
+    size_t included_file_count;
+    size_t included_file_capacity;
     /* For declared() support - points to current output buffer during preprocessing */
     const char *current_output;
     size_t current_output_len;
+    /* Track {$ASMMODE INTEL/ATT} state */
+    bool asmmode_intel;
 };
 
 typedef struct {
@@ -145,8 +151,12 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->include_paths = NULL;
     pp->include_path_count = 0;
     pp->include_path_capacity = 0;
+    pp->included_files = NULL;
+    pp->included_file_count = 0;
+    pp->included_file_capacity = 0;
     pp->current_output = NULL;
     pp->current_output_len = 0;
+    pp->asmmode_intel = false;
     return pp;
 }
 
@@ -163,6 +173,10 @@ void pascal_preprocessor_free(PascalPreprocessor *pp) {
         free(pp->include_paths[i]);
     }
     free(pp->include_paths);
+    for (size_t i = 0; i < pp->included_file_count; ++i) {
+        free(pp->included_files[i]);
+    }
+    free(pp->included_files);
     free(pp);
 }
 
@@ -209,6 +223,31 @@ bool pascal_preprocessor_add_include_path(PascalPreprocessor *pp, const char *pa
     
     pp->include_paths[pp->include_path_count++] = path_copy;
     return true;
+}
+
+static void record_included_file(PascalPreprocessor *pp, const char *path) {
+    if (!pp || !path) return;
+    if (pp->included_file_count >= pp->included_file_capacity) {
+        size_t new_cap = pp->included_file_capacity == 0 ? 16 : pp->included_file_capacity * 2;
+        char **new_arr = realloc(pp->included_files, new_cap * sizeof(char *));
+        if (!new_arr) return;
+        pp->included_files = new_arr;
+        pp->included_file_capacity = new_cap;
+    }
+    char *copy = my_strdup(path);
+    if (copy)
+        pp->included_files[pp->included_file_count++] = copy;
+}
+
+size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
+                                               const char *const **out_files) {
+    if (!pp || !out_files) return 0;
+    *out_files = (const char *const *)pp->included_files;
+    return pp->included_file_count;
+}
+
+bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp) {
+    return pp != NULL && pp->asmmode_intel;
 }
 
 void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp, bool flatten_only) {
@@ -832,6 +871,7 @@ static bool handle_directive(PascalPreprocessor *pp,
              * so we don't emit {#line 1} here - the first emitted content will
              * trigger a line directive with the correct line number */
 
+            record_included_file(pp, resolved_path);
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 
             /* Emit line directive returning to parent file */
@@ -1009,6 +1049,7 @@ static bool handle_directive(PascalPreprocessor *pp,
              * so we don't emit {#line 1} here - the first emitted content will
              * trigger a line directive with the correct line number */
 
+            record_included_file(pp, resolved_path);
             bool ok = preprocess_buffer_internal(pp, resolved_path, include_buffer, include_length, conditions, output, depth + 1, error_message);
 
             /* Emit line directive returning to parent file */
@@ -1275,6 +1316,23 @@ static bool handle_directive(PascalPreprocessor *pp,
             strcmp(keyword, "MESSAGE") == 0 ||
             strcmp(keyword, "STOP") == 0) {
             should_preserve = true;
+        }
+
+        // Track {$ASMMODE INTEL/ATT} state for codegen
+        if (branch_active && strcmp(keyword, "ASMMODE") == 0) {
+            // rest contains the asmmode value (e.g. "INTEL" or "ATT")
+            char asmmode_val[32];
+            size_t vi = 0;
+            for (size_t ri = 0; rest[ri] && vi < sizeof(asmmode_val) - 1; ri++) {
+                if (rest[ri] != ' ' && rest[ri] != '\t')
+                    asmmode_val[vi++] = rest[ri];
+            }
+            asmmode_val[vi] = '\0';
+            if (strcasecmp(asmmode_val, "INTEL") == 0)
+                pp->asmmode_intel = true;
+            else if (strcasecmp(asmmode_val, "ATT") == 0 ||
+                     strcasecmp(asmmode_val, "DEFAULT") == 0)
+                pp->asmmode_intel = false;
         }
 
         // If we should preserve this directive, output it verbatim

@@ -5664,13 +5664,45 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             if (src != NULL)
             {
                 /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
-                 * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
-                 * "qword ptr" would be rejected by the assembler.  Skip the body entirely
-                 * and let the runtime library's stub override the empty function body. */
+                 * KGPC targets AT&T syntax; Intel-syntax asm needs wrapping with
+                 * .intel_syntax noprefix / .att_syntax prefix directives.
+                 *
+                 * Detection heuristics (any match → Intel syntax):
+                 *   1. Memory operand keywords: "dword ptr", "qword ptr", etc.
+                 *   2. Bracket memory operands: [...] (AT&T uses parentheses)
+                 *   3. Bare register operands without '%' prefix in operand position
+                 * Heuristic 2 is the strongest signal since AT&T never uses [] for
+                 * memory addressing, while Intel always does. */
+                int is_intel_syntax = 0;
                 if (pascal_strcasestr(src, "dword ptr") != NULL ||
                     pascal_strcasestr(src, "qword ptr") != NULL ||
                     pascal_strcasestr(src, "byte ptr")  != NULL ||
                     pascal_strcasestr(src, "word ptr")  != NULL)
+                    is_intel_syntax = 1;
+
+                /* Check for Intel-style bracket memory operands: [reg], [reg+off] etc.
+                 * AT&T syntax uses parentheses for memory: (%reg), off(%reg) etc.
+                 * Skip [...] inside comments {...} and strings. */
+                if (!is_intel_syntax) {
+                    int in_brace_comment = 0;
+                    for (const char *p = src; *p != '\0'; p++) {
+                        if (*p == '{') { in_brace_comment = 1; continue; }
+                        if (*p == '}') { in_brace_comment = 0; continue; }
+                        if (in_brace_comment) continue;
+                        if (*p == '[') {
+                            /* Skip Pascal asm clobber lists: end ['eax','edx']
+                             * These have [ followed by ' — Intel memory operands
+                             * use [reg] or [reg+offset], never ['...'] */
+                            if (*(p + 1) == '\'')
+                                continue;
+                            /* Found a bracket — this is Intel memory syntax */
+                            is_intel_syntax = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_intel_syntax)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
                      * fpc_in_sin_real / fpc_in_cos_real so the function body is not empty.
@@ -5720,8 +5752,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             break;
                         }
                     }
-                    fprintf(ctx->output_file,
-                        "\t# Intel-mode asm block skipped (not supported by AT&T assembler)\n");
+                    /* For other Intel-syntax asm blocks, wrap with GAS
+                     * syntax-switching directives so they assemble correctly
+                     * in the otherwise AT&T-syntax output file. */
+                    inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
+                    inst_list = add_inst(inst_list, strdup(src));
+                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
                     break;
                 }
 
@@ -5839,7 +5875,16 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             for (int pi = 0; pi < ctx->asm_param_count; pi++) {
                                                 if (ctx->asm_params[pi].name != NULL &&
                                                     strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
-                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    /* Pick register width from parameter type size */
+                                                    int ri = ctx->asm_params[pi].reg_index;
+                                                    int sz = ctx->asm_params[pi].size_bytes;
+                                                    const char *reg;
+                                                    switch (sz) {
+                                                    case 1:  reg = current_arg_reg8(ri); break;
+                                                    case 2:  reg = current_arg_reg16(ri); break;
+                                                    case 4:  reg = current_arg_reg32(ri); break;
+                                                    default: reg = current_arg_reg64(ri); break;
+                                                    }
                                                     if (reg != NULL) {
                                                         int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
                                                         sj += (n > 0 ? (size_t)n : 0);
@@ -5855,10 +5900,13 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             if (var != NULL) {
                                                 if (var->is_static && var->static_label != NULL) {
                                                     const char *label = var->static_label;
-                                                    size_t llen = strlen(label);
-                                                    if (sj + llen < sub_alloc - 64) {
-                                                        memcpy(substituted + sj, label, llen);
-                                                        sj += llen;
+                                                    /* Use RIP-relative addressing for AT&T syntax
+                                                     * to avoid 32-bit absolute relocation failures
+                                                     * on Windows x64 (image base > 4GB). */
+                                                    int n = snprintf(substituted + sj, sub_alloc - sj,
+                                                        is_intel_syntax ? "%s" : "%s(%%rip)", label);
+                                                    if (n > 0) {
+                                                        sj += (size_t)n;
                                                         did_substitute = 1;
                                                     }
                                                 } else if (var->offset > 0) {

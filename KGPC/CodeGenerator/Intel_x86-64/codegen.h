@@ -289,6 +289,7 @@ typedef struct CodeGenContext {
     StackNode_t *static_link_spill_slot;
     int pending_stack_arg_bytes;
     ListNode_t *emitted_subprograms;
+    FILE *cache_output; /* When populating codegen cache: unit function sections written here */
     CodeGenWithContext *with_stack;
     int with_depth;
     int with_capacity;
@@ -300,6 +301,7 @@ typedef struct CodeGenContext {
     struct {
         const char *name;   /* Pascal parameter name */
         int reg_index;      /* SysV ABI register index (0=%rdi,1=%rsi,...) */
+        int size_bytes;     /* Parameter size: 1,2,4,8 (0 = unknown → 64-bit) */
     } asm_params[16];
 
     /* Callee-saved register save slot offsets (from %rbp).

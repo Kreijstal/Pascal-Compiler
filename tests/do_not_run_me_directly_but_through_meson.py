@@ -155,6 +155,7 @@ except ValueError:
     COMPILER_PARALLEL_LIMIT = DEFAULT_COMPILER_PARALLEL_LIMIT
 COMPILER_PARALLEL_LIMIT = max(1, COMPILER_PARALLEL_LIMIT)
 COMPILER_PARALLEL_SEMAPHORE = threading.BoundedSemaphore(COMPILER_PARALLEL_LIMIT)
+FPC_RTL_PARALLEL_RAMP_BATCH = 10
 
 DEFAULT_TAP_MAX_WORKERS = 8
 try:
@@ -1108,28 +1109,56 @@ class ParallelTestRunner:
         setup_ok_classes = []
         try:
             class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
-                futures = {
-                    executor.submit(
-                        _run_single_test_with_timeout, t,
-                        getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
-                        self.stream,
-                    ): t
-                    for t in tests
-                    if t.__class__ not in class_errors
-                }
-                for future in concurrent.futures.as_completed(futures):
-                    try:
-                        test_case, result_type, err_info, elapsed = future.result()
-                        result.add_result(test_case, result_type, err_info, elapsed)
-                        result.testsRun += 1
-                    except Exception as e:
-                        test_case = futures[future]
-                        result.errors.append((test_case, traceback.format_exc()))
-                        result.testsRun += 1
-                for t in tests:
-                    if t.__class__ in class_errors:
-                        result.add_result(t, "error", class_errors[t.__class__], 0.0)
+            runnable_tests = [t for t in tests if t.__class__ not in class_errors]
+            if FPC_RTL_MODE and self.workers > 1:
+                for batch_index, start in enumerate(range(0, len(runnable_tests), FPC_RTL_PARALLEL_RAMP_BATCH)):
+                    batch = runnable_tests[start:start + FPC_RTL_PARALLEL_RAMP_BATCH]
+                    batch_workers = max(1, min(self.workers, batch_index + 1))
+                    self.stream.write(
+                        f"[PARALLEL] FPC RTL ramp batch {batch_index + 1}: "
+                        f"{len(batch)} tests with {batch_workers} workers\n"
+                    )
+                    self.stream.flush()
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+                        futures = {
+                            executor.submit(
+                                _run_single_test_with_timeout, t,
+                                getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                                self.stream,
+                            ): t
+                            for t in batch
+                        }
+                        for future in concurrent.futures.as_completed(futures):
+                            try:
+                                test_case, result_type, err_info, elapsed = future.result()
+                                result.add_result(test_case, result_type, err_info, elapsed)
+                                result.testsRun += 1
+                            except Exception:
+                                test_case = futures[future]
+                                result.errors.append((test_case, traceback.format_exc()))
+                                result.testsRun += 1
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
+                    futures = {
+                        executor.submit(
+                            _run_single_test_with_timeout, t,
+                            getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                            self.stream,
+                        ): t
+                        for t in runnable_tests
+                    }
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            test_case, result_type, err_info, elapsed = future.result()
+                            result.add_result(test_case, result_type, err_info, elapsed)
+                            result.testsRun += 1
+                        except Exception:
+                            test_case = futures[future]
+                            result.errors.append((test_case, traceback.format_exc()))
+                            result.testsRun += 1
+            for t in tests:
+                if t.__class__ in class_errors:
+                    result.add_result(t, "error", class_errors[t.__class__], 0.0)
         finally:
             _cleanup_parallel_class_fixtures(setup_ok_classes, self.stream)
             result.stopTestRun()
@@ -1212,33 +1241,67 @@ class TAPParallelTestRunner:
                 if t.__class__ in class_errors:
                     completed[idx] = (t, "error", class_errors[t.__class__], 0.0)
 
-            with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
-                future_to_index = {
-                    executor.submit(
-                        _run_single_test_with_timeout, t,
-                        getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
-                    ): idx
-                    for idx, t in enumerate(tests)
-                    if t.__class__ not in class_errors
-                }
-                for future in concurrent.futures.as_completed(future_to_index):
-                    idx = future_to_index[future]
-                    test_case = tests[idx]
-                    try:
-                        completed[idx] = future.result()
-                    except Exception:
-                        completed[idx] = (
-                            test_case,
-                            "error",
-                            traceback.format_exc(),
-                            0.0,
-                        )
-                    # Stream TAP lines for all consecutive completed tests
-                    while next_to_emit in completed:
-                        test_obj, result_type, err_info, elapsed = completed[next_to_emit]
-                        self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
-                        del completed[next_to_emit]
-                        next_to_emit += 1
+            runnable = [(idx, t) for idx, t in enumerate(tests) if t.__class__ not in class_errors]
+            if FPC_RTL_MODE and effective_workers > 1:
+                for batch_index, start in enumerate(range(0, len(runnable), FPC_RTL_PARALLEL_RAMP_BATCH)):
+                    batch = runnable[start:start + FPC_RTL_PARALLEL_RAMP_BATCH]
+                    batch_workers = max(1, min(effective_workers, batch_index + 1))
+                    self._emit(
+                        f"# FPC RTL ramp batch {batch_index + 1}: "
+                        f"{len(batch)} tests with {batch_workers} workers"
+                    )
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=batch_workers) as executor:
+                        future_to_index = {
+                            executor.submit(
+                                _run_single_test_with_timeout, t,
+                                getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                            ): idx
+                            for idx, t in batch
+                        }
+                        for future in concurrent.futures.as_completed(future_to_index):
+                            idx = future_to_index[future]
+                            test_case = tests[idx]
+                            try:
+                                completed[idx] = future.result()
+                            except Exception:
+                                completed[idx] = (
+                                    test_case,
+                                    "error",
+                                    traceback.format_exc(),
+                                    0.0,
+                                )
+                            while next_to_emit in completed:
+                                test_obj, result_type, err_info, elapsed = completed[next_to_emit]
+                                self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                                del completed[next_to_emit]
+                                next_to_emit += 1
+            else:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
+                    future_to_index = {
+                        executor.submit(
+                            _run_single_test_with_timeout, t,
+                            getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
+                        ): idx
+                        for idx, t in runnable
+                    }
+                    for future in concurrent.futures.as_completed(future_to_index):
+                        idx = future_to_index[future]
+                        test_case = tests[idx]
+                        try:
+                            completed[idx] = future.result()
+                        except Exception:
+                            completed[idx] = (
+                                test_case,
+                                "error",
+                                traceback.format_exc(),
+                                0.0,
+                            )
+                        # Stream TAP lines for all consecutive completed tests
+                        while next_to_emit in completed:
+                            test_obj, result_type, err_info, elapsed = completed[next_to_emit]
+                            self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
+                            del completed[next_to_emit]
+                            next_to_emit += 1
 
             # Emit any remaining results (class errors that were never submitted)
             while next_to_emit < len(tests):
@@ -1305,37 +1368,9 @@ class TestCompiler(unittest.TestCase):
         os.makedirs(TEST_OUTPUT_DIR, exist_ok=True)
         os.makedirs(TEST_CASES_DIR, exist_ok=True)
 
-        # Warm the AST cache for FPC RTL mode: compile a minimal dummy program
-        # so system.pp + objpas.pp are cached before individual tests run.
-        if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
-            dummy_src = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.p")
-            dummy_asm = os.path.join(TEST_OUTPUT_DIR, "_fpc_rtl_warmup.s")
-            try:
-                with open(dummy_src, "w") as f:
-                    f.write("program _warmup; begin end.\n")
-                print("--- Warming FPC RTL AST cache ---", file=sys.stderr)
-                sys.stderr.flush()
-                run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
-                print("--- FPC RTL AST cache warmed ---", file=sys.stderr)
-                sys.stderr.flush()
-                # Also try to warm SysUtils/Classes/Math AST caches (may fail
-                # due to unsupported constructs, but AST caches are still
-                # written for successfully parsed units).
-                with open(dummy_src, "w") as f:
-                    f.write("program _warmup2; uses SysUtils, Classes, Math; begin end.\n")
-                try:
-                    run_compiler(dummy_src, dummy_asm, flags=FPC_RTL_FLAGS)
-                    print("--- FPC RTL extended AST cache warmed ---", file=sys.stderr)
-                except Exception:
-                    print("--- FPC RTL extended AST cache partially warmed ---", file=sys.stderr)
-                sys.stderr.flush()
-            except Exception as e:
-                print(f"--- FPC RTL cache warm-up failed: {e} ---", file=sys.stderr)
-                sys.stderr.flush()
-            finally:
-                for tmp in (dummy_src, dummy_asm):
-                    if os.path.exists(tmp):
-                        os.unlink(tmp)
+        # FPC RTL mode uses on-demand AST/codegen caches per testcase.
+        # Do not prewarm here: an eager warm-up defeats the cache design and
+        # can time out before the suite even starts.
 
         cc_raw = os.environ.get("CC")
         if not cc_raw:
@@ -3355,6 +3390,10 @@ def _discover_and_add_auto_tests():
                 """Auto-discovered test case."""
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
+                # Skip tests with hardcoded SysV ABI inline asm on Windows
+                if test_base_name == "nostackframe_asm_regsizing" and IS_WINDOWS_ABI:
+                    self.skipTest("Inline asm test uses hardcoded SysV ABI registers")
+
                 if test_base_name == "unix_wait_helpers_demo":
                     # Check if we're targeting MinGW (not Cygwin/MSYS)
                     # MinGW defines _WIN32 but not __CYGWIN__
