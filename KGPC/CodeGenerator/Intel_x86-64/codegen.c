@@ -8762,6 +8762,27 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     /* Allow Delphi-style Result alias in regular functions too. */
     add_result_alias_for_return_var(return_var);
+
+    /* If this function returns a shortstring (value type, uses sret),
+     * register "Result" in the symtab with SHORTSTRING_TYPE so that
+     * codegen_expr_is_shortstring_value_ctx can find it via FindSymbol
+     * and correctly use leaq (address) instead of movq (dereference). */
+    if (has_record_return && symtab != NULL)
+    {
+        int is_shortstring_return = (func->return_type == SHORTSTRING_TYPE);
+        if (!is_shortstring_return && func_node != NULL && func_node->type != NULL)
+        {
+            KgpcType *ret = kgpc_type_get_return_type(func_node->type);
+            if (ret != NULL && kgpc_type_is_shortstring(ret))
+                is_shortstring_return = 1;
+        }
+        if (is_shortstring_return)
+        {
+            PushVarOntoScope_Typed(symtab, strdup("Result"),
+                create_primitive_type(SHORTSTRING_TYPE));
+        }
+    }
+
     if (func->result_var_name != NULL &&
         !pascal_identifier_equals(func->result_var_name, func->id) &&
         !pascal_identifier_equals(func->result_var_name, "Result"))
