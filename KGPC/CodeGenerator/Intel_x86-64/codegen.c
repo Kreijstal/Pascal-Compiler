@@ -61,6 +61,8 @@ static void codegen_register_record_field_enum_literals(SymTab_t *symtab,
     struct RecordType *record);
 static void codegen_register_type_enum_literals(ListNode_t *type_decls, SymTab_t *symtab);
 static ListNode_t *g_codegen_available_subprograms = NULL;
+/* g_available_subprograms_set and g_available_subprograms_tail declared after
+ * CodeGenStringSet definition below */
 
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
 {
@@ -641,7 +643,7 @@ int codegen_tag_from_kgpc(const KgpcType *type)
 #define CODEGEN_LABEL_BUFFER_SIZE 256
 
 /* ---- Simple string hash set for O(1) label/name lookups ---- */
-#define CODEGEN_HASHSET_SIZE 211
+#define CODEGEN_HASHSET_SIZE 8191
 
 typedef struct CodeGenHashEntry {
     const char *key;
@@ -653,6 +655,8 @@ typedef struct {
 } CodeGenStringSet;
 
 static CodeGenStringSet g_codegen_callable_exports;
+static CodeGenStringSet g_available_subprograms_set;
+static ListNode_t *g_available_subprograms_tail = NULL;
 
 static unsigned codegen_hash(const char *s)
 {
@@ -718,6 +722,18 @@ static void codegen_set_destroy(CodeGenStringSet *set)
 }
 /* ---- End string hash set ---- */
 
+/* Module-level emitted-subprograms hash set + tail pointer for O(1) operations.
+ * Reset in codegen() before each compilation. */
+static CodeGenStringSet g_emitted_set;
+static ListNode_t *g_emitted_tail = NULL;
+
+static void codegen_reset_emitted_set(void)
+{
+    codegen_set_destroy(&g_emitted_set);
+    memset(&g_emitted_set, 0, sizeof(g_emitted_set));
+    g_emitted_tail = NULL;
+}
+
 /* ---- String constant collection for local const strings ---- */
 /* String constants from local const declarations (e.g. `const S = '...'`
  * inside function bodies) are registered into the symbol table via
@@ -739,15 +755,18 @@ static void codegen_keep_subprogram_label(const char *label)
 {
     if (label == NULL)
         return;
-    if (g_codegen_available_subprograms != NULL &&
-        codegen_list_contains_string(g_codegen_available_subprograms, label))
+    if (codegen_set_contains(&g_available_subprograms_set, label))
         return;
 
+    codegen_set_insert(&g_available_subprograms_set, label);
     ListNode_t *node = CreateListNode((void *)label, LIST_STRING);
-    if (g_codegen_available_subprograms == NULL)
+    if (g_codegen_available_subprograms == NULL) {
         g_codegen_available_subprograms = node;
-    else
-        g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+        g_available_subprograms_tail = node;
+    } else {
+        g_available_subprograms_tail->next = node;
+        g_available_subprograms_tail = node;
+    }
 }
 
 /* Build a unit-qualified mangled name: "unitname$$base_mangled".  Returns a
@@ -985,12 +1004,16 @@ static void codegen_collect_available_subprogram_labels(ListNode_t *sub_list)
             continue;
         }
 
-        if (mangled_id != NULL && !codegen_list_contains_string(g_codegen_available_subprograms, mangled_id)) {
+        if (mangled_id != NULL && !codegen_set_contains(&g_available_subprograms_set, mangled_id)) {
+            codegen_set_insert(&g_available_subprograms_set, mangled_id);
             ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
-            if (g_codegen_available_subprograms == NULL)
+            if (g_codegen_available_subprograms == NULL) {
                 g_codegen_available_subprograms = node;
-            else
-                g_codegen_available_subprograms = PushListNodeBack(g_codegen_available_subprograms, node);
+                g_available_subprograms_tail = node;
+            } else {
+                g_available_subprograms_tail->next = node;
+                g_available_subprograms_tail = node;
+            }
         }
 
         if (sub->tree_data.subprogram_data.subprograms != NULL)
@@ -3992,6 +4015,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     ctx->emitted_subprograms = NULL;
     ctx->comp_ctx = comp_ctx;
     g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
@@ -4005,6 +4031,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     init_stackmng();
 
     codegen_program_header(input_file_name, ctx);
+
+    /* Reset emitted-subprograms O(1) tracking for this compilation */
+    codegen_reset_emitted_set();
 
     /* Detect and resolve cross-unit mangled name collisions (e.g.
      * comptty.IsATTY vs termio.IsATTY both producing "isatty_t").
@@ -4061,6 +4090,7 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     codegen_vmt(ctx, symtab, tree, comp_ctx);
 
     prgm_name = codegen_program(tree, ctx, symtab, comp_ctx);
+
     codegen_main(prgm_name, ctx);
 
     /* Emit weak stubs for method labels that were referenced (e.g., via
@@ -4080,6 +4110,9 @@ void codegen(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx, Sym
     {
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
 
@@ -4112,6 +4145,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     ctx->pending_stack_arg_bytes = 0;
     ctx->emitted_subprograms = NULL;
     g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     memset(&g_codegen_callable_exports, 0, sizeof(g_codegen_callable_exports));
 
     ctx->symtab = symtab;
@@ -4270,6 +4306,9 @@ void codegen_unit(Tree_t *tree, const char *input_file_name, CodeGenContext *ctx
     {
         DestroyList(g_codegen_available_subprograms);
         g_codegen_available_subprograms = NULL;
+    codegen_set_destroy(&g_available_subprograms_set);
+    memset(&g_available_subprograms_set, 0, sizeof(g_available_subprograms_set));
+    g_available_subprograms_tail = NULL;
     }
     codegen_set_destroy(&g_codegen_callable_exports);
 
@@ -5163,11 +5202,11 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                 const char *fallback_mangled = method->mangled_name;
                 const char *slot_label = NULL;
                 if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, full_mangled))
+                    codegen_set_contains(&g_available_subprograms_set,full_mangled))
                     slot_label = full_mangled;
                 if (slot_label == NULL && fallback_mangled != NULL &&
                     g_codegen_available_subprograms != NULL &&
-                    codegen_list_contains_string(g_codegen_available_subprograms, fallback_mangled))
+                    codegen_set_contains(&g_available_subprograms_set,fallback_mangled))
                     slot_label = fallback_mangled;
                 if (slot_label != NULL) {
                     fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
@@ -5669,7 +5708,7 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
                     (void *)cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list);
             }
             if (g_codegen_available_subprograms != NULL &&
-                codegen_list_contains_string(g_codegen_available_subprograms, emit_target)) {
+                codegen_set_contains(&g_available_subprograms_set,emit_target)) {
                 resolved_id = emit_target;
                 resolved_def = def;
                 break;
@@ -5967,7 +6006,7 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
 
             /* Skip if a concrete implementation exists */
             if (g_codegen_available_subprograms != NULL &&
-                codegen_list_contains_string(g_codegen_available_subprograms, mangled_id))
+                codegen_set_contains(&g_available_subprograms_set,mangled_id))
                 continue;
 
             if (method->resolved_mangled_id != NULL &&
@@ -7812,27 +7851,12 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
                 sub->tree_data.subprogram_data.is_generic_template);
         }
 
-        if (mangled_id != NULL && ctx->emitted_subprograms != NULL)
+        if (mangled_id != NULL && codegen_set_contains(&g_emitted_set, mangled_id))
         {
-            ListNode_t *seen = ctx->emitted_subprograms;
-            int already_emitted = 0;
-            while (seen != NULL)
-            {
-                if (seen->type == LIST_STRING && seen->cur != NULL &&
-                    strcmp((const char *)seen->cur, mangled_id) == 0)
-                {
-                    already_emitted = 1;
-                    break;
-                }
-                seen = seen->next;
-            }
-            if (already_emitted)
-            {
-                if (trace_tfplistenum || trace_missing_calls)
-                    fprintf(stderr, "[codegen] skip already emitted %s\n", mangled_id);
-                sub_list = sub_list->next;
-                continue;
-            }
+            if (trace_tfplistenum || trace_missing_calls)
+                fprintf(stderr, "[codegen] skip already emitted %s\n", mangled_id);
+            sub_list = sub_list->next;
+            continue;
         }
 
         if (sub->tree_data.subprogram_data.statement_list == NULL)
@@ -7924,10 +7948,14 @@ void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *sy
         if (mangled_id != NULL)
         {
             ListNode_t *node = CreateListNode((void *)mangled_id, LIST_STRING);
-            if (ctx->emitted_subprograms == NULL)
+            if (ctx->emitted_subprograms == NULL) {
                 ctx->emitted_subprograms = node;
-            else
-                ctx->emitted_subprograms = PushListNodeBack(ctx->emitted_subprograms, node);
+                g_emitted_tail = node;
+            } else {
+                g_emitted_tail->next = node;
+                g_emitted_tail = node;
+            }
+            codegen_set_insert(&g_emitted_set, mangled_id);
         }
 
         switch(sub->tree_data.subprogram_data.sub_type)
