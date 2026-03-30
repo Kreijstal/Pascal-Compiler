@@ -5664,13 +5664,40 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
             if (src != NULL)
             {
                 /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
-                 * KGPC targets AT&T syntax; Intel-syntax constructs like "dword ptr" or
-                 * "qword ptr" would be rejected by the assembler.  Skip the body entirely
-                 * and let the runtime library's stub override the empty function body. */
+                 * KGPC targets AT&T syntax; Intel-syntax asm needs wrapping with
+                 * .intel_syntax noprefix / .att_syntax prefix directives.
+                 *
+                 * Detection heuristics (any match → Intel syntax):
+                 *   1. Memory operand keywords: "dword ptr", "qword ptr", etc.
+                 *   2. Bracket memory operands: [...] (AT&T uses parentheses)
+                 *   3. Bare register operands without '%' prefix in operand position
+                 * Heuristic 2 is the strongest signal since AT&T never uses [] for
+                 * memory addressing, while Intel always does. */
+                int is_intel_syntax = 0;
                 if (pascal_strcasestr(src, "dword ptr") != NULL ||
                     pascal_strcasestr(src, "qword ptr") != NULL ||
                     pascal_strcasestr(src, "byte ptr")  != NULL ||
                     pascal_strcasestr(src, "word ptr")  != NULL)
+                    is_intel_syntax = 1;
+
+                /* Check for Intel-style bracket memory operands: [reg], [reg+off] etc.
+                 * AT&T syntax uses parentheses for memory: (%reg), off(%reg) etc.
+                 * Skip [...] inside comments {...} and strings. */
+                if (!is_intel_syntax) {
+                    int in_brace_comment = 0;
+                    for (const char *p = src; *p != '\0'; p++) {
+                        if (*p == '{') { in_brace_comment = 1; continue; }
+                        if (*p == '}') { in_brace_comment = 0; continue; }
+                        if (in_brace_comment) continue;
+                        if (*p == '[') {
+                            /* Found a bracket — this is Intel memory syntax */
+                            is_intel_syntax = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_intel_syntax)
                 {
                     /* Special case: sincos_r_r_r — generate a fallback that calls
                      * fpc_in_sin_real / fpc_in_cos_real so the function body is not empty.
@@ -5720,8 +5747,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                             break;
                         }
                     }
-                    fprintf(ctx->output_file,
-                        "\t# Intel-mode asm block skipped (not supported by AT&T assembler)\n");
+                    /* For other Intel-syntax asm blocks, wrap with GAS
+                     * syntax-switching directives so they assemble correctly
+                     * in the otherwise AT&T-syntax output file. */
+                    inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
+                    inst_list = add_inst(inst_list, strdup(src));
+                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
                     break;
                 }
 

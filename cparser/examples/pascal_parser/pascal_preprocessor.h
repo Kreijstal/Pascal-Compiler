@@ -37,4 +37,7 @@ char *pascal_preprocess_file(PascalPreprocessor *pp,
 size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
                                                const char *const **out_files);
 
+/* Returns true if {$ASMMODE INTEL} was the last asmmode directive seen. */
+bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp);
+
 #endif /* PASCAL_PREPROCESSOR_H */

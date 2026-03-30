@@ -2733,13 +2733,21 @@ static void emit_link_args(void)
     size_t used = 0;
 
     /* On cache hit, include the cached .o and gc-sections.
-     * On cache miss, the main .s has all needed functions; cache .o is
-     * only populated for future runs, not linked this time. */
+     * On cache miss, the main .s has all unit functions (marked used for cache
+     * completeness), so gc-sections is needed to strip unused ones with bad refs.
+     * The cache .o is only populated for future runs, not linked this time. */
     if (g_codegen_cache_hit && g_codegen_cache_obj_path[0] != '\0')
     {
         used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
                                  " %s -Wl,--gc-sections",
                                  g_codegen_cache_obj_path);
+    }
+    else if (g_codegen_cache_dir != NULL)
+    {
+        /* Cache miss: --function-sections was forced, so gc-sections is needed
+         * to remove unused unit functions that have unresolvable references. */
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " -Wl,--gc-sections");
     }
 
     if (!target_windows_flag())

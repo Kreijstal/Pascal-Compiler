@@ -32,6 +32,8 @@ struct PascalPreprocessor {
     /* For declared() support - points to current output buffer during preprocessing */
     const char *current_output;
     size_t current_output_len;
+    /* Track {$ASMMODE INTEL/ATT} state */
+    bool asmmode_intel;
 };
 
 typedef struct {
@@ -154,6 +156,7 @@ PascalPreprocessor *pascal_preprocessor_create(void) {
     pp->included_file_capacity = 0;
     pp->current_output = NULL;
     pp->current_output_len = 0;
+    pp->asmmode_intel = false;
     return pp;
 }
 
@@ -241,6 +244,10 @@ size_t pascal_preprocessor_get_included_files(const PascalPreprocessor *pp,
     if (!pp || !out_files) return 0;
     *out_files = (const char *const *)pp->included_files;
     return pp->included_file_count;
+}
+
+bool pascal_preprocessor_is_intel_asm(const PascalPreprocessor *pp) {
+    return pp != NULL && pp->asmmode_intel;
 }
 
 void pascal_preprocessor_set_flatten_only(PascalPreprocessor *pp, bool flatten_only) {
@@ -1309,6 +1316,23 @@ static bool handle_directive(PascalPreprocessor *pp,
             strcmp(keyword, "MESSAGE") == 0 ||
             strcmp(keyword, "STOP") == 0) {
             should_preserve = true;
+        }
+
+        // Track {$ASMMODE INTEL/ATT} state for codegen
+        if (branch_active && strcmp(keyword, "ASMMODE") == 0) {
+            // rest contains the asmmode value (e.g. "INTEL" or "ATT")
+            char asmmode_val[32];
+            size_t vi = 0;
+            for (size_t ri = 0; rest[ri] && vi < sizeof(asmmode_val) - 1; ri++) {
+                if (rest[ri] != ' ' && rest[ri] != '\t')
+                    asmmode_val[vi++] = rest[ri];
+            }
+            asmmode_val[vi] = '\0';
+            if (strcasecmp(asmmode_val, "INTEL") == 0)
+                pp->asmmode_intel = true;
+            else if (strcasecmp(asmmode_val, "ATT") == 0 ||
+                     strcasecmp(asmmode_val, "DEFAULT") == 0)
+                pp->asmmode_intel = false;
         }
 
         // If we should preserve this directive, output it verbatim
