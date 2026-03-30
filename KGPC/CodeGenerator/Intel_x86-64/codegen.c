@@ -3917,16 +3917,22 @@ void codegen_function_header_ex_alias_vis(char *func_name, CodeGenContext *ctx, 
      * allowing the linker's --gc-sections to strip unused functions. */
     if (function_sections_flag())
         fprintf(ctx->output_file, "\t.section\t.text.%s,\"ax\",@progbits\n", func_name);
-    /* All functions use .globl — the compiler produces a single .s file but
-     * the runtime library (.a) needs to call many unit-defined functions. */
+    /* When using cached unit .o (skip-unit-codegen), program-level functions
+     * (defined_in_unit == 0) must be local to avoid clashing with same-named
+     * unit functions in the cache .o.  All program code is in the same .s,
+     * so local binding still resolves correctly.  Unit functions in the cache
+     * are .globl so the runtime can call them. */
     const char *vis = ".globl";
-    (void)emit_weak;
+    if (skip_unit_codegen_flag() && emit_weak == 0)
+        vis = NULL;
     /* Emit alias label from cname_override (e.g. [Public,Alias:'FPC_DO_EXIT']) */
     if (cname_override != NULL && strcmp(cname_override, func_name) != 0) {
-        fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
+        if (vis != NULL)
+            fprintf(ctx->output_file, "%s\t%s\n", vis, cname_override);
         fprintf(ctx->output_file, "%s:\n", cname_override);
     }
-    fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
+    if (vis != NULL)
+        fprintf(ctx->output_file, "%s\t%s\n", vis, func_name);
     if (codegen_target_is_windows())
         fprintf(ctx->output_file, "\t.seh_proc\t%s\n", func_name);
     if (nostackframe) {
