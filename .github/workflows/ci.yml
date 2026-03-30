@@ -113,3 +113,51 @@ jobs:
         name: meson-logs-fpc-rtl
         path: build-fpc/meson-logs/
         if-no-files-found: ignore
+
+  profile-large-unit-graph:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.14'
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
+        pip install meson ninja
+
+    - name: Clone FPC RTL source
+      run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
+
+    - name: Configure build
+      run: meson setup builddir --buildtype=debugoptimized -Dwith_gmp=enabled
+
+    - name: Build
+      run: meson compile -C builddir
+
+    - name: Run large unit graph perf probe
+      run: |
+        mkdir -p builddir/perf
+        python3 scripts/profile_large_unit_graph.py \
+          --compiler builddir/KGPC/kgpc \
+          --fpc-source FPCSource \
+          --output-dir builddir/perf \
+          --log-file builddir/perf/test_pp_readargs.log \
+          --max-semantic 180 \
+          --max-codegen 180 \
+          --max-total 300
+
+    - name: Upload perf artifacts
+      if: always()
+      uses: actions/upload-artifact@v7
+      with:
+        name: perf-large-unit-graph
+        path: |
+          builddir/perf/
+        if-no-files-found: ignore
