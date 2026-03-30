@@ -17366,7 +17366,16 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
         return NULL;
     }
     case PASCAL_T_ASM_BLOCK: {
-        char *code = collect_asm_text(stmt_node->child);
+        /* stmt_node->child is the asm body (PASCAL_T_NONE with asm text
+         * in sym->name).  Its ->next siblings may include clobber reglist
+         * nodes ['eax', 'ebx', ...] which must NOT be collected as asm.
+         * Temporarily sever the sibling chain to isolate the body. */
+        ast_t *asm_body_node = stmt_node->child;
+        assert(asm_body_node != NULL && asm_body_node->typ == PASCAL_T_NONE);
+        ast_t *saved_next = asm_body_node->next;
+        asm_body_node->next = NULL;
+        char *code = collect_asm_text(asm_body_node);
+        asm_body_node->next = saved_next;
         return mk_asmblock(stmt_node->line, code);
     }
     case PASCAL_T_BREAK_STMT:

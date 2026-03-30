@@ -5803,10 +5803,12 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                              * `__kgpc_program_var_sub_N %rdi,%rcx` when the program
                              * happens to declare a variable named "sub". */
                             int line_has_mnemonic = 0;
+                            char mnemonic_suffix = 0; /* last char of mnemonic: b/w/l/q */
                             while (si < clen && sj < sub_alloc - 64) {
                                 /* Reset mnemonic flag on each new line. */
                                 if (cleaned[si] == '\n') {
                                     line_has_mnemonic = 0;
+                                    mnemonic_suffix = 0;
                                     substituted[sj++] = cleaned[si++];
                                     continue;
                                 }
@@ -5827,6 +5829,11 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                     /* If we haven't seen a mnemonic yet and this is not a
                                      * label, it IS the mnemonic — copy verbatim, no subst. */
                                     int is_mnemonic = (!line_has_mnemonic && !is_label);
+                                    if (is_mnemonic && id_len > 0) {
+                                        /* Save last char of mnemonic for operand size suffix.
+                                         * AT&T syntax: b=byte, w=word, l=long, q=quad */
+                                        mnemonic_suffix = tolower((unsigned char)cleaned[id_start + id_len - 1]);
+                                    }
                                     if (!is_label)
                                         line_has_mnemonic = 1;
                                     char id_buf[256];
@@ -5839,7 +5846,15 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                                             for (int pi = 0; pi < ctx->asm_param_count; pi++) {
                                                 if (ctx->asm_params[pi].name != NULL &&
                                                     strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
-                                                    const char *reg = get_arg_reg64_num(ctx->asm_params[pi].reg_index);
+                                                    /* Pick register width from instruction suffix */
+                                                    int ri = ctx->asm_params[pi].reg_index;
+                                                    const char *reg;
+                                                    switch (mnemonic_suffix) {
+                                                    case 'b': reg = current_arg_reg8(ri); break;
+                                                    case 'w': reg = current_arg_reg16(ri); break;
+                                                    case 'l': reg = current_arg_reg32(ri); break;
+                                                    default:  reg = current_arg_reg64(ri); break;
+                                                    }
                                                     if (reg != NULL) {
                                                         int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
                                                         sj += (n > 0 ? (size_t)n : 0);
