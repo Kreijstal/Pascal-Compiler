@@ -3694,6 +3694,29 @@ cleanup_constructor:
                 if (candidates != NULL) DestroyList(candidates);
             }
         }
+        /* If proc_label came from proc_mangled_id but the actual function
+         * definition has a different (longer) mangled_id — e.g. proc_mangled_id
+         * is "pd_abstract_u" but the function is emitted as
+         * "pd_abstract_u_tabstractprocdef" — resolve via the symbol table's
+         * definition tree to get the correct emission label. */
+        if (proc_label != NULL && ctx != NULL && ctx->symtab != NULL &&
+            expr->expr_data.addr_of_proc_data.proc_id != NULL)
+        {
+            HashNode_t *sym = NULL;
+            const char *lookup = expr->expr_data.addr_of_proc_data.proc_id;
+            if (FindSymbol(&sym, ctx->symtab, lookup) != 0 && sym != NULL &&
+                sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
+                sym->type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = sym->type->info.proc_info.definition;
+                const char *def_mangled = def->tree_data.subprogram_data.mangled_id;
+                if (def_mangled != NULL && def_mangled[0] != '\0' &&
+                    strcmp(def_mangled, proc_label) != 0)
+                {
+                    proc_label = def_mangled;
+                }
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         if (collision_label != NULL) free(collision_label);
