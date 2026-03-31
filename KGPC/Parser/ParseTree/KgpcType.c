@@ -2994,18 +2994,88 @@ long long kgpc_type_sizeof(KgpcType *type)
         {
             if (kgpc_type_is_dynamic_array(type))
                 return 16; /* Runtime uses 16-byte embedded descriptor (data ptr + length) */
-            /* Use the KgpcType's concrete start_index/end_index.
-             * Note: For multi-dimensional arrays defined via TypeAlias, the size computation
-             * might be incorrect here because element_type may not be nested arrays.
-             * Callers with access to symtab should use kgpc_type_get_array_dimension_info
-             * for accurate multi-dimensional array sizes. */
             long long element_size = kgpc_type_sizeof(type->info.array_info.element_type);
             if (element_size < 0)
                 return -1;
             int count = type->info.array_info.end_index - type->info.array_info.start_index + 1;
             if (count < 0)
                 return -1;
-            return element_size * count;
+            long long total = element_size * count;
+            /* Multi-dimensional arrays store additional dimensions in the TypeAlias.
+             * The first dimension is already covered by start_index/end_index above;
+             * multiply by each additional dimension. */
+            struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+            if (alias != NULL && alias->array_dimensions != NULL)
+            {
+                ListNode_t *dim_node = alias->array_dimensions;
+                /* Skip the first dimension (already accounted for) */
+                if (dim_node != NULL)
+                    dim_node = dim_node->next;
+                while (dim_node != NULL)
+                {
+                    const char *range_str = (const char *)dim_node->cur;
+                    if (range_str != NULL)
+                    {
+                        const char *dotdot = strstr(range_str, "..");
+                        if (dotdot != NULL)
+                        {
+                            long long lower = 0, upper = 0;
+                            int ok = 1;
+                            /* Parse left bound (before ..) */
+                            size_t left_len = (size_t)(dotdot - range_str);
+                            char left_buf[64];
+                            if (left_len < sizeof(left_buf))
+                            {
+                                memcpy(left_buf, range_str, left_len);
+                                left_buf[left_len] = '\0';
+                                char *ep;
+                                lower = strtoll(left_buf, &ep, 10);
+                                while (*ep && isspace((unsigned char)*ep)) ep++;
+                                if (ep == left_buf || *ep != '\0')
+                                {
+                                    const char *s = left_buf;
+                                    while (*s && isspace((unsigned char)*s)) s++;
+                                    if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
+                                        lower = (unsigned char)s[1];
+                                    else if (isupper((unsigned char)*s) && (s[1] == '\0' || isspace((unsigned char)s[1])))
+                                        lower = (unsigned char)*s;  /* Bare char: A..Z */
+                                    else
+                                        ok = 0;
+                                }
+                            }
+                            else
+                                ok = 0;
+                            /* Parse right bound (after ..) */
+                            if (ok)
+                            {
+                                const char *rhs = dotdot + 2;
+                                char *ep2;
+                                upper = strtoll(rhs, &ep2, 10);
+                                while (*ep2 && isspace((unsigned char)*ep2)) ep2++;
+                                if (ep2 == rhs || *ep2 != '\0')
+                                {
+                                    const char *s = rhs;
+                                    while (*s && isspace((unsigned char)*s)) s++;
+                                    if (*s == '\'' && s[1] != '\0' && s[2] == '\'')
+                                        upper = (unsigned char)s[1];
+                                    else if (isupper((unsigned char)*s) && (s[1] == '\0' || isspace((unsigned char)s[1])))
+                                        upper = (unsigned char)*s;
+                                    else
+                                        ok = 0;
+                                }
+                            }
+                            if (ok)
+                            {
+                                long long dim_size = upper - lower + 1;
+                                if (dim_size > 0)
+                                    total *= dim_size;
+                            }
+                        }
+                    }
+                    dim_node = dim_node->next;
+                }
+            }
+            return total;
         }
         
         case TYPE_KIND_ARRAY_OF_CONST:
