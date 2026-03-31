@@ -537,6 +537,16 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 mangled_id = expr->expr_data.addr_of_proc_data.proc_id;
             assert(mangled_id != NULL && "EXPR_ADDR_OF_PROC must have proc_mangled_id or proc_id set");
             Tree_t *called_sub = map_find(map, mangled_id);
+            /* If mangled_id lookup failed, try the plain Pascal identifier.
+             * The mangled_id may lack parameter type suffixes (e.g.
+             * "pd_abstract_u") while the map uses the full signature
+             * ("pd_abstract_u_tabstractprocdef").  The plain id is also
+             * registered in the map. */
+            if (called_sub == NULL) {
+                const char *plain_id = expr->expr_data.addr_of_proc_data.proc_id;
+                if (plain_id != NULL && (mangled_id == NULL || strcmp(plain_id, mangled_id) != 0))
+                    called_sub = map_find(map, plain_id);
+            }
             if (called_sub != NULL) {
                 mark_subprogram_recursive(called_sub, map);
             }

@@ -2958,7 +2958,14 @@ long long kgpc_type_sizeof(KgpcType *type)
                 case SHORTSTRING_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
-                    return 256; /* length byte + 255 chars */
+                    if (type->type_alias != NULL &&
+                        type->type_alias->is_shortstring &&
+                        type->type_alias->array_end > 0)
+                        return type->type_alias->array_end + 1; /* length byte + N chars */
+                    if (type->type_alias != NULL &&
+                        type->type_alias->storage_size > 0)
+                        return type->type_alias->storage_size;
+                    return 256; /* length byte + 255 chars (default ShortString) */
                 case FILE_TYPE:
                     if (type->size_in_bytes > 0)
                         return type->size_in_bytes;
@@ -3342,7 +3349,15 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
          * an array, use its sizeof rather than drilling to the scalar element type,
          * since array_dimensions only covers this declaration's dimensions. */
         info->element_size = -1;
-        if (alias->array_element_type_id != NULL && symtab != NULL)
+        /* First check the KgpcType's own element_type (most specific — includes
+         * size_in_bytes for string[N] types created during AST construction). */
+        if (type->kind == TYPE_KIND_ARRAY && type->info.array_info.element_type != NULL)
+        {
+            long long direct_size = kgpc_type_sizeof(type->info.array_info.element_type);
+            if (direct_size > 0)
+                info->element_size = direct_size;
+        }
+        if (info->element_size <= 0 && alias->array_element_type_id != NULL && symtab != NULL)
         {
             HashNode_t *node = kgpc_find_type_node(symtab, alias->array_element_type_id);
             if (node != NULL && node->type != NULL && kgpc_type_is_array(node->type))

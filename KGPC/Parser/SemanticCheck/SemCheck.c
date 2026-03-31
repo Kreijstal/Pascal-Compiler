@@ -16798,6 +16798,15 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             {
                                 element_type = create_primitive_type_with_size(CHAR_TYPE, 2);
                             }
+                            else if (builtin_type == SHORTSTRING_TYPE &&
+                                     tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                            {
+                                /* Use the AST's element_kgpc_type which has specific size
+                                 * for string[N] (N+1 bytes) instead of generic 256 */
+                                element_type = tree->tree_data.arr_decl_data.element_kgpc_type;
+                                kgpc_type_retain(element_type);
+                                element_type_borrowed = 0;
+                            }
                             else
                             {
                                 element_type = create_primitive_type(builtin_type);
@@ -17084,6 +17093,16 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                         temp_alias.array_dimensions = tree->tree_data.arr_decl_data.array_dimensions;
                         has_alias = 1;
+                    }
+
+                    /* Propagate element storage size for shortstring[N] elements
+                     * so kgpc_type_get_array_dimension_info uses N+1 instead of 256 */
+                    if (has_alias && temp_alias.array_element_storage_size == 0 &&
+                        tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
+                    {
+                        long long esize = kgpc_type_sizeof(tree->tree_data.arr_decl_data.element_kgpc_type);
+                        if (esize > 0 && esize <= INT_MAX)
+                            temp_alias.array_element_storage_size = (int)esize;
                     }
 
                     if (has_alias)

@@ -8083,6 +8083,48 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
     }
+    /* Fix shortstring stride: when the element type is a named shortstring alias
+     * (e.g., tasmkeyword = string[10]), the array element type may have been
+     * resolved to a generic ShortString primitive (256 bytes) instead of the
+     * specific shortstring type.  Look up the actual type and use its real size. */
+    if (first_index_stride == 256 && ctx != NULL && ctx->symtab != NULL &&
+        array_expr != NULL && array_expr->array_element_type_id != NULL &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "ShortString") &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "shortstring") &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "String"))
+    {
+        HashNode_t *elem_node = NULL;
+        if (FindSymbol(&elem_node, ctx->symtab, array_expr->array_element_type_id) != 0 &&
+            elem_node != NULL && elem_node->type != NULL)
+        {
+            KgpcType *etype = elem_node->type;
+            long long real_size = -1;
+            /* SHORTSTRING_TYPE primitive with alias info: use array_end + 1 */
+            if (etype->kind == TYPE_KIND_PRIMITIVE &&
+                etype->info.primitive_type_tag == SHORTSTRING_TYPE &&
+                etype->type_alias != NULL &&
+                etype->type_alias->is_shortstring &&
+                etype->type_alias->array_end > 0)
+            {
+                real_size = etype->type_alias->array_end + 1;
+            }
+            /* TYPE_KIND_ARRAY for string[N]: sizeof returns N (data only),
+             * but storage is N+1 (length byte + data). Check if element type
+             * is char and the array represents a shortstring. */
+            else if (etype->kind == TYPE_KIND_ARRAY &&
+                     etype->info.array_info.element_type != NULL &&
+                     etype->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                     etype->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                real_size = kgpc_type_sizeof(etype);
+                if (real_size > 0)
+                    real_size += 1; /* add length byte */
+            }
+            if (real_size > 0 && real_size < 256)
+                first_index_stride = real_size;
+        }
+    }
+
     if (wide_char_index)
     {
         first_index_stride = 2;
