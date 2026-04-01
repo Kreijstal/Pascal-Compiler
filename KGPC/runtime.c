@@ -559,10 +559,23 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
                      * both because offset is per-description, not per-fd.
                      * After close+reopen, they are different descriptions
                      * with independent positions — detect via divergence. */
+                    int saved_errno = errno;
                     off_t h_pos = lseek(h, 0, SEEK_CUR);
                     off_t c_pos = lseek(cached_fd, 0, SEEK_CUR);
-                    if (h_pos != (off_t)-1 && c_pos != (off_t)-1
-                        && h_pos != c_pos)
+                    errno = saved_errno;
+                    if (h_pos == (off_t)-1 || c_pos == (off_t)-1)
+                    {
+                        /* Non-seekable fd (pipe, socket, tty, etc.).
+                         * Position comparison is impossible, but for
+                         * non-seekable descriptors the close+reopen
+                         * staleness problem doesn't apply: FPC RTL
+                         * won't reopen these via reset(), and even if
+                         * it did the fd number would change since the
+                         * kernel doesn't recycle pipe/socket fds the
+                         * same way.  Accept the cached stream. */
+                        cache_valid = 1;
+                    }
+                    else if (h_pos != c_pos)
                     {
                         /* Positions differ: h and cached_fd are different
                          * file descriptions.  Cache is stale. */

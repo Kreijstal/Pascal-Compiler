@@ -5,6 +5,7 @@ program text_file_reset_reread;
   to the beginning so subsequent reads produce the same data again.
   This is the pattern used by FPC's msg2inc utility (two-pass parsing).
 }
+uses SysUtils;
 var
   f : text;
   s : string;
@@ -44,4 +45,7 @@ begin
   writeln('Pass 2: ', count, ' lines');
 
   close(f);
+
+  { Clean up temp file }
+  DeleteFile(tmpname);
 end.
