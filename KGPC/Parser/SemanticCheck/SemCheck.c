@@ -14178,8 +14178,8 @@ void semcheck_add_builtins(SymTab_t *symtab)
     add_builtin_type_owned(symtab, "file", create_primitive_type_with_size(FILE_TYPE, 368));
     add_builtin_type_owned(symtab, "File", create_primitive_type_with_size(FILE_TYPE, 368));
     add_builtin_type_owned(symtab, "TypedFile", create_primitive_type_with_size(FILE_TYPE, 368));
-    add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 672));
-    add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 672));
+    add_builtin_type_owned(symtab, "text", create_primitive_type_with_size(TEXT_TYPE, 640));
+    add_builtin_type_owned(symtab, "Text", create_primitive_type_with_size(TEXT_TYPE, 640));
 
     /* Builtin procedures — only true compiler intrinsics that need special
      * handling (variable args, type-dependent behavior, compile-time magic).
