@@ -222,7 +222,7 @@ long long sizeof_from_type_tag(int type_tag)
         case FILE_TYPE:
             return 368;
         case TEXT_TYPE:
-            return 632;
+            return 640;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
         default:
@@ -1073,6 +1073,37 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
                 if (alias->is_enum)
                 {
                     *align_out = fpc_size_to_alignment(fpc_enum_storage_size_from_alias(alias));
+                    return 0;
+                }
+
+                /* Array type aliases: alignment is determined by the element
+                 * type, not the total array size.  FPC aligns arrays to the
+                 * natural alignment of their element, so e.g.
+                 * TextBuf = array[0..255] of ansichar  has alignment 1 (not 32).
+                 */
+                if (alias->is_array)
+                {
+                    int elem_align = 1;
+                    /* Prioritize resolving the element type via its identifier
+                     * if available.  This works for all element types (records,
+                     * named primitives, other aliases). */
+                    if (alias->array_element_type_id != NULL)
+                    {
+                        int status = get_type_alignment_from_ref(symtab,
+                            alias->array_element_type, alias->array_element_type_id,
+                            &elem_align, depth + 1, line_num);
+                        if (status != 0)
+                            elem_align = 1;
+                    }
+                    /* Fallback to determining alignment from the type tag and size. */
+                    else if (alias->array_element_type != UNKNOWN_TYPE)
+                    {
+                        long long elem_size = sizeof_from_type_tag(alias->array_element_type);
+                        if (elem_size > 0)
+                            elem_align = fpc_type_alignment_from_size(elem_size,
+                                alias->array_element_type);
+                    }
+                    *align_out = elem_align;
                     return 0;
                 }
 

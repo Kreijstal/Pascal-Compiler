@@ -325,13 +325,17 @@ typedef struct KGPCTextRec
     unsigned char userdata[32]; /* offset 80 */
     char name[256];         /* offset 112 */
     char line_end[4];       /* offset 368 */
-    char _pad_buffer[12];   /* offset 372: padding to align buffer at 384 */
-    char buffer[256];       /* offset 384 */
-    uint16_t codepage;      /* offset 640 */
-    unsigned char _pad_fullname[6]; /* padding: 642..647 */
-    void *fullname;         /* offset 648 */
-    unsigned char _pad_end[16]; /* padding: 656..671, total = 672 */
+    char buffer[256];       /* offset 372 */
+    uint16_t codepage;      /* offset 628 */
+    unsigned char _pad_fullname[2]; /* padding: 630..631 */
+    void *fullname;         /* offset 632 */
 } KGPCTextRec;
+
+/* Ensure TEXT_TYPE size in the compiler stays in sync with this struct.
+ * sizeof_from_type_tag(TEXT_TYPE) returns 640; any layout change here
+ * must be mirrored there. */
+_Static_assert(sizeof(KGPCTextRec) == 640,
+    "KGPCTextRec size must be 640 to match TEXT_TYPE in SemCheck_sizeof.c");
 
 typedef struct KGPCFileRec
 {
@@ -433,12 +437,16 @@ static void kgpc_textrec_init_defaults(KGPCTextRec *file)
 }
 
 /* Side-table tracking which handle+mode each cached FILE* was created for.
- * Detects stale caches after FPC RTL close+reopen cycles. */
+ * Detects stale caches after FPC RTL close+reopen cycles.
+ * Also stores the original file's dev+ino to detect fd recycling
+ * (same fd number reused for a different file). */
 #define KGPC_STREAM_CACHE_SLOTS 16
 static struct {
     KGPCTextRec *textrec;
     int32_t original_handle;
     int32_t original_mode;
+    dev_t original_dev;
+    ino_t original_ino;
 } kgpc_stream_cache[KGPC_STREAM_CACHE_SLOTS];
 
 static int kgpc_stream_cache_find(KGPCTextRec *file)
@@ -467,6 +475,18 @@ static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle, int32_t mod
         kgpc_stream_cache[idx].textrec = file;
         kgpc_stream_cache[idx].original_handle = handle;
         kgpc_stream_cache[idx].original_mode = mode;
+        /* Record device+inode so we can detect fd recycling later. */
+        struct stat st;
+        if (handle >= 0 && fstat(handle, &st) == 0)
+        {
+            kgpc_stream_cache[idx].original_dev = st.st_dev;
+            kgpc_stream_cache[idx].original_ino = st.st_ino;
+        }
+        else
+        {
+            kgpc_stream_cache[idx].original_dev = 0;
+            kgpc_stream_cache[idx].original_ino = 0;
+        }
     }
 }
 
@@ -478,6 +498,8 @@ static void kgpc_stream_cache_clear(KGPCTextRec *file)
         kgpc_stream_cache[idx].textrec = NULL;
         kgpc_stream_cache[idx].original_handle = -1;
         kgpc_stream_cache[idx].original_mode = 0;
+        kgpc_stream_cache[idx].original_dev = 0;
+        kgpc_stream_cache[idx].original_ino = 0;
     }
 }
 
@@ -497,7 +519,17 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
         int cached_fd = fileno(cached);
         if (cached_fd >= 0 && cached_fd == h)
             return cached;  /* KGPC RTL: direct ownership, always valid */
-        /* FPC RTL path: validate via side-table */
+        /* FPC RTL path: the FILE* was created via fdopen(dup(h)), so
+         * cached_fd != h.  Validate via the side-table: check that the
+         * original handle and mode haven't changed (which would indicate
+         * the FPC RTL closed and reopened the file).
+         *
+         * We intentionally do NOT compare fd_pos vs stream_pos here:
+         * stdio buffering (fgetc read-ahead) causes the kernel file
+         * position (shared between h and the dup'd fd) to diverge from
+         * the logical stream position (which accounts for buffered but
+         * unconsumed data and ungetc).  Recreating the FILE* on every
+         * call would discard buffered data and corrupt reads. */
         int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
         int idx = kgpc_stream_cache_find(file);
         int cache_valid = 0;
@@ -505,14 +537,16 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
             h == kgpc_stream_cache[idx].original_handle &&
             file->mode == kgpc_stream_cache[idx].original_mode)
         {
-            /* The FPC RTL may have closed and reopened the same fd number
-             * (e.g. reset on a text file).  Detect this by comparing the
-             * real fd position with the cached stream's position.  If they
-             * diverge, the fd was recycled and the cache is stale. */
-            off_t fd_pos = lseek(h, 0, SEEK_CUR);
-            long stream_pos = ftell(cached);
-            if (fd_pos < 0 || stream_pos < 0 || fd_pos == stream_pos)
+            /* Handle and mode match, but the fd could have been recycled
+             * (closed and reopened to a different file).  Use fstat to
+             * compare device+inode with the originals. */
+            struct stat st;
+            if (fstat(h, &st) == 0 &&
+                st.st_dev == kgpc_stream_cache[idx].original_dev &&
+                st.st_ino == kgpc_stream_cache[idx].original_ino)
+            {
                 cache_valid = 1;
+            }
         }
         if (cache_valid)
             return cached;
