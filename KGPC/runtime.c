@@ -447,6 +447,7 @@ static struct {
     int32_t original_mode;
     dev_t original_dev;
     ino_t original_ino;
+    int has_stat;  /* 1 if original_dev/ino are valid */
 } kgpc_stream_cache[KGPC_STREAM_CACHE_SLOTS];
 
 static int kgpc_stream_cache_find(KGPCTextRec *file)
@@ -481,11 +482,13 @@ static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle, int32_t mod
         {
             kgpc_stream_cache[idx].original_dev = st.st_dev;
             kgpc_stream_cache[idx].original_ino = st.st_ino;
+            kgpc_stream_cache[idx].has_stat = 1;
         }
         else
         {
             kgpc_stream_cache[idx].original_dev = 0;
             kgpc_stream_cache[idx].original_ino = 0;
+            kgpc_stream_cache[idx].has_stat = 0;
         }
     }
 }
@@ -500,6 +503,7 @@ static void kgpc_stream_cache_clear(KGPCTextRec *file)
         kgpc_stream_cache[idx].original_mode = 0;
         kgpc_stream_cache[idx].original_dev = 0;
         kgpc_stream_cache[idx].original_ino = 0;
+        kgpc_stream_cache[idx].has_stat = 0;
     }
 }
 
@@ -539,12 +543,21 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
         {
             /* Handle and mode match, but the fd could have been recycled
              * (closed and reopened to a different file).  Use fstat to
-             * compare device+inode with the originals. */
-            struct stat st;
-            if (fstat(h, &st) == 0 &&
-                st.st_dev == kgpc_stream_cache[idx].original_dev &&
-                st.st_ino == kgpc_stream_cache[idx].original_ino)
+             * compare device+inode with the originals when available. */
+            if (kgpc_stream_cache[idx].has_stat)
             {
+                struct stat st;
+                if (fstat(h, &st) == 0 &&
+                    st.st_dev == kgpc_stream_cache[idx].original_dev &&
+                    st.st_ino == kgpc_stream_cache[idx].original_ino)
+                {
+                    cache_valid = 1;
+                }
+            }
+            else
+            {
+                /* fstat was unavailable when the cache was created (e.g.
+                 * special fd); fall back to handle+mode validation only. */
                 cache_valid = 1;
             }
         }
