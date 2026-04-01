@@ -13912,10 +13912,17 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     snprintf(buffer, sizeof(buffer), "%s:\n", except_label);
     inst_list = add_inst(inst_list, buffer);
 
+    /* Set the after-label so codegen_on_exception handlers can jump to it
+       after executing their body (only one 'on' clause should fire). */
+    const char *saved_on_except_after = ctx->on_except_after_label;
+    ctx->on_except_after_label = after_label;
+
     if (except_stmts != NULL)
         inst_list = codegen_statement_list(except_stmts, inst_list, ctx, symtab);
     else
         inst_list = add_inst(inst_list, "\t# EXCEPT block with no handlers\n");
+
+    ctx->on_except_after_label = saved_on_except_after;
 
     snprintf(buffer, sizeof(buffer), "%s:\n", after_label);
     inst_list = add_inst(inst_list, buffer);
@@ -13928,9 +13935,72 @@ static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst
     StackNode_t *exception_var_node = NULL;
     char buffer[CODEGEN_MAX_INST_BUF];
     char *var_name = stmt->stmt_data.on_exception_data.exception_var_name;
+    char *type_name = stmt->stmt_data.on_exception_data.exception_type_name;
     const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
 
-    if (var_name != NULL) {
+    /* Determine the effective exception type for dispatch.
+     * Pascal has two forms:
+     *   on E: ExceptionType do ...   → var_name="E", type_name="ExceptionType"
+     *   on ExceptionType do ...      → var_name="ExceptionType", type_name=NULL
+     * In the second form, var_name is actually the type name. Detect this by
+     * checking if var_name resolves to a class/record type in the symbol table. */
+    const char *effective_type = type_name;
+    int var_is_actually_type = 0;
+    if (effective_type == NULL && var_name != NULL && symtab != NULL)
+    {
+        HashNode_t *sym = NULL;
+        if (FindSymbol(&sym, symtab, var_name) != 0 && sym != NULL &&
+            sym->hash_type == HASHTYPE_TYPE)
+        {
+            effective_type = var_name;
+            var_is_actually_type = 1;
+        }
+    }
+
+    /* ── Type-based dispatch: check if current exception matches this handler ── */
+    char skip_label[18];
+    int has_type_check = 0;
+    if (effective_type != NULL)
+    {
+        gen_label(skip_label, sizeof(skip_label), ctx);
+        has_type_check = 1;
+
+        inst_list = add_inst(inst_list, "\t# ON exception type check\n");
+        /* Load current exception object pointer */
+        inst_list = add_inst(inst_list, "\tmovq\tkgpc_current_exception(%rip), %rax\n");
+        /* If exception is nil, skip this handler */
+        inst_list = add_inst(inst_list, "\ttestq\t%rax, %rax\n");
+        snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+        inst_list = add_inst(inst_list, buffer);
+        /* Load typeinfo from exception instance: VMT pointer → typeinfo slot */
+        inst_list = add_inst(inst_list, "\tmovq\t(%rax), %rax\n");       /* VMT pointer */
+        inst_list = add_inst(inst_list, "\tmovq\t56(%rax), %rax\n");     /* vTypeInfo slot */
+
+        /* Call kgpc_rtti_is(exception_typeinfo, handler_typeinfo) */
+        if (codegen_target_is_windows())
+        {
+            inst_list = add_inst(inst_list, "\tmovq\t%rax, %rcx\n");
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rdx\n", effective_type);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            inst_list = add_inst(inst_list, "\tmovq\t%rax, %rdi\n");
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rsi\n", effective_type);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_rtti_is");
+        free_arg_regs();
+        /* If kgpc_rtti_is returned 0, skip this handler */
+        inst_list = add_inst(inst_list, "\ttestl\t%eax, %eax\n");
+        snprintf(buffer, sizeof(buffer), "\tje\t%s\n", skip_label);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* Only create variable binding for the 'on E: Type do' form
+     * (not the bare 'on Type do' form where var_name is the type). */
+    if (var_name != NULL && !var_is_actually_type) {
         EnterScope(symtab, 0);
         exception_var_node = add_l_x(var_name, 8);
 
@@ -13954,9 +14024,23 @@ static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst
     if (stmt->stmt_data.on_exception_data.handler_stmt != NULL)
         inst_list = codegen_stmt(stmt->stmt_data.on_exception_data.handler_stmt, inst_list, ctx, symtab);
 
-    if (var_name != NULL) {
+    if (var_name != NULL && !var_is_actually_type) {
         remove_last_l_x(var_name);
         LeaveScope(symtab);
+    }
+
+    /* After executing the handler body, jump past the remaining handlers */
+    if (has_type_check && ctx->on_except_after_label != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", ctx->on_except_after_label);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* Skip label for when exception type doesn't match this handler */
+    if (has_type_check)
+    {
+        snprintf(buffer, sizeof(buffer), "%s:\n", skip_label);
+        inst_list = add_inst(inst_list, buffer);
     }
 
     return inst_list;
