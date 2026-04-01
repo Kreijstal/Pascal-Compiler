@@ -528,12 +528,12 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
          * original handle and mode haven't changed (which would indicate
          * the FPC RTL closed and reopened the file).
          *
-         * We intentionally do NOT compare fd_pos vs stream_pos here:
-         * stdio buffering (fgetc read-ahead) causes the kernel file
-         * position (shared between h and the dup'd fd) to diverge from
-         * the logical stream position (which accounts for buffered but
-         * unconsumed data and ungetc).  Recreating the FILE* on every
-         * call would discard buffered data and corrupt reads. */
+         * Critical invariant: when h and cached_fd share the same kernel
+         * file description (dup'd from the same open), lseek on both
+         * returns the same position.  After FPC RTL close+reopen, h is
+         * a NEW file description (position 0) while cached_fd still
+         * references the OLD one (at whatever position reading left it).
+         * Comparing the two kernel positions detects this stale case. */
         int is_closed = (file->mode == (int32_t)0xD7B0 || file->mode == 0);
         int idx = kgpc_stream_cache_find(file);
         int cache_valid = 0;
@@ -551,7 +551,27 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
                     st.st_dev == kgpc_stream_cache[idx].original_dev &&
                     st.st_ino == kgpc_stream_cache[idx].original_ino)
                 {
-                    cache_valid = 1;
+                    /* Same file on disk.  But h might be a freshly-opened
+                     * fd (after FPC RTL close+reopen) while cached_fd
+                     * still refers to the old file description.  When h
+                     * and cached_fd share the same kernel file description
+                     * (normal case), lseek returns the same position for
+                     * both because offset is per-description, not per-fd.
+                     * After close+reopen, they are different descriptions
+                     * with independent positions — detect via divergence. */
+                    off_t h_pos = lseek(h, 0, SEEK_CUR);
+                    off_t c_pos = lseek(cached_fd, 0, SEEK_CUR);
+                    if (h_pos != (off_t)-1 && c_pos != (off_t)-1
+                        && h_pos != c_pos)
+                    {
+                        /* Positions differ: h and cached_fd are different
+                         * file descriptions.  Cache is stale. */
+                        cache_valid = 0;
+                    }
+                    else
+                    {
+                        cache_valid = 1;
+                    }
                 }
             }
             else
