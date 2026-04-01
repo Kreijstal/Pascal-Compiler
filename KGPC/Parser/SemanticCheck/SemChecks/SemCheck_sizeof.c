@@ -1084,32 +1084,24 @@ static int get_type_alignment_from_ref(SymTab_t *symtab, int type_tag,
                 if (alias->is_array)
                 {
                     int elem_align = 1;
-                    if (alias->array_element_type == RECORD_TYPE)
+                    /* Prioritize resolving the element type via its identifier
+                     * if available.  This works for all element types (records,
+                     * named primitives, other aliases). */
+                    if (alias->array_element_type_id != NULL)
                     {
-                        /* For record-element arrays, look up the record alignment. */
-                        if (alias->array_element_type_id != NULL)
-                        {
-                            int status = get_type_alignment_from_ref(symtab,
-                                alias->array_element_type, alias->array_element_type_id,
-                                &elem_align, depth + 1, line_num);
-                            if (status != 0)
-                                elem_align = 1;
-                        }
+                        int status = get_type_alignment_from_ref(symtab,
+                            alias->array_element_type, alias->array_element_type_id,
+                            &elem_align, depth + 1, line_num);
+                        if (status != 0)
+                            elem_align = 1;
                     }
+                    /* Fallback to determining alignment from the type tag and size. */
                     else if (alias->array_element_type != UNKNOWN_TYPE)
                     {
                         long long elem_size = sizeof_from_type_tag(alias->array_element_type);
                         if (elem_size > 0)
                             elem_align = fpc_type_alignment_from_size(elem_size,
                                 alias->array_element_type);
-                    }
-                    else if (alias->array_element_type_id != NULL)
-                    {
-                        int status = get_type_alignment_from_ref(symtab,
-                            UNKNOWN_TYPE, alias->array_element_type_id,
-                            &elem_align, depth + 1, line_num);
-                        if (status != 0)
-                            elem_align = 1;
                     }
                     *align_out = elem_align;
                     return 0;

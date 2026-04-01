@@ -331,6 +331,12 @@ typedef struct KGPCTextRec
     void *fullname;         /* offset 632 */
 } KGPCTextRec;
 
+/* Ensure TEXT_TYPE size in the compiler stays in sync with this struct.
+ * sizeof_from_type_tag(TEXT_TYPE) returns 640; any layout change here
+ * must be mirrored there. */
+_Static_assert(sizeof(KGPCTextRec) == 640,
+    "KGPCTextRec size must be 640 to match TEXT_TYPE in SemCheck_sizeof.c");
+
 typedef struct KGPCFileRec
 {
     int32_t handle;
@@ -431,12 +437,16 @@ static void kgpc_textrec_init_defaults(KGPCTextRec *file)
 }
 
 /* Side-table tracking which handle+mode each cached FILE* was created for.
- * Detects stale caches after FPC RTL close+reopen cycles. */
+ * Detects stale caches after FPC RTL close+reopen cycles.
+ * Also stores the original file's dev+ino to detect fd recycling
+ * (same fd number reused for a different file). */
 #define KGPC_STREAM_CACHE_SLOTS 16
 static struct {
     KGPCTextRec *textrec;
     int32_t original_handle;
     int32_t original_mode;
+    dev_t original_dev;
+    ino_t original_ino;
 } kgpc_stream_cache[KGPC_STREAM_CACHE_SLOTS];
 
 static int kgpc_stream_cache_find(KGPCTextRec *file)
@@ -465,6 +475,18 @@ static void kgpc_stream_cache_set(KGPCTextRec *file, int32_t handle, int32_t mod
         kgpc_stream_cache[idx].textrec = file;
         kgpc_stream_cache[idx].original_handle = handle;
         kgpc_stream_cache[idx].original_mode = mode;
+        /* Record device+inode so we can detect fd recycling later. */
+        struct stat st;
+        if (handle >= 0 && fstat(handle, &st) == 0)
+        {
+            kgpc_stream_cache[idx].original_dev = st.st_dev;
+            kgpc_stream_cache[idx].original_ino = st.st_ino;
+        }
+        else
+        {
+            kgpc_stream_cache[idx].original_dev = 0;
+            kgpc_stream_cache[idx].original_ino = 0;
+        }
     }
 }
 
@@ -476,6 +498,8 @@ static void kgpc_stream_cache_clear(KGPCTextRec *file)
         kgpc_stream_cache[idx].textrec = NULL;
         kgpc_stream_cache[idx].original_handle = -1;
         kgpc_stream_cache[idx].original_mode = 0;
+        kgpc_stream_cache[idx].original_dev = 0;
+        kgpc_stream_cache[idx].original_ino = 0;
     }
 }
 
@@ -513,7 +537,16 @@ static FILE *kgpc_textrec_get_stream(KGPCTextRec *file, FILE *fallback)
             h == kgpc_stream_cache[idx].original_handle &&
             file->mode == kgpc_stream_cache[idx].original_mode)
         {
-            cache_valid = 1;
+            /* Handle and mode match, but the fd could have been recycled
+             * (closed and reopened to a different file).  Use fstat to
+             * compare device+inode with the originals. */
+            struct stat st;
+            if (fstat(h, &st) == 0 &&
+                st.st_dev == kgpc_stream_cache[idx].original_dev &&
+                st.st_ino == kgpc_stream_cache[idx].original_ino)
+            {
+                cache_valid = 1;
+            }
         }
         if (cache_valid)
             return cached;
