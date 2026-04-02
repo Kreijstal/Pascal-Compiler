@@ -9729,6 +9729,40 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                             has_record_or_dynarray = 1;
                         }
                     }
+                    /* Value ShortString parameters call kgpc_shortstring_to_shortstring
+                     * at entry, which clobbers subsequent parameter registers.
+                     * Trigger the presave mechanism so all registers are saved first. */
+                    if (!has_record_or_dynarray &&
+                        !scan_decl->tree_data.var_decl_data.is_const_param)
+                    {
+                        int scan_is_ss = 0;
+                        if (scan_type == SHORTSTRING_TYPE)
+                            scan_is_ss = 1;
+                        if (!scan_is_ss && scan_cached_type != NULL)
+                        {
+                            if (kgpc_type_is_shortstring(scan_cached_type))
+                                scan_is_ss = 1;
+                            else
+                            {
+                                struct TypeAlias *sa = kgpc_type_get_type_alias(scan_cached_type);
+                                if (sa != NULL && sa->is_shortstring)
+                                    scan_is_ss = 1;
+                            }
+                        }
+                        if (!scan_is_ss && scan_type_node != NULL && scan_type_node->type != NULL)
+                        {
+                            if (kgpc_type_is_shortstring(scan_type_node->type))
+                                scan_is_ss = 1;
+                            else
+                            {
+                                struct TypeAlias *sa = kgpc_type_get_type_alias(scan_type_node->type);
+                                if (sa != NULL && sa->is_shortstring)
+                                    scan_is_ss = 1;
+                            }
+                        }
+                        if (scan_is_ss)
+                            has_record_or_dynarray = 1;
+                    }
                 }
                 scan_ids = scan_ids->next;
             }
@@ -9739,6 +9773,16 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
             while(scan_ids != NULL)
             {
                 param_count_for_alloc++;
+                /* Value ShortString array params also need presave */
+                if (!has_record_or_dynarray &&
+                    scan_decl->tree_data.arr_decl_data.is_shortstring)
+                {
+                    HashNode_t *sym = NULL;
+                    if (symtab != NULL)
+                        FindSymbol(&sym, symtab, (char *)scan_ids->cur);
+                    if (sym == NULL || !sym->is_var_parameter)
+                        has_record_or_dynarray = 1;
+                }
                 scan_ids = scan_ids->next;
             }
         }
@@ -10131,12 +10175,16 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                                 is_shortstring_param = 1;
                         }
                     }
-                    if (is_shortstring_param && !is_var_param)
+                    int is_const_param = arg_decl->tree_data.var_decl_data.is_const_param;
+                    int is_value_shortstring = is_shortstring_param && !is_var_param && !is_const_param;
+                    if (is_value_shortstring)
                     {
                         /* VALUE ShortString parameters: allocate full shortstring
                          * buffer so the callee owns a local copy.  The incoming
                          * register/stack slot carries a pointer to the caller's
-                         * ShortString; we will copy it below. */
+                         * ShortString; we will copy it below.
+                         * NOTE: const ShortString params are passed by reference
+                         * (like var) and must NOT get a local copy. */
                         int ss_size = 256;
                         if (resolved_type_node != NULL && resolved_type_node->type != NULL)
                         {
@@ -10158,7 +10206,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
                     if (arg_stack != NULL &&
                         (symbol_is_var_param || is_array_type || is_shortstring_param) &&
-                        !(is_shortstring_param && !is_var_param))
+                        !is_value_shortstring)
                         arg_stack->is_reference = 1;
                     if (use_extended_stack_param)
                     {
@@ -10216,7 +10264,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         free_reg(get_reg_stack(), src_addr_reg);
                         stack_arg_offset += 16;
                     }
-                    else if (is_shortstring_param && !is_var_param)
+                    else if (is_value_shortstring)
                     {
                         /* VALUE ShortString parameter: copy from caller's buffer
                          * into the local stack buffer allocated above.
