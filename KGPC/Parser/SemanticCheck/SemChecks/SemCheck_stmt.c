@@ -7092,7 +7092,9 @@ skip_type_receiver_rewrite:
                                           (actual_type == RECORD_TYPE) ||
                                           (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
                                           (formal_type == CHAR_TYPE && actual_type == STRING_TYPE) ||
-                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE)))
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE) ||
+                                          (formal_type == STRING_TYPE && actual_type == SHORTSTRING_TYPE) ||
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == STRING_TYPE)))
                                 {
                                     semantic_error_at(stmt->line_num, stmt->col_num, -1,
                                         "Incompatible types: got \"%s\" expected \"%s\"",
