@@ -9144,6 +9144,52 @@ static ListNode_t *codegen_builtin_read_like(struct Statement *stmt, ListNode_t 
             args = args->next;
             continue;
         }
+
+        /* Special handling for SHORTSTRING_TYPE - use kgpc_text_readln_into_shortstring */
+        if (expr_type == SHORTSTRING_TYPE)
+        {
+            const char *file_dest64 = current_arg_reg64(0);
+            const char *string_dest64 = current_arg_reg64(1);
+            
+            /* Set file argument (or NULL for stdin) */
+            if (has_file_arg && file_spill != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", file_spill->offset, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\txorq\t%s, %s\n", file_dest64, file_dest64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            
+            /* Load shortstring address from stack */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", addr_spill->offset, string_dest64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Set max length = 255 (standard ShortString) */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$255, %s\n", current_arg_reg32(2));
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Call kgpc_text_readln_into_shortstring */
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_text_readln_into_shortstring");
+            free_arg_regs();
+            
+            /* Invalidate static link cache after call */
+            if (ctx->static_link_reg != NULL)
+            {
+                free_reg(get_reg_stack(), ctx->static_link_reg);
+                ctx->static_link_reg = NULL;
+                ctx->static_link_reg_level = 0;
+            }
+
+            if (read_line)
+                read_consumed_line = 1;
+            
+            args = args->next;
+            continue;
+        }
         
         /* Now set up arguments for non-variadic read functions:
          * arg0 (rdi/rcx): file pointer (NULL for stdin)

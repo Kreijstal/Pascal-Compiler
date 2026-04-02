@@ -3060,7 +3060,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         expr_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, MUTATE);
         
-        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE &&
+        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && !is_string_type(expr_type) &&
             expr_type != REAL_TYPE && !semcheck_expr_is_real_family(expr))
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",

@@ -3922,6 +3922,93 @@ def _add_pp_pas_bootstrap_test():
         asm_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap.s")
         executable_file = os.path.join(TEST_OUTPUT_DIR, "pp_bootstrap" + EXE_EXT)
 
+        # Generate msgtxt.inc and msgidx.inc by compiling and running the real
+        # FPC msg2inc.pp utility with KGPC (same approach as
+        # scripts/profile_large_unit_graph.py ensure_bootstrap_prereqs).
+        compiler_dir = os.path.join(fpc_src, "compiler")
+        msgtxt_inc = os.path.join(compiler_dir, "msgtxt.inc")
+        msgidx_inc = os.path.join(compiler_dir, "msgidx.inc")
+        if not os.path.isfile(msgtxt_inc) or not os.path.isfile(msgidx_inc):
+            msg2inc_pp = os.path.join(fpc_src, "compiler", "utils", "msg2inc.pp")
+            assert os.path.isfile(msg2inc_pp), f"msg2inc.pp not found: {msg2inc_pp}"
+
+            msg2inc_asm = os.path.join(TEST_OUTPUT_DIR, "msg2inc.s")
+            msg2inc_exe = os.path.join(TEST_OUTPUT_DIR, "msg2inc" + EXE_EXT)
+
+            # Compile msg2inc.pp with KGPC using the same RTL flags
+            msg2inc_flags = [
+                "--no-stdlib",
+                "-DCPU64", "-DCPUX86_64", "-Dx86_64", "-DFPC",
+                "-DLINUX", "-DUNIX",
+                "-DFPC_HAS_TYPE_EXTENDED", "-DSUPPORT_EXTENDED", "-Sg",
+                "-I" + os.path.join(fpc_src, "rtl", "objpas"),
+                "-I" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+                "-I" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+                "-I" + os.path.join(fpc_src, "rtl", "linux"),
+                "-I" + os.path.join(fpc_src, "rtl", "unix"),
+                "-I" + os.path.join(fpc_src, "rtl", "inc"),
+                "-I" + os.path.join(fpc_src, "rtl", "x86_64"),
+                "-I" + os.path.join(fpc_src, "rtl", "linux", "x86_64"),
+                "-I" + os.path.join(fpc_src, "rtl", "unix", "x86_64"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "unix"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "linux"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "inc"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "sysutils"),
+                "-Fu" + os.path.join(fpc_src, "rtl", "objpas", "classes"),
+            ]
+            if _FPC_RTL_AST_CACHE_DIR is not None:
+                msg2inc_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
+
+            try:
+                run_compiler(msg2inc_pp, msg2inc_asm, flags=msg2inc_flags, timeout=120)
+            except subprocess.CalledProcessError as e:
+                self.fail(f"msg2inc.pp compilation failed: {e}")
+                return
+
+            # Link msg2inc
+            runtime_lib = _RUNTIME_LIB_PATH
+            assert runtime_lib and os.path.isfile(runtime_lib), (
+                f"KGPC runtime library not found: {runtime_lib!r}"
+            )
+            link_cmd = list(self.c_compiler_cmd) + [
+                "-O2",
+                "-no-pie" if not IS_WINDOWS_ABI else "-static",
+                "-o", msg2inc_exe,
+                msg2inc_asm,
+                runtime_lib,
+            ]
+            link_cmd.extend(LINK_ARGS_BY_ASM.get(msg2inc_asm, []))
+            try:
+                subprocess.run(link_cmd, check=True, capture_output=True, text=True,
+                               timeout=60)
+            except subprocess.CalledProcessError as e:
+                self.fail(f"msg2inc linking failed: {e.stderr}")
+                return
+
+            # Run msg2inc to generate msgtxt.inc and msgidx.inc
+            run_cmd = [os.path.abspath(msg2inc_exe), "msg/errore.msg", "msg", "msg"]
+            try:
+                subprocess.run(run_cmd, check=True, capture_output=True, text=True,
+                               cwd=compiler_dir, timeout=30)
+            except subprocess.CalledProcessError as e:
+                self.fail(f"msg2inc execution failed: {e.stderr}")
+                return
+
+            # Verify and SHA256 the generated files
+            assert os.path.isfile(msgtxt_inc) and os.path.getsize(msgtxt_inc) > 0, (
+                f"msg2inc produced empty or missing {msgtxt_inc}"
+            )
+            assert os.path.isfile(msgidx_inc) and os.path.getsize(msgidx_inc) > 0, (
+                f"msg2inc produced empty or missing {msgidx_inc}"
+            )
+            with open(msgtxt_inc, "rb") as f:
+                msgtxt_sha = hashlib.sha256(f.read()).hexdigest()
+            with open(msgidx_inc, "rb") as f:
+                msgidx_sha = hashlib.sha256(f.read()).hexdigest()
+            print(f"msgtxt.inc sha256: {msgtxt_sha}", file=sys.stderr)
+            print(f"msgidx.inc sha256: {msgidx_sha}", file=sys.stderr)
+
         try:
             run_compiler(pp_pas, asm_file, flags=pp_flags, timeout=600)
         except subprocess.CalledProcessError as e:
