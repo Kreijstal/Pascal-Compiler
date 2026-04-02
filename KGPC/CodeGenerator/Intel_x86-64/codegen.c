@@ -10104,6 +10104,33 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
                         real_storage_size < 16)
                         use_sse_reg = 1;
+                    /* Also detect shortstring from inferred_type_tag when resolved/cached types
+                     * didn't flag it (e.g. bare 'string' under {$H-}). */
+                    if (!is_shortstring_param && inferred_type_tag == SHORTSTRING_TYPE)
+                        is_shortstring_param = 1;
+                    /* Under {$H-}, 'string' parameters may have STRING_TYPE in the
+                     * tree but the actual code treats them as ShortString.  Detect
+                     * this by checking the cached_arg_type's type_alias. */
+                    if (!is_shortstring_param && !is_var_param &&
+                        (inferred_type_tag == STRING_TYPE || type == STRING_TYPE) &&
+                        cached_arg_type != NULL)
+                    {
+                        struct TypeAlias *ca_alias = kgpc_type_get_type_alias(cached_arg_type);
+                        if (ca_alias != NULL && ca_alias->is_shortstring)
+                            is_shortstring_param = 1;
+                        /* Primitive STRING_TYPE that isn't a heap-allocated AnsiString
+                         * and has no type_alias is likely a {$H-} shortstring.
+                         * Check kgpc_type_sizeof: shortstrings have fixed sizes (1-256),
+                         * while AnsiString/heap has size 8 (pointer). */
+                        if (!is_shortstring_param &&
+                            cached_arg_type->kind == TYPE_KIND_PRIMITIVE &&
+                            kgpc_type_get_primitive_tag(cached_arg_type) == STRING_TYPE)
+                        {
+                            long long tsize = kgpc_type_sizeof(cached_arg_type);
+                            if (tsize > 8 && tsize <= 256)
+                                is_shortstring_param = 1;
+                        }
+                    }
                     if (is_shortstring_param && !is_var_param)
                     {
                         /* VALUE ShortString parameters: allocate full shortstring
