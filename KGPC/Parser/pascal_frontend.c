@@ -1,4 +1,5 @@
 #include "pascal_frontend.h"
+#include "../common/file_lock.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -954,12 +955,83 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         char *cache_path = compute_ast_cache_path(path);
         if (cache_path != NULL)
         {
+            /* If the cache is missing/stale, another process might be building it.
+             * Wait for it to ensure we don't redundantly re-parse. */
+            if (!ast_cache_is_fresh(cache_path, path))
+            {
+                if (file_lock_acquire(cache_path, 60))
+                {
+                    /* Lock acquired! This means either:
+                     * 1. No one else was building it (we're first).
+                     * 2. Someone else finished and released the lock.
+                     * Re-check if it's fresh now. */
+                    if (ast_cache_is_fresh(cache_path, path))
+                    {
+                        /* Someone else finished while we waited. Use their result. */
+                        ast_t *cached_ast = NULL;
+                        char *cached_pp_buf = NULL;
+                        size_t cached_pp_len = 0;
+                        if (ast_cache_load(cache_path, &cached_ast, &cached_pp_buf, &cached_pp_len))
+                        {
+                            fprintf(stderr, "AST cache load success (after wait): %s\n", cache_path);
+                            file_lock_release(cache_path);
+                            free(cache_path);
+
+                            set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
+                            int src_offset = semcheck_register_source_buffer(path, cached_pp_buf, cached_pp_len);
+
+                            if (detect_objfpc_mode(cached_pp_buf, cached_pp_len))
+                                g_objfpc_mode_detected = true;
+
+                            {
+                                size_t raw_len = 0;
+                                char *raw_buf = read_file(path, &raw_len);
+                                if (raw_buf != NULL)
+                                {
+                                    detect_shortstring_default(raw_buf, raw_len, &g_default_shortstring, path);
+                                    free(raw_buf);
+                                }
+                            }
+
+                            Tree_t *tree = NULL;
+                            bool success = false;
+                            if (convert_to_tree)
+                            {
+                                file_to_parse = (char *)path;
+                                from_cparser_set_source_offset(src_offset);
+                                tree = tree_from_pascal_ast(cached_ast);
+                                if (tree != NULL) success = true;
+                            }
+                            else
+                            {
+                                success = true;
+                            }
+                            free_ast(cached_ast);
+                            drain_parser_parse_pools();
+                            free(cached_pp_buf);
+#if !defined(_WIN32) && defined(__GLIBC__)
+                            malloc_trim(0);
+#endif
+                            if (out_tree != NULL)
+                                *out_tree = success ? tree : NULL;
+                            else if (tree != NULL)
+                                destroy_tree(tree);
+
+                            return success;
+                        }
+                    }
+                    /* Still not fresh (we're the first process to build it).
+                     * We'll proceed with normal parsing while holding the lock. */
+                }
+            }
+
             ast_t *cached_ast = NULL;
             char *cached_pp_buf = NULL;
             size_t cached_pp_len = 0;
             if (ast_cache_is_fresh(cache_path, path) &&
                 ast_cache_load(cache_path, &cached_ast, &cached_pp_buf, &cached_pp_len))
             {
+                fprintf(stderr, "AST cache load success: %s\n", cache_path);
                 free(cache_path);
                 /* Set up preprocessed source context (needed for semcheck error reporting) */
                 set_preprocessed_context(cached_pp_buf, cached_pp_len, path);
@@ -1435,6 +1507,8 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
                 if (save_cache_path != NULL && result.value.ast != NULL)
                 {
                     ast_cache_save(save_cache_path, result.value.ast, buffer, length);
+                    /* We might be holding the lock from earlier. Release it now. */
+                    file_lock_release(save_cache_path);
                 }
                 free(save_cache_path);
             }

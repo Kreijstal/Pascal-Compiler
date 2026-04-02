@@ -63,6 +63,7 @@ static int unsetenv(const char *name)
 #include "stacktrace.h"
 #include "unit_paths.h"
 #include "arena.h"
+#include "../common/file_lock.h"
 #include "identifier_utils.h"
 #include "compilation_context.h"
 
@@ -2302,6 +2303,8 @@ static int compile_single_program(
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
+            if (g_codegen_cache_obj_path[0] != '\0')
+                file_lock_release(g_codegen_cache_obj_path);
             exit_code = 1;
         }
         else
@@ -2320,6 +2323,8 @@ static int compile_single_program(
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        if (g_codegen_cache_obj_path[0] != '\0')
+            file_lock_release(g_codegen_cache_obj_path);
         codegen_cache_clear_transient_flags();
     }
 
@@ -2457,6 +2462,20 @@ static void codegen_cache_check(void)
              "%s/%s.o", g_codegen_cache_dir, key);
     snprintf(g_codegen_cache_asm_path, sizeof(g_codegen_cache_asm_path),
              "%s/%s.s", g_codegen_cache_dir, key);
+
+    /* If the cache is missing, wait for any existing lock (another process might be building it). */
+    if (access(g_codegen_cache_obj_path, R_OK) != 0)
+    {
+        if (file_lock_acquire(g_codegen_cache_obj_path, 300))
+        {
+            /* Lock acquired. If the cache now exists, use it. */
+            if (access(g_codegen_cache_obj_path, R_OK) == 0)
+            {
+                file_lock_release(g_codegen_cache_obj_path);
+            }
+            /* If it still doesn't exist, we hold the lock and will populate it later. */
+        }
+    }
 
     if (access(g_codegen_cache_obj_path, R_OK) == 0)
     {
@@ -2722,6 +2741,7 @@ static void codegen_cache_populate(const char *cache_asm_file)
 
     remove(err_file);
     fprintf(stderr, "Codegen cache populated: %s\n", g_codegen_cache_obj_path);
+    file_lock_release(g_codegen_cache_obj_path);
 }
 
 static void emit_link_args(void)
@@ -3592,6 +3612,8 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "Code generation failed; removing incomplete output file.\n");
             remove(output_file);
+            if (g_codegen_cache_obj_path[0] != '\0')
+                file_lock_release(g_codegen_cache_obj_path);
             exit_code = 1;
         }
         else
@@ -3610,6 +3632,8 @@ int main(int argc, char **argv)
     {
         fprintf(stderr, "Semantic analysis failed with %d error(s).\n", sem_result);
         exit_code = sem_result;
+        if (g_codegen_cache_obj_path[0] != '\0')
+            file_lock_release(g_codegen_cache_obj_path);
         codegen_cache_clear_transient_flags();
     }
 
