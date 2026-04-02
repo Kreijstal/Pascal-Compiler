@@ -15732,14 +15732,39 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
                     tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
                 }
+                /* Under {$H-}, the parser sets var_decl_data.type to
+                 * SHORTSTRING_TYPE for bare 'string' declarations.  The
+                 * symbol-table lookup resolves "string" to the generic
+                 * STRING_TYPE alias registered by the system unit.  Honour
+                 * the parser's decision so that Length/Copy/@s[1] emit the
+                 * correct shortstring runtime calls and indexing. */
+                if (tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE &&
+                    resolved_type->type != NULL &&
+                    kgpc_type_is_string(resolved_type->type) &&
+                    !kgpc_type_is_shortstring(resolved_type->type))
+                {
+                    tree->tree_data.var_decl_data.cached_kgpc_type =
+                        create_primitive_type(SHORTSTRING_TYPE);
+                }
+                else
+                {
                 kgpc_type_retain(resolved_type->type);
                 tree->tree_data.var_decl_data.cached_kgpc_type = resolved_type->type;
+                }
                 }
             }
             else if (resolved_type != NULL && resolved_type->type == NULL && decl_type_id != NULL)
             {
                 const char *type_name = decl_type_base != NULL ? decl_type_base : decl_type_id;
                 int builtin_tag = semcheck_map_builtin_type_name_local(type_name);
+                /* Honour the parser's {$H-} remap: if the tree tag is
+                 * SHORTSTRING_TYPE but the name lookup yields STRING_TYPE,
+                 * use the tree tag so the runtime gets the right calls. */
+                if (builtin_tag == STRING_TYPE &&
+                    tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE)
+                {
+                    builtin_tag = SHORTSTRING_TYPE;
+                }
                 if (builtin_tag == STRING_TYPE || builtin_tag == SHORTSTRING_TYPE)
                 {
                     tree->tree_data.var_decl_data.cached_kgpc_type =
@@ -15752,6 +15777,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 /* Fallback: Create KgpcType for built-in type names not in symbol table */
                 const char *type_id = decl_type_base != NULL ? decl_type_base : decl_type_id;
                 int builtin_tag = semcheck_map_builtin_type_name_local(type_id);
+                /* Honour the parser's {$H-} remap. */
+                if (builtin_tag == STRING_TYPE &&
+                    tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE)
+                {
+                    builtin_tag = SHORTSTRING_TYPE;
+                }
                 if (builtin_tag != UNKNOWN_TYPE)
                 {
                     tree->tree_data.var_decl_data.cached_kgpc_type = create_primitive_type(builtin_tag);
@@ -16113,7 +16144,12 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
 
                         var_type = get_var_type_from_node(type_node);
                         int resolved_tag = map_var_type_to_type_tag(var_type);
-                        if (resolved_tag != UNKNOWN_TYPE)
+                        /* Preserve {$H-} remap: if the parser set
+                         * SHORTSTRING_TYPE but the type-node resolved to
+                         * STRING_TYPE, keep the parser's tag. */
+                        if (resolved_tag != UNKNOWN_TYPE &&
+                            !(declared_type_tag == SHORTSTRING_TYPE &&
+                              resolved_tag == STRING_TYPE))
                             tree->tree_data.var_decl_data.type = resolved_tag;
                         struct TypeAlias *alias = get_type_alias_from_node(type_node);
                         if (alias != NULL && alias->is_array)
@@ -16217,6 +16253,17 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         if (type_node->type != NULL)
                         {
                             var_kgpc_type = type_node->type;
+                            /* Under {$H-}, the parser sets declared_type_tag
+                             * to SHORTSTRING_TYPE but the symtab lookup
+                             * resolves "string" to STRING_TYPE.  Override
+                             * with a fresh SHORTSTRING_TYPE primitive so
+                             * Length/Copy/@s[1] work correctly. */
+                            if (declared_type_tag == SHORTSTRING_TYPE &&
+                                var_kgpc_type->kind == TYPE_KIND_PRIMITIVE &&
+                                var_kgpc_type->info.primitive_type_tag == STRING_TYPE)
+                            {
+                                var_kgpc_type = create_primitive_type(SHORTSTRING_TYPE);
+                            }
                             /* If the type node has a primitive KgpcType but the alias says
                              * it's a pointer, rebuild as a proper pointer type so downstream
                              * pointer dereferences resolve correctly. */
@@ -18830,6 +18877,12 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                             {
                                 int builtin_tag = semcheck_map_builtin_type_name_local(
                                     param_tree->tree_data.var_decl_data.type_id);
+                                /* Honour the parser's {$H-} remap for parameters. */
+                                if (builtin_tag == STRING_TYPE &&
+                                    param_tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE)
+                                {
+                                    builtin_tag = SHORTSTRING_TYPE;
+                                }
                                 if (builtin_tag != UNKNOWN_TYPE)
                                     param_type = create_primitive_type(builtin_tag);
                             }

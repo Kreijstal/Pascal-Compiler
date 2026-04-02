@@ -572,6 +572,8 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
                 return 1;
             }
         }
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
     }
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
