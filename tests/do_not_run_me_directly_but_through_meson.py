@@ -4002,8 +4002,10 @@ def _add_pp_pas_bootstrap_test():
             assert os.path.isfile(msgidx_inc) and os.path.getsize(msgidx_inc) > 0, (
                 f"msg2inc produced empty or missing {msgidx_inc}"
             )
-            msgtxt_sha = hashlib.sha256(open(msgtxt_inc, "rb").read()).hexdigest()
-            msgidx_sha = hashlib.sha256(open(msgidx_inc, "rb").read()).hexdigest()
+            with open(msgtxt_inc, "rb") as f:
+                msgtxt_sha = hashlib.sha256(f.read()).hexdigest()
+            with open(msgidx_inc, "rb") as f:
+                msgidx_sha = hashlib.sha256(f.read()).hexdigest()
             print(f"msgtxt.inc sha256: {msgtxt_sha}", file=sys.stderr)
             print(f"msgidx.inc sha256: {msgidx_sha}", file=sys.stderr)
 
