@@ -10072,6 +10072,49 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Handle string assignment to string variables */
         if (var_type == STRING_TYPE)
         {
+            /* Under {$H-}, a variable with STRING_TYPE tag may actually be backed
+             * by ShortString storage (256-byte stack buffer with length byte).
+             * Detect this and route to shortstring-aware assignment instead of
+             * kgpc_string_assign which would corrupt the buffer by writing a pointer. */
+            int lhs_is_actually_shortstring =
+                codegen_expr_is_shortstring_array(var_expr) ||
+                codegen_expr_is_shortstring_value_ctx(var_expr, ctx);
+            if (lhs_is_actually_shortstring)
+            {
+                Register_t *addr_reg = NULL;
+                inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+                if (codegen_had_error(ctx) || addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    if (addr_reg != NULL)
+                        free_reg(get_reg_stack(), addr_reg);
+                    return inst_list;
+                }
+
+                int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+                if (array_size <= 1)
+                    array_size = 256;
+
+                int rhs_is_shortstring = codegen_expr_is_shortstring_value_ctx(assign_expr, ctx) ||
+                    codegen_expr_is_shortstring_value_local(assign_expr) ||
+                    expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE;
+
+                if (rhs_is_shortstring)
+                {
+                    /* Both sides are ShortString — copy preserving the length byte */
+                    inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
+                }
+                else
+                {
+                    /* RHS is an AnsiString or string literal — convert to ShortString
+                     * (kgpc_string_to_shortstring writes length byte + payload) */
+                    inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
+                }
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
             int inner_is_shortstring = codegen_expr_is_shortstring_value_ctx(assign_expr, ctx);
             if (!inner_is_shortstring && assign_expr != NULL &&
                 assign_expr->type == EXPR_TYPECAST &&
