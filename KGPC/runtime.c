@@ -4217,6 +4217,38 @@ void kgpc_text_readln_into_char(KGPCTextRec *file, char *target)
     free(line);
 }
 
+void kgpc_text_readln_into_shortstring(KGPCTextRec *file, unsigned char *target, int max_len)
+{
+    /* target[0] = length byte, target[1..max_len] = character data */
+    if (target == NULL)
+        return;
+    if (max_len < 0)
+        max_len = 0;
+    if (max_len > 255)
+        max_len = 255;
+
+    FILE *stream = kgpc_text_input_stream(file);
+    if (stream == NULL)
+    {
+        target[0] = 0;
+        return;
+    }
+
+    char *line = kgpc_text_read_line_from_stream(stream);
+    if (line == NULL)
+    {
+        target[0] = 0;
+        return;
+    }
+
+    int len = (int)strlen(line);
+    if (len > max_len)
+        len = max_len;
+    target[0] = (unsigned char)len;
+    memcpy(target + 1, line, len);
+    free(line);
+}
+
 void kgpc_text_readln_discard(KGPCTextRec *file)
 {
     FILE *stream = kgpc_text_input_stream(file);
