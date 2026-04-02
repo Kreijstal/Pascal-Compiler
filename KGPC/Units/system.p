@@ -2053,7 +2053,7 @@ end;
 begin
     InOutRes := 0;
     FirstDotAtFileNameStartIsExtension := False;
-    DefaultSystemCodePage := 0;
+    DefaultSystemCodePage := 65001;
     DefaultUnicodeCodePage := 65001;
     DefaultFileSystemCodePage := 65001;
     DefaultRTLFileSystemCodePage := DefaultFileSystemCodePage;
