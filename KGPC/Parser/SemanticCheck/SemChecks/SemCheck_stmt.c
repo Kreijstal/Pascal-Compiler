@@ -572,6 +572,8 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
                 return 1;
             }
         }
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
     }
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
@@ -7090,7 +7092,9 @@ skip_type_receiver_rewrite:
                                           (actual_type == RECORD_TYPE) ||
                                           (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
                                           (formal_type == CHAR_TYPE && actual_type == STRING_TYPE) ||
-                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE)))
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE) ||
+                                          (formal_type == STRING_TYPE && actual_type == SHORTSTRING_TYPE) ||
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == STRING_TYPE)))
                                 {
                                     semantic_error_at(stmt->line_num, stmt->col_num, -1,
                                         "Incompatible types: got \"%s\" expected \"%s\"",
