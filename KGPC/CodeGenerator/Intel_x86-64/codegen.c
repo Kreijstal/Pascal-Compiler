@@ -10104,11 +10104,34 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         (inferred_type_tag == REAL_TYPE || inferred_type_tag == EXTENDED_TYPE) &&
                         real_storage_size < 16)
                         use_sse_reg = 1;
-                    if (use_extended_stack_param)
+                    if (is_shortstring_param && !is_var_param)
+                    {
+                        /* VALUE ShortString parameters: allocate full shortstring
+                         * buffer so the callee owns a local copy.  The incoming
+                         * register/stack slot carries a pointer to the caller's
+                         * ShortString; we will copy it below. */
+                        int ss_size = 256;
+                        if (resolved_type_node != NULL && resolved_type_node->type != NULL)
+                        {
+                            int resolved_size = codegen_shortstring_storage_size(resolved_type_node->type);
+                            if (resolved_size > 0) ss_size = resolved_size;
+                        }
+                        else if (cached_arg_type != NULL)
+                        {
+                            int cached_size = codegen_shortstring_storage_size(cached_arg_type);
+                            if (cached_size > 0) ss_size = cached_size;
+                        }
+                        arg_stack = add_l_z_bytes((char *)arg_ids->cur, ss_size);
+                        /* NOT setting is_reference — the slot holds the actual
+                         * ShortString data, not a pointer to it. */
+                    }
+                    else if (use_extended_stack_param)
                         arg_stack = add_l_z_bytes((char *)arg_ids->cur, 10);
                     else
                         arg_stack = use_64bit ? add_q_z((char *)arg_ids->cur) : add_l_z((char *)arg_ids->cur);
-                    if (arg_stack != NULL && (symbol_is_var_param || is_array_type || is_shortstring_param))
+                    if (arg_stack != NULL &&
+                        (symbol_is_var_param || is_array_type || is_shortstring_param) &&
+                        !(is_shortstring_param && !is_var_param))
                         arg_stack->is_reference = 1;
                     if (use_extended_stack_param)
                     {
@@ -10165,6 +10188,126 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         free_reg(get_reg_stack(), dst_addr_reg);
                         free_reg(get_reg_stack(), src_addr_reg);
                         stack_arg_offset += 16;
+                    }
+                    else if (is_shortstring_param && !is_var_param)
+                    {
+                        /* VALUE ShortString parameter: copy from caller's buffer
+                         * into the local stack buffer allocated above.
+                         * The incoming register (or stack slot) holds a pointer
+                         * to the caller's ShortString. */
+                        arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+
+                        /* Obtain the source pointer: prefer presaved slot, then
+                         * register, then stack. */
+                        Register_t *src_ptr_reg = NULL;
+                        const char *source_ptr = NULL;
+
+                        StackNode_t *presaved_slot = NULL;
+                        if (has_record_or_dynarray)
+                        {
+                            char presaved_name[64];
+                            snprintf(presaved_name, sizeof(presaved_name),
+                                "__presaved_%s__", (char *)arg_ids->cur);
+                            presaved_slot = find_label(presaved_name);
+                        }
+
+                        if (presaved_slot != NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    presaved_slot->offset, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL && arg_reg != NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                    arg_reg, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                                    stack_arg_offset, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for ShortString parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        Register_t *dst_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                            dst_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                        {
+                            if (src_ptr_reg != NULL)
+                                free_reg(get_reg_stack(), src_ptr_reg);
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate destination register for ShortString parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        int ss_size = arg_stack->element_size;
+                        if (ss_size <= 0) ss_size = 256;
+
+                        /* leaq dest buffer address */
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            arg_stack->offset, dst_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        /* kgpc_shortstring_to_shortstring(dest, dest_size, src) */
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", ss_size);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", source_ptr);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", ss_size);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", source_ptr);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+                        free_arg_regs();
+                        free_reg(get_reg_stack(), dst_addr_reg);
+                        if (src_ptr_reg != NULL)
+                            free_reg(get_reg_stack(), src_ptr_reg);
                     }
                     else if (use_sse_reg)
                     {
@@ -10289,7 +10432,151 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                 arg_ids = arg_decl->tree_data.arr_decl_data.ids;
                 while(arg_ids != NULL)
                 {
+                    int is_value_shortstring = 0;
+                    if (arg_decl->tree_data.arr_decl_data.is_shortstring)
+                    {
+                        /* Check symtab: if NOT a var parameter, this is a
+                         * value ShortString that needs a local copy. */
+                        HashNode_t *sym = NULL;
+                        if (symtab != NULL)
+                            FindSymbol(&sym, symtab, (char *)arg_ids->cur);
+                        if (sym == NULL || !sym->is_var_parameter)
+                            is_value_shortstring = 1;
+                    }
+
                     arg_reg = alloc_integer_arg_reg(1, &next_gpr_index);
+
+                    if (is_value_shortstring)
+                    {
+                        /* Allocate full ShortString buffer for value copy */
+                        int ss_size = 256;
+                        KgpcType *arr_type = arg_decl->tree_data.arr_decl_data.element_kgpc_type;
+                        if (arr_type != NULL)
+                        {
+                            int resolved_size = codegen_shortstring_storage_size(arr_type);
+                            if (resolved_size > 0) ss_size = resolved_size;
+                        }
+                        if (ss_size <= 0)
+                        {
+                            /* Try to compute from range */
+                            int s = arg_decl->tree_data.arr_decl_data.s_range;
+                            int e = arg_decl->tree_data.arr_decl_data.e_range;
+                            if (e >= s && (e - s + 1) > 1)
+                                ss_size = e - s + 1;
+                            else
+                                ss_size = 256;
+                        }
+                        arg_stack = add_l_z_bytes((char *)arg_ids->cur, ss_size);
+                        /* NOT setting is_reference — local value copy */
+
+                        /* Copy from caller's buffer into local stack buffer */
+                        Register_t *src_ptr_reg = NULL;
+                        const char *source_ptr = NULL;
+
+                        StackNode_t *presaved_slot = NULL;
+                        if (has_record_or_dynarray)
+                        {
+                            char presaved_name[64];
+                            snprintf(presaved_name, sizeof(presaved_name),
+                                "__presaved_%s__", (char *)arg_ids->cur);
+                            presaved_slot = find_label(presaved_name);
+                        }
+
+                        if (presaved_slot != NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    presaved_slot->offset, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL && arg_reg != NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                    arg_reg, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL)
+                        {
+                            src_ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg == NULL)
+                                src_ptr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (src_ptr_reg != NULL)
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t%d(%%rbp), %s\n",
+                                    stack_arg_offset, src_ptr_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
+                                stack_arg_offset += CODEGEN_POINTER_SIZE_BYTES;
+                                source_ptr = src_ptr_reg->bit_64;
+                            }
+                        }
+
+                        if (source_ptr == NULL)
+                        {
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate register for ShortString array parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        Register_t *dst_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                            dst_addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (dst_addr_reg == NULL)
+                        {
+                            if (src_ptr_reg != NULL)
+                                free_reg(get_reg_stack(), src_ptr_reg);
+                            codegen_report_error(ctx,
+                                "ERROR: Unable to allocate dest register for ShortString array parameter %s.",
+                                (char *)arg_ids->cur);
+                            return inst_list;
+                        }
+
+                        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                            arg_stack->offset, dst_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", ss_size);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", source_ptr);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dst_addr_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", ss_size);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", source_ptr);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+                        free_arg_regs();
+                        free_reg(get_reg_stack(), dst_addr_reg);
+                        if (src_ptr_reg != NULL)
+                            free_reg(get_reg_stack(), src_ptr_reg);
+                    }
+                    else
+                    {
                     arg_stack = add_q_z((char *)arg_ids->cur);
                     if (arg_stack != NULL)
                         arg_stack->is_reference = 1;
@@ -10340,6 +10627,7 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     inst_list = add_inst(inst_list, buffer);
                     if (stack_value_reg != NULL)
                         free_reg(get_reg_stack(), stack_value_reg);
+                    }
                     arg_ids = arg_ids->next;
                     param_index++;
                 }
