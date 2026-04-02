@@ -2269,7 +2269,9 @@ static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src,
     if (inst_list == NULL || src == NULL || dst == NULL)
         return inst_list;
     char buffer[128];
-    if (src_reg != NULL || src[0] == '$')
+    if (src_reg != NULL)
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src_reg->bit_64, dst);
+    else if (src[0] == '$')
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
     else if (strstr(src, "(%rbp)") != NULL)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
@@ -5783,9 +5785,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
 
                     /* Spill the other operand before shortstring promotion calls,
-                     * since function calls clobber caller-saved registers. */
+                     * since function calls clobber caller-saved registers.
+                     * Use 64-bit register names for movq to avoid register width
+                     * mismatch when the operand string is a 32-bit register name
+                     * (e.g. %ebx when the value is actually a 64-bit pointer). */
                     int ca_right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
                     int ca_left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
+                    const char *right64 = operand_as_reg64(right, right_reg);
+                    const char *left64 = operand_as_reg64(left, left_reg);
                     StackNode_t *spill_other = NULL;
                     if (left_is_shortstring && ca_right_needs_spill)
                     {
@@ -5793,7 +5800,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         if (spill_other != NULL)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                right, spill_other->offset);
+                                right64, spill_other->offset);
                             inst_list = add_inst(inst_list, buffer);
                         }
                     }
@@ -5802,7 +5809,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, right);
+                            spill_other->offset, right64);
                         inst_list = add_inst(inst_list, buffer);
                     }
 
@@ -5813,7 +5820,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         if (spill_other != NULL)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                left, spill_other->offset);
+                                left64, spill_other->offset);
                             inst_list = add_inst(inst_list, buffer);
                         }
                     }
@@ -5822,7 +5829,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, left);
+                            spill_other->offset, left64);
                         inst_list = add_inst(inst_list, buffer);
                     }
 
