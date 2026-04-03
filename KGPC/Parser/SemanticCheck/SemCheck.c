@@ -13541,7 +13541,38 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             if (FindSymbol(&ref, symtab, value_expr->expr_data.id) != 0 && ref != NULL &&
                 (ref->hash_type == HASHTYPE_CONST || ref->is_typed_const))
             {
-                if (ref->const_string_value != NULL)
+                if (ref->const_set_value != NULL && ref->const_set_size > 0)
+                {
+                    KgpcType *set_type = create_primitive_type_with_size(SET_TYPE,
+                        ref->const_set_size);
+                    if (set_type != NULL && set_type->type_alias != NULL)
+                    {
+                        set_type->type_alias->is_set = 1;
+                        set_type->type_alias->set_element_type =
+                            (ref->const_set_size > 4) ? CHAR_TYPE : INT_TYPE;
+                    }
+                    if (set_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, set_type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_set_size = ref->const_set_size;
+                            n2->const_set_value =
+                                (unsigned char *)malloc((size_t)ref->const_set_size);
+                            if (n2->const_set_value != NULL)
+                            {
+                                memcpy(n2->const_set_value, ref->const_set_value,
+                                    (size_t)ref->const_set_size);
+                            }
+                        }
+                    }
+                    destroy_kgpc_type(set_type);
+                }
+                else if (ref->const_string_value != NULL)
                 {
                     const char *sv = ref->const_string_value;
                     if (strlen(sv) == 1 && ref->type != NULL &&
@@ -13654,6 +13685,46 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             }
             destroy_kgpc_type(int_type);
         }
+        else if (expression_is_set_const_expr(symtab, value_expr))
+        {
+            unsigned char set_bytes[32];
+            size_t set_size = 0;
+            long long mask = 0;
+            int is_char_set = 0;
+            if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
+                    &set_size, &mask, &is_char_set) == 0)
+            {
+                KgpcType *set_type = create_primitive_type_with_size(SET_TYPE, (int)set_size);
+                if (set_type != NULL && set_type->type_alias != NULL)
+                {
+                    set_type->type_alias->is_set = 1;
+                    set_type->type_alias->set_element_type = is_char_set ? CHAR_TYPE : INT_TYPE;
+                }
+                if (set_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, set_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        if (set_size > 0)
+                        {
+                            node->const_set_size = (int)set_size;
+                            node->const_set_value = (unsigned char *)malloc(set_size);
+                            if (node->const_set_value != NULL)
+                                memcpy(node->const_set_value, set_bytes, set_size);
+                        }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                destroy_kgpc_type(set_type);
+            }
+        }
         else if (value_expr->type == EXPR_FUNCTION_CALL)
         {
             /* Try full const evaluation silently for expressions like Low()/High(). */
@@ -13684,6 +13755,63 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             else
             {
                 /* Also try real const evaluation */
+                double rval = 0.0;
+                ok = const_fold_real_expr(symtab, value_expr, &rval);
+                if (ok == 0)
+                {
+                    KgpcType *real_type = create_primitive_type(REAL_TYPE);
+                    if (real_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, real_type) == 0)
+                    {
+                        HashNode_t *node = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (node != NULL)
+                        {
+                            node->is_constant = 1;
+                            node->const_real_value = rval;
+                            mark_hashnode_unit_info(symtab, node,
+                                tree->tree_data.const_decl_data.defined_in_unit,
+                                tree->tree_data.const_decl_data.unit_is_public);
+                            mark_hashnode_source_unit(node, target_unit_index);
+                        }
+                    }
+                    destroy_kgpc_type(real_type);
+                }
+            }
+        }
+        else
+        {
+            /* Imported units may need non-trivial foldable integer constants
+             * (e.g. OT_RM_GPR = OT_REGMEM or otf_reg_gpr) before typed const
+             * declarations from the same unit are semchecked. Seed any const
+             * expression we can already fold in this lightweight pass. */
+            long long val = 0;
+            int ok = const_fold_int_expr(symtab, value_expr, &val);
+            if (ok == 0)
+            {
+                int type_tag = (val > INT_MAX || val < INT_MIN) ? INT64_TYPE : INT_TYPE;
+                KgpcType *int_type = create_primitive_type(type_tag);
+                if (int_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, int_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_int_value = val;
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                destroy_kgpc_type(int_type);
+            }
+            else
+            {
                 double rval = 0.0;
                 ok = const_fold_real_expr(symtab, value_expr, &rval);
                 if (ok == 0)
