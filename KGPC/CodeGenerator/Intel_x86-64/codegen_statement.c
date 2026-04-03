@@ -384,6 +384,7 @@ static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_li
 static int codegen_expr_is_shortstring_array(const struct Expression *expr);
 static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
 static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx);
+static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx);
 static int codegen_expr_is_shortstring_value_local(const struct Expression *expr);
 #if KGPC_ENABLE_REG_DEBUG
 extern const char *g_reg_debug_context;
@@ -3250,6 +3251,30 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
     return 1;
 }
 
+/* Detect whether an expression represents a ShortString value on the RHS
+ * of an assignment.  Checks context-aware shortstring detection, local
+ * shortstring markers, the SHORTSTRING_TYPE tag, and typecast wrappers.
+ * Used by both the "LHS is shortstring" and "LHS is AnsiString" assignment
+ * branches to keep the detection logic in a single place. */
+static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    if (codegen_expr_is_shortstring_value_ctx(expr, ctx))
+        return 1;
+    if (codegen_expr_is_shortstring_value_local(expr))
+        return 1;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    /* Unwrap typecasts: e.g. TFormatString(HexStr(...)) where the outer type
+     * is AnsiString but the inner expression returns ShortString. */
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.expr != NULL &&
+        codegen_expr_is_shortstring_value_ctx(expr->expr_data.typecast_data.expr, ctx))
+        return 1;
+    return 0;
+}
+
 static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
 {
     int explicit_shortstring = 0;
@@ -4788,11 +4813,11 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             
             /* Call kgpc_string_to_shortstring(dest, src, max_len).
              * Use the declared capacity for string[N] (= N+1) to avoid
-             * overflowing smaller-than-255 buffers. Falls back to 256
-             * (standard ShortString) when capacity cannot be determined. */
+             * overflowing smaller-than-255 buffers.
+             * codegen_get_shortstring_capacity returns 256 when capacity
+             * cannot be determined; codegen_call_string_to_shortstring
+             * also guards against invalid (<= 1) values internally. */
             int dest_capacity = codegen_get_shortstring_capacity(dest_expr, ctx);
-            if (dest_capacity <= 1)
-                dest_capacity = 256;
             if (codegen_target_is_windows())
             {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
@@ -10099,15 +10124,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     return inst_list;
                 }
 
+                /* codegen_get_shortstring_capacity returns 256 when capacity
+                 * cannot be determined; codegen_call_string_to_shortstring
+                 * also guards against invalid (<= 1) values internally. */
                 int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
-                if (array_size <= 1)
-                    array_size = 256;
 
-                int rhs_is_shortstring = codegen_expr_is_shortstring_value_ctx(assign_expr, ctx) ||
-                    codegen_expr_is_shortstring_value_local(assign_expr) ||
-                    expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE;
-
-                if (rhs_is_shortstring)
+                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
                 {
                     /* Both sides are ShortString — copy preserving the length byte */
                     inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
@@ -10123,15 +10145,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 return inst_list;
             }
 
-            int inner_is_shortstring = codegen_expr_is_shortstring_value_ctx(assign_expr, ctx);
-            if (!inner_is_shortstring && assign_expr != NULL &&
-                assign_expr->type == EXPR_TYPECAST &&
-                assign_expr->expr_data.typecast_data.expr != NULL &&
-                codegen_expr_is_shortstring_value_ctx(
-                    assign_expr->expr_data.typecast_data.expr, ctx))
-            {
-                inner_is_shortstring = 1;
-            }
+            int inner_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx);
 
             /* If assigning a char to string, promote it first.
              * Also check for typecasts from char to string (e.g. AnsiString(char_value))
