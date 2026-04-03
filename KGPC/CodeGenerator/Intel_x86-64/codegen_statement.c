@@ -2838,7 +2838,12 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
         struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
         if (field != NULL && field->type == SHORTSTRING_TYPE)
             return 1;
-        return 0;
+        if (field != NULL)
+            return 0;
+        /* Field lookup failed (e.g. class field where record_type is not
+         * resolved).  Fall through to the array bounds heuristic below so
+         * that char array[0..255] class fields under {$H-} are correctly
+         * detected as ShortString. */
     }
     /* Also check by type bounds: string[N] is char array with bounds 0..N */
     if (expr->is_array_expr &&
@@ -3228,8 +3233,24 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
             struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
             if (field != NULL && field->type == SHORTSTRING_TYPE)
                 *is_shortstring_out = 1;
-            else
+            else if (field != NULL)
                 *is_shortstring_out = 0;
+            else
+            {
+                /* Field lookup failed (e.g. class field where record_type is
+                 * not resolved).  Fall through to the general heuristic so
+                 * that char array[0..255] fields are correctly detected as
+                 * ShortString.  Without this, class fields under {$H-} would
+                 * be treated as plain char arrays and assigned with
+                 * kgpc_string_to_char_array instead of
+                 * kgpc_string_to_shortstring, corrupting the length byte. */
+                int is_short = (*is_shortstring_out != 0);
+                if (!is_short)
+                    is_short = codegen_expr_is_shortstring_array(expr);
+                if (!is_short && lower == 0 && upper == 255)
+                    is_short = 1;
+                *is_shortstring_out = is_short;
+            }
         }
         else
         {
