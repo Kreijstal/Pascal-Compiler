@@ -3236,19 +3236,11 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
                 *is_shortstring_out = 0;
             else
             {
-                /* Field lookup failed (e.g. class field where record_type is
-                 * not resolved).  Fall through to the general heuristic so
-                 * that char array[0..255] fields are correctly detected as
-                 * ShortString.  Without this, class fields under {$H-} would
-                 * be treated as plain char arrays and assigned with
-                 * kgpc_string_to_char_array instead of
-                 * kgpc_string_to_shortstring, corrupting the length byte. */
-                int is_short = (*is_shortstring_out != 0);
-                if (!is_short)
-                    is_short = codegen_expr_is_shortstring_array(expr);
-                if (!is_short && lower == 0 && upper == 255)
-                    is_short = 1;
-                *is_shortstring_out = is_short;
+                /* Field lookup failed — conservatively treat as not-shortstring
+                 * to avoid false positives on plain char array[0..255] fields
+                 * like TextRec.Name.  codegen_expr_is_shortstring_array already
+                 * returns 0 in this case. */
+                *is_shortstring_out = 0;
             }
         }
         else
