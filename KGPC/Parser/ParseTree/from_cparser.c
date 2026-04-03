@@ -8323,6 +8323,11 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             char *mapped_id = NULL;
             int mapped_type = map_type_name(candidate, &mapped_id);
             if (mapped_type != UNKNOWN_TYPE) {
+                /* Under {$H-}, bare 'string' mapped to STRING_TYPE should
+                 * become SHORTSTRING_TYPE for record fields. */
+                if (mapped_type == STRING_TYPE && pascal_frontend_default_shortstring() &&
+                    strcasecmp(candidate, "string") == 0)
+                    mapped_type = SHORTSTRING_TYPE;
                 field_type = mapped_type;
                 field_type_id = mapped_id;
                 free(candidate);
@@ -9727,6 +9732,11 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             char *mapped_id = NULL;
             int mapped_type = map_type_name(candidate, &mapped_id);
             if (mapped_type != UNKNOWN_TYPE) {
+                /* Under {$H-}, bare 'string' mapped to STRING_TYPE should
+                 * become SHORTSTRING_TYPE for record fields. */
+                if (mapped_type == STRING_TYPE && pascal_frontend_default_shortstring() &&
+                    strcasecmp(candidate, "string") == 0)
+                    mapped_type = SHORTSTRING_TYPE;
                 field_type = mapped_type;
                 field_type_id = mapped_id;
                 free(candidate);

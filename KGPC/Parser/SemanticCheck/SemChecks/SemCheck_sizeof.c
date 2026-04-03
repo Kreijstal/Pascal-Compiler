@@ -225,6 +225,8 @@ long long sizeof_from_type_tag(int type_tag)
             return 640;
         case PROCEDURE:
             return POINTER_SIZE_BYTES;
+        case SHORTSTRING_TYPE:
+            return 256;
         default:
             return -1;
     }
