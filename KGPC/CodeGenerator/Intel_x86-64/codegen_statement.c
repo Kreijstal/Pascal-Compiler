@@ -4786,7 +4786,10 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 label, str_addr_reg->bit_64);
             inst_list = add_inst(inst_list, buffer);
             
-            /* Call kgpc_string_to_shortstring(dest, src, max_len) */
+            /* Call kgpc_string_to_shortstring(dest, src, max_len).
+             * Use the declared capacity for string[N] (= N+1) to avoid
+             * overflowing smaller-than-255 buffers. Falls back to 256
+             * (standard ShortString) when capacity cannot be determined. */
             int dest_capacity = codegen_get_shortstring_capacity(dest_expr, ctx);
             if (dest_capacity <= 1)
                 dest_capacity = 256;
