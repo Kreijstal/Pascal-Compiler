@@ -2838,12 +2838,11 @@ static int codegen_expr_is_shortstring_array(const struct Expression *expr)
         struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
         if (field != NULL && field->type == SHORTSTRING_TYPE)
             return 1;
-        if (field != NULL)
-            return 0;
-        /* Field lookup failed (e.g. class field where record_type is not
-         * resolved).  Fall through to the array bounds heuristic below so
-         * that char array[0..255] class fields under {$H-} are correctly
-         * detected as ShortString. */
+        /* Field lookup is authoritative — if it succeeded, use its type.
+         * If it failed, conservatively return 0 rather than relying on the
+         * bounds heuristic, which would false-positive on plain char
+         * array[0..255] fields like TextRec.Name. */
+        return 0;
     }
     /* Also check by type bounds: string[N] is char array with bounds 0..N */
     if (expr->is_array_expr &&
