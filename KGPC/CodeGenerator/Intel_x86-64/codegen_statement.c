@@ -4787,13 +4787,17 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
             inst_list = add_inst(inst_list, buffer);
             
             /* Call kgpc_string_to_shortstring(dest, src, max_len) */
+            int dest_capacity = codegen_get_shortstring_capacity(dest_expr, ctx);
+            if (dest_capacity <= 1)
+                dest_capacity = 256;
             if (codegen_target_is_windows())
             {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", str_addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tmovl\t$256, %r8d\n");
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", dest_capacity);
+                inst_list = add_inst(inst_list, buffer);
             }
             else
             {
@@ -4801,7 +4805,8 @@ static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 inst_list = add_inst(inst_list, buffer);
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", str_addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
-                inst_list = add_inst(inst_list, "\tmovl\t$256, %edx\n");
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", dest_capacity);
+                inst_list = add_inst(inst_list, buffer);
             }
             
             inst_list = codegen_vect_reg(inst_list, 0);
