@@ -1279,6 +1279,28 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 return semcheck_match_from_rank(rank);
             /* Fall through to default EXACT if rank can't be determined */
         }
+        /* STRING_TYPE is used for AnsiString, RawByteString, AND UnicodeString
+         * (all share the same primitive tag).  When both have STRING_TYPE, compare
+         * the type_alias to distinguish wide (UnicodeString/WideString) from narrow
+         * (AnsiString/RawByteString) string kinds.  An AnsiString argument should
+         * prefer the RawByteString overload over the UnicodeString overload, since
+         * AnsiString→UnicodeString requires a lossy encoding conversion. */
+        if (formal_tag == STRING_TYPE && formal_kgpc != NULL && actual_kgpc != NULL)
+        {
+            const char *formal_alias = (formal_kgpc->type_alias != NULL)
+                ? formal_kgpc->type_alias->alias_name : NULL;
+            const char *actual_alias = (actual_kgpc->type_alias != NULL)
+                ? actual_kgpc->type_alias->alias_name : NULL;
+            int formal_kind = semcheck_string_kind_from_type_id(formal_alias);
+            int actual_kind = semcheck_string_kind_from_type_id(actual_alias);
+            /* Wide formal (UnicodeString) with narrow actual (AnsiString): demote
+             * to PROMOTION so that a narrow formal (RawByteString) is preferred. */
+            if (formal_kind == 2 && actual_kind != 2)
+                return semcheck_make_quality(MATCH_PROMOTION);
+            /* Narrow formal with wide actual: also demote */
+            if (formal_kind != 2 && formal_kind != 0 && actual_kind == 2)
+                return semcheck_make_quality(MATCH_PROMOTION);
+        }
         /* For record types, compare the actual record identity.
          * Different record types (e.g. TGUID vs TObject) sharing the
          * same RECORD_TYPE tag must not score as EXACT — this prevents
