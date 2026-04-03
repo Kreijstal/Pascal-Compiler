@@ -98,6 +98,10 @@ static int fpc_type_alignment_from_size(long long size, int type_tag)
 {
     if (type_tag == EXTENDED_TYPE)
         return 16;
+    /* ShortString is a packed array[0..255] of Char — alignment is 1,
+     * not derived from its 256-byte size (which would incorrectly give 32). */
+    if (type_tag == SHORTSTRING_TYPE)
+        return 1;
     return fpc_size_to_alignment(size);
 }
 
