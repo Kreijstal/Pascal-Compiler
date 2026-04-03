@@ -1064,6 +1064,18 @@ static struct RecordField *codegen_lookup_record_field_in_members(ListNode_t *me
     return NULL;
 }
 
+/* Dereference a KgpcType pointer-to-record (e.g., class instance) and return
+ * the underlying RecordType, or NULL if the type is not a pointer to a record. */
+static struct RecordType *codegen_deref_pointer_to_record(KgpcType *type)
+{
+    if (type == NULL || type->kind != TYPE_KIND_POINTER)
+        return NULL;
+    KgpcType *pointee = type->info.points_to;
+    if (pointee != NULL && kgpc_type_is_record(pointee))
+        return kgpc_type_get_record(pointee);
+    return NULL;
+}
+
 static struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr)
 {
     if (record_access_expr == NULL || record_access_expr->type != EXPR_RECORD_ACCESS)
@@ -1105,22 +1117,10 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     }
     /* For class instances, the base expression's resolved_kgpc_type is a pointer
      * to the class record.  Dereference the pointer to get the underlying record. */
-    if (record_type == NULL && base_expr->resolved_kgpc_type != NULL &&
-        base_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
-    {
-        KgpcType *pointee = base_expr->resolved_kgpc_type->info.points_to;
-        if (pointee != NULL && kgpc_type_is_record(pointee))
-            record_type = kgpc_type_get_record(pointee);
-    }
-    /* Also check the record_access_expr's own resolved_kgpc_type (may carry
-     * pointer-to-class info when the base doesn't). */
-    if (record_type == NULL && record_access_expr->resolved_kgpc_type != NULL &&
-        record_access_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
-    {
-        KgpcType *pointee = record_access_expr->resolved_kgpc_type->info.points_to;
-        if (pointee != NULL && kgpc_type_is_record(pointee))
-            record_type = kgpc_type_get_record(pointee);
-    }
+    if (record_type == NULL)
+        record_type = codegen_deref_pointer_to_record(base_expr->resolved_kgpc_type);
+    if (record_type == NULL)
+        record_type = codegen_deref_pointer_to_record(record_access_expr->resolved_kgpc_type);
     if (record_type == NULL)
     {
         if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
