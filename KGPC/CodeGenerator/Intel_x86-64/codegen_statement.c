@@ -1103,6 +1103,24 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     {
         record_type = kgpc_type_get_record(base_expr->resolved_kgpc_type);
     }
+    /* For class instances, the base expression's resolved_kgpc_type is a pointer
+     * to the class record.  Dereference the pointer to get the underlying record. */
+    if (record_type == NULL && base_expr->resolved_kgpc_type != NULL &&
+        base_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *pointee = base_expr->resolved_kgpc_type->info.points_to;
+        if (pointee != NULL && kgpc_type_is_record(pointee))
+            record_type = kgpc_type_get_record(pointee);
+    }
+    /* Also check the record_access_expr's own resolved_kgpc_type (may carry
+     * pointer-to-class info when the base doesn't). */
+    if (record_type == NULL && record_access_expr->resolved_kgpc_type != NULL &&
+        record_access_expr->resolved_kgpc_type->kind == TYPE_KIND_POINTER)
+    {
+        KgpcType *pointee = record_access_expr->resolved_kgpc_type->info.points_to;
+        if (pointee != NULL && kgpc_type_is_record(pointee))
+            record_type = kgpc_type_get_record(pointee);
+    }
     if (record_type == NULL)
     {
         if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
