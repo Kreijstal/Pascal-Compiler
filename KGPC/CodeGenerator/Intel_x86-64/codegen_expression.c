@@ -10955,6 +10955,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 if (codegen_had_error(ctx) || addr_reg == NULL)
                     return inst_list;
 
+                /* When passing a ShortString argument to a formal AnsiString (STRING_TYPE)
+                 * parameter, convert via kgpc_shortstring_to_string.  Without this, the
+                 * raw ShortString buffer address (length-byte + data) is passed and the
+                 * callee interprets the length byte as the first character of an AnsiString. */
+                if (is_array_arg && !is_var_param && !is_array_param &&
+                    (expected_type == STRING_TYPE ||
+                     (expected_type == UNKNOWN_TYPE &&
+                      formal_arg_decl != NULL &&
+                      formal_arg_decl->type == TREE_VAR_DECL &&
+                      formal_arg_decl->tree_data.var_decl_data.type == STRING_TYPE)) &&
+                    codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
+                {
+                    inst_list = codegen_promote_shortstring_reg(inst_list, ctx, addr_reg);
+                    /* addr_reg now holds an AnsiString pointer; clear is_pointer_like
+                     * so the spill is treated as a by-value string, not as a by-ref address. */
+                    if (arg_infos != NULL)
+                        arg_infos[arg_num].is_pointer_like = 0;
+                }
+
                 /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
                 StackNode_t *arg_spill = add_l_t("arg_eval");
                 if (arg_spill != NULL && arg_infos != NULL)

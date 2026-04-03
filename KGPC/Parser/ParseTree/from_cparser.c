@@ -10721,6 +10721,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         char *type_name = dup_symbol(type_node);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
+            var_type = apply_shortstring_mode(var_type, type_name);
             if (var_type == UNKNOWN_TYPE && type_id == NULL)
                 type_id = type_name;
             else
@@ -10748,6 +10749,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             char *type_name = dup_symbol(search);
             if (type_name != NULL) {
                 int mapped = map_type_name(type_name, &type_id);
+                mapped = apply_shortstring_mode(mapped, type_name);
                 if (mapped == UNKNOWN_TYPE && type_id == NULL)
                     type_id = type_name;
                 else
@@ -10964,6 +10966,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             char *type_name = strdup((char *)iter->cur);
             if (type_name != NULL) {
                 int mapped = map_type_name(type_name, &type_id);
+                mapped = apply_shortstring_mode(mapped, type_name);
                 if (mapped == UNKNOWN_TYPE && type_id == NULL)
                     type_id = type_name;
                 else
@@ -12225,6 +12228,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         char *type_name = dup_symbol(cur);
         if (type_name != NULL) {
             int mapped = map_type_name(type_name, &type_id);
+            mapped = apply_shortstring_mode(mapped, type_name);
             if (mapped != UNKNOWN_TYPE || type_id != NULL) {
                 /* Known type name — consume and advance */
                 free(type_name);
@@ -12261,6 +12265,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                 char *type_name = dup_symbol(type_node);
                 if (type_name != NULL) {
                     int mapped = map_type_name(type_name, &type_id);
+                    mapped = apply_shortstring_mode(mapped, type_name);
                     if (mapped == UNKNOWN_TYPE && type_id == NULL)
                         type_id = type_name;
                     else
@@ -12403,9 +12408,10 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         if (empty_tuple_record_const) {
             int var_type = UNKNOWN_TYPE;
             struct RecordType *inline_record = NULL;
-            if (type_id != NULL)
+            if (type_id != NULL) {
                 var_type = map_type_name(type_id, NULL);
-            else if (type_info.is_record && type_info.record_type != NULL)
+                var_type = apply_shortstring_mode(var_type, type_id);
+            } else if (type_info.is_record && type_info.record_type != NULL)
             {
                 var_type = RECORD_TYPE;
                 inline_record = type_info.record_type;
@@ -12513,6 +12519,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         struct RecordType *inline_record = NULL;
         if (type_id != NULL) {
             var_type = map_type_name(type_id, NULL);
+            var_type = apply_shortstring_mode(var_type, type_id);
         } else if (type_info.is_record && type_info.record_type != NULL) {
             var_type = RECORD_TYPE;
             inline_record = type_info.record_type;

@@ -8654,10 +8654,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_size = shortstring_size > 0 ? shortstring_size : 256;
         }
     }
-    if (func_node != NULL && func_node->type != NULL &&
-        func_node->type->kind == TYPE_KIND_PROCEDURE)
-        ctx->current_return_type = kgpc_type_get_return_type(func_node->type);
-
     /* Fallback: if the AST node's return_type tag is SHORTSTRING_TYPE (set during
      * AST conversion under {$H-}), but the KgpcType on the symbol table didn't
      * reflect it (because semcheck runs with the flag reset), force sret and
@@ -8682,6 +8678,24 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
         }
     }
+
+    /* Set ctx->current_return_type AFTER the SHORTSTRING_TYPE patch above,
+     * so that body codegen (e.g. `FuncName := expr`) sees the corrected
+     * return type and routes through ShortString assignment paths instead
+     * of kgpc_string_assign_from_shortstring (which expects char** semantics). */
+    if (func_node != NULL && func_node->type != NULL &&
+        func_node->type->kind == TYPE_KIND_PROCEDURE)
+        ctx->current_return_type = kgpc_type_get_return_type(func_node->type);
+
+    /* For nested functions (or any function where func_node lookup failed),
+     * the symbol table may not contain the function, leaving
+     * ctx->current_return_type as NULL.  When the AST says the return type
+     * is SHORTSTRING_TYPE, synthesize a KgpcType so that body codegen
+     * (e.g. `FuncName := expr`) correctly identifies the function result
+     * variable as ShortString and avoids kgpc_string_assign_from_shortstring
+     * which expects char** (AnsiString variable) semantics. */
+    if (ctx->current_return_type == NULL && func->return_type == SHORTSTRING_TYPE)
+        ctx->current_return_type = create_primitive_type(SHORTSTRING_TYPE);
 
     /* Only nested functions receive static links (excluding class methods). */
     int will_need_static_link = (!is_class_method && lexical_depth > 1);
