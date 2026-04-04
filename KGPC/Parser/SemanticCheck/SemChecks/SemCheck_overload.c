@@ -48,7 +48,17 @@ static const char *semcheck_get_param_type_id(Tree_t *decl)
     return NULL;
 }
 
-static int semcheck_string_kind_from_type_id(const char *type_id);
+/* Classifies a string/char type identifier into narrow (ANSI) or wide
+ * (Unicode) families.  Used by overload resolution to distinguish
+ * AnsiString/RawByteString (narrow) from UnicodeString/WideString (wide)
+ * and to detect cross-family promotions that should be penalised. */
+typedef enum {
+    STRING_KIND_UNKNOWN = 0,  /* NULL input or unrecognized type */
+    STRING_KIND_NARROW  = 1,  /* Char, AnsiChar, String, AnsiString, RawByteString, ShortString */
+    STRING_KIND_WIDE    = 2   /* WideChar, UnicodeChar, WideString, UnicodeString */
+} StringKind;
+
+static StringKind semcheck_string_kind_from_type_id(const char *type_id);
 
 static int semcheck_array_elem_legacy_tag(KgpcType *type)
 {
@@ -201,9 +211,9 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                 {
                     if (id_a != NULL && id_b != NULL)
                     {
-                        int kind_a = semcheck_string_kind_from_type_id(id_a);
-                        int kind_b = semcheck_string_kind_from_type_id(id_b);
-                        if (kind_a != 0 && kind_a == kind_b)
+                        StringKind kind_a = semcheck_string_kind_from_type_id(id_a);
+                        StringKind kind_b = semcheck_string_kind_from_type_id(id_b);
+                        if (kind_a != STRING_KIND_UNKNOWN && kind_a == kind_b)
                         {
                             args_a = args_a->next;
                             args_b = args_b->next;
@@ -227,9 +237,9 @@ int semcheck_candidates_share_signature(SymTab_t *symtab, HashNode_t *a, HashNod
                     {
                         if (id_a != NULL && id_b != NULL)
                         {
-                            int kind_a = semcheck_string_kind_from_type_id(id_a);
-                            int kind_b = semcheck_string_kind_from_type_id(id_b);
-                            if (kind_a != 0 && kind_a == kind_b)
+                            StringKind kind_a = semcheck_string_kind_from_type_id(id_a);
+                            StringKind kind_b = semcheck_string_kind_from_type_id(id_b);
+                            if (kind_a != STRING_KIND_UNKNOWN && kind_a == kind_b)
                             {
                                 args_a = args_a->next;
                                 args_b = args_b->next;
@@ -284,9 +294,9 @@ int semcheck_candidates_string_subtypes_differ(SymTab_t *symtab, HashNode_t *a, 
             if (id_a != NULL && id_b != NULL &&
                 !pascal_identifier_equals(id_a, id_b))
             {
-                int kind_a = semcheck_string_kind_from_type_id(id_a);
-                int kind_b = semcheck_string_kind_from_type_id(id_b);
-                if (kind_a != kind_b || (kind_a == 0 && kind_b == 0))
+                StringKind kind_a = semcheck_string_kind_from_type_id(id_a);
+                StringKind kind_b = semcheck_string_kind_from_type_id(id_b);
+                if (kind_a != kind_b || (kind_a == STRING_KIND_UNKNOWN && kind_b == STRING_KIND_UNKNOWN))
                     return 1;
             }
         }
@@ -1291,14 +1301,14 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
                 ? formal_kgpc->type_alias->alias_name : NULL;
             const char *actual_alias = (actual_kgpc->type_alias != NULL)
                 ? actual_kgpc->type_alias->alias_name : NULL;
-            int formal_kind = semcheck_string_kind_from_type_id(formal_alias);
-            int actual_kind = semcheck_string_kind_from_type_id(actual_alias);
+            StringKind formal_kind = semcheck_string_kind_from_type_id(formal_alias);
+            StringKind actual_kind = semcheck_string_kind_from_type_id(actual_alias);
             /* Wide formal (UnicodeString) with narrow actual (AnsiString): demote
              * to PROMOTION so that a narrow formal (RawByteString) is preferred. */
-            if (formal_kind == 2 && actual_kind != 2)
+            if (formal_kind == STRING_KIND_WIDE && actual_kind != STRING_KIND_WIDE)
                 return semcheck_make_quality(MATCH_PROMOTION);
             /* Narrow formal with wide actual: also demote */
-            if (formal_kind != 2 && formal_kind != 0 && actual_kind == 2)
+            if (formal_kind != STRING_KIND_WIDE && formal_kind != STRING_KIND_UNKNOWN && actual_kind == STRING_KIND_WIDE)
                 return semcheck_make_quality(MATCH_PROMOTION);
         }
         /* For record types, compare the actual record identity.
@@ -1804,10 +1814,10 @@ static const char *semcheck_explicit_string_cast_target_id(struct Expression *ex
     return NULL;
 }
 
-static int semcheck_string_kind_from_type_id(const char *type_id)
+static StringKind semcheck_string_kind_from_type_id(const char *type_id)
 {
     if (type_id == NULL)
-        return 0;
+        return STRING_KIND_UNKNOWN;
 
     const char *id = type_id;
     if (id[0] == 'P' || id[0] == 'p')
@@ -1817,7 +1827,7 @@ static int semcheck_string_kind_from_type_id(const char *type_id)
         pascal_identifier_equals(id, "UnicodeChar") ||
         pascal_identifier_equals(id, "WideString") ||
         pascal_identifier_equals(id, "UnicodeString"))
-        return 2;
+        return STRING_KIND_WIDE;
 
     if (pascal_identifier_equals(id, "Char") ||
         pascal_identifier_equals(id, "AnsiChar") ||
@@ -1825,9 +1835,9 @@ static int semcheck_string_kind_from_type_id(const char *type_id)
         pascal_identifier_equals(id, "AnsiString") ||
         pascal_identifier_equals(id, "RawByteString") ||
         pascal_identifier_equals(id, "ShortString"))
-        return 1;
+        return STRING_KIND_NARROW;
 
-    return 0;
+    return STRING_KIND_UNKNOWN;
 }
 
 static const char *semcheck_numeric_type_canonical_id(const char *type_id)
@@ -2571,18 +2581,18 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         int arg_expr_tag = (arg_expr_kgpc != NULL)
                             ? semcheck_tag_from_kgpc(arg_expr_kgpc)
                             : UNKNOWN_TYPE;
-                        int formal_kind = semcheck_string_kind_from_type_id(formal_id);
-                        int arg_kind = (arg_decl_id != NULL)
+                        StringKind formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                        StringKind arg_kind = (arg_decl_id != NULL)
                             ? semcheck_string_kind_from_type_id(arg_decl_id)
-                            : 0;
-                        if (arg_kind == 0 && arg_expr_kgpc != NULL)
+                            : STRING_KIND_UNKNOWN;
+                        if (arg_kind == STRING_KIND_UNKNOWN && arg_expr_kgpc != NULL)
                         {
                             if (semcheck_is_widechar_like_type(arg_expr_kgpc))
-                                arg_kind = 2;
+                                arg_kind = STRING_KIND_WIDE;
                             else if (kgpc_type_is_char(arg_expr_kgpc))
-                                arg_kind = 1;
+                                arg_kind = STRING_KIND_NARROW;
                         }
-                        if (formal_kind != 0 && arg_kind != 0)
+                        if (formal_kind != STRING_KIND_UNKNOWN && arg_kind != STRING_KIND_UNKNOWN)
                         {
                             if (formal_kind == arg_kind)
                                 quality.exact_type_id = 1;
@@ -2593,7 +2603,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                 quality.string_rank = 1;
                             }
                         }
-                        else if (formal_kind == 2 &&
+                        else if (formal_kind == STRING_KIND_WIDE &&
                                  (arg_expr_tag == CHAR_TYPE || arg_expr_tag == BYTE_TYPE))
                         {
                             if (quality.kind == MATCH_EXACT)
@@ -2974,8 +2984,8 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                     {
                         long long formal_size = formal_kgpc != NULL ? kgpc_type_sizeof(formal_kgpc) : 1;
                         int is_wide = (formal_size > 1);
-                        int actual_char_kind = 0;
-                        int formal_char_kind = is_wide ? 2 : 1;
+                        StringKind actual_char_kind = STRING_KIND_UNKNOWN;
+                        StringKind formal_char_kind = is_wide ? STRING_KIND_WIDE : STRING_KIND_NARROW;
                         /* Also check by name: WideChar type alias may not carry size in formal params */
                         const char *fid = semcheck_get_param_type_id(formal_decl);
                         if (!is_wide)
@@ -2984,7 +2994,7 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                                                 pascal_identifier_equals(fid, "UnicodeChar")))
                             {
                                 is_wide = 1;
-                                formal_char_kind = 2;
+                                formal_char_kind = STRING_KIND_WIDE;
                             }
                         }
                         if (arg_expr != NULL)
@@ -2992,15 +3002,15 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             const char *arg_decl_id = semcheck_get_expr_decl_type_id(arg_expr, symtab);
                             if (arg_decl_id != NULL)
                                 actual_char_kind = semcheck_string_kind_from_type_id(arg_decl_id);
-                            if (actual_char_kind == 0 && arg_kgpc != NULL)
+                            if (actual_char_kind == STRING_KIND_UNKNOWN && arg_kgpc != NULL)
                             {
                                 if (semcheck_is_widechar_like_type(arg_kgpc))
-                                    actual_char_kind = 2;
+                                    actual_char_kind = STRING_KIND_WIDE;
                                 else if (kgpc_type_is_char(arg_kgpc))
-                                    actual_char_kind = 1;
+                                    actual_char_kind = STRING_KIND_NARROW;
                             }
                         }
-                        if (actual_char_kind != 0 && formal_char_kind != 0)
+                        if (actual_char_kind != STRING_KIND_UNKNOWN && formal_char_kind != STRING_KIND_UNKNOWN)
                         {
                             if (actual_char_kind == formal_char_kind)
                             {
@@ -3042,9 +3052,9 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             quality.exact_type_id = 1;
                         if (!quality.exact_type_id && formal_id != NULL && arg_type_id != NULL)
                         {
-                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
-                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
-                            if (formal_kind != 0 && arg_kind != 0)
+                            StringKind formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            StringKind arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != STRING_KIND_UNKNOWN && arg_kind != STRING_KIND_UNKNOWN)
                             {
                                 if (formal_kind == arg_kind)
                                     quality.exact_type_id = 1;
@@ -3067,17 +3077,17 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                         if (formal_id != NULL && arg_type_id != NULL &&
                             is_string_type(formal_tag) && is_string_type(arg_tag))
                         {
-                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
-                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
-                            if (formal_kind != 0 && formal_kind == arg_kind)
+                            StringKind formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            StringKind arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != STRING_KIND_UNKNOWN && formal_kind == arg_kind)
                                 quality.exact_type_id = 1;
                         }
                         if (formal_id != NULL && arg_type_id != NULL &&
                             formal_tag == POINTER_TYPE && arg_tag == STRING_TYPE)
                         {
-                            int formal_kind = semcheck_string_kind_from_type_id(formal_id);
-                            int arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
-                            if (formal_kind != 0 && formal_kind == arg_kind)
+                            StringKind formal_kind = semcheck_string_kind_from_type_id(formal_id);
+                            StringKind arg_kind = semcheck_string_kind_from_type_id(arg_type_id);
+                            if (formal_kind != STRING_KIND_UNKNOWN && formal_kind == arg_kind)
                                 quality.exact_type_id = 1;
                         }
                     }
