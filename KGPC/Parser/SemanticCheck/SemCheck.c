@@ -13648,6 +13648,17 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
                     &set_size, &mask, &is_char_set) == 0)
             {
+                unsigned char *copy = NULL;
+                if (set_size > 0)
+                {
+                    copy = (unsigned char *)malloc(set_size);
+                    if (copy == NULL)
+                    {
+                        semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                        continue;
+                    }
+                    memcpy(copy, set_bytes, set_size);
+                }
                 KgpcType *set_type = create_primitive_type_with_size(SET_TYPE, (int)set_size);
                 if (set_type != NULL && set_type->type_alias != NULL)
                 {
@@ -13662,26 +13673,25 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                         tree->tree_data.const_decl_data.id);
                     if (node != NULL)
                     {
-                        unsigned char *copy = (unsigned char *)malloc(set_size);
-                        if (copy != NULL)
+                        node->is_constant = 1;
+                        node->const_set_value = copy;
+                        node->const_set_size = (int)set_size;
+                        if (set_size <= sizeof(long long))
                         {
-                            memcpy(copy, set_bytes, set_size);
-                            node->is_constant = 1;
-                            node->const_set_value = copy;
-                            node->const_set_size = (int)set_size;
-                            if (set_size <= sizeof(long long))
-                            {
-                                long long small_mask = 0;
-                                for (size_t i = 0; i < set_size; ++i)
-                                    small_mask |= ((long long)copy[i]) << (i * 8);
-                                node->const_int_value = small_mask;
-                            }
-                            mark_hashnode_unit_info(symtab, node,
-                                tree->tree_data.const_decl_data.defined_in_unit,
-                                tree->tree_data.const_decl_data.unit_is_public);
-                            mark_hashnode_source_unit(node, target_unit_index);
+                            long long small_mask = 0;
+                            for (size_t i = 0; i < set_size; ++i)
+                                small_mask |= ((long long)copy[i]) << (i * 8);
+                            node->const_int_value = small_mask;
                         }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
                     }
+                }
+                else
+                {
+                    free(copy);
                 }
                 destroy_kgpc_type(set_type);
                 semcheck_restore_scope(symtab, saved_scope_for_prepush);
@@ -13861,6 +13871,13 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                 }
                 else if (ref_tag == SET_TYPE && ref->const_set_value != NULL && ref->const_set_size > 0)
                 {
+                    unsigned char *copy = (unsigned char *)malloc((size_t)ref->const_set_size);
+                    if (copy == NULL)
+                    {
+                        semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                        continue;
+                    }
+                    memcpy(copy, ref->const_set_value, (size_t)ref->const_set_size);
                     KgpcType *set_type = create_primitive_type_with_size(SET_TYPE, ref->const_set_size);
                     if (set_type != NULL && set_type->type_alias != NULL)
                     {
@@ -13874,17 +13891,16 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                             tree->tree_data.const_decl_data.id);
                         if (n2 != NULL)
                         {
-                            unsigned char *copy = (unsigned char *)malloc((size_t)ref->const_set_size);
-                            if (copy != NULL)
-                            {
-                                memcpy(copy, ref->const_set_value, (size_t)ref->const_set_size);
-                                n2->is_constant = 1;
-                                n2->const_set_value = copy;
-                                n2->const_set_size = ref->const_set_size;
-                                if (ref->const_set_size <= (int)sizeof(long long))
-                                    n2->const_int_value = ref->const_int_value;
-                            }
+                            n2->is_constant = 1;
+                            n2->const_set_value = copy;
+                            n2->const_set_size = ref->const_set_size;
+                            if (ref->const_set_size <= (int)sizeof(long long))
+                                n2->const_int_value = ref->const_int_value;
                         }
+                    }
+                    else
+                    {
+                        free(copy);
                     }
                     destroy_kgpc_type(set_type);
                 }

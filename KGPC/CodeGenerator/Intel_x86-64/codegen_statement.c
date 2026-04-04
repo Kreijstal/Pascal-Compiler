@@ -132,7 +132,7 @@ static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
             else if (lhs_expr->array_element_type != UNKNOWN_TYPE)
             {
                 int elem_size = codegen_local_type_tag_size(lhs_expr->array_element_type);
-                if (elem_size > 0 && elem_size <= INT_MAX)
+                if (elem_size > 0)
                     rhs_expr->array_element_size = elem_size;
             }
         }

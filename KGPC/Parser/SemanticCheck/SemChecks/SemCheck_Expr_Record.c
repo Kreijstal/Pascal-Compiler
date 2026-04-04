@@ -158,14 +158,22 @@ int semcheck_record_may_have_method_name(SymTab_t *symtab,
         return 0;
 
     struct RecordType *current = record_info;
-    int max_iterations = 100;
-    int iterations = 0;
-    while (current != NULL && iterations < max_iterations)
+    SemcheckPtrSet visited = {0};
+    while (current != NULL)
     {
-        iterations++;
+        if (semcheck_ptrset_contains(&visited, current))
+            break;
+        if (!semcheck_ptrset_insert(&visited, current))
+        {
+            semcheck_ptrset_destroy(&visited);
+            return 0;
+        }
 
         if (semcheck_record_declares_method_name_local(current, method_name))
+        {
+            semcheck_ptrset_destroy(&visited);
             return 1;
+        }
 
         if (current->is_type_helper && current->helper_parent_id != NULL)
         {
@@ -184,6 +192,7 @@ int semcheck_record_may_have_method_name(SymTab_t *symtab,
         current = semcheck_lookup_parent_record(symtab, current);
     }
 
+    semcheck_ptrset_destroy(&visited);
     return 0;
 }
 
