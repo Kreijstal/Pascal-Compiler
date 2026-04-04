@@ -2275,16 +2275,10 @@ static int compile_single_program(
                 fprintf(stderr, "WARNING: cannot open cache asm file: %s\n", g_codegen_cache_asm_path);
         }
 
-        extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        extern void mark_used_functions_full(Tree_t *program, SymTab_t *symtab);
         double mark_used_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_used_functions(user_tree, symtab);
-        emit_profile_stage("program: mark used functions (pass 1)", current_time_seconds() - mark_used_start);
-        double mark_program_subs_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_program_subs_used(user_tree);
-        emit_profile_stage("program: mark program subprograms", current_time_seconds() - mark_program_subs_start);
-        double mark_used_second_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_used_functions(user_tree, symtab);
-        emit_profile_stage("program: mark used functions (pass 2)", current_time_seconds() - mark_used_second_start);
+        mark_used_functions_full(user_tree, symtab);
+        emit_profile_stage("program: mark used functions", current_time_seconds() - mark_used_start);
 
         double unbuild_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
         unbuild_combined_program_view(&g_comp_ctx);
@@ -3559,18 +3553,10 @@ int main(int argc, char **argv)
         }
 
         /* Mark which functions are actually used (dead code elimination) */
-        extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
+        extern void mark_used_functions_full(Tree_t *program, SymTab_t *symtab);
         double mark_used_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_used_functions(user_tree, symtab);
-        emit_profile_stage("program: mark used functions (pass 1)", current_time_seconds() - mark_used_start);
-        double mark_program_subs_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_program_subs_used(user_tree);
-        emit_profile_stage("program: mark program subprograms", current_time_seconds() - mark_program_subs_start);
-        /* Run mark_used again to discover functions called by newly-marked subprograms
-         * (e.g., inherited methods in specialized generics) */
-        double mark_used_second_start = profile_pipeline_flag() ? current_time_seconds() : 0.0;
-        mark_used_functions(user_tree, symtab);
-        emit_profile_stage("program: mark used functions (pass 2)", current_time_seconds() - mark_used_second_start);
+        mark_used_functions_full(user_tree, symtab);
+        emit_profile_stage("program: mark used functions", current_time_seconds() - mark_used_start);
 
         /* Restore unit declarations from merged program lists back to unit
          * records so that codegen emits imported code from unit records. */

@@ -513,9 +513,8 @@ int main(int argc, char **argv)
             /* Mark which functions are actually used */
             {
                 double t0 = kgpc_timing_start();
-                extern void mark_used_functions(Tree_t *program, SymTab_t *symtab);
-                mark_used_functions(user_tree, symtab);
-                mark_program_subs_used(user_tree);
+                extern void mark_used_functions_full(Tree_t *program, SymTab_t *symtab);
+                mark_used_functions_full(user_tree, symtab);
                 kgpc_timing_log("mark used functions", t0);
             }
 
