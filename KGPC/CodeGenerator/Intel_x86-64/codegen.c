@@ -8155,31 +8155,50 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
     int is_constructor = proc->is_constructor;
-
-    if (is_constructor && num_args > 0)
+    if (!is_constructor &&
+        proc->owner_class != NULL &&
+        ((proc->method_name != NULL &&
+          pascal_identifier_equals(proc->method_name, "Create")) ||
+         (proc->id != NULL &&
+          pascal_identifier_equals(proc->id, "Create"))))
     {
-        /* Self is the first parameter. For class methods, it's in %rdi (or first stack slot).
-         * Retrieve it and place in %rax for the return value. */
-        ListNode_t *first_arg = (proc->args_var != NULL) ? proc->args_var : NULL;
-        if (first_arg != NULL && first_arg->cur != NULL)
+        /* Some constructor methods still reach codegen without preserving the
+         * constructor bit. Treat class/object methods literally named Create as
+         * constructor-shaped so they return Self. */
+        is_constructor = 1;
+    }
+
+    if (is_constructor)
+    {
+        /* Constructors must return Self. Prefer a materialized receiver label
+         * in the rebuilt scope, then the first explicit argument label, and
+         * finally the hidden receiver slot at -8(%rbp). */
+        StackNode_t *self_var = find_label_with_depth("self", 0);
+        if (self_var == NULL)
         {
-            Tree_t *first_param = (Tree_t *)first_arg->cur;
-            if (first_param != NULL && first_param->type == TREE_VAR_DECL)
+            ListNode_t *first_arg = proc->args_var;
+            if (first_arg != NULL && first_arg->cur != NULL)
             {
-                struct Var *param_var = &first_param->tree_data.var_decl_data;
-                if (param_var->ids != NULL && param_var->ids->cur != NULL)
+                Tree_t *first_param = (Tree_t *)first_arg->cur;
+                if (first_param != NULL && first_param->type == TREE_VAR_DECL)
                 {
-                    char *param_id = (char *)param_var->ids->cur;
-                    StackNode_t *self_var = find_label(param_id);
-                    if (self_var != NULL)
+                    struct Var *param_var = &first_param->tree_data.var_decl_data;
+                    if (param_var->ids != NULL && param_var->ids->cur != NULL)
                     {
-                        /* Self parameter is on the stack - load it into %rax for return */
-                        char buffer[128];
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
-                        inst_list = add_inst(inst_list, buffer);
+                        char *param_id = (char *)param_var->ids->cur;
+                        self_var = find_label_with_depth(param_id, 0);
                     }
                 }
             }
+        }
+
+        {
+            char buffer[128];
+            if (self_var != NULL)
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", self_var->offset);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %%rax\n");
+            inst_list = add_inst(inst_list, buffer);
         }
     }
     

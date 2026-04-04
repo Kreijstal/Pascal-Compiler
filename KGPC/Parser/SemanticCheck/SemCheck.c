@@ -5118,6 +5118,57 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
     return 1;
 }
 
+static int semcheck_const_expr_char_cast_value(struct Expression *expr, long long *out_value,
+    int *out_char_size)
+{
+    const char *target_id = NULL;
+    struct Expression *arg = NULL;
+
+    if (out_value == NULL)
+        return 1;
+
+    if (expr == NULL)
+        return 1;
+
+    if (expr->type == EXPR_FUNCTION_CALL)
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next != NULL || args->cur == NULL)
+            return 1;
+        target_id = expr->expr_data.function_call_data.id;
+        arg = (struct Expression *)args->cur;
+    }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        target_id = expr->expr_data.typecast_data.target_type_id;
+        arg = expr->expr_data.typecast_data.expr;
+    }
+    else
+    {
+        return 1;
+    }
+
+    if (target_id == NULL || arg == NULL)
+        return 1;
+    if (semcheck_map_builtin_type_name_local(target_id) != CHAR_TYPE)
+        return 1;
+
+    long long value = 0;
+    if (const_fold_int_expr(NULL, arg, &value) != 0)
+        return 1;
+
+    if (out_char_size != NULL)
+    {
+        if (pascal_identifier_equals(target_id, "WideChar") ||
+            pascal_identifier_equals(target_id, "UnicodeChar"))
+            *out_char_size = 2;
+        else
+            *out_char_size = 1;
+    }
+    *out_value = value;
+    return 0;
+}
+
 typedef struct SubprogramPredeclLookup
 {
     HashNode_t *exact_match;
@@ -13487,6 +13538,39 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             }
             semcheck_restore_scope(symtab, saved_scope_for_prepush);
             continue;
+        }
+
+        {
+            long long char_value = 0;
+            int char_size = 1;
+            if (semcheck_const_expr_char_cast_value(value_expr, &char_value, &char_size) == 0)
+            {
+                KgpcType *char_type = create_primitive_type_with_size(CHAR_TYPE, char_size);
+                int push_result = AddIdentToTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, char_type);
+                destroy_kgpc_type(char_type);
+                if (push_result == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_int_value = char_value;
+                        if (char_size == 1)
+                        {
+                            char str[2] = { (char)(char_value & 0xFF), '\0' };
+                            node->const_string_value = strdup(str);
+                        }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                continue;
+            }
         }
 
         /* Imported string aliases/concatenations (e.g. sLineBreak = LineEnding)
