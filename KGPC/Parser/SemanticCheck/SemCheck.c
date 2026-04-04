@@ -5118,6 +5118,57 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
     return 1;
 }
 
+static int semcheck_const_expr_char_cast_value(struct Expression *expr, long long *out_value,
+    int *out_char_size)
+{
+    const char *target_id = NULL;
+    struct Expression *arg = NULL;
+
+    if (out_value == NULL)
+        return 1;
+
+    if (expr == NULL)
+        return 1;
+
+    if (expr->type == EXPR_FUNCTION_CALL)
+    {
+        ListNode_t *args = expr->expr_data.function_call_data.args_expr;
+        if (args == NULL || args->next != NULL || args->cur == NULL)
+            return 1;
+        target_id = expr->expr_data.function_call_data.id;
+        arg = (struct Expression *)args->cur;
+    }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        target_id = expr->expr_data.typecast_data.target_type_id;
+        arg = expr->expr_data.typecast_data.expr;
+    }
+    else
+    {
+        return 1;
+    }
+
+    if (target_id == NULL || arg == NULL)
+        return 1;
+    if (semcheck_map_builtin_type_name_local(target_id) != CHAR_TYPE)
+        return 1;
+
+    long long value = 0;
+    if (const_fold_int_expr(NULL, arg, &value) != 0)
+        return 1;
+
+    if (out_char_size != NULL)
+    {
+        if (pascal_identifier_equals(target_id, "WideChar") ||
+            pascal_identifier_equals(target_id, "UnicodeChar"))
+            *out_char_size = 2;
+        else
+            *out_char_size = 1;
+    }
+    *out_value = value;
+    return 0;
+}
+
 typedef struct SubprogramPredeclLookup
 {
     HashNode_t *exact_match;
@@ -13374,13 +13425,14 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
  * (semcheck_predeclare_program_into_unit_scope) to populate per-unit scopes
  * before full const evaluation.  Cross-unit resolution uses scope dependency
  * edges rather than relying on list concatenation order. */
-static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls)
+static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls,
+    int include_local_unit_consts)
 {
     for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
     {
         Tree_t *tree = (Tree_t *)cur->cur;
         int target_unit_index = tree->tree_data.const_decl_data.source_unit_index;
-        if (!tree->tree_data.const_decl_data.defined_in_unit)
+        if (!tree->tree_data.const_decl_data.defined_in_unit && !include_local_unit_consts)
             continue;
         if (tree->tree_data.const_decl_data.id == NULL)
             continue;
@@ -13488,7 +13540,223 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             continue;
         }
 
-        /* Only handle trivially evaluable expressions */
+        {
+            long long char_value = 0;
+            int char_size = 1;
+            if (semcheck_const_expr_char_cast_value(value_expr, &char_value, &char_size) == 0)
+            {
+                KgpcType *char_type = create_primitive_type_with_size(CHAR_TYPE, char_size);
+                int push_result = AddIdentToTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, char_type);
+                destroy_kgpc_type(char_type);
+                if (push_result == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_int_value = char_value;
+                        if (char_size == 1)
+                        {
+                            char str[2] = { (char)(char_value & 0xFF), '\0' };
+                            node->const_string_value = strdup(str);
+                        }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                continue;
+            }
+        }
+
+        /* Imported string aliases/concatenations (e.g. sLineBreak = LineEnding)
+         * must preserve string type here even if the underlying literal was a
+         * single character. Otherwise dependent units see them as ordinals. */
+        if (expression_is_string(symtab, value_expr))
+        {
+            char *string_value = NULL;
+            if (evaluate_string_const_expr(symtab, value_expr, &string_value) == 0 &&
+                string_value != NULL)
+            {
+                KgpcType *string_type = create_primitive_type(STRING_TYPE);
+                if (string_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, string_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_string_value = string_value;
+                        string_value = NULL;
+                        if (node->const_string_value[0] != '\0' &&
+                            node->const_string_value[1] == '\0')
+                        {
+                            node->const_int_value = (unsigned char)node->const_string_value[0];
+                        }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                destroy_kgpc_type(string_type);
+            }
+            free(string_value);
+            semcheck_restore_scope(symtab, saved_scope_for_prepush);
+            continue;
+        }
+
+        if (value_expr->type == EXPR_BOOL)
+        {
+            KgpcType *bool_type = create_primitive_type(BOOL);
+            int push_result = AddIdentToTable(target_scope->table,
+                tree->tree_data.const_decl_data.id, NULL, HASHTYPE_CONST, bool_type);
+            destroy_kgpc_type(bool_type);
+            if (push_result == 0)
+            {
+                HashNode_t *node = FindIdentInTable(target_scope->table,
+                    tree->tree_data.const_decl_data.id);
+                if (node != NULL)
+                {
+                    node->is_constant = 1;
+                    node->const_int_value = value_expr->expr_data.i_num ? 1 : 0;
+                    mark_hashnode_unit_info(symtab, node,
+                        tree->tree_data.const_decl_data.defined_in_unit,
+                        tree->tree_data.const_decl_data.unit_is_public);
+                    mark_hashnode_source_unit(node, target_unit_index);
+                }
+            }
+            semcheck_restore_scope(symtab, saved_scope_for_prepush);
+            continue;
+        }
+
+        /* Imported set constants must stay typed as sets; if we fold them as
+         * integers here, later `x in imported_set_const` checks misclassify the
+         * right-hand side as ordinal rather than set. */
+        if (expression_is_set_const_expr(symtab, value_expr))
+        {
+            unsigned char set_bytes[32];
+            size_t set_size = 0;
+            long long mask = 0;
+            int is_char_set = 0;
+            if (evaluate_set_const_bytes(symtab, value_expr, set_bytes, sizeof(set_bytes),
+                    &set_size, &mask, &is_char_set) == 0)
+            {
+                unsigned char *copy = NULL;
+                if (set_size > 0)
+                {
+                    copy = (unsigned char *)malloc(set_size);
+                    if (copy == NULL)
+                    {
+                        semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                        continue;
+                    }
+                    memcpy(copy, set_bytes, set_size);
+                }
+                KgpcType *set_type = create_primitive_type_with_size(SET_TYPE, (int)set_size);
+                if (set_type != NULL && set_type->type_alias != NULL)
+                {
+                    set_type->type_alias->is_set = 1;
+                    set_type->type_alias->set_element_type = is_char_set ? CHAR_TYPE : INT_TYPE;
+                }
+                if (set_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, set_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_set_value = copy;
+                        node->const_set_size = (int)set_size;
+                        if (set_size <= sizeof(long long))
+                        {
+                            long long small_mask = 0;
+                            for (size_t i = 0; i < set_size; ++i)
+                                small_mask |= ((long long)copy[i]) << (i * 8);
+                            node->const_int_value = small_mask;
+                        }
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                else
+                {
+                    free(copy);
+                }
+                destroy_kgpc_type(set_type);
+                semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                continue;
+            }
+        }
+
+        /* Generic constant-fold prepush for imported consts. This is needed
+         * during decls-only unit loading so dependent typed const declarations
+         * can see non-trivial integer/real constants (e.g. OT_* masks in
+         * aasmcpu) before the full const pass runs. */
+        {
+            long long folded_int = 0;
+            if (const_fold_int_expr(symtab, value_expr, &folded_int) == 0)
+            {
+                int type_tag = (folded_int > INT_MAX || folded_int < INT_MIN) ? INT64_TYPE : INT_TYPE;
+                KgpcType *int_type = create_primitive_type(type_tag);
+                if (int_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, int_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_int_value = folded_int;
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                destroy_kgpc_type(int_type);
+                semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                continue;
+            }
+
+            double folded_real = 0.0;
+            if (const_fold_real_expr(symtab, value_expr, &folded_real) == 0)
+            {
+                KgpcType *real_type = create_primitive_type(REAL_TYPE);
+                if (real_type != NULL &&
+                    AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                        NULL, HASHTYPE_CONST, real_type) == 0)
+                {
+                    HashNode_t *node = FindIdentInTable(target_scope->table,
+                        tree->tree_data.const_decl_data.id);
+                    if (node != NULL)
+                    {
+                        node->is_constant = 1;
+                        node->const_real_value = folded_real;
+                        mark_hashnode_unit_info(symtab, node,
+                            tree->tree_data.const_decl_data.defined_in_unit,
+                            tree->tree_data.const_decl_data.unit_is_public);
+                        mark_hashnode_source_unit(node, target_unit_index);
+                    }
+                }
+                destroy_kgpc_type(real_type);
+                semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                continue;
+            }
+        }
+
+        /* Only handle remaining trivially evaluable expressions */
         if (value_expr->type == EXPR_INUM)
         {
             long long val = value_expr->expr_data.i_num;
@@ -13541,6 +13809,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
             if (FindSymbol(&ref, symtab, value_expr->expr_data.id) != 0 && ref != NULL &&
                 (ref->hash_type == HASHTYPE_CONST || ref->is_typed_const))
             {
+                int ref_tag = (ref->type != NULL) ? semcheck_tag_from_kgpc(ref->type) : UNKNOWN_TYPE;
                 if (ref->const_string_value != NULL)
                 {
                     const char *sv = ref->const_string_value;
@@ -13583,6 +13852,58 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                         destroy_kgpc_type(string_type);
                     }
                 }
+                else if (ref_tag == BOOL)
+                {
+                    KgpcType *bool_type = create_primitive_type(BOOL);
+                    if (bool_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, bool_type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_int_value = ref->const_int_value ? 1 : 0;
+                        }
+                    }
+                    destroy_kgpc_type(bool_type);
+                }
+                else if (ref_tag == SET_TYPE && ref->const_set_value != NULL && ref->const_set_size > 0)
+                {
+                    unsigned char *copy = (unsigned char *)malloc((size_t)ref->const_set_size);
+                    if (copy == NULL)
+                    {
+                        semcheck_restore_scope(symtab, saved_scope_for_prepush);
+                        continue;
+                    }
+                    memcpy(copy, ref->const_set_value, (size_t)ref->const_set_size);
+                    KgpcType *set_type = create_primitive_type_with_size(SET_TYPE, ref->const_set_size);
+                    if (set_type != NULL && set_type->type_alias != NULL)
+                    {
+                        set_type->type_alias->is_set = 1;
+                    }
+                    if (set_type != NULL &&
+                        AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, set_type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_set_value = copy;
+                            n2->const_set_size = ref->const_set_size;
+                            if (ref->const_set_size <= (int)sizeof(long long))
+                                n2->const_int_value = ref->const_int_value;
+                        }
+                    }
+                    else
+                    {
+                        free(copy);
+                    }
+                    destroy_kgpc_type(set_type);
+                }
                 else if (ref->type != NULL && kgpc_type_is_real(ref->type))
                 {
                     KgpcType *real_type = create_primitive_type(REAL_TYPE);
@@ -13599,6 +13920,26 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
                         }
                     }
                     destroy_kgpc_type(real_type);
+                }
+                else if (ref->type != NULL &&
+                         ref_tag != UNKNOWN_TYPE &&
+                         (kgpc_type_get_type_alias(ref->type) != NULL ||
+                          is_unsigned_integer_type(ref_tag) ||
+                          ref_tag == ENUM_TYPE))
+                {
+                    kgpc_type_retain(ref->type);
+                    if (AddIdentToTable(target_scope->table, tree->tree_data.const_decl_data.id,
+                            NULL, HASHTYPE_CONST, ref->type) == 0)
+                    {
+                        HashNode_t *n2 = FindIdentInTable(target_scope->table,
+                            tree->tree_data.const_decl_data.id);
+                        if (n2 != NULL)
+                        {
+                            n2->is_constant = 1;
+                            n2->const_int_value = ref->const_int_value;
+                        }
+                    }
+                    destroy_kgpc_type(ref->type);
                 }
                 else
                 {
@@ -13780,6 +14121,87 @@ static int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *
     return return_val;
 }
 
+struct typed_const_init_backup
+{
+    Tree_t *tree;
+    struct Statement *initializer;
+};
+
+static int semcheck_decl_only_should_skip_typed_const_initializer(const struct Statement *initializer)
+{
+    if (initializer == NULL)
+        return 0;
+
+    if (initializer->type == STMT_COMPOUND_STATEMENT)
+        return 1;
+
+    if (initializer->type != STMT_VAR_ASSIGN ||
+        initializer->stmt_data.var_assign_data.expr == NULL)
+        return 0;
+
+    struct Expression *init_expr = initializer->stmt_data.var_assign_data.expr;
+    return (init_expr->type == EXPR_ARRAY_LITERAL ||
+            init_expr->type == EXPR_RECORD_CONSTRUCTOR);
+}
+
+/* During decls-only unit loading we need imported typed const symbols and their
+ * declared types visible to dependent units, but we must not semcheck their
+ * initializer expressions yet. Those initializers can depend on local enum/set
+ * declarations that are only fully valid in the later full semantic pass. */
+static int semcheck_decl_only_typed_const_decls(SymTab_t *symtab, ListNode_t *typed_const_decls)
+{
+    if (typed_const_decls == NULL)
+        return 0;
+
+    int count = 0;
+    for (ListNode_t *cur = typed_const_decls; cur != NULL; cur = cur->next)
+        ++count;
+
+    struct typed_const_init_backup *saved =
+        (struct typed_const_init_backup *)calloc((size_t)count, sizeof(*saved));
+    if (saved == NULL)
+        return semcheck_decls(symtab, typed_const_decls);
+
+    int idx = 0;
+    for (ListNode_t *cur = typed_const_decls; cur != NULL; cur = cur->next, ++idx)
+    {
+        Tree_t *tree = (Tree_t *)cur->cur;
+        saved[idx].tree = tree;
+        if (tree == NULL)
+            continue;
+
+        if (tree->type == TREE_VAR_DECL)
+        {
+            saved[idx].initializer = tree->tree_data.var_decl_data.initializer;
+            if (semcheck_decl_only_should_skip_typed_const_initializer(saved[idx].initializer))
+                tree->tree_data.var_decl_data.initializer = NULL;
+        }
+        else if (tree->type == TREE_ARR_DECL)
+        {
+            saved[idx].initializer = tree->tree_data.arr_decl_data.initializer;
+            if (semcheck_decl_only_should_skip_typed_const_initializer(saved[idx].initializer))
+                tree->tree_data.arr_decl_data.initializer = NULL;
+        }
+    }
+
+    int return_val = semcheck_decls(symtab, typed_const_decls);
+
+    for (int restore_idx = 0; restore_idx < count; ++restore_idx)
+    {
+        Tree_t *tree = saved[restore_idx].tree;
+        if (tree == NULL)
+            continue;
+
+        if (tree->type == TREE_VAR_DECL)
+            tree->tree_data.var_decl_data.initializer = saved[restore_idx].initializer;
+        else if (tree->type == TREE_ARR_DECL)
+            tree->tree_data.arr_decl_data.initializer = saved[restore_idx].initializer;
+    }
+
+    free(saved);
+    return return_val;
+}
+
 /* Semantic check on constant declarations.
  *
  * Two-pass processing to handle qualified constant references.
@@ -13793,7 +14215,7 @@ static int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *
 int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls)
 {
     int return_val = 0;
-    prepush_trivial_imported_consts(symtab, const_decls);
+    prepush_trivial_imported_consts(symtab, const_decls, 0);
     return_val += semcheck_const_decls_imported_filtered(symtab, const_decls, 1);
     return_val += semcheck_const_decls_local(symtab, const_decls);
     /* Retry deferred imported constants that reference CurrentUnit.ConstName.
@@ -15077,7 +15499,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
     
     /* Continue interface section processing */
     /* Pre-push trivially evaluable imported consts for cross-unit forward references */
-    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls);
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls, 0);
     /* Pass 1: Imported unit untyped constants. */
     before = return_val;
     return_val += semcheck_const_decls_imported_filtered(symtab,
@@ -15139,7 +15561,7 @@ int semcheck_unit(SymTab_t *symtab, Tree_t *tree)
 
     /* Continue implementation section processing */
     /* Pre-push trivially evaluable imported consts from implementation */
-    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls, 0);
     /* Pass 1: Imported unit untyped constants from implementation section. */
     before = return_val;
     return_val += semcheck_const_decls_imported_filtered(symtab,
@@ -15257,7 +15679,7 @@ void semcheck_predeclare_program_into_unit_scope(SymTab_t *symtab, Tree_t *progr
     predeclare_subprograms(symtab, program_tree->tree_data.program_data.subprograms, 0, NULL);
 
     /* Pre-push trivially evaluable constants */
-    prepush_trivial_imported_consts(symtab, program_tree->tree_data.program_data.const_declaration);
+    prepush_trivial_imported_consts(symtab, program_tree->tree_data.program_data.const_declaration, 1);
 
     LeaveScope(symtab);
     symtab->current_scope = saved_scope;
@@ -15381,27 +15803,43 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     return_val += predeclare_subprograms(symtab, tree->tree_data.unit_data.subprograms, 0, NULL);
 
     /* Pre-push trivially evaluable constants (just integer/string values) */
-    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls);
-    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls);
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.interface_const_decls, 1);
+    prepush_trivial_imported_consts(symtab, tree->tree_data.unit_data.implementation_const_decls, 1);
 
     /* Decls-only also needs typed const declarations lowered from const sections
      * into interface/implementation var/array decls. Without this, dependent units
      * can miss typed const arrays like gas_needsuffix during semantic analysis. */
     {
-        ListNode_t *typed_iface_consts = collect_typed_const_decls_filtered(symtab,
+        ListNode_t *typed_iface_unit_consts = collect_typed_const_decls_filtered(symtab,
             tree->tree_data.unit_data.interface_var_decls, 1);
+        if (typed_iface_unit_consts != NULL)
+        {
+            return_val += semcheck_decl_only_typed_const_decls(symtab, typed_iface_unit_consts);
+            DestroyList(typed_iface_unit_consts);
+        }
+
+        ListNode_t *typed_iface_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.interface_var_decls, 0);
         if (typed_iface_consts != NULL)
         {
-            return_val += semcheck_decls(symtab, typed_iface_consts);
+            return_val += semcheck_decl_only_typed_const_decls(symtab, typed_iface_consts);
             DestroyList(typed_iface_consts);
         }
     }
     {
-        ListNode_t *typed_impl_consts = collect_typed_const_decls_filtered(symtab,
+        ListNode_t *typed_impl_unit_consts = collect_typed_const_decls_filtered(symtab,
             tree->tree_data.unit_data.implementation_var_decls, 1);
+        if (typed_impl_unit_consts != NULL)
+        {
+            return_val += semcheck_decl_only_typed_const_decls(symtab, typed_impl_unit_consts);
+            DestroyList(typed_impl_unit_consts);
+        }
+
+        ListNode_t *typed_impl_consts = collect_typed_const_decls_filtered(symtab,
+            tree->tree_data.unit_data.implementation_var_decls, 0);
         if (typed_impl_consts != NULL)
         {
-            return_val += semcheck_decls(symtab, typed_impl_consts);
+            return_val += semcheck_decl_only_typed_const_decls(symtab, typed_impl_consts);
             DestroyList(typed_impl_consts);
         }
     }
@@ -17410,8 +17848,9 @@ next_identifier:
                             }
                         }
                         if (init_expr->type == EXPR_ARRAY_LITERAL &&
-                            init_expr->array_element_type == UNKNOWN_TYPE &&
-                            init_expr->array_element_type_id == NULL)
+                            (init_expr->array_element_type == UNKNOWN_TYPE ||
+                             init_expr->array_element_type_id == NULL ||
+                             init_expr->array_element_size <= 0))
                         {
                             KgpcType *var_type = (var_node != NULL) ? var_node->type : NULL;
                             if ((var_type == NULL || !kgpc_type_is_array(var_type)) &&
@@ -17430,6 +17869,13 @@ next_identifier:
                                     int elem_tag = semcheck_tag_from_kgpc(elem_type);
                                     if (init_expr->array_element_type == UNKNOWN_TYPE)
                                         init_expr->array_element_type = elem_tag;
+                                    if (init_expr->array_element_type_id == NULL &&
+                                        elem_type->type_alias != NULL &&
+                                        elem_type->type_alias->alias_name != NULL)
+                                    {
+                                        init_expr->array_element_type_id =
+                                            strdup(elem_type->type_alias->alias_name);
+                                    }
                                     if (elem_type->kind == TYPE_KIND_RECORD)
                                     {
                                         struct RecordType *rec = kgpc_type_get_record(elem_type);
@@ -17446,6 +17892,12 @@ next_identifier:
                                     {
                                         init_expr->array_element_type_id =
                                             strdup(elem_type->type_alias->target_type_id);
+                                    }
+                                    if (init_expr->array_element_size <= 0)
+                                    {
+                                        long long elem_size = kgpc_type_sizeof(elem_type);
+                                        if (elem_size > 0 && elem_size <= INT_MAX)
+                                            init_expr->array_element_size = (int)elem_size;
                                     }
                                 }
                                 if (init_expr->array_element_type_id == NULL &&

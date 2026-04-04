@@ -2082,6 +2082,44 @@ int from_cparser_is_type_helper(const char *helper_id) {
     return lookup_type_helper_base(helper_id) != NULL;
 }
 
+int from_cparser_class_has_method_name(const char *class_name, const char *method_name)
+{
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding != NULL && binding->method_name == mn)
+                return 1;
+        }
+    }
+
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = string_intern(dot + 1);
+    if (unqualified == NULL)
+        return 0;
+
+    entry = cmb_index_find(unqualified);
+    if (entry == NULL)
+        return 0;
+
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding != NULL && binding->method_name == mn)
+            return 1;
+    }
+    return 0;
+}
+
 /* Check if a method is virtual (needs VMT dispatch) */
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)

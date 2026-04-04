@@ -4891,11 +4891,30 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             KgpcType *lhs_elem = lhs_kgpctype->info.array_info.element_type;
             int elem_tag = semcheck_tag_from_kgpc(lhs_elem);
             const char *elem_type_id = NULL;
-            if (lhs_elem != NULL && lhs_elem->kind == TYPE_KIND_RECORD &&
-                lhs_elem->info.record_info != NULL &&
-                lhs_elem->info.record_info->type_id != NULL)
+            if (lhs_elem != NULL)
             {
-                elem_type_id = lhs_elem->info.record_info->type_id;
+                if (lhs_elem->type_alias != NULL &&
+                    lhs_elem->type_alias->alias_name != NULL)
+                {
+                    elem_type_id = lhs_elem->type_alias->alias_name;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_RECORD &&
+                         lhs_elem->info.record_info != NULL &&
+                         lhs_elem->info.record_info->type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->info.record_info->type_id;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_ARRAY &&
+                         lhs_elem->info.array_info.element_type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->info.array_info.element_type_id;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_POINTER &&
+                         lhs_elem->type_alias != NULL &&
+                         lhs_elem->type_alias->target_type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->type_alias->target_type_id;
+                }
             }
             if (kgpc_getenv("KGPC_DEBUG_ARRAY_ASSIGN") != NULL)
             {
@@ -4909,6 +4928,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 expr->array_element_type = elem_tag;
             if (expr->array_element_type_id == NULL && elem_type_id != NULL)
                 expr->array_element_type_id = strdup(elem_type_id);
+            if (expr->array_element_size <= 0 && lhs_elem != NULL)
+            {
+                long long elem_size = kgpc_type_sizeof(lhs_elem);
+                if (elem_size > 0 && elem_size <= INT_MAX)
+                    expr->array_element_size = (int)elem_size;
+            }
             semcheck_typecheck_array_literal(expr, symtab, INT_MAX,
                 elem_tag, elem_type_id, stmt->line_num);
             goto assignment_types_ok;
