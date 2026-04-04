@@ -1593,9 +1593,20 @@ static ListNode_t *promote_char_operand_to_string(expr_node_t *node, ListNode_t 
     CodeGenContext *ctx, Register_t *value_reg);
 static ListNode_t *gencode_string_concat(expr_node_t *node, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *target_reg);
-ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int );
+
+/* Describes the semantic kind of an assembly operand, so codegen helpers can
+   select the correct instruction without resorting to string pattern matching. */
+typedef enum {
+    OPKIND_REGISTER,   /* Operand is a CPU register (e.g. %rbx)           */
+    OPKIND_IMMEDIATE,  /* Operand is an immediate value (e.g. $42)        */
+    OPKIND_MEMORY,     /* Operand is a stack/memory reference (e.g. -8(%rbp)) */
+    OPKIND_LABEL       /* Operand is a RIP-relative label (needs leaq)    */
+} OperandKind;
+
+ListNode_t *gencode_leaf_var(struct Expression *, ListNode_t *, CodeGenContext *, char *, int, OperandKind *out_kind);
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register_t *left_reg,
     const char *right, const Register_t *right_reg,
+    OperandKind left_kind, OperandKind right_kind,
     ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *gencode_op_deprecated(struct Expression *expr, ListNode_t *inst_list,
     char *buffer, int buf_len, CodeGenContext *ctx);
@@ -1925,7 +1936,7 @@ ListNode_t *gencode_expr_tree(expr_node_t *node, ListNode_t *inst_list, CodeGenC
         inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
         const char *target_name = select_register_name(target_reg, node->expr, expr_get_type_tag(node->expr));
         if (target_name != NULL)
-            inst_list = gencode_op(node->expr, target_name, target_reg, target_name, target_reg, inst_list, ctx);
+            inst_list = gencode_op(node->expr, target_name, target_reg, target_name, target_reg, OPKIND_REGISTER, OPKIND_REGISTER, inst_list, ctx);
     }
     else if(node->right_expr != NULL && expr_tree_is_leaf(node->right_expr))
     {
@@ -2263,18 +2274,87 @@ static ListNode_t *promote_char_reg_operand_to_string(ListNode_t *inst_list,
     return inst_list;
 }
 
-static ListNode_t *emit_move_ptr_operand(ListNode_t *inst_list, const char *src,
-    const Register_t *src_reg, const char *dst)
+/* Promote a char operand (possibly an immediate like "$46") to an AnsiString
+ * via kgpc_char_to_string.  When the operand is an immediate with no backing
+ * register, a new register is allocated and the result is stored there.
+ * The caller's operand, register, and kind pointers are updated in-place. */
+static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
+    const char **operand_ptr, Register_t **reg_ptr, OperandKind *kind_ptr,
+    const char *other_operand, const Register_t *other_reg)
+{
+    assert(operand_ptr != NULL && reg_ptr != NULL && kind_ptr != NULL);
+
+    if (*reg_ptr != NULL)
+    {
+        /* Operand is already in a register — use existing path. */
+        StackNode_t *other_save = NULL;
+        if (other_reg != NULL)
+            inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+                "relop_charpromo_save");
+        inst_list = promote_char_reg_operand_to_string(inst_list, *operand_ptr, *reg_ptr);
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        return inst_list;
+    }
+
+    /* Operand is an immediate (e.g. "$46") — materialize into a register. */
+    assert(*operand_ptr != NULL);
+
+    StackNode_t *other_save = NULL;
+    if (other_reg != NULL)
+        inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+            "relop_charpromo_imm_save");
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+    {
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", *operand_ptr, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    free_arg_regs();
+
+    Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
+    assert(result_reg != NULL);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, result_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    *operand_ptr = result_reg->bit_64;
+    *reg_ptr = result_reg;
+    *kind_ptr = OPKIND_REGISTER;
+
+    inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+    return inst_list;
+}
+
+/* Move a pointer-sized operand into a destination register, using the appropriate
+   instruction based on the semantic kind of the operand. */
+static ListNode_t *emit_move_ptr_operand_kind(ListNode_t *inst_list, const char *src,
+    const Register_t *src_reg, OperandKind kind, const char *dst)
 {
     if (inst_list == NULL || src == NULL || dst == NULL)
         return inst_list;
     char buffer[128];
-    if (src_reg != NULL || src[0] == '$')
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
-    else if (strstr(src, "(%rbp)") != NULL)
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
-    else
-        snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", src, dst);
+    switch (kind) {
+        case OPKIND_REGISTER:
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                src_reg != NULL ? src_reg->bit_64 : src, dst);
+            break;
+        case OPKIND_IMMEDIATE:
+        case OPKIND_MEMORY:
+            /* Both immediates ($val) and memory refs (-N(%rbp)) use movq */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
+            break;
+        case OPKIND_LABEL:
+            /* RIP-relative labels need leaq to load the address */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n", src, dst);
+            break;
+    }
     return add_inst(inst_list, buffer);
 }
 
@@ -3694,6 +3774,29 @@ cleanup_constructor:
                 if (candidates != NULL) DestroyList(candidates);
             }
         }
+        /* If proc_label came from proc_mangled_id but the actual function
+         * definition has a different (longer) mangled_id — e.g. proc_mangled_id
+         * is "pd_abstract_u" but the function is emitted as
+         * "pd_abstract_u_tabstractprocdef" — resolve via the symbol table's
+         * definition tree to get the correct emission label. */
+        if (proc_label != NULL && ctx != NULL && ctx->symtab != NULL &&
+            expr->expr_data.addr_of_proc_data.proc_id != NULL)
+        {
+            HashNode_t *sym = NULL;
+            const char *lookup = expr->expr_data.addr_of_proc_data.proc_id;
+            if (FindSymbol(&sym, ctx->symtab, lookup) != 0 && sym != NULL &&
+                sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
+                sym->type->info.proc_info.definition != NULL)
+            {
+                Tree_t *def = sym->type->info.proc_info.definition;
+                const char *def_mangled = def->tree_data.subprogram_data.mangled_id;
+                if (def_mangled != NULL && def_mangled[0] != '\0' &&
+                    strcmp(def_mangled, proc_label) != 0)
+                {
+                    proc_label = def_mangled;
+                }
+            }
+        }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);
         if (collision_label != NULL) free(collision_label);
@@ -3930,7 +4033,7 @@ cleanup_constructor:
         return inst_list;
     }
 
-    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf));
+    inst_list = gencode_leaf_var(expr, inst_list, ctx, buf_leaf, sizeof(buf_leaf), NULL);
 
     if (expr->type == EXPR_VAR_ID)
     {
@@ -4400,7 +4503,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             }
             inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
             const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? expr_get_type_tag(left_expr) : expr_get_type_tag(expr));
-            inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, inst_list, ctx);
+            inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, OPKIND_REGISTER, OPKIND_MEMORY, inst_list, ctx);
         }
         else
         {
@@ -4412,7 +4515,7 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, expr_get_type_tag(left_expr), lhs_spill->offset);
             const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
             const char *rhs_name = select_register_name(rhs_reg, right_expr, expr_get_type_tag(right_expr));
-            inst_list = gencode_op(expr, target_name, target_reg, rhs_name, rhs_reg, inst_list, ctx);
+            inst_list = gencode_op(expr, target_name, target_reg, rhs_name, rhs_reg, OPKIND_REGISTER, OPKIND_REGISTER, inst_list, ctx);
             free_reg(get_reg_stack(), rhs_reg);
         }
         return inst_list;
@@ -4420,10 +4523,11 @@ ListNode_t *gencode_case1(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
     inst_list = gencode_expr_tree(node->left_expr, inst_list, ctx, target_reg);
 
-    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf));
+    OperandKind rhs_kind = OPKIND_LABEL;
+    inst_list = gencode_leaf_var(right_expr, inst_list, ctx, name_buf, sizeof(name_buf), &rhs_kind);
 
     const char *target_name = select_register_name(target_reg, left_expr, left_expr != NULL ? expr_get_type_tag(left_expr) : expr_get_type_tag(expr));
-    inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, inst_list, ctx);
+    inst_list = gencode_op(expr, target_name, target_reg, name_buf, NULL, OPKIND_REGISTER, rhs_kind, inst_list, ctx);
 
     return inst_list;
 }
@@ -4467,7 +4571,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
-        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, OPKIND_REGISTER, OPKIND_MEMORY, inst_list, ctx);
     }
     else
     {
@@ -4479,7 +4583,7 @@ ListNode_t *gencode_case2(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, temp_reg, right_expr, expr_get_type_tag(right_expr), rhs_spill->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
         const char *temp_name = select_register_name(temp_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, OPKIND_REGISTER, OPKIND_REGISTER, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -4524,7 +4628,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         char spill_mem[30];
         snprintf(spill_mem, 30, "-%d(%%rbp)", spill_loc->offset);
         const char *target_name = select_register_name(target_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, spill_mem, NULL, OPKIND_REGISTER, OPKIND_MEMORY, inst_list, ctx);
     }
     else
     {
@@ -4535,7 +4639,7 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         inst_list = emit_load_from_stack(inst_list, target_reg, left_expr, expr_get_type_tag(left_expr), lhs_spill->offset);
         const char *target_name = select_register_name(target_reg, left_expr, expr_get_type_tag(left_expr));
         const char *temp_name = select_register_name(temp_reg, right_expr, expr_get_type_tag(right_expr));
-        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, inst_list, ctx);
+        inst_list = gencode_op(node->expr, target_name, target_reg, temp_name, temp_reg, OPKIND_REGISTER, OPKIND_REGISTER, inst_list, ctx);
         free_reg(get_reg_stack(), temp_reg);
     }
 
@@ -4545,10 +4649,14 @@ ListNode_t *gencode_case3(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 /* Returns the corresponding string and instructions for a leaf */
 /* TODO: Only supports var_id and i_num */
 ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
-    CodeGenContext *ctx, char *buffer, int buf_len)
+    CodeGenContext *ctx, char *buffer, int buf_len, OperandKind *out_kind)
 {
     assert(expr != NULL);
     assert(buffer != NULL);
+
+    /* Default to LABEL; updated below as specific operand kinds are determined */
+    if (out_kind != NULL)
+        *out_kind = OPKIND_LABEL;
 
     StackNode_t *stack_node;
     int offset;
@@ -4694,6 +4802,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         snprintf(mangled_name, sizeof(mangled_name), "%s_void", node->const_string_value);
                         /* Use RIP-relative format for label - this causes leaq to be generated */
                         snprintf(buffer, buf_len, "%s(%%rip)", mangled_name);
+                        if (out_kind) *out_kind = OPKIND_LABEL;
                     }
                     /* Check if this is a real constant */
                     else if (node->type != NULL && kgpc_type_equals_tag(node->type, REAL_TYPE))
@@ -4709,6 +4818,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             } converter;
                             converter.f = (float)node->const_real_value;
                             snprintf(buffer, buf_len, "$%u", (unsigned)converter.i);
+                            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                         }
                         else
                         {
@@ -4719,6 +4829,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             } converter;
                             converter.d = node->const_real_value;
                             snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
+                            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                         }
                     }
                     /* Check if this is a set constant that fits in 8 bytes */
@@ -4727,6 +4838,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     {
                         /* Small set constant - use const_int_value */
                         snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                        if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                     }
                     /* Check if this is a character set (32 bytes) - needs special handling */
                     else if (node->const_set_value != NULL && node->const_set_size > (int)sizeof(long long))
@@ -4738,6 +4850,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         if (node->const_set_label != NULL)
                         {
                             snprintf(buffer, buf_len, "%s(%%rip)", node->const_set_label);
+                            if (out_kind) *out_kind = OPKIND_LABEL;
                         }
                         else
                         {
@@ -4747,6 +4860,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                                 "ERROR: Failed to emit large set constant '%s' to rodata.",
                                 expr->expr_data.id ? expr->expr_data.id : "(unknown)");
                             snprintf(buffer, buf_len, "$0");
+                            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                         }
                     }
                     else if (node->const_string_value != NULL)
@@ -4761,6 +4875,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         {
                             unsigned char ch = (unsigned char)node->const_string_value[0];
                             snprintf(buffer, buf_len, "$%d", (int)ch);
+                            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                         }
                         else
                         {
@@ -4775,12 +4890,14 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             if (escaped) free(escaped);
                             inst_list = add_inst(inst_list, add_rodata);
                             snprintf(buffer, buf_len, "%s(%%rip)", label);
+                            if (out_kind) *out_kind = OPKIND_LABEL;
                         }
                     }
                     else
                     {
                         /* Integer constant */
                         snprintf(buffer, buf_len, "$%lld", node->const_int_value);
+                        if (out_kind) *out_kind = OPKIND_IMMEDIATE;
                     }
                 }
                 else if (found && node->hash_type == HASHTYPE_TYPE &&
@@ -4801,6 +4918,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                      if (vmt_class_label == NULL)
                          vmt_class_label = expr->expr_data.id;
                      snprintf(buffer, buf_len, "%s_VMT(%%rip)", vmt_class_label);
+                     if (out_kind) *out_kind = OPKIND_LABEL;
                 }
                 else if(stack_node != NULL)
                 {
@@ -4809,23 +4927,29 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                         const char *label = (stack_node->static_label != NULL) ?
                             stack_node->static_label : stack_node->label;
                         snprintf(buffer, buf_len, "%s(%%rip)", label);
+                        if (out_kind) *out_kind = OPKIND_LABEL;
                     }
                     else if (scope_depth == 0)
                     {
                         /* Variable is in current scope, access normally */
                         snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                        if (out_kind) *out_kind = OPKIND_MEMORY;
                     }
                     else
                     {
                         Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
                         if (frame_reg != NULL)
+                        {
                             snprintf(buffer, buf_len, "-%d(%s)", stack_node->offset, frame_reg->bit_64);
+                            if (out_kind) *out_kind = OPKIND_MEMORY;
+                        }
                         else
                         {
                             codegen_report_error(ctx,
                                 "ERROR: Failed to acquire static link for variable %s.",
                                 expr->expr_data.id);
                             snprintf(buffer, buf_len, "-%d(%%rbp)", stack_node->offset);
+                            if (out_kind) *out_kind = OPKIND_MEMORY;
                         }
                     }
                 }
@@ -4841,9 +4965,11 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                                 const char *label = (mangled_stack_node->static_label != NULL) ?
                                     mangled_stack_node->static_label : mangled_stack_node->label;
                                 snprintf(buffer, buf_len, "%s(%%rip)", label);
+                                if (out_kind) *out_kind = OPKIND_LABEL;
                                 break;
                             }
                             snprintf(buffer, buf_len, "-%d(%%rbp)", mangled_stack_node->offset);
+                            if (out_kind) *out_kind = OPKIND_MEMORY;
                             break;
                         }
                     }
@@ -4885,6 +5011,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                                 cand->type != NULL &&
                                 cand->type->kind == TYPE_KIND_PROCEDURE) {
                                 snprintf(buffer, buf_len, "%s(%%rip)", cand->mangled_id);
+                                if (out_kind) *out_kind = OPKIND_LABEL;
                                 resolved_as_method = 1;
                                 break;
                             }
@@ -4932,15 +5059,18 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     if (is_vmt_label)
                     {
                         snprintf(buffer, buf_len, "%s(%%rip)", var_name);
+                        if (out_kind) *out_kind = OPKIND_LABEL;
                     }
                     else if (is_builtin_file)
                     {
                         snprintf(buffer, buf_len, "%s(%%rip)", global_ptr_name);
+                        if (out_kind) *out_kind = OPKIND_LABEL;
                     }
                     else
                     {
                         inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
                         snprintf(buffer, buf_len, "-%d(%s)", offset, current_non_local_reg64());
+                        if (out_kind) *out_kind = OPKIND_MEMORY;
                     }
                 }
             }
@@ -4949,10 +5079,12 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 
         case EXPR_INUM:
             snprintf(buffer, buf_len, "$%lld", expr->expr_data.i_num);
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
 
         case EXPR_CHAR_CODE:
             snprintf(buffer, buf_len, "$%u", expr->expr_data.char_code);
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
 
         case EXPR_RNUM:
@@ -4976,19 +5108,23 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 converter.d = expr->expr_data.r_num;
                 snprintf(buffer, buf_len, "$%lld", (long long)converter.i);
             }
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
         }
 
         case EXPR_BOOL:
             snprintf(buffer, buf_len, "$%d", expr->expr_data.bool_value ? 1 : 0);
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
 
         case EXPR_NIL:
             snprintf(buffer, buf_len, "$0");
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
 
         case EXPR_SET:
             snprintf(buffer, buf_len, "$%u", expr->expr_data.set_data.bitmask);
+            if (out_kind) *out_kind = OPKIND_IMMEDIATE;
             break;
 
         default:
@@ -5002,6 +5138,7 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
 /* TODO: Assumes eax and edx registers are free for division */
 ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register_t *left_reg,
     const char *right, const Register_t *right_reg,
+    OperandKind left_kind, OperandKind right_kind,
     ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(expr != NULL);
@@ -5760,9 +5897,14 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     }
 
                     /* Spill the other operand before shortstring promotion calls,
-                     * since function calls clobber caller-saved registers. */
+                     * since function calls clobber caller-saved registers.
+                     * Use 64-bit register names for movq to avoid register width
+                     * mismatch when the operand string is a 32-bit register name
+                     * (e.g. %ebx when the value is actually a 64-bit pointer). */
                     int ca_right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
                     int ca_left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
+                    const char *right64 = operand_as_reg64(right, right_reg);
+                    const char *left64 = operand_as_reg64(left, left_reg);
                     StackNode_t *spill_other = NULL;
                     if (left_is_shortstring && ca_right_needs_spill)
                     {
@@ -5770,7 +5912,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         if (spill_other != NULL)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                right, spill_other->offset);
+                                right64, spill_other->offset);
                             inst_list = add_inst(inst_list, buffer);
                         }
                     }
@@ -5779,7 +5921,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, right);
+                            spill_other->offset, right64);
                         inst_list = add_inst(inst_list, buffer);
                     }
 
@@ -5790,7 +5932,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         if (spill_other != NULL)
                         {
                             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-                                left, spill_other->offset);
+                                left64, spill_other->offset);
                             inst_list = add_inst(inst_list, buffer);
                         }
                     }
@@ -5799,7 +5941,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     if (spill_other != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                            spill_other->offset, left);
+                            spill_other->offset, left64);
                         inst_list = add_inst(inst_list, buffer);
                     }
 
@@ -5814,10 +5956,10 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
 
                     if (strcmp(cmp_func, "kgpc_char_array_compare_array") == 0)
                     {
-                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, left, left_reg, left_kind, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg2);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, right, right_reg, right_kind, arg2);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", rhs_array_len, arg3);
                         inst_list = add_inst(inst_list, buffer);
                     }
@@ -5825,19 +5967,19 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     {
                         if (compare_full)
                             cmp_func = "kgpc_char_array_compare_full";
-                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, left, left_reg, left_kind, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg2);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, right, right_reg, right_kind, arg2);
                     }
                     else
                     {
                         if (compare_full)
                             cmp_func = "kgpc_char_array_compare_full";
-                        inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg0);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, right, right_reg, right_kind, arg0);
                         snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_len, arg1);
                         inst_list = add_inst(inst_list, buffer);
-                        inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg2);
+                        inst_list = emit_move_ptr_operand_kind(inst_list, left, left_reg, left_kind, arg2);
                     }
 
                     inst_list = codegen_vect_reg(inst_list, 0);
@@ -5901,7 +6043,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                      * kgpc_string_compare.  Detect chars by expression type
                      * (EXPR_CHAR_CODE), legacy type tag (CHAR_TYPE), or
                      * resolved KgpcType (covers string-index expressions like
-                     * Result[L] which are char but not EXPR_CHAR_CODE). */
+                     * Result[L] which are char but not EXPR_CHAR_CODE).
+                     *
+                     * The operand may be in a register OR an immediate (e.g.
+                     * "$46" for a single-char EXPR_STRING).  Use mutable
+                     * copies so promote_char_operand_to_string_ex can update
+                     * an immediate operand to a register-backed one. */
                     int left_is_char_operand = (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
                          expr_get_type_tag(left_expr) == CHAR_TYPE ||
@@ -5914,39 +6061,39 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                          (right_expr->resolved_kgpc_type != NULL &&
                           kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
                          codegen_expr_is_string_char_index(right_expr)));
-                    if (left_is_char_operand && left_reg != NULL)
-                    {
-                        StackNode_t *rhs_save = NULL;
-                        if (right_reg != NULL)
-                        {
-                            inst_list = spill_reg64_operand(inst_list, right, &rhs_save,
-                                "relop_rhs_charpromo");
-                        }
-                        inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
-                        inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
-                    }
-                    if (right_is_char_operand && right_reg != NULL)
-                    {
-                        StackNode_t *lhs_save = NULL;
-                        if (left_reg != NULL)
-                        {
-                            inst_list = spill_reg64_operand(inst_list, left, &lhs_save,
-                                "relop_lhs_charpromo");
-                        }
-                        inst_list = promote_char_reg_operand_to_string(inst_list, right, right_reg);
-                        inst_list = restore_spilled_reg64_operand(inst_list, left, lhs_save);
-                    }
+
+                    /* Mutable copies: promote_char_operand_to_string_ex may
+                     * upgrade an immediate to a register-backed operand. */
+                    const char *l_op = left;
+                    Register_t *l_reg = (Register_t *)left_reg;
+                    OperandKind l_kind = left_kind;
+                    const char *r_op = right;
+                    Register_t *r_reg = (Register_t *)right_reg;
+                    OperandKind r_kind = right_kind;
+
+                    if (left_is_char_operand)
+                        inst_list = promote_char_operand_to_string_ex(inst_list,
+                            &l_op, &l_reg, &l_kind, r_op, r_reg);
+                    if (right_is_char_operand)
+                        inst_list = promote_char_operand_to_string_ex(inst_list,
+                            &r_op, &r_reg, &r_kind, l_op, l_reg);
 
                     const char *arg0 = current_arg_reg64(0);
                     const char *arg1 = current_arg_reg64(1);
                     if (arg0 == NULL || arg1 == NULL)
                         break;
-                    inst_list = emit_move_ptr_operand(inst_list, left, left_reg, arg0);
-                    inst_list = emit_move_ptr_operand(inst_list, right, right_reg, arg1);
+                    inst_list = emit_move_ptr_operand_kind(inst_list, l_op, l_reg, l_kind, arg0);
+                    inst_list = emit_move_ptr_operand_kind(inst_list, r_op, r_reg, r_kind, arg1);
                     inst_list = codegen_vect_reg(inst_list, 0);
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_compare");
                     inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
                     free_arg_regs();
+
+                    /* Free any registers allocated by char→string promotion. */
+                    if (l_reg != left_reg && l_reg != NULL)
+                        free_reg(get_reg_stack(), l_reg);
+                    if (r_reg != right_reg && r_reg != NULL)
+                        free_reg(get_reg_stack(), r_reg);
 
                     const char *left32 = reg_to_reg32(left, left_reg);
                     const char *left8 = reg32_to_reg8(left32, left_reg);

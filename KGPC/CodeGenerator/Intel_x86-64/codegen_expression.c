@@ -8083,6 +8083,48 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
     }
+    /* Fix shortstring stride: when the element type is a named shortstring alias
+     * (e.g., tasmkeyword = string[10]), the array element type may have been
+     * resolved to a generic ShortString primitive (256 bytes) instead of the
+     * specific shortstring type.  Look up the actual type and use its real size. */
+    if (first_index_stride == 256 && ctx != NULL && ctx->symtab != NULL &&
+        array_expr != NULL && array_expr->array_element_type_id != NULL &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "ShortString") &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "shortstring") &&
+        !pascal_identifier_equals(array_expr->array_element_type_id, "String"))
+    {
+        HashNode_t *elem_node = NULL;
+        if (FindSymbol(&elem_node, ctx->symtab, array_expr->array_element_type_id) != 0 &&
+            elem_node != NULL && elem_node->type != NULL)
+        {
+            KgpcType *etype = elem_node->type;
+            long long real_size = -1;
+            /* SHORTSTRING_TYPE primitive with alias info: use array_end + 1 */
+            if (etype->kind == TYPE_KIND_PRIMITIVE &&
+                etype->info.primitive_type_tag == SHORTSTRING_TYPE &&
+                etype->type_alias != NULL &&
+                etype->type_alias->is_shortstring &&
+                etype->type_alias->array_end > 0)
+            {
+                real_size = etype->type_alias->array_end + 1;
+            }
+            /* TYPE_KIND_ARRAY for string[N]: sizeof returns N (data only),
+             * but storage is N+1 (length byte + data). Check if element type
+             * is char and the array represents a shortstring. */
+            else if (etype->kind == TYPE_KIND_ARRAY &&
+                     etype->info.array_info.element_type != NULL &&
+                     etype->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                     etype->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+            {
+                real_size = kgpc_type_sizeof(etype);
+                if (real_size > 0)
+                    real_size += 1; /* add length byte */
+            }
+            if (real_size > 0 && real_size < 256)
+                first_index_stride = real_size;
+        }
+    }
+
     if (wide_char_index)
     {
         first_index_stride = 2;
@@ -10912,6 +10954,25 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 }
                 if (codegen_had_error(ctx) || addr_reg == NULL)
                     return inst_list;
+
+                /* When passing a ShortString argument to a formal AnsiString (STRING_TYPE)
+                 * parameter, convert via kgpc_shortstring_to_string.  Without this, the
+                 * raw ShortString buffer address (length-byte + data) is passed and the
+                 * callee interprets the length byte as the first character of an AnsiString. */
+                if (is_array_arg && !is_var_param && !is_array_param &&
+                    (expected_type == STRING_TYPE ||
+                     (expected_type == UNKNOWN_TYPE &&
+                      formal_arg_decl != NULL &&
+                      formal_arg_decl->type == TREE_VAR_DECL &&
+                      formal_arg_decl->tree_data.var_decl_data.type == STRING_TYPE)) &&
+                    codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
+                {
+                    inst_list = codegen_promote_shortstring_reg(inst_list, ctx, addr_reg);
+                    /* addr_reg now holds an AnsiString pointer; clear is_pointer_like
+                     * so the spill is treated as a by-value string, not as a by-ref address. */
+                    if (arg_infos != NULL)
+                        arg_infos[arg_num].is_pointer_like = 0;
+                }
 
                 /* ARCHITECTURAL FIX: Spill address to stack to prevent clobbering by nested calls */
                 StackNode_t *arg_spill = add_l_t("arg_eval");

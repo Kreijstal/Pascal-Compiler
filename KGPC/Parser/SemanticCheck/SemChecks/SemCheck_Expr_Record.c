@@ -117,6 +117,85 @@ static void semcheck_ptrset_destroy(SemcheckPtrSet *set)
     set->count = 0;
 }
 
+static int semcheck_record_declares_method_name_local(const struct RecordType *record_info,
+    const char *method_name)
+{
+    if (record_info == NULL || method_name == NULL)
+        return 0;
+
+    for (ListNode_t *cur = record_info->methods; cur != NULL; cur = cur->next)
+    {
+        struct MethodInfo *method = (struct MethodInfo *)cur->cur;
+        if (method != NULL && method->name != NULL &&
+            pascal_identifier_equals(method->name, method_name))
+        {
+            return 1;
+        }
+    }
+
+    for (ListNode_t *cur = record_info->method_templates; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_METHOD_TEMPLATE || cur->cur == NULL)
+            continue;
+        struct MethodTemplate *method = (struct MethodTemplate *)cur->cur;
+        if (method->name != NULL && pascal_identifier_equals(method->name, method_name))
+            return 1;
+    }
+
+    if (record_info->type_id != NULL &&
+        from_cparser_class_has_method_name(record_info->type_id, method_name))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+int semcheck_record_may_have_method_name(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name)
+{
+    if (symtab == NULL || record_info == NULL || method_name == NULL)
+        return 0;
+
+    struct RecordType *current = record_info;
+    SemcheckPtrSet visited = {0};
+    while (current != NULL)
+    {
+        if (semcheck_ptrset_contains(&visited, current))
+            break;
+        if (!semcheck_ptrset_insert(&visited, current))
+        {
+            semcheck_ptrset_destroy(&visited);
+            return 0;
+        }
+
+        if (semcheck_record_declares_method_name_local(current, method_name))
+        {
+            semcheck_ptrset_destroy(&visited);
+            return 1;
+        }
+
+        if (current->is_type_helper && current->helper_parent_id != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindSymbol(&parent_node, symtab, current->helper_parent_id) != 0 && parent_node != NULL)
+            {
+                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                if (parent_helper != NULL && parent_helper->is_type_helper)
+                {
+                    current = parent_helper;
+                    continue;
+                }
+            }
+        }
+
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    semcheck_ptrset_destroy(&visited);
+    return 0;
+}
+
 static void semcheck_merge_candidate_lists_dedup_seen(ListNode_t **combined_head,
     ListNode_t **combined_tail, ListNode_t *new_candidates, SemcheckPtrSet *seen)
 {

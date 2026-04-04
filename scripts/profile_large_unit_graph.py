@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -117,8 +118,10 @@ def build_msg2inc_command(compiler: Path, fpc_source: Path, asm_path: Path) -> l
 
 def ensure_bootstrap_prereqs(compiler: Path, fpc_source: Path, output_dir: Path) -> None:
     msgtxt = fpc_source / "compiler" / "msgtxt.inc"
+
+    # Always regenerate msgtxt.inc to validate msg2inc works correctly.
     if msgtxt.exists():
-        return
+        msgtxt.unlink()
 
     runtime_lib = compiler.parent / "libkgpc_runtime.a"
     if not runtime_lib.exists():
@@ -163,6 +166,12 @@ def ensure_bootstrap_prereqs(compiler: Path, fpc_source: Path, output_dir: Path)
     if proc.returncode != 0:
         raise RuntimeError(f"failed to generate {msgtxt} with KGPC msg2inc (exit {proc.returncode})")
 
+    if not msgtxt.exists() or msgtxt.stat().st_size == 0:
+        raise RuntimeError(f"msg2inc produced empty or missing {msgtxt}")
+
+    digest = hashlib.md5(msgtxt.read_bytes()).hexdigest()
+    print(f"msgtxt.inc md5: {digest} ({msgtxt.stat().st_size} bytes)")
+
 
 def parse_timings(output: str) -> dict[str, float]:
     timings: dict[str, float] = {}
@@ -193,6 +202,8 @@ def main() -> int:
     fpc_source = Path(args.fpc_source)
     compiler = Path(args.compiler)
     ensure_bootstrap_prereqs(compiler, fpc_source, output_dir)
+    msgtxt = fpc_source / "compiler" / "msgtxt.inc"
+    msgtxt_hash = hashlib.md5(msgtxt.read_bytes()).hexdigest() if msgtxt.exists() else None
     cmd = build_command(args, asm_path)
 
     print("Running perf probe command:")
@@ -217,6 +228,7 @@ def main() -> int:
         "source": str(Path(args.source)),
         "asm": str(asm_path),
         "compiler_exit_code": proc.returncode,
+        "msgtxt_md5": msgtxt_hash,
         "timings": timings,
     }
     print("PROFILE_SUMMARY=" + json.dumps(summary, sort_keys=True))

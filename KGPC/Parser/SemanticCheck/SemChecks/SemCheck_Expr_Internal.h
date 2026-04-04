@@ -338,6 +338,10 @@ struct RecordField *semcheck_find_class_field_including_hidden(SymTab_t *symtab,
     struct RecordType *record_info, const char *field_name,
     struct RecordType **owner_out);
 
+/* Cheap metadata-only gate for speculative method lookup. */
+int semcheck_record_may_have_method_name(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name);
+
 /* Find method in class hierarchy */
 HashNode_t *semcheck_find_class_method(SymTab_t *symtab,
     struct RecordType *record_info, const char *method_name,

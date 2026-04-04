@@ -311,6 +311,10 @@ typedef struct CodeGenContext {
     int callee_save_r13_offset;
     int callee_save_r14_offset;
     int callee_save_r15_offset;
+
+    /* Label to jump to after an 'on' exception handler body executes.
+       Set by codegen_try_except, read by codegen_on_exception. */
+    const char *on_except_after_label;
 } CodeGenContext;
 
 /* Generates a label */

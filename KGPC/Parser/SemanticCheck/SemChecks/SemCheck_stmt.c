@@ -572,6 +572,8 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
                 return 1;
             }
         }
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
     }
     if (expr->is_array_expr &&
         expr->array_element_type == CHAR_TYPE &&
@@ -3058,7 +3060,7 @@ static int semcheck_builtin_read_like(SymTab_t *symtab, struct Statement *stmt, 
         expr_type = UNKNOWN_TYPE;
         return_val += semcheck_stmt_expr_tag(&expr_type, symtab, expr, max_scope_lev, MUTATE);
         
-        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && expr_type != STRING_TYPE &&
+        if (!is_integer_type(expr_type) && expr_type != CHAR_TYPE && !is_string_type(expr_type) &&
             expr_type != REAL_TYPE && !semcheck_expr_is_real_family(expr))
         {
             semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, read argument %d must be integer, longint, real, char, or string variable.\n",
@@ -4889,11 +4891,30 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
             KgpcType *lhs_elem = lhs_kgpctype->info.array_info.element_type;
             int elem_tag = semcheck_tag_from_kgpc(lhs_elem);
             const char *elem_type_id = NULL;
-            if (lhs_elem != NULL && lhs_elem->kind == TYPE_KIND_RECORD &&
-                lhs_elem->info.record_info != NULL &&
-                lhs_elem->info.record_info->type_id != NULL)
+            if (lhs_elem != NULL)
             {
-                elem_type_id = lhs_elem->info.record_info->type_id;
+                if (lhs_elem->type_alias != NULL &&
+                    lhs_elem->type_alias->alias_name != NULL)
+                {
+                    elem_type_id = lhs_elem->type_alias->alias_name;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_RECORD &&
+                         lhs_elem->info.record_info != NULL &&
+                         lhs_elem->info.record_info->type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->info.record_info->type_id;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_ARRAY &&
+                         lhs_elem->info.array_info.element_type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->info.array_info.element_type_id;
+                }
+                else if (lhs_elem->kind == TYPE_KIND_POINTER &&
+                         lhs_elem->type_alias != NULL &&
+                         lhs_elem->type_alias->target_type_id != NULL)
+                {
+                    elem_type_id = lhs_elem->type_alias->target_type_id;
+                }
             }
             if (kgpc_getenv("KGPC_DEBUG_ARRAY_ASSIGN") != NULL)
             {
@@ -4907,6 +4928,12 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                 expr->array_element_type = elem_tag;
             if (expr->array_element_type_id == NULL && elem_type_id != NULL)
                 expr->array_element_type_id = strdup(elem_type_id);
+            if (expr->array_element_size <= 0 && lhs_elem != NULL)
+            {
+                long long elem_size = kgpc_type_sizeof(lhs_elem);
+                if (elem_size > 0 && elem_size <= INT_MAX)
+                    expr->array_element_size = (int)elem_size;
+            }
             semcheck_typecheck_array_literal(expr, symtab, INT_MAX,
                 elem_tag, elem_type_id, stmt->line_num);
             goto assignment_types_ok;
@@ -7090,7 +7117,9 @@ skip_type_receiver_rewrite:
                                           (actual_type == RECORD_TYPE) ||
                                           (formal_type == STRING_TYPE && actual_type == CHAR_TYPE) ||
                                           (formal_type == CHAR_TYPE && actual_type == STRING_TYPE) ||
-                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE)))
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == CHAR_TYPE) ||
+                                          (formal_type == STRING_TYPE && actual_type == SHORTSTRING_TYPE) ||
+                                          (formal_type == SHORTSTRING_TYPE && actual_type == STRING_TYPE)))
                                 {
                                     semantic_error_at(stmt->line_num, stmt->col_num, -1,
                                         "Incompatible types: got \"%s\" expected \"%s\"",

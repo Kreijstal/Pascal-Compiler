@@ -2082,6 +2082,44 @@ int from_cparser_is_type_helper(const char *helper_id) {
     return lookup_type_helper_base(helper_id) != NULL;
 }
 
+int from_cparser_class_has_method_name(const char *class_name, const char *method_name)
+{
+    if (class_name == NULL || method_name == NULL)
+        return 0;
+
+    const char *cn = string_intern(class_name);
+    const char *mn = string_intern(method_name);
+    if (cn == NULL || mn == NULL)
+        return 0;
+
+    CMBIndexEntry *entry = cmb_index_find(cn);
+    if (entry != NULL) {
+        for (int i = 0; i < entry->count; i++) {
+            ClassMethodBinding *binding = entry->bindings[i];
+            if (binding != NULL && binding->method_name == mn)
+                return 1;
+        }
+    }
+
+    const char *dot = strrchr(class_name, '.');
+    if (dot == NULL)
+        return 0;
+    const char *unqualified = string_intern(dot + 1);
+    if (unqualified == NULL)
+        return 0;
+
+    entry = cmb_index_find(unqualified);
+    if (entry == NULL)
+        return 0;
+
+    for (int i = 0; i < entry->count; i++) {
+        ClassMethodBinding *binding = entry->bindings[i];
+        if (binding != NULL && binding->method_name == mn)
+            return 1;
+    }
+    return 0;
+}
+
 /* Check if a method is virtual (needs VMT dispatch) */
 int from_cparser_is_method_virtual(const char *class_name, const char *method_name) {
     if (class_name == NULL || method_name == NULL)
@@ -4874,6 +4912,17 @@ static ast_t *unwrap_pascal_node(ast_t *node) {
     return cur;
 }
 
+/* Under {$H-}, bare 'string' mapped to STRING_TYPE should become
+ * SHORTSTRING_TYPE.  Only remap when the name is literally "string"
+ * (case-insensitive) so that explicit AnsiString/UnicodeString are
+ * left untouched. */
+static int apply_shortstring_mode(int type_tag, const char *name) {
+    if (type_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
+        name != NULL && strcasecmp(name, "string") == 0)
+        return SHORTSTRING_TYPE;
+    return type_tag;
+}
+
 static int map_type_name(const char *name, char **type_id_out) {
     if (name == NULL) {
         return UNKNOWN_TYPE;
@@ -7103,10 +7152,7 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
         }
 
         int result = map_type_name(dup, type_id_out);
-        /* Under {$H-}, bare 'string' means shortstring (256-byte value type). */
-        if (result == STRING_TYPE && pascal_frontend_default_shortstring() &&
-            strcasecmp(dup, "string") == 0)
-            result = SHORTSTRING_TYPE;
+        result = apply_shortstring_mode(result, dup);
         if (type_info != NULL && result == FILE_TYPE) {
             type_info->is_file = 1;
             type_info->file_type = FILE_TYPE;
@@ -7823,11 +7869,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
         /* Get the preserved type name for RawByteString/UnicodeString */
         char *preserved_type_id = NULL;
         int type_tag = map_type_name(type_name, &preserved_type_id);
-        /* Under {$H-}, 'string' means shortstring (256-byte value type).
-         * Only remap bare 'string', not explicit names like AnsiString/UnicodeString. */
-        if (type_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
-            strcasecmp(type_name, "string") == 0)
-            type_tag = SHORTSTRING_TYPE;
+        type_tag = apply_shortstring_mode(type_tag, type_name);
         if (type_tag != UNKNOWN_TYPE) {
             KgpcType *type = create_primitive_type(type_tag);
             /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
@@ -8124,9 +8166,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
                     if (ret_type_name != NULL) {
                         // First check if it's a primitive type
                         int ret_tag = map_type_name(ret_type_name, NULL);
-                        if (ret_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
-                            strcasecmp(ret_type_name, "string") == 0)
-                            ret_tag = SHORTSTRING_TYPE;
+                        ret_tag = apply_shortstring_mode(ret_tag, ret_type_name);
                         if (ret_tag != UNKNOWN_TYPE) {
                             return_type = create_primitive_type(ret_tag);
                             owns_return_type = 1;
@@ -8323,6 +8363,7 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             char *mapped_id = NULL;
             int mapped_type = map_type_name(candidate, &mapped_id);
             if (mapped_type != UNKNOWN_TYPE) {
+                mapped_type = apply_shortstring_mode(mapped_type, candidate);
                 field_type = mapped_type;
                 field_type_id = mapped_id;
                 free(candidate);
@@ -9727,6 +9768,7 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             char *mapped_id = NULL;
             int mapped_type = map_type_name(candidate, &mapped_id);
             if (mapped_type != UNKNOWN_TYPE) {
+                mapped_type = apply_shortstring_mode(mapped_type, candidate);
                 field_type = mapped_type;
                 field_type_id = mapped_id;
                 free(candidate);
@@ -10630,9 +10672,7 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
             char *ret_name = dup_symbol(ret_node);
             if (ret_name != NULL) {
                 int ret_tag = map_type_name(ret_name, NULL);
-                if (ret_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
-                    strcasecmp(ret_name, "string") == 0)
-                    ret_tag = SHORTSTRING_TYPE;
+                ret_tag = apply_shortstring_mode(ret_tag, ret_name);
                 if (ret_tag != UNKNOWN_TYPE)
                     return_type = create_primitive_type(ret_tag);
                 return_type_id = strdup(ret_name);
@@ -10719,6 +10759,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         char *type_name = dup_symbol(type_node);
         if (type_name != NULL) {
             var_type = map_type_name(type_name, &type_id);
+            var_type = apply_shortstring_mode(var_type, type_name);
             if (var_type == UNKNOWN_TYPE && type_id == NULL)
                 type_id = type_name;
             else
@@ -10746,6 +10787,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             char *type_name = dup_symbol(search);
             if (type_name != NULL) {
                 int mapped = map_type_name(type_name, &type_id);
+                mapped = apply_shortstring_mode(mapped, type_name);
                 if (mapped == UNKNOWN_TYPE && type_id == NULL)
                     type_id = type_name;
                 else
@@ -10962,6 +11004,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             char *type_name = strdup((char *)iter->cur);
             if (type_name != NULL) {
                 int mapped = map_type_name(type_name, &type_id);
+                mapped = apply_shortstring_mode(mapped, type_name);
                 if (mapped == UNKNOWN_TYPE && type_id == NULL)
                     type_id = type_name;
                 else
@@ -12223,6 +12266,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         char *type_name = dup_symbol(cur);
         if (type_name != NULL) {
             int mapped = map_type_name(type_name, &type_id);
+            mapped = apply_shortstring_mode(mapped, type_name);
             if (mapped != UNKNOWN_TYPE || type_id != NULL) {
                 /* Known type name — consume and advance */
                 free(type_name);
@@ -12259,6 +12303,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
                 char *type_name = dup_symbol(type_node);
                 if (type_name != NULL) {
                     int mapped = map_type_name(type_name, &type_id);
+                    mapped = apply_shortstring_mode(mapped, type_name);
                     if (mapped == UNKNOWN_TYPE && type_id == NULL)
                         type_id = type_name;
                     else
@@ -12401,9 +12446,10 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         if (empty_tuple_record_const) {
             int var_type = UNKNOWN_TYPE;
             struct RecordType *inline_record = NULL;
-            if (type_id != NULL)
+            if (type_id != NULL) {
                 var_type = map_type_name(type_id, NULL);
-            else if (type_info.is_record && type_info.record_type != NULL)
+                var_type = apply_shortstring_mode(var_type, type_id);
+            } else if (type_info.is_record && type_info.record_type != NULL)
             {
                 var_type = RECORD_TYPE;
                 inline_record = type_info.record_type;
@@ -12511,6 +12557,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
         struct RecordType *inline_record = NULL;
         if (type_id != NULL) {
             var_type = map_type_name(type_id, NULL);
+            var_type = apply_shortstring_mode(var_type, type_id);
         } else if (type_info.is_record && type_info.record_type != NULL) {
             var_type = RECORD_TYPE;
             inline_record = type_info.record_type;
