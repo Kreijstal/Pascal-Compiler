@@ -5628,12 +5628,14 @@ int semcheck_try_reinterpret_as_typecast(int *type_return,
     if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
     {
         struct RecordType *self_record = get_record_type_from_node(self_node);
-        if (self_record != NULL)
+        if (self_record != NULL &&
+            semcheck_record_may_have_method_name(symtab, self_record, id) &&
+            semcheck_find_class_method(symtab, self_record, id, NULL) != NULL)
         {
-            if (semcheck_find_class_method(symtab, self_record, id, NULL) != NULL)
-                return 0;
+            return 0;
         }
     }
+
     char *id_copy = strdup(id);
     if (id_copy == NULL)
         return 0;

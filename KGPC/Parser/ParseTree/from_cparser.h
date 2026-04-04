@@ -54,6 +54,7 @@ int from_cparser_is_method_static(const char *class_name, const char *method_nam
 int from_cparser_is_method_class_method(const char *class_name, const char *method_name);
 int from_cparser_is_method_nonstatic_class_method(const char *class_name, const char *method_name);
 int from_cparser_is_type_helper(const char *helper_id);
+int from_cparser_class_has_method_name(const char *class_name, const char *method_name);
 
 /* Check if a method is virtual (needs VMT dispatch).
  * Returns 1 if virtual or override, 0 otherwise.
