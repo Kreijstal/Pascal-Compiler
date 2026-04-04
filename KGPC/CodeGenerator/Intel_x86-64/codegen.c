@@ -64,6 +64,20 @@ static ListNode_t *g_codegen_available_subprograms = NULL;
 /* g_available_subprograms_set and g_available_subprograms_tail declared after
  * CodeGenStringSet definition below */
 
+/* Return a lazily-created, process-lifetime canonical KgpcType for
+ * SHORTSTRING_TYPE.  This avoids allocating ad-hoc instances via
+ * create_primitive_type(SHORTSTRING_TYPE) in code paths that only need
+ * a type descriptor for identification (e.g. ctx->current_return_type,
+ * proc_info.return_type patching).  The returned pointer must NOT be
+ * freed or ref-counted by the caller. */
+static KgpcType *codegen_canonical_shortstring_type(void)
+{
+    static KgpcType *canonical = NULL;
+    if (canonical == NULL)
+        canonical = create_primitive_type(SHORTSTRING_TYPE);
+    return canonical;
+}
+
 static int codegen_runtime_owns_exported_symbol(const char *symbol)
 {
     if (symbol == NULL)
@@ -8671,11 +8685,11 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             kgpc_type_get_primitive_tag(ret) == STRING_TYPE)
         {
             /* Patch STRING -> SHORTSTRING so body codegen uses value semantics */
-            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+            func_node->type->info.proc_info.return_type = codegen_canonical_shortstring_type();
         }
         else if (ret == NULL)
         {
-            func_node->type->info.proc_info.return_type = create_primitive_type(SHORTSTRING_TYPE);
+            func_node->type->info.proc_info.return_type = codegen_canonical_shortstring_type();
         }
     }
 
@@ -8695,7 +8709,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * variable as ShortString and avoids kgpc_string_assign_from_shortstring
      * which expects char** (AnsiString variable) semantics. */
     if (ctx->current_return_type == NULL && func->return_type == SHORTSTRING_TYPE)
-        ctx->current_return_type = create_primitive_type(SHORTSTRING_TYPE);
+        ctx->current_return_type = codegen_canonical_shortstring_type();
 
     /* Only nested functions receive static links (excluding class methods). */
     int will_need_static_link = (!is_class_method && lexical_depth > 1);

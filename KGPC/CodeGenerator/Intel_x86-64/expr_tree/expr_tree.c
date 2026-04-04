@@ -2274,6 +2274,64 @@ static ListNode_t *promote_char_reg_operand_to_string(ListNode_t *inst_list,
     return inst_list;
 }
 
+/* Promote a char operand (possibly an immediate like "$46") to an AnsiString
+ * via kgpc_char_to_string.  When the operand is an immediate with no backing
+ * register, a new register is allocated and the result is stored there.
+ * The caller's operand, register, and kind pointers are updated in-place. */
+static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
+    const char **operand_ptr, Register_t **reg_ptr, OperandKind *kind_ptr,
+    const char *other_operand, const Register_t *other_reg)
+{
+    assert(operand_ptr != NULL && reg_ptr != NULL && kind_ptr != NULL);
+
+    if (*reg_ptr != NULL)
+    {
+        /* Operand is already in a register — use existing path. */
+        StackNode_t *other_save = NULL;
+        if (other_reg != NULL)
+            inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+                "relop_charpromo_save");
+        inst_list = promote_char_reg_operand_to_string(inst_list, *operand_ptr, *reg_ptr);
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        return inst_list;
+    }
+
+    /* Operand is an immediate (e.g. "$46") — materialize into a register. */
+    assert(*operand_ptr != NULL);
+
+    StackNode_t *other_save = NULL;
+    if (other_reg != NULL)
+        inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+            "relop_charpromo_imm_save");
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+    {
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        return inst_list;
+    }
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", *operand_ptr, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    free_arg_regs();
+
+    Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
+    assert(result_reg != NULL);
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, result_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    *operand_ptr = result_reg->bit_64;
+    *reg_ptr = result_reg;
+    *kind_ptr = OPKIND_REGISTER;
+
+    inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+    return inst_list;
+}
+
 /* Move a pointer-sized operand into a destination register, using the appropriate
    instruction based on the semantic kind of the operand. */
 static ListNode_t *emit_move_ptr_operand_kind(ListNode_t *inst_list, const char *src,
@@ -5985,7 +6043,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                      * kgpc_string_compare.  Detect chars by expression type
                      * (EXPR_CHAR_CODE), legacy type tag (CHAR_TYPE), or
                      * resolved KgpcType (covers string-index expressions like
-                     * Result[L] which are char but not EXPR_CHAR_CODE). */
+                     * Result[L] which are char but not EXPR_CHAR_CODE).
+                     *
+                     * The operand may be in a register OR an immediate (e.g.
+                     * "$46" for a single-char EXPR_STRING).  Use mutable
+                     * copies so promote_char_operand_to_string_ex can update
+                     * an immediate operand to a register-backed one. */
                     int left_is_char_operand = (left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
                          expr_get_type_tag(left_expr) == CHAR_TYPE ||
@@ -5998,39 +6061,39 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                          (right_expr->resolved_kgpc_type != NULL &&
                           kgpc_type_is_char(right_expr->resolved_kgpc_type)) ||
                          codegen_expr_is_string_char_index(right_expr)));
-                    if (left_is_char_operand && left_reg != NULL)
-                    {
-                        StackNode_t *rhs_save = NULL;
-                        if (right_reg != NULL)
-                        {
-                            inst_list = spill_reg64_operand(inst_list, right, &rhs_save,
-                                "relop_rhs_charpromo");
-                        }
-                        inst_list = promote_char_reg_operand_to_string(inst_list, left, left_reg);
-                        inst_list = restore_spilled_reg64_operand(inst_list, right, rhs_save);
-                    }
-                    if (right_is_char_operand && right_reg != NULL)
-                    {
-                        StackNode_t *lhs_save = NULL;
-                        if (left_reg != NULL)
-                        {
-                            inst_list = spill_reg64_operand(inst_list, left, &lhs_save,
-                                "relop_lhs_charpromo");
-                        }
-                        inst_list = promote_char_reg_operand_to_string(inst_list, right, right_reg);
-                        inst_list = restore_spilled_reg64_operand(inst_list, left, lhs_save);
-                    }
+
+                    /* Mutable copies: promote_char_operand_to_string_ex may
+                     * upgrade an immediate to a register-backed operand. */
+                    const char *l_op = left;
+                    Register_t *l_reg = (Register_t *)left_reg;
+                    OperandKind l_kind = left_kind;
+                    const char *r_op = right;
+                    Register_t *r_reg = (Register_t *)right_reg;
+                    OperandKind r_kind = right_kind;
+
+                    if (left_is_char_operand)
+                        inst_list = promote_char_operand_to_string_ex(inst_list,
+                            &l_op, &l_reg, &l_kind, r_op, r_reg);
+                    if (right_is_char_operand)
+                        inst_list = promote_char_operand_to_string_ex(inst_list,
+                            &r_op, &r_reg, &r_kind, l_op, l_reg);
 
                     const char *arg0 = current_arg_reg64(0);
                     const char *arg1 = current_arg_reg64(1);
                     if (arg0 == NULL || arg1 == NULL)
                         break;
-                    inst_list = emit_move_ptr_operand_kind(inst_list, left, left_reg, left_kind, arg0);
-                    inst_list = emit_move_ptr_operand_kind(inst_list, right, right_reg, right_kind, arg1);
+                    inst_list = emit_move_ptr_operand_kind(inst_list, l_op, l_reg, l_kind, arg0);
+                    inst_list = emit_move_ptr_operand_kind(inst_list, r_op, r_reg, r_kind, arg1);
                     inst_list = codegen_vect_reg(inst_list, 0);
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_compare");
                     inst_list = add_inst(inst_list, "\tcmpl\t$0, %eax\n");
                     free_arg_regs();
+
+                    /* Free any registers allocated by char→string promotion. */
+                    if (l_reg != left_reg && l_reg != NULL)
+                        free_reg(get_reg_stack(), l_reg);
+                    if (r_reg != right_reg && r_reg != NULL)
+                        free_reg(get_reg_stack(), r_reg);
 
                     const char *left32 = reg_to_reg32(left, left_reg);
                     const char *left8 = reg32_to_reg8(left32, left_reg);
