@@ -11560,6 +11560,70 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        if (codegen_expr_is_shortstring_array(var_expr) &&
+            codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+        {
+            Register_t *dest_addr = NULL;
+            Register_t *src_addr = NULL;
+
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &dest_addr);
+            if (codegen_had_error(ctx) || dest_addr == NULL)
+            {
+                if (dest_addr != NULL)
+                    free_reg(get_reg_stack(), dest_addr);
+                return inst_list;
+            }
+
+            inst_list = codegen_address_for_expr(assign_expr, inst_list, ctx, &src_addr);
+            if (codegen_had_error(ctx) || src_addr == NULL)
+            {
+                free_reg(get_reg_stack(), dest_addr);
+                if (src_addr != NULL)
+                    free_reg(get_reg_stack(), src_addr);
+                return inst_list;
+            }
+
+            {
+                char arg_buf[128];
+                const char *arg_reg0 = current_arg_reg64(0);
+                const char *arg_reg1 = current_arg_reg64(1);
+                const char *arg_reg2 = current_arg_reg64(2);
+                Register_t *len_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (arg_reg0 == NULL || arg_reg1 == NULL || arg_reg2 == NULL || len_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), dest_addr);
+                    free_reg(get_reg_stack(), src_addr);
+                    if (len_reg != NULL)
+                        free_reg(get_reg_stack(), len_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate registers for pointer shortstring copy.");
+                }
+
+                snprintf(arg_buf, sizeof(arg_buf), "\tmovq\t%s, %s\n", src_addr->bit_64, arg_reg0);
+                inst_list = add_inst(inst_list, arg_buf);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_length");
+                free_arg_regs();
+
+                snprintf(arg_buf, sizeof(arg_buf), "\tmovq\t%%rax, %s\n", len_reg->bit_64);
+                inst_list = add_inst(inst_list, arg_buf);
+                snprintf(arg_buf, sizeof(arg_buf), "\tincq\t%s\n", len_reg->bit_64);
+                inst_list = add_inst(inst_list, arg_buf);
+
+                snprintf(arg_buf, sizeof(arg_buf), "\tmovq\t%s, %s\n", dest_addr->bit_64, arg_reg0);
+                inst_list = add_inst(inst_list, arg_buf);
+                snprintf(arg_buf, sizeof(arg_buf), "\tmovq\t%s, %s\n", src_addr->bit_64, arg_reg1);
+                inst_list = add_inst(inst_list, arg_buf);
+                snprintf(arg_buf, sizeof(arg_buf), "\tmovq\t%s, %s\n", len_reg->bit_64, arg_reg2);
+                inst_list = add_inst(inst_list, arg_buf);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                free_arg_regs();
+                free_reg(get_reg_stack(), len_reg);
+            }
+            free_reg(get_reg_stack(), dest_addr);
+            free_reg(get_reg_stack(), src_addr);
+            return inst_list;
+        }
+
         expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
