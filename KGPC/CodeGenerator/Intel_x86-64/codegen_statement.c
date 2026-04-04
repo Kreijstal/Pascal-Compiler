@@ -14077,7 +14077,6 @@ static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst
     char buffer[CODEGEN_MAX_INST_BUF];
     char *var_name = stmt->stmt_data.on_exception_data.exception_var_name;
     char *type_name = stmt->stmt_data.on_exception_data.exception_type_name;
-    const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
 
     /* Determine the effective exception type for dispatch.
      * Pascal has two forms:
@@ -14144,15 +14143,6 @@ static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst
     if (var_name != NULL && !var_is_actually_type) {
         EnterScope(symtab, 0);
         exception_var_node = add_l_x(var_name, 8);
-
-        if (trace_nonlocal != NULL && pascal_identifier_equals(trace_nonlocal, var_name)) {
-            fprintf(stderr,
-                "[KGPC_TRACE_NONLOCAL] on_exception bind symbol=%s offset=%d stmt_type=%d\n",
-                var_name,
-                exception_var_node != NULL ? exception_var_node->offset : -1,
-                stmt->stmt_data.on_exception_data.handler_stmt != NULL ?
-                    stmt->stmt_data.on_exception_data.handler_stmt->type : -1);
-        }
 
         if (exception_var_node != NULL) {
             snprintf(buffer, sizeof(buffer), "\tmovq\tkgpc_current_exception(%%rip), %%rax\n");
