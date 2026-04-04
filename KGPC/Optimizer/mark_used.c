@@ -25,13 +25,13 @@ static int g_trace_missing_calls = -1;
 
 static int trace_tfplistenum_flag(void) {
     if (g_trace_tfplistenum < 0)
-        g_trace_tfplistenum = trace_tfplistenum_flag();
+        g_trace_tfplistenum = getenv("KGPC_TRACE_TFPLISTENUM") != NULL;
     return g_trace_tfplistenum;
 }
 
 static int trace_missing_calls_flag(void) {
     if (g_trace_missing_calls < 0)
-        g_trace_missing_calls = trace_missing_calls_flag();
+        g_trace_missing_calls = getenv("KGPC_TRACE_MISSING_CALLS") != NULL;
     return g_trace_missing_calls;
 }
 

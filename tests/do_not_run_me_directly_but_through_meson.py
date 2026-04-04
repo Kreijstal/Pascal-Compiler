@@ -3902,8 +3902,6 @@ def _add_pp_pas_bootstrap_test():
     pp_flags = ["--no-stdlib"] + pp_extra_flags
     if _FPC_RTL_AST_CACHE_DIR is not None:
         pp_flags.append("--pp-cache-dir=" + _FPC_RTL_AST_CACHE_DIR)
-    if _FPC_RTL_CODEGEN_CACHE_DIR is not None:
-        pp_flags.append("--codegen-cache-dir=" + _FPC_RTL_CODEGEN_CACHE_DIR)
 
     pp_expected_file = os.path.join(TEST_CASES_DIR, "pp_pas_bootstrap.expected")
 
