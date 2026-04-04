@@ -9108,6 +9108,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
     template->source_offset = g_source_offset;
+    template->owns_ast = 1; /* Template owns its detached AST copy */
     return template;
 }
 

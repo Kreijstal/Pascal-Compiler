@@ -177,6 +177,11 @@ struct MethodTemplate
     struct ast_t *directives_ast;   /* Pointer inside method_ast for directives */
     struct ast_t *method_impl_ast;  /* Cloned AST for the implementation */
     int source_offset;              /* g_source_offset when template was created */
+    int owns_ast;                   /* 1 if this template owns method_ast/method_impl_ast
+                                     * and is responsible for freeing them via
+                                     * free_ast_detached().  Shallow clones created by
+                                     * clone_method_template_detached() share pointers
+                                     * with the original and must NOT free them. */
 };
 
 struct RecordType
