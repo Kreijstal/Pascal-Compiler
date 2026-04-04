@@ -17,6 +17,24 @@
 #include "compilation_context.h"
 #include "flags.h"
 
+/* Cached debug-trace flags — getenv() is slow and these environment
+ * variables are checked on every EXPR_FUNCTION_CALL node during the
+ * mark-used tree walk.  Cache once on first use. */
+static int g_trace_tfplistenum = -1;  /* -1 = unchecked */
+static int g_trace_missing_calls = -1;
+
+static int trace_tfplistenum_flag(void) {
+    if (g_trace_tfplistenum < 0)
+        g_trace_tfplistenum = trace_tfplistenum_flag();
+    return g_trace_tfplistenum;
+}
+
+static int trace_missing_calls_flag(void) {
+    if (g_trace_missing_calls < 0)
+        g_trace_missing_calls = trace_missing_calls_flag();
+    return g_trace_missing_calls;
+}
+
 /* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
 #define SUBPROG_MAP_BUCKETS 8191
 
@@ -120,7 +138,8 @@ static void map_add(SubprogramMap *map, const char *mangled_id, Tree_t *subprogr
 
 static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
     if (mangled_id == NULL) return NULL;
-    char *lookup_id = pascal_identifier_lower_dup(mangled_id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *lookup_id = pascal_identifier_lower_buf(mangled_id, stack_buf, sizeof(stack_buf));
     if (lookup_id == NULL)
         return NULL;
 
@@ -131,7 +150,7 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
         if (strcmp(e->canonical_id, lookup_id) == 0) {
             Tree_t *sub = e->subprogram;
             if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL) {
-                free(lookup_id);
+                pascal_identifier_lower_buf_free(lookup_id, stack_buf);
                 return sub;
             }
             if (fallback == NULL)
@@ -146,7 +165,7 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
         if (strcmp(e->canonical_id, lookup_id) == 0) {
             Tree_t *sub = e->subprogram;
             if (sub != NULL && sub->tree_data.subprogram_data.statement_list != NULL) {
-                free(lookup_id);
+                pascal_identifier_lower_buf_free(lookup_id, stack_buf);
                 return sub;
             }
             if (id_fallback == NULL)
@@ -154,7 +173,7 @@ static Tree_t* map_find(SubprogramMap *map, const char *mangled_id) {
         }
     }
 
-    free(lookup_id);
+    pascal_identifier_lower_buf_free(lookup_id, stack_buf);
     if (fallback != NULL)
         return fallback;
     return id_fallback;
@@ -342,7 +361,7 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             if (lookup_id == NULL)
                 lookup_id = expr->expr_data.function_call_data.id;
             Tree_t *called_sub = NULL;
-            if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+            if (trace_tfplistenum_flag() &&
                 expr->expr_data.function_call_data.is_constructor_call) {
                 struct Expression *recv = expr->expr_data.function_call_data.constructor_receiver_expr;
                 fprintf(stderr,
@@ -356,7 +375,7 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                     (void *)(expr->expr_data.function_call_data.call_kgpc_type != NULL ? expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition : NULL));
             }
             if (lookup_id != NULL) {
-                int trace_missing_calls = getenv("KGPC_TRACE_MISSING_CALLS") != NULL &&
+                int trace_missing_calls = trace_missing_calls_flag() &&
                     (strcasecmp(lookup_id, "format_us_a") == 0 ||
                      strcasecmp(lookup_id, "format_s_a") == 0 ||
                      strcasecmp(lookup_id, "codepagenametocodepage_s") == 0 ||
@@ -1058,7 +1077,7 @@ static void mark_class_constructors_from_types(ListNode_t *type_list, Subprogram
 
                 if (record_info != NULL && record_type_is_class(record_info))
                 {
-                    if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+                    if (trace_tfplistenum_flag() &&
                         strcasecmp(type_tree->tree_data.type_decl_data.id, "TFPListEnumerator") == 0)
                     {
                         fprintf(stderr, "[mark_used] type-scan hit class %s\n",
@@ -1429,7 +1448,8 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
     if (map == NULL || id == NULL)
         return;
 
-    char *lower_id = pascal_identifier_lower_dup(id);
+    char stack_buf[PASCAL_ID_STACK_MAX];
+    char *lower_id = pascal_identifier_lower_buf(id, stack_buf, sizeof(stack_buf));
     if (lower_id == NULL)
         return;
 
@@ -1443,7 +1463,7 @@ static void mark_subprograms_by_id(SubprogramMap *map, const char *id)
                 mark_subprogram_recursive(sub, map);
         }
     }
-    free(lower_id);
+    pascal_identifier_lower_buf_free(lower_id, stack_buf);
 }
 
 static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_class,
@@ -1452,7 +1472,7 @@ static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_
     if (owner_class == NULL || method_name == NULL || map == NULL)
         return;
 
-    int trace_tfplistenum = getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+    int trace_tfplistenum = trace_tfplistenum_flag() &&
         strcasecmp(owner_class, "TFPListEnumerator") == 0;
     if (trace_tfplistenum && sub_list == NULL)
         fprintf(stderr, "[mark_used] begin owner-scan %s.%s across loaded units\n", owner_class, method_name);
