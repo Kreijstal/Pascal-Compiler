@@ -10312,15 +10312,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     expected_type = resolved;
             }
         }
-        /* Final fallback: when expected_type is still UNKNOWN but the formal
-         * parameter tree has an explicit type tag, use it.  This centralises
-         * the resolution so that downstream checks (e.g. ShortString→AnsiString
-         * promotion) do not need to re-inspect formal_arg_decl independently. */
-        if (expected_type == UNKNOWN_TYPE &&
-            formal_arg_decl != NULL &&
-            formal_arg_decl->type == TREE_VAR_DECL &&
-            formal_arg_decl->tree_data.var_decl_data.type != UNKNOWN_TYPE)
-            expected_type = formal_arg_decl->tree_data.var_decl_data.type;
         /* Self for type helpers over real types is passed by value (not by reference). */
         if (is_self_param && expected_type == REAL_TYPE)
             is_var_param = 0;
@@ -10967,12 +10958,13 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 /* When passing a ShortString argument to a formal AnsiString (STRING_TYPE)
                  * parameter, convert via kgpc_shortstring_to_string.  Without this, the
                  * raw ShortString buffer address (length-byte + data) is passed and the
-                 * callee interprets the length byte as the first character of an AnsiString.
-                 *
-                 * expected_type is already resolved from formal_arg_decl by the
-                 * centralised fallback above, so a single check suffices. */
+                 * callee interprets the length byte as the first character of an AnsiString. */
                 if (is_array_arg && !is_var_param && !is_array_param &&
-                    expected_type == STRING_TYPE &&
+                    (expected_type == STRING_TYPE ||
+                     (expected_type == UNKNOWN_TYPE &&
+                      formal_arg_decl != NULL &&
+                      formal_arg_decl->type == TREE_VAR_DECL &&
+                      formal_arg_decl->tree_data.var_decl_data.type == STRING_TYPE)) &&
                     codegen_expr_is_shortstring_value_ctx(arg_expr, ctx))
                 {
                     inst_list = codegen_promote_shortstring_reg(inst_list, ctx, addr_reg);
