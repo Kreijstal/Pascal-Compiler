@@ -4819,22 +4819,6 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     int actual_iface_count = 0;
     const char **effective_iface_names = (const char **)record_info->interface_names;
     int effective_iface_count = record_info->num_interfaces;
-    const char *dbg = getenv("KGPC_DEBUG_EMIT_INTERFACES");
-    if (dbg != NULL && class_label != NULL &&
-        (strcasecmp(class_label, "TList") == 0 ||
-         strcasecmp(class_label, "TStringList") == 0 ||
-         strcasecmp(class_label, "TComponent") == 0 ||
-         strcasecmp(class_label, "TInterfaceList") == 0)) {
-        fprintf(stderr,
-            "[KGPC] emit class vmt %s rec=%p direct_ifaces=%d parent=%s methods=%d props=%d\n",
-            class_label, (void *)record_info, record_info->num_interfaces,
-            record_info->parent_class_name != NULL ? record_info->parent_class_name : "(null)",
-            ListLength(record_info->method_templates), ListLength(record_info->properties));
-        for (int i = 0; i < record_info->num_interfaces; i++) {
-            fprintf(stderr, "[KGPC]   direct iface %s\n",
-                record_info->interface_names[i] != NULL ? record_info->interface_names[i] : "(null)");
-        }
-    }
     int free_effective_iface_names = 0;
     long long base_instance_size = 0;
     if (effective_iface_count > 0) {
@@ -5688,7 +5672,6 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
     const struct RecordType *record, const char *fallback_class_label,
     const char *iface_name, const char *method_name)
 {
-    const char *dbg_lookup = getenv("KGPC_DEBUG_METHOD_LOOKUP");
     const struct RecordType *cur_record = record;
     const char *cur_label = fallback_class_label;
 
@@ -5711,14 +5694,6 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
 
         char base_name[512];
         snprintf(base_name, sizeof(base_name), "%s__%s", owner_label, lookup_method_name);
-        if (dbg_lookup != NULL &&
-            fallback_class_label != NULL &&
-            (strcasecmp(fallback_class_label, "TList") == 0 ||
-             strcasecmp(fallback_class_label, "TComponent") == 0 ||
-             strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
-            fprintf(stderr, "[KGPC] lookup %s method %s via %s\n",
-                fallback_class_label, lookup_method_name, base_name);
-        }
         ListNode_t *impl_candidates = FindAllIdents(symtab, base_name);
         const char *resolved_id = NULL;
         Tree_t *resolved_def = NULL;
@@ -5732,15 +5707,6 @@ const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
             const char *emit_target = codegen_subprogram_emission_symbol(cand);
             if (emit_target == NULL)
                 continue;
-            if (dbg_lookup != NULL &&
-                fallback_class_label != NULL &&
-                (strcasecmp(fallback_class_label, "TList") == 0 ||
-                 strcasecmp(fallback_class_label, "TComponent") == 0 ||
-                 strcasecmp(fallback_class_label, "TInterfaceList") == 0)) {
-                fprintf(stderr, "[KGPC]   cand %s emit=%s stmt=%p\n", cand->mangled_id,
-                    emit_target,
-                    (void *)cand->type->info.proc_info.definition->tree_data.subprogram_data.statement_list);
-            }
             if (g_codegen_available_subprograms != NULL &&
                 codegen_set_contains(&g_available_subprograms_set,emit_target)) {
                 resolved_id = emit_target;
@@ -5869,18 +5835,6 @@ static void __attribute__((unused)) codegen_collect_inferred_interfaces(SymTab_t
 
     *out_names = names;
 
-    const char *dbg = getenv("KGPC_DEBUG_INFERRED_INTERFACES");
-    if (dbg != NULL && class_label != NULL &&
-        (strcasecmp(class_label, "TList") == 0 ||
-         strcasecmp(class_label, "TStringList") == 0 ||
-         strcasecmp(class_label, "TComponent") == 0 ||
-         strcasecmp(class_label, "TInterfaceList") == 0)) {
-        fprintf(stderr, "[KGPC] inferred interfaces for %s: %d\n",
-            class_label, *out_count);
-        for (int i = 0; i < *out_count; i++) {
-            fprintf(stderr, "[KGPC]   %s\n", names[i] != NULL ? names[i] : "(null)");
-        }
-    }
 }
 
 static void codegen_canonicalize_record_for_emission(SymTab_t *symtab,
@@ -9119,15 +9073,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
 
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
-    if (getenv("KGPC_DEBUG_NOSTACKFRAME") != NULL)
-    {
-        fprintf(stderr,
-            "[KGPC_DEBUG_NOSTACKFRAME] func=%s nostackframe=%d method=%s owner=%s\n",
-            sub_id ? sub_id : "<null>",
-            func->nostackframe,
-            func->method_name ? func->method_name : "<null>",
-            func->owner_class ? func->owner_class : "<null>");
-    }
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
     if (!func->nostackframe)
         codegen_stack_space_for_inst_list(inst_list, ctx);
@@ -9986,27 +9931,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                     int is_dynarray_param = 0;
                     int dynarray_elem_size = 0;
 
-                    if (getenv("KGPC_DEBUG_ARG_TYPES") != NULL && arg_ids->cur != NULL)
-                    {
-                        fprintf(stderr,
-                            "[CODEGEN] Arg %s: type=%d inferred=%d type_id=%s resolved_type_node=%p cached=%p\n",
-                            (char *)arg_ids->cur, type, inferred_type_tag,
-                            arg_decl->tree_data.var_decl_data.type_id ?
-                                arg_decl->tree_data.var_decl_data.type_id : "(null)",
-                            (void *)resolved_type_node, (void *)cached_arg_type);
-                        if (resolved_type_node != NULL && resolved_type_node->type != NULL)
-                        {
-                            fprintf(stderr, "[CODEGEN]   resolved_type_node->type kind=%d tag=%d\n",
-                                resolved_type_node->type->kind,
-                                codegen_tag_from_kgpc(resolved_type_node->type));
-                        }
-                        if (cached_arg_type != NULL)
-                        {
-                            fprintf(stderr, "[CODEGEN]   cached_arg_type kind=%d tag=%d\n",
-                                cached_arg_type->kind,
-                                codegen_tag_from_kgpc(cached_arg_type));
-                        }
-                    }
                     if (!symbol_is_var_param)
                     {
                         if (resolved_type_node != NULL)
@@ -10815,18 +10739,6 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
 
             if (record_src_reg == NULL)
             {
-                if (getenv("KGPC_DEBUG_RECORD_PARAM") != NULL)
-                {
-                    fprintf(stderr,
-                        "[KGPC] record param missing src: subprogram=%s param=%s arg_reg=%s has_stack=%d stack_off=%d arg_index=%d presaved=%p\n",
-                        ctx != NULL && ctx->current_subprogram_id != NULL ? ctx->current_subprogram_id : "(null)",
-                        work->id != NULL ? work->id : "(null)",
-                        work->arg_reg != NULL ? work->arg_reg : "(null)",
-                        work->has_stack_arg,
-                        work->stack_arg_offset,
-                        work->arg_index,
-                        (void *)presaved_slot);
-                }
                 if (work->arg_reg == NULL && !work->has_stack_arg)
                 {
                     const char *fallback_reg = get_arg_reg64_num(arg_start_index + work->arg_index);
