@@ -337,6 +337,8 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
     }
 
     /* Early return for leaf expression types that don't contain function calls */
+    /* We need to be careful accessing expr->type if expr is garbage but passes is_valid_pointer */
+    /* But we can't easily check validity without OS-specific calls (IsBadReadPtr etc) */
     
     switch (expr->type) {
         case EXPR_VAR_ID:
@@ -432,9 +434,11 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 }
             }
             /* Also check constructor receiver and procedural var expressions */
-            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.function_call_data.constructor_receiver_expr) &&
+                    expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
                 mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
-            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.function_call_data.procedural_var_expr) &&
+                    expr->expr_data.function_call_data.procedural_var_expr != NULL)
                 mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             /* Also check arguments */
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
@@ -444,18 +448,24 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 }
                 args = args->next;
             }
+            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
+            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
+                mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             break;
         }
         
         case EXPR_RELOP:
-            if (expr->expr_data.relop_data.left != NULL)
+            if (is_valid_pointer(expr->expr_data.relop_data.left) && 
+                expr->expr_data.relop_data.left != NULL)
                 mark_expr_calls(expr->expr_data.relop_data.left, map);
-            if (expr->expr_data.relop_data.right != NULL)
+            if (is_valid_pointer(expr->expr_data.relop_data.right) && 
+                expr->expr_data.relop_data.right != NULL)
                 mark_expr_calls(expr->expr_data.relop_data.right, map);
             break;
             
         case EXPR_SIGN_TERM:
-            if (expr->expr_data.sign_term != NULL)
+            if (is_valid_pointer(expr->expr_data.sign_term) && expr->expr_data.sign_term != NULL)
                 mark_expr_calls(expr->expr_data.sign_term, map);
             break;
             
@@ -467,31 +477,34 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_MULOP:
-            if (expr->expr_data.mulop_data.left_term != NULL)
+            if (is_valid_pointer(expr->expr_data.mulop_data.left_term) && expr->expr_data.mulop_data.left_term != NULL)
                 mark_expr_calls(expr->expr_data.mulop_data.left_term, map);
-            if (expr->expr_data.mulop_data.right_factor != NULL)
+            if (is_valid_pointer(expr->expr_data.mulop_data.right_factor) && expr->expr_data.mulop_data.right_factor != NULL)
                 mark_expr_calls(expr->expr_data.mulop_data.right_factor, map);
             break;
             
         case EXPR_ARRAY_ACCESS:
-            if (expr->expr_data.array_access_data.array_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.array_access_data.array_expr) && expr->expr_data.array_access_data.array_expr != NULL)
                 mark_expr_calls(expr->expr_data.array_access_data.array_expr, map);
-            if (expr->expr_data.array_access_data.index_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.array_access_data.index_expr) && expr->expr_data.array_access_data.index_expr != NULL)
                 mark_expr_calls(expr->expr_data.array_access_data.index_expr, map);
             break;
             
         case EXPR_RECORD_ACCESS:
-            if (expr->expr_data.record_access_data.record_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.record_access_data.record_expr) && 
+                expr->expr_data.record_access_data.record_expr != NULL)
                 mark_expr_calls(expr->expr_data.record_access_data.record_expr, map);
             break;
             
         case EXPR_POINTER_DEREF:
-            if (expr->expr_data.pointer_deref_data.pointer_expr != NULL)
+            if (is_valid_pointer(expr->expr_data.pointer_deref_data.pointer_expr) && 
+                expr->expr_data.pointer_deref_data.pointer_expr != NULL)
                 mark_expr_calls(expr->expr_data.pointer_deref_data.pointer_expr, map);
             break;
             
         case EXPR_ADDR:
-            if (expr->expr_data.addr_data.expr != NULL)
+            if (is_valid_pointer(expr->expr_data.addr_data.expr) &&
+                expr->expr_data.addr_data.expr != NULL)
             {
                 struct Expression *addr_inner = expr->expr_data.addr_data.expr;
                 /* When semcheck doesn't convert @MethodName to EXPR_ADDR_OF_PROC
@@ -520,17 +533,20 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_TYPECAST:
-            if (expr->expr_data.typecast_data.expr != NULL)
+            if (is_valid_pointer(expr->expr_data.typecast_data.expr) && 
+                expr->expr_data.typecast_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.typecast_data.expr, map);
             break;
             
         case EXPR_IS:
-            if (expr->expr_data.is_data.expr != NULL)
+            if (is_valid_pointer(expr->expr_data.is_data.expr) && 
+                expr->expr_data.is_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.is_data.expr, map);
             break;
             
         case EXPR_AS:
-            if (expr->expr_data.as_data.expr != NULL)
+            if (is_valid_pointer(expr->expr_data.as_data.expr) && 
+                expr->expr_data.as_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.as_data.expr, map);
             break;
             
@@ -1300,269 +1316,6 @@ void mark_used_functions(Tree_t *program, SymTab_t *symtab) {
         fprintf(stderr, "DEBUG mark_used_functions: Reachability analysis complete\n");
     #endif
 
-    map_destroy(&map);
-}
-
-/* ---- mark_program_subs_used (internal) ---- */
-static void mark_program_subs_used_internal(ListNode_t *sub_list)
-{
-    while (sub_list != NULL) {
-        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
-            Tree_t *sub = (Tree_t *)sub_list->cur;
-            if (sub->type == TREE_SUBPROGRAM) {
-                if (sub->tree_data.subprogram_data.statement_list != NULL &&
-                    sub->tree_data.subprogram_data.defined_in_unit == 0)
-                    sub->tree_data.subprogram_data.is_used = 1;
-                if (sub->tree_data.subprogram_data.subprograms != NULL)
-                    mark_program_subs_used_internal(sub->tree_data.subprogram_data.subprograms);
-            }
-        }
-        sub_list = sub_list->next;
-    }
-}
-
-/* ---- Fixpoint body scanner ----
- * Like scan_used_subprogram_bodies, but returns non-zero if at least one
- * previously-unscanned subprogram body was traversed (i.e. new reachable
- * calls might have been discovered).  We use a per-subprogram flag stored
- * in a separate bitset to track which bodies were already scanned. */
-
-/* A simple bitset backed by a hash set of Tree_t pointers.  Using the same
- * bucket count as SubprogramMap to avoid another constant. */
-#define SCANNED_SET_BUCKETS 8191
-
-typedef struct ScannedEntry {
-    Tree_t *sub;
-    struct ScannedEntry *next;
-} ScannedEntry;
-
-typedef struct {
-    ScannedEntry *buckets[SCANNED_SET_BUCKETS];
-} ScannedSet;
-
-static void scanned_set_init(ScannedSet *s) { memset(s, 0, sizeof(*s)); }
-
-static void scanned_set_destroy(ScannedSet *s) {
-    for (unsigned i = 0; i < SCANNED_SET_BUCKETS; i++) {
-        ScannedEntry *e = s->buckets[i];
-        while (e != NULL) {
-            ScannedEntry *next = e->next;
-            free(e);
-            e = next;
-        }
-    }
-}
-
-static int scanned_set_contains(ScannedSet *s, Tree_t *sub) {
-    unsigned idx = (unsigned)((uintptr_t)sub >> 4) % SCANNED_SET_BUCKETS;
-    for (ScannedEntry *e = s->buckets[idx]; e != NULL; e = e->next) {
-        if (e->sub == sub) return 1;
-    }
-    return 0;
-}
-
-static void scanned_set_add(ScannedSet *s, Tree_t *sub) {
-    unsigned idx = (unsigned)((uintptr_t)sub >> 4) % SCANNED_SET_BUCKETS;
-    ScannedEntry *e = malloc(sizeof(ScannedEntry));
-    assert(e != NULL);
-    e->sub = sub;
-    e->next = s->buckets[idx];
-    s->buckets[idx] = e;
-}
-
-/* Scan used-but-not-yet-scanned subprogram bodies.  Returns non-zero if
- * any new bodies were scanned (i.e. the worklist changed). */
-static int scan_used_bodies_incremental(ListNode_t *sub_list,
-                                        SubprogramMap *map,
-                                        ScannedSet *scanned)
-{
-    int changed = 0;
-    while (sub_list != NULL) {
-        if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
-            Tree_t *sub = (Tree_t *)sub_list->cur;
-            if (sub->type == TREE_SUBPROGRAM && sub->tree_data.subprogram_data.is_used) {
-                if (!scanned_set_contains(scanned, sub)) {
-                    scanned_set_add(scanned, sub);
-                    struct Statement *body = sub->tree_data.subprogram_data.statement_list;
-                    if (body != NULL) {
-                        mark_stmt_calls(body, map);
-                        changed = 1;
-                    }
-                }
-                if (sub->tree_data.subprogram_data.subprograms != NULL) {
-                    changed |= scan_used_bodies_incremental(
-                        sub->tree_data.subprogram_data.subprograms, map, scanned);
-                }
-            }
-        }
-        sub_list = sub_list->next;
-    }
-    return changed;
-}
-
-void mark_used_functions_full(Tree_t *program, SymTab_t *symtab) {
-    if (program == NULL || symtab == NULL || program->type != TREE_PROGRAM_TYPE) return;
-
-    SubprogramMap map;
-    map_init(&map);
-
-    /* Build map of all program and loaded-unit subprograms (once). */
-    build_subprogram_map(program->tree_data.program_data.subprograms, &map);
-    {
-        CompilationContext *comp_ctx = compilation_context_get_active();
-        if (comp_ctx != NULL)
-            build_loaded_unit_subprogram_map(comp_ctx, &map);
-    }
-
-    /* Mark program-level subprograms (non-unit) as used. */
-    mark_program_subs_used_internal(program->tree_data.program_data.subprograms);
-
-    ScannedSet scanned;
-    scanned_set_init(&scanned);
-
-    /* Fixpoint loop: keep scanning bodies of used subprograms until no new
-     * reachable functions are discovered. */
-    for (int iteration = 0; iteration < 100; iteration++) {
-        int changed = 0;
-
-        /* Scan already-used subprogram bodies (program + all units). */
-        changed |= scan_used_bodies_incremental(
-            program->tree_data.program_data.subprograms, &map, &scanned);
-        {
-            CompilationContext *comp_ctx = compilation_context_get_active();
-            if (comp_ctx != NULL) {
-                for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
-                    Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                    if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                    changed |= scan_used_bodies_incremental(
-                        unit_tree->tree_data.unit_data.subprograms, &map, &scanned);
-                }
-            }
-        }
-
-        /* Mark calls from main program body. */
-        struct Statement *main_body = program->tree_data.program_data.body_statement;
-        if (main_body != NULL)
-            mark_stmt_calls(main_body, &map);
-
-        /* Mark calls from unit initialization/finalization. */
-        {
-            CompilationContext *comp_ctx = compilation_context_get_active();
-            if (comp_ctx != NULL) {
-                for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
-                    Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                    if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                    if (unit_tree->tree_data.unit_data.initialization != NULL)
-                        mark_stmt_calls(unit_tree->tree_data.unit_data.initialization, &map);
-                    if (unit_tree->tree_data.unit_data.finalization != NULL)
-                        mark_stmt_calls(unit_tree->tree_data.unit_data.finalization, &map);
-                }
-            }
-        }
-
-        /* Mark typed constant and variable initializer references. */
-        mark_var_initializer_calls(
-            program->tree_data.program_data.var_declaration, &map);
-        {
-            CompilationContext *comp_ctx = compilation_context_get_active();
-            if (comp_ctx != NULL) {
-                for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
-                    Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                    if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                    mark_var_initializer_calls(
-                        unit_tree->tree_data.unit_data.interface_var_decls, &map);
-                    mark_var_initializer_calls(
-                        unit_tree->tree_data.unit_data.implementation_var_decls, &map);
-                }
-            }
-        }
-
-        /* VMT and interface dispatch targets. */
-        mark_vmt_methods_used(program, &map);
-        mark_class_constructors_from_types(program->tree_data.program_data.type_declaration, &map);
-        mark_class_constructors_from_subprograms(program->tree_data.program_data.subprograms, &map);
-        {
-            CompilationContext *comp_ctx = compilation_context_get_active();
-            if (comp_ctx != NULL) {
-                for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
-                    Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                    if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                    mark_class_constructors_from_types(unit_tree->tree_data.unit_data.interface_type_decls, &map);
-                    mark_class_constructors_from_types(unit_tree->tree_data.unit_data.implementation_type_decls, &map);
-                    mark_class_constructors_from_subprograms(unit_tree->tree_data.unit_data.subprograms, &map);
-                }
-            }
-        }
-
-        /* Forward/body reconciliation. */
-        ListNode_t *sub_list = program->tree_data.program_data.subprograms;
-        while (sub_list != NULL) {
-            if (sub_list->type == LIST_TREE && sub_list->cur != NULL) {
-                Tree_t *sub = (Tree_t*)sub_list->cur;
-                if (sub->type == TREE_SUBPROGRAM) {
-                    char *mangled_id = sub->tree_data.subprogram_data.mangled_id;
-                    if (mangled_id != NULL) {
-                        Tree_t *canonical = map_find(&map, mangled_id);
-                        if (canonical != NULL && canonical != sub)
-                            sub->tree_data.subprogram_data.is_used = canonical->tree_data.subprogram_data.is_used;
-                    }
-                }
-            }
-            sub_list = sub_list->next;
-        }
-
-        /* Do one more incremental scan to pick up any newly-marked bodies
-         * from VMT/forward reconciliation. */
-        changed |= scan_used_bodies_incremental(
-            program->tree_data.program_data.subprograms, &map, &scanned);
-        {
-            CompilationContext *comp_ctx = compilation_context_get_active();
-            if (comp_ctx != NULL) {
-                for (int ui = 0; ui < comp_ctx->loaded_unit_count; ++ui) {
-                    Tree_t *unit_tree = comp_ctx->loaded_units[ui].unit_tree;
-                    if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                    changed |= scan_used_bodies_incremental(
-                        unit_tree->tree_data.unit_data.subprograms, &map, &scanned);
-                }
-            }
-        }
-
-        if (!changed)
-            break;
-    }
-
-    /* Codegen-cache-miss: mark ALL subprograms as used for complete cache. */
-    if (codegen_cache_miss_flag()) {
-        ListNode_t *mark_all = program->tree_data.program_data.subprograms;
-        while (mark_all != NULL) {
-            if (mark_all->type == LIST_TREE && mark_all->cur != NULL) {
-                Tree_t *sub = (Tree_t *)mark_all->cur;
-                if (sub->type == TREE_SUBPROGRAM &&
-                    sub->tree_data.subprogram_data.statement_list != NULL)
-                    sub->tree_data.subprogram_data.is_used = 1;
-            }
-            mark_all = mark_all->next;
-        }
-        CompilationContext *fs_ctx = compilation_context_get_active();
-        if (fs_ctx != NULL) {
-            for (int ui = 0; ui < fs_ctx->loaded_unit_count; ++ui) {
-                Tree_t *unit_tree = fs_ctx->loaded_units[ui].unit_tree;
-                if (unit_tree == NULL || unit_tree->type != TREE_UNIT) continue;
-                ListNode_t *usub = unit_tree->tree_data.unit_data.subprograms;
-                while (usub != NULL) {
-                    if (usub->type == LIST_TREE && usub->cur != NULL) {
-                        Tree_t *sub = (Tree_t *)usub->cur;
-                        if (sub->type == TREE_SUBPROGRAM &&
-                            sub->tree_data.subprogram_data.statement_list != NULL)
-                            sub->tree_data.subprogram_data.is_used = 1;
-                    }
-                    usub = usub->next;
-                }
-            }
-        }
-    }
-
-    scanned_set_destroy(&scanned);
     map_destroy(&map);
 }
 
