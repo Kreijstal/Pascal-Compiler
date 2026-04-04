@@ -17,6 +17,24 @@
 #include "compilation_context.h"
 #include "flags.h"
 
+/* Cached debug-trace flags — getenv() is slow and these environment
+ * variables are checked on every EXPR_FUNCTION_CALL node during the
+ * mark-used tree walk.  Cache once on first use. */
+static int g_trace_tfplistenum = -1;  /* -1 = unchecked */
+static int g_trace_missing_calls = -1;
+
+static int trace_tfplistenum_flag(void) {
+    if (g_trace_tfplistenum < 0)
+        g_trace_tfplistenum = trace_tfplistenum_flag();
+    return g_trace_tfplistenum;
+}
+
+static int trace_missing_calls_flag(void) {
+    if (g_trace_missing_calls < 0)
+        g_trace_missing_calls = trace_missing_calls_flag();
+    return g_trace_missing_calls;
+}
+
 /* Hash map to map mangled_id -> Tree_t* (subprogram) with O(1) lookup */
 #define SUBPROG_MAP_BUCKETS 8191
 
@@ -319,8 +337,6 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
     }
 
     /* Early return for leaf expression types that don't contain function calls */
-    /* We need to be careful accessing expr->type if expr is garbage but passes is_valid_pointer */
-    /* But we can't easily check validity without OS-specific calls (IsBadReadPtr etc) */
     
     switch (expr->type) {
         case EXPR_VAR_ID:
@@ -343,7 +359,7 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             if (lookup_id == NULL)
                 lookup_id = expr->expr_data.function_call_data.id;
             Tree_t *called_sub = NULL;
-            if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+            if (trace_tfplistenum_flag() &&
                 expr->expr_data.function_call_data.is_constructor_call) {
                 struct Expression *recv = expr->expr_data.function_call_data.constructor_receiver_expr;
                 fprintf(stderr,
@@ -357,7 +373,7 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                     (void *)(expr->expr_data.function_call_data.call_kgpc_type != NULL ? expr->expr_data.function_call_data.call_kgpc_type->info.proc_info.definition : NULL));
             }
             if (lookup_id != NULL) {
-                int trace_missing_calls = getenv("KGPC_TRACE_MISSING_CALLS") != NULL &&
+                int trace_missing_calls = trace_missing_calls_flag() &&
                     (strcasecmp(lookup_id, "format_us_a") == 0 ||
                      strcasecmp(lookup_id, "format_s_a") == 0 ||
                      strcasecmp(lookup_id, "codepagenametocodepage_s") == 0 ||
@@ -416,11 +432,9 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 }
             }
             /* Also check constructor receiver and procedural var expressions */
-            if (is_valid_pointer(expr->expr_data.function_call_data.constructor_receiver_expr) &&
-                    expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
                 mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
-            if (is_valid_pointer(expr->expr_data.function_call_data.procedural_var_expr) &&
-                    expr->expr_data.function_call_data.procedural_var_expr != NULL)
+            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
                 mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             /* Also check arguments */
             ListNode_t *args = expr->expr_data.function_call_data.args_expr;
@@ -430,24 +444,18 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
                 }
                 args = args->next;
             }
-            if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
-                mark_expr_calls(expr->expr_data.function_call_data.constructor_receiver_expr, map);
-            if (expr->expr_data.function_call_data.procedural_var_expr != NULL)
-                mark_expr_calls(expr->expr_data.function_call_data.procedural_var_expr, map);
             break;
         }
         
         case EXPR_RELOP:
-            if (is_valid_pointer(expr->expr_data.relop_data.left) && 
-                expr->expr_data.relop_data.left != NULL)
+            if (expr->expr_data.relop_data.left != NULL)
                 mark_expr_calls(expr->expr_data.relop_data.left, map);
-            if (is_valid_pointer(expr->expr_data.relop_data.right) && 
-                expr->expr_data.relop_data.right != NULL)
+            if (expr->expr_data.relop_data.right != NULL)
                 mark_expr_calls(expr->expr_data.relop_data.right, map);
             break;
             
         case EXPR_SIGN_TERM:
-            if (is_valid_pointer(expr->expr_data.sign_term) && expr->expr_data.sign_term != NULL)
+            if (expr->expr_data.sign_term != NULL)
                 mark_expr_calls(expr->expr_data.sign_term, map);
             break;
             
@@ -459,34 +467,31 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_MULOP:
-            if (is_valid_pointer(expr->expr_data.mulop_data.left_term) && expr->expr_data.mulop_data.left_term != NULL)
+            if (expr->expr_data.mulop_data.left_term != NULL)
                 mark_expr_calls(expr->expr_data.mulop_data.left_term, map);
-            if (is_valid_pointer(expr->expr_data.mulop_data.right_factor) && expr->expr_data.mulop_data.right_factor != NULL)
+            if (expr->expr_data.mulop_data.right_factor != NULL)
                 mark_expr_calls(expr->expr_data.mulop_data.right_factor, map);
             break;
             
         case EXPR_ARRAY_ACCESS:
-            if (is_valid_pointer(expr->expr_data.array_access_data.array_expr) && expr->expr_data.array_access_data.array_expr != NULL)
+            if (expr->expr_data.array_access_data.array_expr != NULL)
                 mark_expr_calls(expr->expr_data.array_access_data.array_expr, map);
-            if (is_valid_pointer(expr->expr_data.array_access_data.index_expr) && expr->expr_data.array_access_data.index_expr != NULL)
+            if (expr->expr_data.array_access_data.index_expr != NULL)
                 mark_expr_calls(expr->expr_data.array_access_data.index_expr, map);
             break;
             
         case EXPR_RECORD_ACCESS:
-            if (is_valid_pointer(expr->expr_data.record_access_data.record_expr) && 
-                expr->expr_data.record_access_data.record_expr != NULL)
+            if (expr->expr_data.record_access_data.record_expr != NULL)
                 mark_expr_calls(expr->expr_data.record_access_data.record_expr, map);
             break;
             
         case EXPR_POINTER_DEREF:
-            if (is_valid_pointer(expr->expr_data.pointer_deref_data.pointer_expr) && 
-                expr->expr_data.pointer_deref_data.pointer_expr != NULL)
+            if (expr->expr_data.pointer_deref_data.pointer_expr != NULL)
                 mark_expr_calls(expr->expr_data.pointer_deref_data.pointer_expr, map);
             break;
             
         case EXPR_ADDR:
-            if (is_valid_pointer(expr->expr_data.addr_data.expr) &&
-                expr->expr_data.addr_data.expr != NULL)
+            if (expr->expr_data.addr_data.expr != NULL)
             {
                 struct Expression *addr_inner = expr->expr_data.addr_data.expr;
                 /* When semcheck doesn't convert @MethodName to EXPR_ADDR_OF_PROC
@@ -515,20 +520,17 @@ static void mark_expr_calls(struct Expression *expr, SubprogramMap *map) {
             break;
             
         case EXPR_TYPECAST:
-            if (is_valid_pointer(expr->expr_data.typecast_data.expr) && 
-                expr->expr_data.typecast_data.expr != NULL)
+            if (expr->expr_data.typecast_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.typecast_data.expr, map);
             break;
             
         case EXPR_IS:
-            if (is_valid_pointer(expr->expr_data.is_data.expr) && 
-                expr->expr_data.is_data.expr != NULL)
+            if (expr->expr_data.is_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.is_data.expr, map);
             break;
             
         case EXPR_AS:
-            if (is_valid_pointer(expr->expr_data.as_data.expr) && 
-                expr->expr_data.as_data.expr != NULL)
+            if (expr->expr_data.as_data.expr != NULL)
                 mark_expr_calls(expr->expr_data.as_data.expr, map);
             break;
             
@@ -1059,7 +1061,7 @@ static void mark_class_constructors_from_types(ListNode_t *type_list, Subprogram
 
                 if (record_info != NULL && record_type_is_class(record_info))
                 {
-                    if (getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+                    if (trace_tfplistenum_flag() &&
                         strcasecmp(type_tree->tree_data.type_decl_data.id, "TFPListEnumerator") == 0)
                     {
                         fprintf(stderr, "[mark_used] type-scan hit class %s\n",
@@ -1717,7 +1719,7 @@ static void mark_class_methods_by_owner(ListNode_t *sub_list, const char *owner_
     if (owner_class == NULL || method_name == NULL || map == NULL)
         return;
 
-    int trace_tfplistenum = getenv("KGPC_TRACE_TFPLISTENUM") != NULL &&
+    int trace_tfplistenum = trace_tfplistenum_flag() &&
         strcasecmp(owner_class, "TFPListEnumerator") == 0;
     if (trace_tfplistenum && sub_list == NULL)
         fprintf(stderr, "[mark_used] begin owner-scan %s.%s across loaded units\n", owner_class, method_name);
