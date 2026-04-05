@@ -3521,20 +3521,6 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
     if (expr->type == EXPR_POINTER_DEREF)
     {
         const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
-        if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
-        {
-            fprintf(stderr,
-                "[KGPC_DEBUG_ARRAY_ACCESS] pointer_deref base_type=%d ptr_subtype=%d ptr_subtype_id=%s ptr_kgpc=%s%s%s\n",
-                pointer_expr != NULL ? pointer_expr->type : -1,
-                expr->pointer_subtype,
-                expr->pointer_subtype_id ? expr->pointer_subtype_id : "<null>",
-                (pointer_expr != NULL && pointer_expr->resolved_kgpc_type != NULL)
-                    ? kgpc_type_to_string(pointer_expr->resolved_kgpc_type) : "<null>",
-                (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
-                    ? " id=" : "",
-                (pointer_expr != NULL && pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
-                    ? pointer_expr->expr_data.id : "");
-        }
         if (pointer_expr != NULL &&
             pointer_expr->resolved_kgpc_type != NULL &&
             kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
@@ -3649,18 +3635,6 @@ long long expr_get_array_element_size(const struct Expression *expr, CodeGenCont
             struct RecordField *field = codegen_lookup_record_field_expr((struct Expression *)lookup_expr, ctx);
             if (field != NULL)
             {
-                if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
-                {
-                    fprintf(stderr,
-                        "[KGPC_DEBUG_ARRAY_ACCESS] record field=%s is_pointer=%d is_array=%d pointer_type=%d pointer_type_id=%s array_elem_type=%d array_elem_type_id=%s\n",
-                        field->name ? field->name : "<null>",
-                        field->is_pointer,
-                        field->is_array,
-                        field->pointer_type,
-                        field->pointer_type_id ? field->pointer_type_id : "<null>",
-                        field->array_element_type,
-                        field->array_element_type_id ? field->array_element_type_id : "<null>");
-                }
                 {
                     long long elem_size = codegen_array_elem_size_from_field(field, ctx);
                     if (elem_size > 0)
@@ -4262,16 +4236,6 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         return 1;
     }
 
-    if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
-    {
-        fprintf(stderr, "[codegen-debug] size-fail: type_tag=%d type_id=%s record_type=%p\n", type_tag, type_id ? type_id : "<null>", (void*)record_type);
-        /* Print stack trace */
-#ifdef HAVE_EXECINFO
-        void *bt[20];
-        int n = backtrace(bt, 20);
-        backtrace_symbols_fd(bt, n, 2);
-#endif
-    }
     codegen_report_error(ctx, "ERROR: Unable to determine size for expression type %d.", type_tag);
     return 1;
 }
@@ -4863,19 +4827,6 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
     struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
     if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
         record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
-    if (record == NULL && kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
-    {
-        struct Expression *rec_expr = record_access_expr->expr_data.record_access_data.record_expr;
-        fprintf(stderr,
-            "[KGPC_DEBUG_ARRAY_ACCESS] record_field_lookup failed: field=%s rec_type=%d rec_kgpc=%s rec_type_id=%s\n",
-            field_id,
-            rec_expr != NULL ? rec_expr->type : -1,
-            (rec_expr != NULL && rec_expr->resolved_kgpc_type != NULL)
-                ? kgpc_type_to_string(rec_expr->resolved_kgpc_type) : "<null>",
-            (rec_expr != NULL && rec_expr->type == EXPR_TYPECAST &&
-             rec_expr->expr_data.typecast_data.target_type_id != NULL)
-                ? rec_expr->expr_data.typecast_data.target_type_id : "<null>");
-    }
     if (record == NULL)
         return NULL;
 
@@ -5008,11 +4959,6 @@ struct RecordField *codegen_lookup_with_field(CodeGenContext *ctx,
 {
     if (ctx == NULL || field_id == NULL || ctx->with_depth <= 0)
         return NULL;
-    if (kgpc_getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
-    {
-        fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] lookup field=%s depth=%d\n",
-            field_id, ctx->with_depth);
-    }
     for (int i = ctx->with_depth; i > 0; --i)
     {
         struct RecordType *record = ctx->with_stack[i - 1].record_type;
@@ -5748,27 +5694,6 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     struct Expression *record_expr = expr->expr_data.record_access_data.record_expr;
     if (record_expr == NULL)
         return inst_list;
-
-    {
-        const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
-        if (trace_nonlocal != NULL &&
-            record_expr->type == EXPR_VAR_ID &&
-            record_expr->expr_data.id != NULL &&
-            (strcmp(trace_nonlocal, "1") == 0 ||
-             pascal_identifier_equals(record_expr->expr_data.id, trace_nonlocal)))
-        {
-            fprintf(stderr,
-                "[KGPC_TRACE_NONLOCAL] record_access base=%s field=%s base_type=%d resolved_kgpc=%s subprogram=%s\n",
-                record_expr->expr_data.id,
-                expr->expr_data.record_access_data.field_id != NULL
-                    ? expr->expr_data.record_access_data.field_id : "<null>",
-                record_expr->type,
-                record_expr->resolved_kgpc_type != NULL
-                    ? kgpc_type_to_string(record_expr->resolved_kgpc_type) : "<null>",
-                (ctx != NULL && ctx->current_subprogram_id != NULL)
-                    ? ctx->current_subprogram_id : "<null>");
-        }
-    }
 
     /* Check if this is a class field access. Classes are pointers, so we need to load
      * the instance pointer from variable storage for VAR_ID expressions. */
@@ -7271,30 +7196,6 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
                 array_expr->array_element_record_type,
                 &element_size_ll, 0) != 0 || element_size_ll <= 0)
         {
-            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
-            {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_ARRAY_ACCESS] elem size fail: expr_type=%d tag=%d array_elem_type=%d elem_id=%s is_array=%d dyn=%d\n",
-                    array_expr->type,
-                    expr_get_type_tag(array_expr),
-                    array_expr->array_element_type,
-                    array_expr->array_element_type_id ? array_expr->array_element_type_id : "<null>",
-                    array_expr->is_array_expr,
-                    array_expr->array_is_dynamic);
-                fprintf(stderr,
-                    "[KGPC_DEBUG_ARRAY_ACCESS] base_is_array=%d stack_is_array=%d stack_elem_size=%d\n",
-                    base_is_array,
-                    array_stack_node != NULL ? array_stack_node->is_array : -1,
-                    array_stack_node != NULL ? array_stack_node->element_size : -1);
-                if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
-                    fprintf(stderr,
-                        "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n",
-                        array_expr->expr_data.id);
-                if (array_expr->resolved_kgpc_type != NULL)
-                    fprintf(stderr,
-                        "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
-                        kgpc_type_to_string(array_expr->resolved_kgpc_type));
-            }
             codegen_report_error(ctx, "ERROR: Unable to determine element size for array access.");
             return 0;
         }
@@ -7875,35 +7776,6 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         }
         else
         {
-            if (kgpc_getenv("KGPC_DEBUG_ARRAY_ACCESS") != NULL)
-            {
-                fprintf(stderr,
-                    "[KGPC_DEBUG_ARRAY_ACCESS] non-indexable base: expr_type=%d tag=%d base_is_array=%d base_is_string=%d base_is_pointer=%d\n",
-                    array_expr != NULL ? array_expr->type : -1,
-                    array_expr != NULL ? expr_get_type_tag(array_expr) : -1,
-                    base_is_array, base_is_string, base_is_pointer);
-                if (ctx != NULL && ctx->current_subprogram_id != NULL)
-                    fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] subprogram: %s\n", ctx->current_subprogram_id);
-                if (array_expr != NULL)
-                {
-                    if (array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
-                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] base id: %s\n", array_expr->expr_data.id);
-                    if (array_expr->resolved_kgpc_type != NULL)
-                        fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] kgpc type: %s\n",
-                            kgpc_type_to_string(array_expr->resolved_kgpc_type));
-                    if (ctx != NULL && ctx->symtab != NULL &&
-                        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL)
-                    {
-                        HashNode_t *dbg_node = NULL;
-                        if (FindSymbol(&dbg_node, ctx->symtab, array_expr->expr_data.id) != 0 &&
-                            dbg_node != NULL && dbg_node->type != NULL)
-                        {
-                            fprintf(stderr, "[KGPC_DEBUG_ARRAY_ACCESS] symtab type: %s\n",
-                                kgpc_type_to_string(dbg_node->type));
-                        }
-                    }
-                }
-            }
             codegen_report_error(ctx, "ERROR: Expression is not indexable as an array.");
             return inst_list;
         }
@@ -9630,58 +9502,15 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
     char buffer[128];
     int scope_depth = 0;
     HashNode_t *sym_node = NULL;
-    const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
-    int trace_this_symbol = 0;
-    if (trace_nonlocal != NULL && var_id != NULL)
-    {
-        if (strcmp(trace_nonlocal, "1") == 0 ||
-            pascal_identifier_equals(trace_nonlocal, var_id))
-            trace_this_symbol = 1;
-    }
-    if (trace_this_symbol)
-    {
-        fprintf(stderr,
-            "[KGPC_TRACE_NONLOCAL] enter symbol=%s subprogram=%s owner_class=%s current_unit=%d with_depth=%d\n",
-            var_id,
-            (ctx != NULL && ctx->current_subprogram_id != NULL)
-                ? ctx->current_subprogram_id : "<null>",
-            (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
-                ? ctx->current_subprogram_owner_class : "<null>",
-            (ctx != NULL && ctx->symtab != NULL) ? ctx->symtab->current_unit_index : -1,
-            ctx != NULL ? ctx->with_depth : -1);
-    }
     StackNode_t *var = codegen_find_nonlocal_lexical(ctx, var_id, &scope_depth, &sym_node);
-    if (trace_this_symbol)
-    {
-        fprintf(stderr,
-            "[KGPC_TRACE_NONLOCAL] lexical symbol=%s found=%d depth=%d sym_node=%s unit=%d defined_in_unit=%d\n",
-            var_id,
-            var != NULL ? 1 : 0,
-            scope_depth,
-            (sym_node != NULL && sym_node->id != NULL) ? sym_node->id : "<null>",
-            sym_node != NULL ? sym_node->source_unit_index : -1,
-            sym_node != NULL ? sym_node->defined_in_unit : -1);
-    }
 
     if(var == NULL) {
         ListNode_t *resolved = codegen_try_emit_nonlocal_global(inst_list, var_id, ctx,
             sym_node, offset);
-        if (trace_this_symbol)
-        {
-            fprintf(stderr,
-                "[KGPC_TRACE_NONLOCAL] global symbol=%s resolved=%d offset=%d\n",
-                var_id, resolved != NULL ? 1 : 0, offset != NULL ? *offset : -1);
-        }
         if (resolved != NULL)
             return resolved;
 
         resolved = codegen_try_emit_nonlocal_class_var(inst_list, var_id, ctx, offset);
-        if (trace_this_symbol)
-        {
-            fprintf(stderr,
-                "[KGPC_TRACE_NONLOCAL] classvar symbol=%s resolved=%d offset=%d\n",
-                var_id, resolved != NULL ? 1 : 0, offset != NULL ? *offset : -1);
-        }
         if (resolved != NULL)
             return resolved;
 
@@ -9847,15 +9676,6 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                 struct Expression *with_expr = ctx->with_stack[i - 1].context_expr;
                 struct RecordField *field_desc = NULL;
                 long long field_offset = 0;
-                if (trace_this_symbol)
-                {
-                    fprintf(stderr,
-                        "[KGPC_TRACE_NONLOCAL] with[%d] record=%s expr_type=%d\n",
-                        i - 1,
-                        (with_record != NULL && with_record->type_id != NULL)
-                            ? with_record->type_id : "<null>",
-                        with_expr != NULL ? with_expr->type : -1);
-                }
                 if (with_record == NULL || with_expr == NULL)
                     continue;
                 if (resolve_record_field(ctx->symtab, with_record, var_id,
@@ -9897,16 +9717,6 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
         codegen_report_error(ctx,
             "ERROR: Unresolved non-local symbol %s reached codegen fallback.",
             var_id);
-        if (trace_this_symbol)
-        {
-            fprintf(stderr,
-                "[KGPC_TRACE_NONLOCAL] unresolved symbol=%s subprogram=%s owner_class=%s\n",
-                var_id,
-                (ctx != NULL && ctx->current_subprogram_id != NULL)
-                    ? ctx->current_subprogram_id : "<null>",
-                (ctx != NULL && ctx->current_subprogram_owner_class != NULL)
-                    ? ctx->current_subprogram_owner_class : "<null>");
-        }
         /* When populating the codegen cache, all unit functions are emitted.
          * Some have unresolvable non-locals (e.g. local consts in functions
          * that DCE normally removes).  Don't abort — the per-function
@@ -10138,24 +9948,6 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
             }
             formal_arg_decl = (Tree_t *)formal_args->cur;
         }
-        {
-            const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
-            if (trace_nonlocal != NULL && arg_expr != NULL &&
-                arg_expr->type == EXPR_VAR_ID &&
-                arg_expr->expr_data.id != NULL &&
-                (strcmp(trace_nonlocal, "1") == 0 ||
-                 pascal_identifier_equals(arg_expr->expr_data.id, trace_nonlocal)))
-            {
-                fprintf(stderr,
-                    "[KGPC_TRACE_NONLOCAL] pass_arg callee=%s arg_num=%d arg_id=%s formal_type=%d call_expr_type=%d\n",
-                    procedure_name != NULL ? procedure_name : "<null>",
-                    arg_num,
-                    arg_expr->expr_data.id,
-                    formal_arg_decl != NULL ? formal_arg_decl->type : -1,
-                    call_expr != NULL ? call_expr->type : -1);
-            }
-        }
-
         int is_self_param = 0;
         if (formal_arg_decl != NULL && formal_arg_decl->type == TREE_VAR_DECL)
         {

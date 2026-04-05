@@ -700,20 +700,6 @@ static ListNode_t *codegen_builtin_length_type_fallback(struct Expression *expr,
     struct TypeAlias *type_alias = hashnode_get_type_alias(type_node);
     if (type_alias == NULL && type_node->type != NULL)
         type_alias = kgpc_type_get_type_alias(type_node->type);
-    if (kgpc_getenv("KGPC_TRACE_NONLOCAL") != NULL)
-    {
-        fprintf(stderr,
-            "[KGPC_TRACE_NONLOCAL] length_type arg=%s kgpc=%s alias_short=%d alias_range=[%lld,%lld] sizeof=%lld is_short=%d is_array=%d\n",
-            arg_expr->expr_data.id,
-            type_node->type != NULL ? kgpc_type_to_string(type_node->type) : "<null>",
-            type_alias != NULL ? type_alias->is_shortstring : -1,
-            type_alias != NULL ? type_alias->array_start : -1LL,
-            type_alias != NULL ? type_alias->array_end : -1LL,
-            type_node->type != NULL ? kgpc_type_sizeof(type_node->type) : -1LL,
-            type_node->type != NULL ? kgpc_type_is_shortstring(type_node->type) : 0,
-            type_node->type != NULL ? kgpc_type_is_array(type_node->type) : 0);
-    }
-
     if (type_alias != NULL && type_alias->is_shortstring)
         length_value = (type_alias->array_end - type_alias->array_start) + 1;
     else if (type_node->type != NULL && kgpc_type_is_shortstring(type_node->type))
@@ -2663,16 +2649,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                  (pascal_identifier_equals(call_target, "Low") ||
                   pascal_identifier_equals(call_target, "High")));
             int type_ident_arg = codegen_lowhigh_arg_is_type_identifier(expr, ctx);
-            if (kgpc_getenv("KGPC_TRACE_NONLOCAL") != NULL && type_ident_arg)
-            {
-                fprintf(stderr,
-                    "[KGPC_TRACE_NONLOCAL] lowhigh func=%s target=%s type_ident_arg=%d call_kgpc=%p resolved_func=%p\n",
-                    func_id,
-                    call_target != NULL ? call_target : "<null>",
-                    type_ident_arg,
-                    (void *)expr->expr_data.function_call_data.call_kgpc_type,
-                    (void *)expr->expr_data.function_call_data.resolved_func);
-            }
             if ((call_target == NULL &&
                  expr->expr_data.function_call_data.call_kgpc_type == NULL &&
                  expr->expr_data.function_call_data.resolved_func == NULL) ||
@@ -4707,18 +4683,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     node = codegen_find_owner_unit_symbol(ctx, expr->expr_data.id);
                     found = (node != NULL);
                 }
-                const char *trace_nonlocal = kgpc_getenv("KGPC_TRACE_NONLOCAL");
-                if (trace_nonlocal != NULL && expr->expr_data.id != NULL &&
-                    strcmp(trace_nonlocal, expr->expr_data.id) == 0)
-                {
-                    fprintf(stderr,
-                        "[KGPC_TRACE_NONLOCAL] leaf id=%s found=%d node=%p hash_type=%d is_const=%d const_str=%p\n",
-                        expr->expr_data.id, found, (void *)node,
-                        node != NULL ? node->hash_type : -1,
-                        node != NULL ? node->is_constant : -1,
-                        node != NULL ? (void *)node->const_string_value : NULL);
-                }
-
                 /* If FindSymbol returned a callable/type-like symbol but there is a
                  * constant with the same name in the active/user scopes (or builtin
                  * scope), prefer the constant. This keeps enum literals and user
