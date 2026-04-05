@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 {
     int return_val, func_return;
@@ -1186,7 +1188,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
  * This is used for forward declarations so all procedures are visible
  * before any bodies are processed.
  */
-static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, Tree_t *parent_subprogram)
+int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, Tree_t *parent_subprogram)
 {
     int return_val = 0;
     int func_return;
@@ -1477,12 +1479,10 @@ static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_s
 /* Semantic check on multiple subprograms */
 /* A return value greater than 0 indicates how many errors occurred */
 /* Forward declaration - we'll define this after semcheck_subprogram */
-static int predeclare_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev, Tree_t *parent_subprogram);
-static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias);
 
 /* Predeclare a list of subprograms without processing bodies.
  * Safe to call multiple times thanks to duplicate checks in predeclare_subprogram. */
-static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
+int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram)
 {
     int return_val = 0;

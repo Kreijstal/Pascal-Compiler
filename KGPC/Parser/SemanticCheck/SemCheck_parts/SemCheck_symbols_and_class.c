@@ -1,4 +1,10 @@
-static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias)
+#include "../SemCheck_internal.h"
+
+/* Forward declaration - defined later in this file */
+HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
+    const TypeRef *type_ref, const char *type_id);
+
+void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const char *alias)
 {
     if (symtab == NULL || id == NULL || alias == NULL)
         return;
@@ -13,16 +19,9 @@ static void semcheck_update_symbol_alias(SymTab_t *symtab, const char *id, const
 }
 
 /* Helper function to get TypeAlias from HashNode, preferring KgpcType when available */
-static inline struct TypeAlias* get_type_alias_from_node(HashNode_t *node)
-{
-    if (node == NULL)
-        return NULL;
-    
-    /* Use hashnode helper which handles NULL KgpcType */
-    return hashnode_get_type_alias(node);
-}
+/* get_type_alias_from_node is defined as static inline in SemCheck_internal.h */
 
-static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *type_name)
+void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const char *type_name)
 {
     if (alias == NULL || type_name == NULL)
         return;
@@ -106,7 +105,7 @@ static void apply_builtin_integer_alias_metadata(struct TypeAlias *alias, const 
     }
 }
 
-static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
+void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 {
     if (symtab == NULL || alias == NULL)
         return;
@@ -161,34 +160,14 @@ static void inherit_alias_metadata(SymTab_t *symtab, struct TypeAlias *alias)
 }
 
 /* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    if (node == NULL) return NULL;
-    
-    /* Use hashnode helper which handles NULL KgpcType */
-    struct RecordType *record = hashnode_get_record_type(node);
-    if (record != NULL)
-        return record;
-        
-    /* If not a direct record, check if it's a pointer to a record (Class types are pointers) */
-    if (node->type != NULL && kgpc_type_is_pointer(node->type))
-    {
-        KgpcType *pointed_to = node->type->info.points_to;
-        if (pointed_to != NULL && kgpc_type_is_record(pointed_to))
-        {
-            return kgpc_type_get_record(pointed_to);
-        }
-    }
-    
-    return NULL;
-}
+/* get_record_type_from_node is defined as static inline in SemCheck_internal.h */
 
 /**
  * Copy default parameter values from forward declaration to implementation.
  * When a method is declared in a class with default values but implemented
  * without them, the implementation's params need the defaults for overload resolution.
  */
-static void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_t *impl_params)
+void copy_default_values_to_impl_params(ListNode_t *fwd_params, ListNode_t *impl_params)
 {
     if (fwd_params == NULL || impl_params == NULL)
         return;
@@ -605,12 +584,12 @@ static void add_class_vars_to_method_scope_for(SymTab_t *symtab, Tree_t *subprog
         subprogram->tree_data.subprogram_data.args_var);
 }
 
-static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
 {
     add_class_vars_to_method_scope_for(symtab, subprogram, 0);
 }
 
-static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
 {
     add_class_vars_to_method_scope_for(symtab, subprogram, 1);
 }
@@ -621,7 +600,7 @@ static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subpr
  * This is needed because default values are specified in the class declaration
  * but not repeated in the implementation.
  */
-static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram)
+void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogram)
 {
     if (symtab == NULL || subprogram == NULL)
         return;
@@ -799,7 +778,7 @@ static void copy_method_decl_defaults_to_impl(SymTab_t *symtab, Tree_t *subprogr
 /* Copy method identity fields from a subprogram tree node into a hash node,
  * if the hash node doesn't already have them.  We strdup so the hash node
  * owns the memory and DestroyHashTable can free it uniformly. */
-static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
+void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
 {
     if (node == NULL || subprogram == NULL)
         return;
@@ -819,7 +798,7 @@ static void copy_method_identity_to_node(HashNode_t *node, Tree_t *subprogram)
         node->owner_class_outer = strdup(subprogram->tree_data.subprogram_data.owner_class_outer);
 }
 
-static void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
+void semcheck_propagate_method_identity(SymTab_t *symtab, Tree_t *subprogram)
 {
     if (symtab == NULL || subprogram == NULL)
         return;
@@ -1273,7 +1252,7 @@ HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     return semcheck_find_preferred_type_node_ref_internal(symtab, type_ref, type_id, 0, 0);
 }
 
-static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
+HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
     const char *type_id, int defined_in_unit)
 {
     if (symtab == NULL || type_id == NULL)
@@ -1306,7 +1285,7 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag(SymTab_t *symtab,
     return best;
 }
 
-static HashNode_t *semcheck_find_type_node_with_unit_flag_ref(SymTab_t *symtab,
+HashNode_t *semcheck_find_type_node_with_unit_flag_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id, int defined_in_unit)
 {
     if (symtab == NULL)
@@ -1342,7 +1321,7 @@ static HashNode_t *semcheck_find_type_node_with_unit_flag_ref(SymTab_t *symtab,
 }
 
 /* Helper function to get VarType from HashNode */
-static inline enum VarType get_var_type_from_node(HashNode_t *node)
+enum VarType get_var_type_from_node(HashNode_t *node)
 {
     if (node == NULL || node->type == NULL)
         return HASHVAR_UNTYPED;
@@ -1367,12 +1346,12 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
     }
 }
 
-static inline void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
+void mark_hashnode_source_unit(HashNode_t *node, int unit_index) {
     if (node == NULL || unit_index <= 0) return;
     node->source_unit_index = unit_index;
 }
 
-static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
+void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     int defined_in_unit, int is_public)
 {
     if (node == NULL || !defined_in_unit)
@@ -1425,7 +1404,7 @@ static inline void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     free(qualified_id);
 }
 
-static inline void mark_latest_type_node_unit_info(SymTab_t *symtab, const char *type_id,
+void mark_latest_type_node_unit_info(SymTab_t *symtab, const char *type_id,
     int defined_in_unit, int unit_is_public, int source_unit_index)
 {
     if (symtab == NULL || type_id == NULL)
@@ -1439,9 +1418,9 @@ static inline void mark_latest_type_node_unit_info(SymTab_t *symtab, const char 
     }
 }
 
-static Tree_t *g_semcheck_current_subprogram = NULL;
+Tree_t *g_semcheck_current_subprogram = NULL;
 
-static int semcheck_prefer_unit_defined_owner(void)
+int semcheck_prefer_unit_defined_owner(void)
 {
     if (g_semcheck_current_subprogram == NULL)
         return 0;
@@ -1657,7 +1636,7 @@ int semcheck_const_decls(SymTab_t *symtab, ListNode_t *const_decls);
 /* Collect typed const declarations from a var_declaration list.
  * If from_unit_only is true, only collect those with defined_in_unit=1.
  * If from_unit_only is false, only collect those with defined_in_unit=0. */
-static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *decls, int from_unit_only)
+ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode_t *decls, int from_unit_only)
 {
     ListNode_t *head = NULL;
     ListNode_t *tail = NULL;
@@ -1756,7 +1735,7 @@ static ListNode_t *collect_typed_const_decls_filtered(SymTab_t *symtab, ListNode
 }
 
 /* Collect non-typed var/array declarations (skip typed consts). */
-static ListNode_t *collect_non_typed_var_decls(ListNode_t *decls)
+ListNode_t *collect_non_typed_var_decls(ListNode_t *decls)
 {
     ListNode_t *head = NULL;
     ListNode_t *tail = NULL;
@@ -1791,8 +1770,5 @@ static ListNode_t *collect_non_typed_var_decls(ListNode_t *decls)
     return head;
 }
 
-static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls);
-static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls);
-static int predeclare_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev, Tree_t *parent_subprogram);
 
 int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev);

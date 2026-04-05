@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 
 void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
 
@@ -45,21 +47,12 @@ const char *kgpc_getenv(const char *name) {
 
 #ifdef _WIN32
 /* Windows CRT does not provide strndup; caller owns returned buffer. */
-static char* strndup(const char* s, size_t n)
-{
-    size_t len = strnlen(s, n);
-    char* buf = (char*)malloc(len + 1);
-    if (buf == NULL)
-        return NULL;
-    memcpy(buf, s, len);
-    buf[len] = '\0';
-    return buf;
-}
+/* strndup is defined as static inline in SemCheck_internal.h */
 #endif
 
 static ListNode_t *g_semcheck_unit_names = NULL;
-static int g_semcheck_current_unit_index = 0;
-static int g_semcheck_imported_decl_unit_index = 0;
+int g_semcheck_current_unit_index = 0;
+int g_semcheck_imported_decl_unit_index = 0;
 
 /* Track which units have been fully semchecked via semcheck_unit().
  * Declarations from these units are skipped in semcheck_program(). */
@@ -77,10 +70,10 @@ void semcheck_mark_unit_fully_checked(int unit_index)
     if (unit_index > 0 && unit_index < SYMTAB_MAX_UNITS)
         g_unit_fully_semchecked[unit_index] = 1;
 }
-static char *g_semcheck_source_path = NULL;
-static char *g_semcheck_source_buffer = NULL;
-static size_t g_semcheck_source_length = 0;
-static int g_semcheck_warning_count = 0;
+char *g_semcheck_source_path = NULL;
+char *g_semcheck_source_buffer = NULL;
+size_t g_semcheck_source_length = 0;
+int g_semcheck_warning_count = 0;
 
 #define MAX_SOURCE_BUFFERS 512
 static struct {
@@ -92,7 +85,7 @@ static struct {
 static int g_source_buffer_count = 0;
 static int g_source_buffer_next_global = 0; /* next available global offset */
 
-static ScopeNode *semcheck_switch_to_unit_scope(SymTab_t *symtab, int unit_index)
+ScopeNode *semcheck_switch_to_unit_scope(SymTab_t *symtab, int unit_index)
 {
     if (symtab == NULL || unit_index <= 0)
         return NULL;
@@ -106,7 +99,7 @@ static ScopeNode *semcheck_switch_to_unit_scope(SymTab_t *symtab, int unit_index
     return saved_scope;
 }
 
-static void semcheck_restore_scope(SymTab_t *symtab, ScopeNode *saved_scope)
+void semcheck_restore_scope(SymTab_t *symtab, ScopeNode *saved_scope)
 {
     if (symtab != NULL && saved_scope != NULL)
         symtab->current_scope = saved_scope;
@@ -233,7 +226,7 @@ static int semcheck_print_context_from_file(const char *file_path, int line_num,
     return printed;
 }
 
-static void semcheck_unit_names_reset(void)
+void semcheck_unit_names_reset(void)
 {
     ListNode_t *cur = g_semcheck_unit_names;
     while (cur != NULL)
@@ -247,7 +240,7 @@ static void semcheck_unit_names_reset(void)
     g_semcheck_current_unit_index = 0;
 }
 
-static void semcheck_unit_name_add(const char *name)
+void semcheck_unit_name_add(const char *name)
 {
     if (name == NULL || name[0] == '\0')
         return;
@@ -283,7 +276,7 @@ static void semcheck_unit_name_add(const char *name)
     }
 }
 
-static void semcheck_unit_names_add_list(ListNode_t *units)
+void semcheck_unit_names_add_list(ListNode_t *units)
 {
     ListNode_t *cur = units;
     while (cur != NULL)
@@ -294,7 +287,7 @@ static void semcheck_unit_names_add_list(ListNode_t *units)
     }
 }
 
-static void semcheck_mark_type_decl_units(ListNode_t *type_decls, int unit_index)
+void semcheck_mark_type_decl_units(ListNode_t *type_decls, int unit_index)
 {
     if (type_decls == NULL || unit_index <= 0)
         return;
@@ -317,7 +310,7 @@ static void semcheck_mark_type_decl_units(ListNode_t *type_decls, int unit_index
     }
 }
 
-static void semcheck_mark_subprogram_units(ListNode_t *subprograms, int unit_index)
+void semcheck_mark_subprogram_units(ListNode_t *subprograms, int unit_index)
 {
     if (subprograms == NULL || unit_index <= 0)
         return;
@@ -336,7 +329,7 @@ static void semcheck_mark_subprogram_units(ListNode_t *subprograms, int unit_ind
     }
 }
 
-static void semcheck_mark_const_decl_units(ListNode_t *const_decls, int unit_index)
+void semcheck_mark_const_decl_units(ListNode_t *const_decls, int unit_index)
 {
     if (const_decls == NULL || unit_index <= 0)
         return;
@@ -353,7 +346,7 @@ static void semcheck_mark_const_decl_units(ListNode_t *const_decls, int unit_ind
     }
 }
 
-static void semcheck_mark_var_decl_units(ListNode_t *var_decls, int unit_index)
+void semcheck_mark_var_decl_units(ListNode_t *var_decls, int unit_index)
 {
     if (var_decls == NULL || unit_index <= 0)
         return;
@@ -376,7 +369,7 @@ static void semcheck_mark_var_decl_units(ListNode_t *var_decls, int unit_index)
     }
 }
 
-static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode_t *limit,
+void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode_t *limit,
     const char *type_id, int source_unit_index, const struct RecordType *canonical_record)
 {
     if (type_decls == NULL || type_id == NULL || canonical_record == NULL)
@@ -409,7 +402,7 @@ static void semcheck_mark_resolved_forward_stub(ListNode_t *type_decls, ListNode
     }
 }
 
-static struct RecordType *semcheck_record_from_type_decl(Tree_t *tree, SymTab_t *symtab)
+struct RecordType *semcheck_record_from_type_decl(Tree_t *tree, SymTab_t *symtab)
 {
     if (tree == NULL || tree->type != TREE_TYPE_DECL)
         return NULL;
@@ -507,7 +500,7 @@ static int semcheck_record_candidate_is_forward_stub(struct RecordType *record)
     return 1;
 }
 
-static int semcheck_type_candidate_is_forward_stub(HashNode_t *node)
+int semcheck_type_candidate_is_forward_stub(HashNode_t *node)
 {
     if (node == NULL)
         return 0;
@@ -556,7 +549,7 @@ int semcheck_is_unit_name(const char *name)
 /* Build a method lookup key in the form "ClassName__MethodName".
  * Centralises the __ convention so it lives in one place.
  * Caller must free() the returned string. */
-static char *make_method_lookup_key(const char *class_name, const char *method_name)
+char *make_method_lookup_key(const char *class_name, const char *method_name)
 {
     if (class_name == NULL || method_name == NULL)
         return NULL;
@@ -568,56 +561,11 @@ static char *make_method_lookup_key(const char *class_name, const char *method_n
 }
 
 /* Helper declared in SemCheck_expr.c */
-static const char *semcheck_base_type_name(const char *id)
-{
-    /* Type identifiers are normalized before semcheck; avoid parsing strings here. */
-    return id;
-}
+/* semcheck_base_type_name is defined as static inline in SemCheck_internal.h */
 
-static char *type_ref_render_mangled_unqualified(const TypeRef *ref)
-{
-    if (ref == NULL)
-        return NULL;
-    const char *base = type_ref_base_name(ref);
-    if (base == NULL)
-        return NULL;
-    if (ref->num_generic_args <= 0)
-        return strdup(base);
+/* type_ref_render_mangled_unqualified is defined as static inline in SemCheck_internal.h */
 
-    size_t total = strlen(base) + 1;
-    for (int i = 0; i < ref->num_generic_args; ++i)
-    {
-        char *arg = type_ref_render_mangled(ref->generic_args[i]);
-        if (arg != NULL)
-        {
-            total += strlen(arg);
-            free(arg);
-        }
-        if (i + 1 < ref->num_generic_args)
-            total += 1;
-    }
-
-    char *out = (char *)malloc(total + 1);
-    if (out == NULL)
-        return NULL;
-    out[0] = '\0';
-    strcat(out, base);
-    strcat(out, "$");
-    for (int i = 0; i < ref->num_generic_args; ++i)
-    {
-        char *arg = type_ref_render_mangled(ref->generic_args[i]);
-        if (arg != NULL)
-        {
-            strcat(out, arg);
-            free(arg);
-        }
-        if (i + 1 < ref->num_generic_args)
-            strcat(out, "$");
-    }
-    return out;
-}
-
-static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
+int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
 {
     if (ref == NULL || ref->name == NULL || ref->name->count < 2)
         return 0;
@@ -627,10 +575,8 @@ static int semcheck_is_explicit_unit_qualified_type_ref(const TypeRef *ref)
 
 HashNode_t *semcheck_find_preferred_type_node_with_ref(SymTab_t *symtab,
     const TypeRef *type_ref, const char *type_id);
-static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
-    const QualifiedIdent *type_ref);
 
-static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab,
+void semcheck_maybe_qualify_nested_type(SymTab_t *symtab,
     const char *owner_full, const char *owner_outer,
     char **type_id, TypeRef **type_ref)
 {
@@ -677,7 +623,7 @@ static void semcheck_maybe_qualify_nested_type(SymTab_t *symtab,
     }
 }
 
-static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct RecordType *record_info)
+void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct RecordType *record_info)
 {
     if (symtab == NULL || record_info == NULL || record_info->type_id == NULL)
         return;
@@ -738,7 +684,7 @@ static void semcheck_qualify_nested_types_for_record(SymTab_t *symtab, struct Re
     }
 }
 
-static int semcheck_map_builtin_type_name_local(const char *id)
+int semcheck_map_builtin_type_name_local(const char *id)
 {
     if (id == NULL)
         return UNKNOWN_TYPE;
@@ -820,7 +766,7 @@ static int semcheck_map_builtin_type_name_local(const char *id)
  * declared in systemh.inc and should resolve through normal type resolution.
  * This function fires a warning if any of them fail to resolve, indicating
  * a preprocessor or type registration bug. */
-static void semcheck_assert_pointer_type_resolved(const char *id)
+void semcheck_assert_pointer_type_resolved(const char *id)
 {
     if (id == NULL) return;
     static const char *expected_pointer_types[] = {
@@ -837,7 +783,7 @@ static void semcheck_assert_pointer_type_resolved(const char *id)
     }
 }
 
-static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t *candidate)
+int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t *candidate)
 {
     if (symtab == NULL || candidate == NULL || candidate->id == NULL)
         return INT_MAX / 2;
@@ -861,7 +807,7 @@ static int semcheck_scope_level_for_type_candidate(SymTab_t *symtab, HashNode_t 
     return INT_MAX / 2;
 }
 
-static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
+int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_id)
 {
     if (base_type_id == NULL)
         return 0;
@@ -903,9 +849,8 @@ static int semcheck_helper_self_is_var(SymTab_t *symtab, const char *base_type_i
     return 1;
 }
 
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node);
 
-static char *semcheck_dup_type_id_from_ast(ast_t *node)
+char *semcheck_dup_type_id_from_ast(ast_t *node)
 {
     if (node == NULL)
         return NULL;
@@ -929,13 +874,13 @@ static int semcheck_is_char_alias_name(const char *id)
             pascal_identifier_equals(id, "UnicodeChar")));
 }
 
-static int semcheck_alias_should_be_char_like(const char *alias_id, const char *target_id)
+int semcheck_alias_should_be_char_like(const char *alias_id, const char *target_id)
 {
     return (semcheck_is_char_alias_name(alias_id) ||
         semcheck_is_char_alias_name(target_id));
 }
 
-static int semcheck_kgpc_type_is_char_like(const KgpcType *type)
+int semcheck_kgpc_type_is_char_like(const KgpcType *type)
 {
     if (type == NULL)
         return 0;
@@ -946,13 +891,13 @@ static int semcheck_kgpc_type_is_char_like(const KgpcType *type)
     return 0;
 }
 
-static int semcheck_is_currency_type_id(const char *type_id)
+int semcheck_is_currency_type_id(const char *type_id)
 {
     const char *base = semcheck_base_type_name(type_id);
     return (base != NULL && pascal_identifier_equals(base, "Currency"));
 }
 
-static int map_var_type_to_type_tag(enum VarType var_type)
+int map_var_type_to_type_tag(enum VarType var_type)
 {
     switch (var_type)
     {
@@ -980,7 +925,7 @@ static int map_var_type_to_type_tag(enum VarType var_type)
 
 /* Inverse of map_var_type_to_type_tag: converts a type tag from
  * semcheck_map_builtin_type_name_local() to the corresponding VarType. */
-static enum VarType map_type_tag_to_var_type(int type_tag)
+enum VarType map_type_tag_to_var_type(int type_tag)
 {
     switch (type_tag)
     {
@@ -1040,7 +985,7 @@ __attribute__((unused)) static int semcheck_find_ident_with_qualified_fallback_r
     return found;
 }
 
-static ListNode_t *semcheck_clone_string_list(const ListNode_t *src)
+ListNode_t *semcheck_clone_string_list(const ListNode_t *src)
 {
     if (src == NULL)
         return NULL;
@@ -1077,7 +1022,7 @@ static ListNode_t *semcheck_clone_string_list(const ListNode_t *src)
     return head;
 }
 
-static int semcheck_alias_targets_match(const struct TypeAlias *lhs, const struct TypeAlias *rhs)
+int semcheck_alias_targets_match(const struct TypeAlias *lhs, const struct TypeAlias *rhs)
 {
     if (lhs == NULL || rhs == NULL)
         return 0;
@@ -1098,7 +1043,7 @@ static int semcheck_alias_targets_match(const struct TypeAlias *lhs, const struc
     return 0;
 }
 
-static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const char *type_id,
+HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const char *type_id,
     struct TypeAlias *exclude_alias)
 {
     if (symtab == NULL || type_id == NULL)
@@ -1132,9 +1077,8 @@ static HashNode_t *semcheck_find_type_excluding_alias(SymTab_t *symtab, const ch
     return NULL;
 }
 
-static int semcheck_prefer_unit_defined_owner(void);
 
-static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const char *owner_id)
+HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const char *owner_id)
 {
     if (symtab == NULL || owner_id == NULL)
         return NULL;
@@ -1215,7 +1159,7 @@ static HashNode_t *semcheck_find_owner_record_type_node(SymTab_t *symtab, const 
     return best_record;
 }
 
-static int semcheck_kgpc_type_is_record_like(const KgpcType *type)
+int semcheck_kgpc_type_is_record_like(const KgpcType *type)
 {
     if (type == NULL)
         return 0;
@@ -1230,7 +1174,7 @@ static int semcheck_kgpc_type_is_record_like(const KgpcType *type)
     return 0;
 }
 
-static int semcheck_param_decl_equivalent(const Tree_t *lhs, const Tree_t *rhs)
+int semcheck_param_decl_equivalent(const Tree_t *lhs, const Tree_t *rhs)
 {
     if (lhs == NULL || rhs == NULL)
         return 0;
@@ -1275,7 +1219,7 @@ static int semcheck_param_decl_equivalent(const Tree_t *lhs, const Tree_t *rhs)
     return 0;
 }
 
-static int semcheck_subprogram_signatures_equivalent(const Tree_t *lhs, const Tree_t *rhs)
+int semcheck_subprogram_signatures_equivalent(const Tree_t *lhs, const Tree_t *rhs)
 {
     if (lhs == NULL || rhs == NULL)
         return 0;
@@ -1298,7 +1242,7 @@ static int semcheck_subprogram_signatures_equivalent(const Tree_t *lhs, const Tr
     return (lhs_args == NULL && rhs_args == NULL);
 }
 
-static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
+ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
 {
     char *param_name = strdup(name);
     if (param_name == NULL)
@@ -1315,7 +1259,7 @@ static ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
     return CreateListNode(decl, LIST_TREE);
 }
 
-static ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_tag)
+ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_tag)
 {
     char *param_name = strdup(name);
     if (param_name == NULL)
@@ -1648,16 +1592,15 @@ static void semcheck_file_from_buffer_line_number(int line_num, char *file_out, 
 
 static int g_semcheck_error_line = 0;
 static int g_semcheck_error_col = 0;
-static int g_semcheck_error_source_index = -1;
+int g_semcheck_error_source_index = -1;
 /* When set, source_index values are from a foreign preprocessed buffer
  * (unit-imported subprogram bodies) and must not be stored in the error
  * context, since resolve_error_source_context cannot disambiguate which
  * buffer the offset belongs to. */
-static int g_semcheck_error_suppress_source_index = 0;
+int g_semcheck_error_suppress_source_index = 0;
 /* When inside a unit subprogram body, holds the unit name for error reporting
  * fallback (e.g., "<unit System>") so errors don't show the main program file. */
-static const char *g_semcheck_error_unit_name = NULL;
-static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value);
+const char *g_semcheck_error_unit_name = NULL;
 
 void semcheck_set_error_context(int line_num, int col_num, int source_index)
 {
@@ -1894,7 +1837,7 @@ static int eval_const_expr_parse_additive(SymTab_t *symtab, const char **p, long
     return 0;
 }
 
-static int resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
+int resolve_array_bound_expr(SymTab_t *symtab, const char *expr, int *out_value)
 {
     if (expr == NULL || out_value == NULL)
         return -1;
@@ -2010,7 +1953,7 @@ static int semcheck_debug_errors_enabled(void)
     return cached;
 }
 
-static void semcheck_debug_error_step(const char *step, Tree_t *subprogram, int before, int after)
+void semcheck_debug_error_step(const char *step, Tree_t *subprogram, int before, int after)
 {
     if (!semcheck_debug_errors_enabled() || after <= before)
         return;
@@ -2039,7 +1982,7 @@ static void semcheck_debug_error_step(const char *step, Tree_t *subprogram, int 
  * line number (>0 on success, 0 when nothing could be resolved).  On success
  * the directive file name is written to *directive_file_out.  The caller must
  * provide a buffer of at least MAX_DIRECTIVE_FILENAME_LEN bytes. */
-static int resolve_error_source_context(int source_index,
+int resolve_error_source_context(int source_index,
     char *directive_file_out, size_t dir_size, int search_registry)
 {
     assert(directive_file_out != NULL);
@@ -2103,7 +2046,7 @@ static int resolve_error_source_context(int source_index,
  * include file and line number.  Returns the resolved line (>0 on success).
  * On success, directive_file_out contains the include file path and
  * unit_chain_out contains a string like " (in unit System from program.p)". */
-static int resolve_unit_error_location(int source_index, int line_num,
+int resolve_unit_error_location(int source_index, int line_num,
     char *directive_file_out, size_t dir_size,
     char *unit_chain_out, size_t chain_size)
 {

@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 static double semcheck_now_ms(void) {
     return (double)clock() * 1000.0 / (double)CLOCKS_PER_SEC;
 }
@@ -3395,7 +3397,7 @@ next_identifier:
  * "Inner__Method" so code using just the inner type name can find the method.
  * Uses structural owner metadata from the subprogram node instead of parsing
  * the dotted owner path string. */
-static void register_nested_type_short_alias(SymTab_t *symtab,
+void register_nested_type_short_alias(SymTab_t *symtab,
     const char *owner_class_outer, const char *owner_class, const char *method_name,
     const char *mangled_id, KgpcType *type, int is_function)
 {

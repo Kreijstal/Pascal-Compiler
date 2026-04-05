@@ -36,6 +36,7 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
+#include "../../Parser/SemanticCheck/SemCheck.h"
 #include "../../Parser/ParseTree/from_cparser.h"
 
 /* Shared macro - pointer size for x86-64 codegen */

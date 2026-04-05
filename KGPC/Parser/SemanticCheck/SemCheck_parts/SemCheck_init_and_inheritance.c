@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 SymTab_t *semcheck_init_symtab(void)
 {
     double t0 = 0.0;
@@ -230,7 +232,7 @@ static int register_record_field_enum_literals(SymTab_t *symtab, struct RecordTy
 }
 
 /* Pushes a bunch of type declarations onto the current scope */
-static int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
+int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
 {
     if (symtab == NULL)
         return 0;
@@ -545,7 +547,7 @@ static long long semcheck_builtin_type_size(const char *name)
     return 0;
 }
 
-static int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
+int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 {
     if (symtab == NULL)
         return 0;
@@ -2095,7 +2097,7 @@ static int ensure_class_storage_capacity(SymTab_t *symtab, struct RecordType *re
  * @param record_info The class RecordType to configure. Must not be NULL.
  * @param parent_record The parent class RecordType, or NULL for base classes like TObject.
  */
-static void detect_default_indexed_property(struct RecordType *record_info, const struct RecordType *parent_record)
+void detect_default_indexed_property(struct RecordType *record_info, const struct RecordType *parent_record)
 {
     assert(record_info != NULL);
     
@@ -2172,7 +2174,7 @@ static void detect_default_indexed_property(struct RecordType *record_info, cons
 }
 
 /* Helper function to merge parent class fields into derived class */
-static int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
+int merge_parent_class_fields(SymTab_t *symtab, struct RecordType *record_info, const char *class_name, int line_num)
 {
     if (record_info == NULL || record_info->parent_class_name == NULL)
         return 0;  /* No parent class to merge */

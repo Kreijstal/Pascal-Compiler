@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
@@ -422,7 +424,7 @@ static int semcheck_template_matches_vmt_method(const struct MethodTemplate *tmp
     return 1;
 }
 
-static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
+void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
     ListNode_t *type_decls)
 {
     if (symtab == NULL || type_decls == NULL)
@@ -553,7 +555,7 @@ static void semcheck_refresh_generic_specialization_vmts(SymTab_t *symtab,
 
 /* Helper function to resolve constant identifier to integer value
  * Returns 0 on success, 1 on failure */
-static int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
+int resolve_const_identifier(SymTab_t *symtab, const char *id, long long *out_value)
 {
     if (symtab == NULL || id == NULL || out_value == NULL)
         return 1;
@@ -928,7 +930,7 @@ int semcheck_resolve_scoped_enum_literal_ref(SymTab_t *symtab, const QualifiedId
     return 0;
 }
 
-static char *build_qualified_identifier_from_expr(struct Expression *expr)
+char *build_qualified_identifier_from_expr(struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -953,7 +955,7 @@ static char *build_qualified_identifier_from_expr(struct Expression *expr)
     return qualified;
 }
 
-static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr)
+QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr)
 {
     if (expr == NULL)
         return NULL;
@@ -1121,7 +1123,7 @@ static void resolve_alias_range_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *k
 
 /* Resolves array bounds specified as constant identifiers in a KgpcType
  * This is needed because parsing happens before constants are declared */
-static void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_type, struct TypeAlias *alias)
+void resolve_array_bounds_in_kgpctype(SymTab_t *symtab, KgpcType *kgpc_type, struct TypeAlias *alias)
 {
     if (kgpc_type == NULL || alias == NULL || symtab == NULL)
         return;

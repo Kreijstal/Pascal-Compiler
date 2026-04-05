@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scope_lev,
     Tree_t *parent_subprogram);
 
@@ -72,7 +74,7 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     return semcheck_find_type_node_with_kgpc_type_ref(symtab, NULL, type_id);
 }
 
-static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
+KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
     KgpcType *builtin_return = NULL;
@@ -178,8 +180,6 @@ static KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab
 /* Forward declarations for type resolution helpers used in const evaluation. */
 static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
     const char *base_name, const struct TypeAlias *exclude_alias);
-static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
-    const QualifiedIdent *type_ref);
 static const char *resolve_type_to_base_name(SymTab_t *symtab,
     const QualifiedIdent *type_id,
     const char *type_name);
@@ -203,7 +203,7 @@ static int is_real_type_name(SymTab_t *symtab, const char *type_name)
 }
 
 /* Helper to check if an expression contains a real number literal or real constant */
-static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
+int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -267,7 +267,7 @@ static int expression_contains_real_literal_impl(SymTab_t *symtab, struct Expres
 }
 
 /* Helper to check if an expression is a string expression */
-static int expression_is_string(SymTab_t *symtab, struct Expression *expr)
+int expression_is_string(SymTab_t *symtab, struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -325,14 +325,8 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr,
     long long *out_value, int emit_diagnostics);
 static int const_fold_real_expr_mode(SymTab_t *symtab, struct Expression *expr,
     double *out_value, int emit_diagnostics);
-static int const_fold_int_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
-static int const_fold_real_expr(SymTab_t *symtab, struct Expression *expr, double *out_value);
-static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value);
-static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value);
 int semcheck_resolve_scoped_enum_literal(SymTab_t *symtab, const char *type_name,
     const char *literal_name, long long *out_value);
-static char *build_qualified_identifier_from_expr(struct Expression *expr);
-static QualifiedIdent *build_qualified_ident_from_expr(struct Expression *expr);
 
 int expression_is_set_const_expr(SymTab_t *symtab, struct Expression *expr)
 {
@@ -578,7 +572,7 @@ int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
 }
 
 /* Evaluates a string constant expression, allocating a new string */
-static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr, char **out_value)
+int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr, char **out_value)
 {
     if (expr == NULL || out_value == NULL)
         return 1;
@@ -698,7 +692,7 @@ static int evaluate_string_const_expr(SymTab_t *symtab, struct Expression *expr,
     return 1;
 }
 
-static int semcheck_const_expr_char_cast_value(struct Expression *expr, long long *out_value,
+int semcheck_const_expr_char_cast_value(struct Expression *expr, long long *out_value,
     int *out_char_size)
 {
     const char *target_id = NULL;
@@ -749,13 +743,7 @@ static int semcheck_const_expr_char_cast_value(struct Expression *expr, long lon
     return 0;
 }
 
-typedef struct SubprogramPredeclLookup
-{
-    HashNode_t *exact_match;
-    HashNode_t *first_mangled_match;
-    HashNode_t *tree_match;
-    HashNode_t *body_pair_match;
-} SubprogramPredeclLookup;
+/* SubprogramPredeclLookup typedef is in SemCheck_internal.h */
 
 static int semcheck_subprogram_node_source_unit_index(HashNode_t *candidate)
 {
@@ -773,7 +761,7 @@ static int semcheck_subprogram_node_source_unit_index(HashNode_t *candidate)
     return candidate->source_unit_index;
 }
 
-static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
+SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
     SymTab_t *symtab,
     Tree_t *subprogram,
     const char *lookup_id,
@@ -863,7 +851,7 @@ static SubprogramPredeclLookup semcheck_lookup_subprogram_predecl(
     return result;
 }
 
-static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
+void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
 {
     if (node == NULL || subprogram == NULL)
         return;
@@ -912,7 +900,7 @@ static void semcheck_refresh_predecl_match(HashNode_t *node, Tree_t *subprogram)
     }
 }
 
-static int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
+int semcheck_param_list_equivalent(ListNode_t *lhs, ListNode_t *rhs)
 {
     ListNode_t *lcur = lhs;
     ListNode_t *rcur = rhs;
@@ -1515,7 +1503,7 @@ static HashNode_t *find_type_node_with_range_metadata(SymTab_t *symtab,
     return best;
 }
 
-static HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
+HashNode_t *semcheck_find_exact_type_node_for_qid(SymTab_t *symtab,
     const QualifiedIdent *type_ref)
 {
     if (symtab == NULL || type_ref == NULL)
@@ -3007,22 +2995,22 @@ low_cleanup:
     return 1;
 }
 
-static int const_fold_int_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
+int const_fold_int_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
     return const_fold_int_expr_mode(symtab, expr, out_value, 0);
 }
 
-static int const_fold_real_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
+int const_fold_real_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
 {
     return const_fold_real_expr_mode(symtab, expr, out_value, 0);
 }
 
-static int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
+int evaluate_const_expr(SymTab_t *symtab, struct Expression *expr, long long *out_value)
 {
     return const_fold_int_expr_mode(symtab, expr, out_value, 1);
 }
 
-static int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
+int evaluate_real_const_expr(SymTab_t *symtab, struct Expression *expr, double *out_value)
 {
     return const_fold_real_expr_mode(symtab, expr, out_value, 1);
 }

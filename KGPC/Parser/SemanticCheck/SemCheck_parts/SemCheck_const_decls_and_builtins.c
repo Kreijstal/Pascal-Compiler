@@ -1,3 +1,5 @@
+#include "../SemCheck_internal.h"
+
 static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
 {
     int return_val = 0;
@@ -484,7 +486,7 @@ static int semcheck_single_const_decl(SymTab_t *symtab, Tree_t *tree)
  * (semcheck_predeclare_program_into_unit_scope) to populate per-unit scopes
  * before full const evaluation.  Cross-unit resolution uses scope dependency
  * edges rather than relying on list concatenation order. */
-static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls,
+void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_decls,
     int include_local_unit_consts)
 {
     for (ListNode_t *cur = const_decls; cur != NULL; cur = cur->next)
@@ -1114,7 +1116,7 @@ static void prepush_trivial_imported_consts(SymTab_t *symtab, ListNode_t *const_
     }
 }
 
-static int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
+int semcheck_const_decls_local(SymTab_t *symtab, ListNode_t *const_decls)
 {
     int return_val = 0;
     ListNode_t *cur = const_decls;
@@ -1152,7 +1154,7 @@ static int semcheck_const_expr_refs_current_unit_qualified_id(struct Expression 
     return cur_unit_str != NULL && pascal_identifier_equals(owner->expr_data.id, cur_unit_str);
 }
 
-static int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *const_decls,
+int semcheck_const_decls_imported_filtered(SymTab_t *symtab, ListNode_t *const_decls,
     int defer_current_unit_qualified)
 {
     int return_val = 0;
@@ -1207,7 +1209,7 @@ static int semcheck_decl_only_should_skip_typed_const_initializer(const struct S
  * declared types visible to dependent units, but we must not semcheck their
  * initializer expressions yet. Those initializers can depend on local enum/set
  * declarations that are only fully valid in the later full semantic pass. */
-static int semcheck_decl_only_typed_const_decls(SymTab_t *symtab, ListNode_t *typed_const_decls)
+int semcheck_decl_only_typed_const_decls(SymTab_t *symtab, ListNode_t *typed_const_decls)
 {
     if (typed_const_decls == NULL)
         return 0;
