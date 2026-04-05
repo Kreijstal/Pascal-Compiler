@@ -1,0 +1,4085 @@
+ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target)
+{
+    if (target == NULL)
+        return inst_list;
+
+    int shadow_space = 0;
+    if (codegen_target_is_windows())
+    {
+        shadow_space = codegen_align_to(current_stack_home_space(), REQUIRED_OFFSET);
+        if (shadow_space > 0)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", shadow_space);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    char call_buffer[64];
+    snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", target);
+    inst_list = add_inst(inst_list, call_buffer);
+
+    if (shadow_space > 0)
+    {
+        char restore_buffer[64];
+        snprintf(restore_buffer, sizeof(restore_buffer), "\taddq\t$%d, %%rsp\n", shadow_space);
+        inst_list = add_inst(inst_list, restore_buffer);
+    }
+
+    return inst_list;
+}
+
+static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
+{
+    if (value_reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg)
+{
+    if (ctx == NULL || exc_expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_kgpctype(exc_expr))
+    {
+        if (codegen_expr_is_signed(exc_expr))
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+        else
+            inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
+    }
+
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, kgpc_current_exception(%%rip)\n", value_reg->bit_64);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+    Register_t **out_reg, const char *message)
+{
+    if (out_reg != NULL)
+        *out_reg = NULL;
+    if (message != NULL)
+        codegen_report_error(ctx, "%s", message);
+    return inst_list;
+}
+
+static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    if (expr->type == EXPR_IS)
+        return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+
+    if (expr->type == EXPR_AS && expr->expr_data.as_data.expr != NULL)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+        inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+        *out_reg = addr_reg;
+        return inst_list;
+    }
+
+    expr_node_t *expr_tree = build_expr_tree(expr);
+    Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+    if (reg == NULL)
+        return codegen_fail_register(ctx, inst_list, out_reg,
+            "ERROR: Unable to allocate register for expression evaluation.");
+    inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, reg);
+    free_expr_tree(expr_tree);
+    *out_reg = reg;
+    return inst_list;
+}
+
+ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, int *relop_type)
+{
+    if (expr == NULL)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+        return inst_list;
+    }
+
+    if (expr->type == EXPR_RELOP)
+        return codegen_simple_relop(expr, inst_list, ctx, relop_type);
+
+    Register_t *value_reg = NULL;
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
+    if (value_reg == NULL)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", value_reg->bit_32, value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), value_reg);
+
+    if (relop_type != NULL)
+        *relop_type = NE;
+    return inst_list;
+}
+
+ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    int began_expr = 0;
+    if (ctx != NULL)
+    {
+        codegen_begin_expression(ctx);
+        began_expr = 1;
+    }
+
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        goto cleanup;
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        if (codegen_is_current_return_var_id(expr, ctx))
+        {
+            StackNode_t *return_var = ctx->current_return_slot;
+            if (return_var != NULL)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Unable to allocate register for return variable address.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                if (return_var->is_static)
+                {
+                    const char *label = (return_var->static_label != NULL) ?
+                        return_var->static_label : return_var->label;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                }
+                else if (return_var->is_reference)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
+        int scope_depth = 0;
+        StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+
+        /* Check if this is a set constant - need to emit rodata even if var_node is found */
+        if (ctx->symtab != NULL)
+        {
+            HashNode_t *const_node = NULL;
+            if (FindSymbol(&const_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                const_node->const_set_value != NULL && const_node->const_set_size > 0)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for set constant.");
+                        goto cleanup;
+                    }
+                }
+
+                inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                if (const_node->const_set_label == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Failed to materialize set constant.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    const_node->const_set_label, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
+        /* Fallback: resolve via symbol table mangled_id (e.g. class constants
+           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
+        if (var_node == NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindSymbol(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                sym_node != NULL && sym_node->mangled_id != NULL)
+            {
+                var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+            }
+        }
+
+        if (var_node == NULL)
+        {
+            /* Procedures/functions used as values (e.g. @Proc, typed proc constants) */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *proc_node = NULL;
+                if (FindSymbol(&proc_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                    proc_node != NULL &&
+                    (proc_node->hash_type == HASHTYPE_PROCEDURE ||
+                     proc_node->hash_type == HASHTYPE_FUNCTION) &&
+                    proc_node->mangled_id != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for procedure address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        proc_node->mangled_id, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            /* Constant set literals (set of char) are materialized in rodata */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *const_node = NULL;
+                int found = FindSymbol(&const_node, ctx->symtab, expr->expr_data.id);
+                if (found != 0 &&
+                    const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                    const_node->const_set_value != NULL && const_node->const_set_size > 0)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (addr_reg == NULL)
+                        {
+                            inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                                "ERROR: Unable to allocate register for set constant.");
+                            goto cleanup;
+                        }
+                    }
+
+                    inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                    if (const_node->const_set_label == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Failed to materialize set constant.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        const_node->const_set_label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            /* String constants need to be emitted to rodata so their address can be taken */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *str_const_node = NULL;
+                int str_found = FindSymbol(&str_const_node, ctx->symtab, expr->expr_data.id);
+                if (str_found != 0 && str_const_node != NULL &&
+                    str_const_node->hash_type == HASHTYPE_CONST &&
+                    str_const_node->const_string_value != NULL &&
+                    !(str_const_node->type != NULL && str_const_node->type->kind == TYPE_KIND_PROCEDURE))
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for string constant address.");
+                        goto cleanup;
+                    }
+
+                    char label[20];
+                    snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                    char add_rodata[1024];
+                    const char *readonly_section = codegen_readonly_section_directive();
+                    /* Simple assembly-safe emit — control chars are rare in constants */
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                        readonly_section, label, str_const_node->const_string_value, codegen_text_section_resume());
+                    inst_list = add_inst(inst_list, add_rodata);
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            if (expr->expr_data.id != NULL)
+            {
+                const char *builtin_file_ptr = NULL;
+                if (pascal_identifier_equals(expr->expr_data.id, "stdin"))
+                    builtin_file_ptr = "stdin_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stdout"))
+                    builtin_file_ptr = "stdout_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stderr"))
+                    builtin_file_ptr = "stderr_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Input"))
+                    builtin_file_ptr = "Input_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Output"))
+                    builtin_file_ptr = "Output_ptr";
+
+                if (builtin_file_ptr != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for file variable address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                        builtin_file_ptr, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            if (nonlocal_flag() == 1)
+            {
+                int offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for address expression.");
+                        goto cleanup;
+                    }
+                }
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
+                    current_non_local_reg64(), addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+            inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+        
+        HashNode_t *symbol = NULL;
+        int treat_as_reference = 0;
+        if (ctx->symtab != NULL)
+        {
+            if (FindSymbol(&symbol, ctx->symtab, expr->expr_data.id) != 0 && symbol != NULL)
+                treat_as_reference = symbol->is_var_parameter;
+        }
+        if (var_node->is_reference)
+            treat_as_reference = 1;
+        if (treat_as_reference && symbol != NULL && expr->expr_data.id != NULL &&
+            pascal_identifier_equals(expr->expr_data.id, "Self") &&
+            symbol->type != NULL)
+        {
+            struct RecordType *self_record = NULL;
+            if (kgpc_type_is_pointer(symbol->type) &&
+                symbol->type->info.points_to != NULL &&
+                symbol->type->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.points_to->info.record_info;
+            }
+            else if (symbol->type->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.record_info;
+            }
+            if (self_record != NULL && record_type_is_class(self_record))
+                treat_as_reference = 0;
+        }
+        /* ShortStrings may be stored as pointers in a single qword slot.
+         * In that case we need to load the pointer value, not take the
+         * address of the spill slot itself. */
+        if (!treat_as_reference && symbol != NULL && symbol->type != NULL &&
+            var_node->size <= CODEGEN_POINTER_SIZE_BYTES)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(symbol->type);
+            int is_shortstring = kgpc_type_is_shortstring(symbol->type) ||
+                (alias != NULL && alias->is_shortstring);
+            if (!is_shortstring && alias != NULL)
+            {
+                if ((alias->alias_name != NULL &&
+                     pascal_identifier_equals(alias->alias_name, "ShortString")) ||
+                    (alias->target_type_id != NULL &&
+                     pascal_identifier_equals(alias->target_type_id, "ShortString")))
+                {
+                    is_shortstring = 1;
+                }
+            }
+            if (is_shortstring)
+                treat_as_reference = 1;
+        }
+
+        /* Try normal allocation first, then spill if needed */
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for address expression.");
+                goto cleanup;
+            }
+        }
+
+        char buffer[96];
+        
+        const char *static_label = NULL;
+        if (var_node->is_static)
+            static_label = (var_node->static_label != NULL) ? var_node->static_label : var_node->label;
+
+        if (static_label != NULL)
+        {
+            /* Static/global variables live at a fixed address; even when used for
+             * var parameters we need the address, not the first qword of storage. */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                static_label, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        
+        /* For non-local variables (scope_depth > 0), use static link */
+        if (scope_depth > 0)
+        {
+            Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+            if (frame_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to acquire static link for variable %s.",
+                    expr->expr_data.id);
+                /* Fallback to local access (will be wrong but prevents crash) */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+            
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        
+        /* Local variable (scope_depth == 0) */
+        if (treat_as_reference)
+        {
+            if (var_node->is_static)
+            {
+                const char *label = var_node->static_label != NULL ?
+                    var_node->static_label : var_node->label;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                    label != NULL ? label : "",
+                    addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        if (var_node->is_static)
+        {
+            const char *label = var_node->static_label != NULL ?
+                var_node->static_label : var_node->label;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label != NULL ? label : "",
+                addr_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                var_node->offset, addr_reg->bit_64);
+        }
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        inst_list = codegen_array_element_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        inst_list = codegen_record_field_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_RECORD_CONSTRUCTOR)
+    {
+        long long record_size = 0;
+        if (codegen_get_record_size(ctx, expr, &record_size) != 0 || record_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine size for record constructor.");
+            goto cleanup;
+        }
+
+        StackNode_t *temp_slot = codegen_alloc_record_ctor_temp(record_size);
+        if (temp_slot == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate temporary storage for record constructor.");
+            goto cleanup;
+        }
+
+        const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+        const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+        const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
+        char buffer[128];
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, dest_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorq\t%%rax, %%rax\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", val_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "memset");
+        free_arg_regs();
+
+        struct Expression *temp_var = mk_varid(expr->line_num, strdup(temp_slot->label));
+        if (temp_var == NULL)
+            goto cleanup;
+        temp_var->record_type = expr->record_type;
+        if (expr->record_type != NULL)
+            temp_var->resolved_kgpc_type = create_record_type(expr->record_type);
+
+        ListNode_t *field_node = expr->expr_data.record_constructor_data.fields;
+        while (field_node != NULL)
+        {
+            struct RecordConstructorField *field =
+                (struct RecordConstructorField *)field_node->cur;
+            if (field != NULL && field->field_id != NULL && field->value != NULL)
+            {
+                struct Expression *field_access =
+                    mk_recordaccess(expr->line_num, temp_var, strdup(field->field_id));
+                if (field_access == NULL)
+                    goto cleanup;
+                field_access->expr_data.record_access_data.field_offset = field->field_offset;
+                if (field->field_type == RECORD_TYPE)
+                {
+                    field_access->record_type = field->field_record_type;
+                    if (field->field_record_type != NULL)
+                        field_access->resolved_kgpc_type = create_record_type(field->field_record_type);
+                }
+                else if (field->field_type == POINTER_TYPE)
+                {
+                    field_access->resolved_kgpc_type = create_pointer_type(NULL);
+                }
+                else if (field->field_type != UNKNOWN_TYPE)
+                {
+                    /* Compute the field's actual storage size from record layout.
+                     * create_primitive_type(INT_TYPE) defaults to 4 bytes, but in
+                     * FPC mode Integer=SmallInt is only 2 bytes.  Derive the real
+                     * size from consecutive field offsets and the record's cached
+                     * total size. */
+                    long long field_storage = 0;
+                    if (expr->record_type != NULL && expr->record_type->has_cached_size)
+                    {
+                        long long next_off = expr->record_type->cached_size;
+                        ListNode_t *scan = expr->expr_data.record_constructor_data.fields;
+                        while (scan != NULL)
+                        {
+                            struct RecordConstructorField *other =
+                                (struct RecordConstructorField *)scan->cur;
+                            if (other != NULL &&
+                                other->field_offset > field->field_offset &&
+                                other->field_offset < next_off)
+                                next_off = other->field_offset;
+                            scan = scan->next;
+                        }
+                        field_storage = next_off - field->field_offset;
+                    }
+                    if (field_storage > 0 && field_storage != 4 &&
+                        field_storage <= INT_MAX)
+                        field_access->resolved_kgpc_type =
+                            create_primitive_type_with_size(field->field_type, (int)field_storage);
+                    else
+                        field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
+                }
+
+                if (field->field_is_array)
+                {
+                    field_access->is_array_expr = 1;
+                    field_access->array_lower_bound = field->array_start;
+                    field_access->array_upper_bound = field->array_end;
+                    field_access->array_is_dynamic = field->array_is_open;
+                    field_access->array_element_type = field->array_element_type;
+                    if (field->array_element_type_id != NULL)
+                        field_access->array_element_type_id = strdup(field->array_element_type_id);
+                    field_access->array_element_record_type = field->array_element_record_type;
+                }
+
+                struct RecordField *actual_field = codegen_lookup_record_field_expr(field_access, ctx);
+                if (actual_field != NULL && actual_field->is_array && !field_access->is_array_expr)
+                {
+                    field_access->is_array_expr = 1;
+                    field_access->array_lower_bound = actual_field->array_start;
+                    field_access->array_upper_bound = actual_field->array_end;
+                    field_access->array_is_dynamic = actual_field->array_is_open;
+                    field_access->array_element_type = actual_field->array_element_type;
+                    if (field_access->array_element_type_id == NULL &&
+                        actual_field->array_element_type_id != NULL)
+                    {
+                        field_access->array_element_type_id =
+                            strdup(actual_field->array_element_type_id);
+                    }
+                    field_access->array_element_record_type =
+                        actual_field->array_element_record;
+                    if (field_access->array_element_size <= 0 &&
+                        actual_field->array_element_type != UNKNOWN_TYPE)
+                    {
+                        int elem_size = codegen_local_type_tag_size(actual_field->array_element_type);
+                        if (elem_size > 0)
+                            field_access->array_element_size = elem_size;
+                    }
+                }
+                if (!field_access->is_array_expr &&
+                    field->value->type == EXPR_ARRAY_LITERAL &&
+                    field->field_type != UNKNOWN_TYPE)
+                {
+                    int elem_size = codegen_local_type_tag_size(field->field_type);
+                    if (elem_size > 0)
+                    {
+                        field_access->is_array_expr = 1;
+                        field_access->array_lower_bound = 0;
+                        field_access->array_upper_bound =
+                            field->value->expr_data.array_literal_data.element_count - 1;
+                        field_access->array_is_dynamic = 0;
+                        field_access->array_element_type = field->field_type;
+                        field_access->array_element_size = elem_size;
+                        if (field_access->array_element_type_id == NULL &&
+                            field->field_type_id != NULL)
+                        {
+                            field_access->array_element_type_id = strdup(field->field_type_id);
+                        }
+                    }
+                }
+
+                if (field_access->is_array_expr &&
+                    field->value->type == EXPR_ARRAY_LITERAL)
+                {
+                    ListNode_t *element_node = field->value->expr_data.array_literal_data.elements;
+                    int index = field_access->array_lower_bound;
+                    while (element_node != NULL && index <= field_access->array_upper_bound)
+                    {
+                        struct Expression *element_expr = (struct Expression *)element_node->cur;
+                        struct Expression *index_expr = mk_inum(expr->line_num, index);
+                        struct Expression *array_access = mk_arrayaccess(expr->line_num,
+                            field_access, index_expr);
+                        if (array_access == NULL)
+                            goto cleanup;
+                        array_access->is_array_expr = 1;
+                        array_access->array_lower_bound = field_access->array_lower_bound;
+                        array_access->array_upper_bound = field_access->array_upper_bound;
+                        array_access->array_is_dynamic = field_access->array_is_dynamic;
+                        array_access->array_element_type = field_access->array_element_type;
+                        array_access->array_element_size = field_access->array_element_size;
+                        if (field_access->array_element_type_id != NULL)
+                            array_access->array_element_type_id = strdup(field_access->array_element_type_id);
+                        array_access->array_element_record_type = field_access->array_element_record_type;
+
+                        struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                            array_access, element_expr);
+                        if (assign_stmt == NULL)
+                            goto cleanup;
+                        inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                        free(assign_stmt);
+                        element_node = element_node->next;
+                        ++index;
+                    }
+                    field_node = field_node->next;
+                    continue;
+                }
+
+                struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                    field_access, field->value);
+                if (assign_stmt == NULL)
+                    goto cleanup;
+                inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                free(assign_stmt);
+            }
+            field_node = field_node->next;
+        }
+
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for record constructor address.");
+                goto cleanup;
+            }
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ARRAY_LITERAL)
+    {
+        /* Array literals are materialized into a temporary stack slot by
+         * codegen_expr_with_result, which returns a register pointing to
+         * the data.  Use that address directly instead of falling through
+         * to codegen_evaluate_expr/build_expr_tree which cannot handle
+         * compound expressions. */
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+            goto cleanup;
+        }
+
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_evaluate_expr(pointer_expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            goto cleanup;
+
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ADDR)
+    {
+        struct Expression *inner = expr->expr_data.addr_data.expr;
+        if (inner == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Address-of expression missing operand.");
+            goto cleanup;
+        }
+
+        inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = expr->expr_data.typecast_data.expr;
+        /* Typecast on an addressable expression: pass the address of the inner
+         * expression. This handles reinterpret casts for var parameters, e.g.
+         * InterLockedExchange(longint(TLSInitialized), ...) where the first
+         * param is 'var Target: longint' and TLSInitialized is longbool. */
+        if (inner != NULL && codegen_expr_is_addressable(inner))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+    }
+    else if (expr->type == EXPR_FUNCTION_CALL &&
+        (expr_has_type_tag(expr, RECORD_TYPE) || expr_has_type_tag(expr, SHORTSTRING_TYPE) ||
+         (expr->resolved_kgpc_type != NULL &&
+          expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
+          !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))))
+    {
+        /* Record-valued function calls evaluate to a temporary addressable object
+         * (sret/hidden pointer), which callers may pass by reference. */
+        inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *operand_addr = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &operand_addr);
+            if (operand_addr != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address((struct Expression *)expr,
+                    inst_list, ctx, operand_addr);
+                *out_reg = operand_addr;
+                goto cleanup;
+            }
+        }
+        goto cleanup;
+    }
+
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+
+cleanup:
+    if (began_expr)
+        codegen_end_expression(ctx);
+    return inst_list;
+}
+
+static int record_type_is_mp_integer(const struct RecordType *record_type)
+{
+    if (record_type == NULL)
+        return 0;
+
+    if (record_type->fields == NULL || record_type->fields->next != NULL)
+        return 0;
+
+    struct RecordField *field = (struct RecordField *)record_type->fields->cur;
+    if (field == NULL || field->name == NULL)
+        return 0;
+
+    return strcmp(field->name, "__kgpc_mp_handle") == 0;
+}
+
+static int codegen_expr_is_mp_integer(struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr_has_type_tag(expr, RECORD_TYPE))
+        return record_type_is_mp_integer(expr->record_type);
+
+    if (expr_has_type_tag(expr, POINTER_TYPE))
+    {
+        /* For pointers, check what they point to via KgpcType if available */
+        if (expr->resolved_kgpc_type != NULL && kgpc_type_is_pointer(expr->resolved_kgpc_type))
+        {
+            int subtype = kgpc_type_get_pointer_subtype_tag(expr->resolved_kgpc_type);
+            if (subtype == RECORD_TYPE)
+                return record_type_is_mp_integer(expr->record_type);
+        }
+        /* Fallback to legacy field */
+        else if (expr->pointer_subtype == RECORD_TYPE)
+        {
+            return record_type_is_mp_integer(expr->record_type);
+        }
+    }
+
+    return 0;
+}
+
+static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
+    Register_t *value_reg)
+{
+    if (addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_gmp_mpint_assign");
+    return inst_list;
+}
+
+/* Move two registers into the first two ABI argument registers (arg0, arg1),
+ * handling all possible register conflict scenarios. Uses xchgq when both
+ * registers are cross-assigned, otherwise moves in the correct order.
+ * arg0_reg → first ABI arg register, arg1_reg → second ABI arg register. */
+static ListNode_t *codegen_setup_two_arg_regs(ListNode_t *inst_list,
+    Register_t *arg0_reg, Register_t *arg1_reg)
+{
+    char buffer[128];
+    const char *abi_arg0 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+    const char *abi_arg1 = codegen_target_is_windows() ? "%rdx" : "%rsi";
+    int arg0_id = codegen_target_is_windows() ? REG_RCX : REG_RDI;
+    int arg1_id = codegen_target_is_windows() ? REG_RDX : REG_RSI;
+
+    int val_in_arg0 = (arg1_reg->reg_id == arg0_id);
+    int addr_in_arg1 = (arg0_reg->reg_id == arg1_id);
+
+    if (val_in_arg0 && addr_in_arg1)
+    {
+        snprintf(buffer, sizeof(buffer), "\txchgq\t%s, %s\n", abi_arg0, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (val_in_arg0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (addr_in_arg1)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    return inst_list;
+}
+
+/* Call a 2-arg runtime function: func(addr_reg, value_reg)
+ * addr_reg → first arg (char**), value_reg → second arg (const char*) */
+static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, const char *func_name)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, func_name);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg)
+{
+    return codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg, "kgpc_string_assign");
+}
+
+static int codegen_expr_is_wide_string_value(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_wide_string(expr->resolved_kgpc_type))
+            return 1;
+
+        if (expr->resolved_kgpc_type->type_alias != NULL)
+        {
+            const char *alias_name = expr->resolved_kgpc_type->type_alias->alias_name;
+            const char *target_name = expr->resolved_kgpc_type->type_alias->target_type_id;
+            if ((alias_name != NULL &&
+                 (pascal_identifier_equals(alias_name, "UnicodeString") ||
+                  pascal_identifier_equals(alias_name, "WideString"))) ||
+                (target_name != NULL &&
+                 (pascal_identifier_equals(target_name, "UnicodeString") ||
+                  pascal_identifier_equals(target_name, "WideString"))))
+            {
+                return 1;
+            }
+        }
+    }
+
+    if (expr->type == EXPR_FUNCTION_CALL &&
+        expr->expr_data.function_call_data.call_kgpc_type != NULL &&
+        expr->expr_data.function_call_data.call_kgpc_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+        if (ret_type != NULL && kgpc_type_is_wide_string(ret_type))
+            return 1;
+        if (call_type->info.proc_info.return_type_id != NULL &&
+            (pascal_identifier_equals(call_type->info.proc_info.return_type_id, "UnicodeString") ||
+             pascal_identifier_equals(call_type->info.proc_info.return_type_id, "WideString")))
+        {
+            return 1;
+        }
+    }
+
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.target_type_id != NULL &&
+        (pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "UnicodeString") ||
+         pascal_identifier_equals(expr->expr_data.typecast_data.target_type_id, "WideString")))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Call kgpc_string_to_char_array(dest, src, size) to copy string to char array */
+static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
+
+    char buffer[128];
+    if (codegen_target_is_windows()) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+    } else {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+    }
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_char_array");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Call kgpc_shortstring_to_char_array(dest, src, size) */
+static ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
+
+    char buffer[128];
+    if (codegen_target_is_windows()) {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+    } else {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+    }
+    inst_list = add_inst(inst_list, buffer);
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_char_array");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Call kgpc_char_array_to_shortstring(dest, src, src_len, dest_size) */
+static ListNode_t *codegen_call_char_array_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int src_len, int dest_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: rcx, rdx, r8, r9 */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r9\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V ABI: rdi, rsi, rdx, rcx */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rcx\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_array_to_shortstring");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *addr_reg, Register_t *value_reg, int src_len)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", src_len);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_assign_from_char_array");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Check if an array access expression targets a shortstring element.
+ * This handles cases like Names[0] where Names is array[...] of ShortString. */
+static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL)
+        return 0;
+    if (expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+    if (expr->array_element_size == 2 ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
+    
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+    if (base_expr->array_element_size == 2 ||
+        (base_expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(base_expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(base_expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
+    
+    /* If the array access expression itself has shortstring type info, use that */
+    if (codegen_expr_is_shortstring_array(expr))
+        return 1;
+    
+    /* Check if base array is declared with shortstring element type */
+    if (base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 && node != NULL)
+        {
+            /* Check KgpcType for array element info */
+            if (node->type != NULL && kgpc_type_is_array(node->type))
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type(node->type);
+                if (elem_type != NULL)
+                {
+                    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL)
+                    {
+                        fprintf(stderr, "[codegen] checking shortstring: base=%s elem_type->kind=%d\n",
+                            base_expr->expr_data.id, elem_type->kind);
+                    }
+                    /* Element type is a shortstring if it's an array of char with proper bounds */
+                    if (kgpc_type_is_array(elem_type))
+                    {
+                        KgpcType *inner_elem = kgpc_type_get_array_element_type(elem_type);
+                        if (inner_elem != NULL && inner_elem->kind == TYPE_KIND_PRIMITIVE &&
+                            inner_elem->info.primitive_type_tag == CHAR_TYPE)
+                        {
+                            return 1;  /* array element is array of char = shortstring */
+                        }
+                    }
+                    /* Or if the element type tag is SHORTSTRING_TYPE */
+                    if (elem_type->kind == TYPE_KIND_PRIMITIVE &&
+                        elem_type->info.primitive_type_tag == SHORTSTRING_TYPE)
+                    {
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+    
+    return 0;
+}
+
+static int codegen_expr_is_shortstring_array(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if ((expr->array_element_size == 2) ||
+        (expr->array_element_type_id != NULL &&
+         (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+          pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))))
+        return 0;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_shortstring)
+            return 1;
+    }
+    /* For record field access, only the RecordField's type is authoritative.
+     * Plain array[0..255] of AnsiChar fields are NOT shortstrings. */
+    if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+        if (field != NULL && field->type == SHORTSTRING_TYPE)
+            return 1;
+        /* Field lookup is authoritative — if it succeeded, use its type.
+         * If it failed, conservatively return 0 rather than relying on the
+         * bounds heuristic, which would false-positive on plain char
+         * array[0..255] fields like TextRec.Name. */
+        return 0;
+    }
+    /* Also check by type bounds: string[N] is char array with bounds 0..N */
+    if (expr->is_array_expr &&
+        expr->array_element_type == CHAR_TYPE &&
+        expr->array_element_size != 2 &&
+        (expr->array_element_type_id == NULL ||
+         (!pascal_identifier_equals(expr->array_element_type_id, "WideChar") &&
+          !pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar"))) &&
+        expr_get_array_lower_bound(expr) == 0)
+    {
+        /* Any char array starting at 0 and sized up to 256 is treated as shortstring */
+        int upper = expr_get_array_upper_bound(expr);
+        if (upper >= 0 && upper <= 255)
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_expr_has_widechar_array_metadata_local(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->array_element_size == 2)
+        return 1;
+    if (expr->array_element_type_id != NULL &&
+        (pascal_identifier_equals(expr->array_element_type_id, "WideChar") ||
+         pascal_identifier_equals(expr->array_element_type_id, "UnicodeChar")))
+    {
+        return 1;
+    }
+    return 0;
+}
+
+static int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (codegen_expr_has_widechar_array_metadata_local(expr))
+        return 0;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+            (alias != NULL && alias->is_shortstring))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_shortstring_capacity_from_type_local(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->is_shortstring)
+    {
+        if (alias->array_end >= alias->array_start && alias->array_end >= 0)
+            return alias->array_end - alias->array_start + 1;
+        if (alias->storage_size > 1)
+            return (int)alias->storage_size;
+    }
+
+    if (kgpc_type_is_shortstring(type))
+    {
+        long long type_size = kgpc_type_sizeof(type);
+        if (type_size > 1 && type_size <= INT_MAX)
+            return (int)type_size;
+        return 256;
+    }
+
+    return 0;
+}
+
+static int codegen_shortstring_capacity_from_array_element_local(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+
+    struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+    if (base_expr == NULL)
+        return 0;
+
+    KgpcType *base_type = expr_get_kgpc_type(base_expr);
+    if (base_type == NULL &&
+        base_expr->type == EXPR_VAR_ID &&
+        ctx != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            base_type = node->type;
+        }
+    }
+
+    if (base_type != NULL && kgpc_type_is_array(base_type))
+    {
+        KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+        int capacity = codegen_shortstring_capacity_from_type_local(elem_type);
+        if (capacity > 0)
+            return capacity;
+    }
+
+    if (base_expr->type == EXPR_VAR_ID)
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(base_expr->expr_data.id, &scope_depth);
+        if (stack_node != NULL && stack_node->element_size > 1)
+            return stack_node->element_size;
+    }
+
+    return 0;
+}
+
+static int codegen_record_field_shortstring_capacity(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_RECORD_ACCESS)
+        return 0;
+
+    struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+    if (field == NULL)
+        return 0;
+
+    int shortstring_like = (field->type == SHORTSTRING_TYPE);
+    if (!shortstring_like && expr != NULL)
+    {
+        KgpcType *expr_type = expr_get_kgpc_type(expr);
+        if (expr_type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+            if (kgpc_type_is_shortstring(expr_type) ||
+                (alias != NULL && alias->is_shortstring))
+                shortstring_like = 1;
+        }
+    }
+
+    if (!shortstring_like)
+        return 0;
+
+    if (field->type == SHORTSTRING_TYPE)
+    {
+        if (field->is_array && field->array_end >= field->array_start && field->array_end >= 0)
+            return field->array_end - field->array_start + 1;
+    }
+
+    if (ctx != NULL)
+    {
+        long long field_size = codegen_record_field_effective_size((struct Expression *)expr, ctx);
+        if (field_size > 1 && field_size <= INT_MAX)
+            return (int)field_size;
+    }
+
+    return 0;
+}
+static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx)
+{
+    const char *expr_id = NULL;
+    const char *current_id = NULL;
+    const char *suffix = NULL;
+    HashNode_t *shadow_node = NULL;
+
+    if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID)
+        return 0;
+
+    expr_id = expr->expr_data.id;
+    if (expr_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(expr_id, "Result"))
+    {
+        /* A real local/parameter named Result must win over the implicit
+         * function-result designator. Only treat bare Result as implicit when
+         * semantic lookup did not bind it to an actual symbol. */
+        if (ctx->symtab != NULL &&
+            FindSymbol(&shadow_node, ctx->symtab, expr_id) != 0 &&
+            shadow_node != NULL)
+            return 0;
+        return 1;
+    }
+
+    current_id = ctx->current_subprogram_id;
+    if (current_id == NULL)
+        return 0;
+
+    if (pascal_identifier_equals(expr_id, current_id))
+        return 1;
+    if (ctx->current_subprogram_method_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_method_name))
+        return 1;
+    if (ctx->current_subprogram_result_name != NULL &&
+        pascal_identifier_equals(expr_id, ctx->current_subprogram_result_name))
+        return 1;
+
+    suffix = strstr(current_id, "__");
+    if (suffix != NULL)
+    {
+        while (suffix != NULL)
+        {
+            const char *next = strstr(suffix + 2, "__");
+            if (next == NULL)
+                break;
+            suffix = next;
+        }
+        suffix += 2;
+        if (*suffix != '\0' && pascal_identifier_equals(expr_id, suffix))
+            return 1;
+    }
+
+    return 0;
+}
+
+static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext *ctx,
+    int *lower_out, int *upper_out, int *is_shortstring_out)
+{
+    if (lower_out != NULL) *lower_out = 0;
+    if (upper_out != NULL) *upper_out = -1;
+    if (is_shortstring_out != NULL) *is_shortstring_out = 0;
+    if (expr == NULL)
+        return 0;
+
+    int found = 0;
+    int lower = 0;
+    int upper = -1;
+
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL &&
+        codegen_is_current_return_var_id(expr, ctx))
+    {
+        int short_capacity = codegen_get_current_return_shortstring_capacity(ctx, ctx->symtab);
+        if (short_capacity > 1)
+        {
+            lower = 0;
+            upper = short_capacity - 1;
+            found = 1;
+            if (is_shortstring_out != NULL)
+                *is_shortstring_out = 1;
+        }
+    }
+
+    if (!found && expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
+    {
+        lower = expr_get_array_lower_bound(expr);
+        upper = expr_get_array_upper_bound(expr);
+        found = 1;
+    }
+    else
+    {
+        KgpcType *kgpc = expr_get_kgpc_type(expr);
+        int short_capacity = codegen_shortstring_capacity_from_type_local(kgpc);
+        if (short_capacity > 0)
+        {
+            lower = 0;
+            upper = short_capacity - 1;
+            found = 1;
+            if (is_shortstring_out != NULL)
+                *is_shortstring_out = 1;
+        }
+        else if (kgpc != NULL && kgpc_type_is_array(kgpc) &&
+            kgpc->info.array_info.element_type != NULL &&
+            kgpc->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+        {
+            lower = kgpc->info.array_info.start_index;
+            upper = kgpc->info.array_info.end_index;
+            found = 1;
+        }
+        else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL &&
+            node->type != NULL)
+            {
+                int node_short_capacity = codegen_shortstring_capacity_from_type_local(node->type);
+                if (node_short_capacity > 0)
+                {
+                    lower = 0;
+                    upper = node_short_capacity - 1;
+                    found = 1;
+                    if (is_shortstring_out != NULL)
+                        *is_shortstring_out = 1;
+                }
+                else if (node->type->kind == TYPE_KIND_PROCEDURE &&
+                    node->type->info.proc_info.return_type != NULL)
+                {
+                    int return_short_capacity = codegen_shortstring_capacity_from_type_local(
+                        node->type->info.proc_info.return_type);
+                    if (return_short_capacity > 0)
+                    {
+                        lower = 0;
+                        upper = return_short_capacity - 1;
+                        found = 1;
+                        if (is_shortstring_out != NULL)
+                            *is_shortstring_out = 1;
+                    }
+                }
+                else if (node->type->kind == TYPE_KIND_ARRAY &&
+                    node->type->info.array_info.element_type != NULL &&
+                    node->type->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
+                    node->type->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    lower = node->type->info.array_info.start_index;
+                    upper = node->type->info.array_info.end_index;
+                    found = 1;
+                    if (is_shortstring_out != NULL &&
+                        node->type->type_alias != NULL &&
+                        node->type->type_alias->is_shortstring)
+                    {
+                        *is_shortstring_out = 1;
+                    }
+                }
+            }
+
+            if (!found &&
+                (expr_get_type_tag(expr) == SHORTSTRING_TYPE ||
+                 codegen_expr_is_shortstring_value_local(expr)))
+            {
+                int scope_depth = 0;
+                StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+                if (stack_node != NULL)
+                {
+                    int slot_size = stack_node->element_size > 0 ?
+                        stack_node->element_size : stack_node->size;
+                    if (slot_size > 1)
+                    {
+                        lower = 0;
+                        upper = slot_size - 1;
+                        found = 1;
+                        if (is_shortstring_out != NULL)
+                            *is_shortstring_out = 1;
+                    }
+                }
+            }
+        }
+        else if (expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* Look up the record field to check if it's a char array */
+            struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+            int short_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
+            if (field != NULL && field->is_array &&
+                (field->array_element_type == CHAR_TYPE || field->array_element_type == BYTE_TYPE))
+            {
+                lower = field->array_start;
+                upper = field->array_end;
+                found = 1;
+                /* Record fields: only SHORTSTRING_TYPE fields are shortstrings.
+                 * Plain array[0..255] of AnsiChar is NOT a shortstring. */
+                if (is_shortstring_out != NULL)
+                    *is_shortstring_out = (field->type == SHORTSTRING_TYPE) ? 1 : 0;
+            }
+            else if (short_capacity > 1)
+            {
+                lower = 0;
+                upper = short_capacity - 1;
+                found = 1;
+                if (is_shortstring_out != NULL)
+                    *is_shortstring_out = 1;
+            }
+        }
+    }
+
+    if (!found)
+        return 0;
+
+    if (lower_out != NULL) *lower_out = lower;
+    if (upper_out != NULL) *upper_out = upper;
+
+    if (is_shortstring_out != NULL)
+    {
+        if (expr->type == EXPR_RECORD_ACCESS)
+        {
+            /* For record field access, the RecordField's type is authoritative.
+             * Do NOT fall through to the array[0..255] heuristic. */
+            struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
+            if (field != NULL && field->type == SHORTSTRING_TYPE)
+                *is_shortstring_out = 1;
+            else if (field != NULL)
+                *is_shortstring_out = 0;
+            else
+            {
+                /* Field lookup failed — conservatively treat as not-shortstring
+                 * to avoid false positives on plain char array[0..255] fields
+                 * like TextRec.Name.  codegen_expr_is_shortstring_array already
+                 * returns 0 in this case. */
+                *is_shortstring_out = 0;
+            }
+        }
+        else
+        {
+            int is_short = (*is_shortstring_out != 0);
+            if (!is_short)
+                is_short = codegen_expr_is_shortstring_array(expr);
+            if (!is_short)
+            {
+                KgpcType *kgpc = expr_get_kgpc_type(expr);
+                if (kgpc != NULL && kgpc->type_alias != NULL && kgpc->type_alias->is_shortstring)
+                    is_short = 1;
+            }
+            if (!is_short && lower == 0 && upper == 255)
+                is_short = 1;
+            *is_shortstring_out = is_short;
+        }
+    }
+
+    return 1;
+}
+
+/* Detect whether an expression represents a ShortString value on the RHS
+ * of an assignment.  Checks context-aware shortstring detection, local
+ * shortstring markers, the SHORTSTRING_TYPE tag, and typecast wrappers.
+ * Used by both the "LHS is shortstring" and "LHS is AnsiString" assignment
+ * branches to keep the detection logic in a single place. */
+static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+    if (codegen_expr_is_shortstring_value_ctx(expr, ctx))
+        return 1;
+    if (codegen_expr_is_shortstring_value_local(expr))
+        return 1;
+    if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+        return 1;
+    /* Unwrap typecasts: e.g. TFormatString(HexStr(...)) where the outer type
+     * is AnsiString but the inner expression returns ShortString. */
+    if (expr->type == EXPR_TYPECAST &&
+        expr->expr_data.typecast_data.expr != NULL &&
+        codegen_expr_is_shortstring_value_ctx(expr->expr_data.typecast_data.expr, ctx))
+        return 1;
+    return 0;
+}
+
+static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
+{
+    int explicit_shortstring = 0;
+    if (expr != NULL)
+    {
+        explicit_shortstring =
+            (expr_get_type_tag(expr) == SHORTSTRING_TYPE) ||
+            codegen_expr_is_shortstring_array(expr);
+    }
+
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL &&
+        codegen_is_current_return_var_id(expr, ctx))
+    {
+        int short_capacity = codegen_get_current_return_shortstring_capacity(ctx, ctx->symtab);
+        if (short_capacity > 0)
+            return short_capacity;
+    }
+
+    if (expr != NULL)
+    {
+        int record_field_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
+        if (record_field_capacity > 1)
+            return record_field_capacity;
+
+        int array_element_capacity = codegen_shortstring_capacity_from_array_element_local(expr, ctx);
+        if (array_element_capacity > 1)
+            return array_element_capacity;
+
+        KgpcType *expr_type = expr_get_kgpc_type(expr);
+        if (expr_type != NULL &&
+            expr_type->kind == TYPE_KIND_PRIMITIVE &&
+            expr_type->info.primitive_type_tag == SHORTSTRING_TYPE)
+        {
+            int capacity = codegen_shortstring_capacity_from_type_local(expr_type);
+            return capacity > 0 ? capacity : 256;
+        }
+        if (expr_type != NULL)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(expr_type);
+            if (alias != NULL && alias->is_shortstring &&
+                alias->array_end >= alias->array_start && alias->array_end >= 0)
+            {
+                return alias->array_end - alias->array_start + 1;
+            }
+            if (kgpc_type_is_array(expr_type) &&
+                expr_type->type_alias != NULL && expr_type->type_alias->is_shortstring)
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(expr_type, &start, &end) == 0 &&
+                    end >= start && end >= 0)
+                {
+                    return end - start + 1;
+                }
+            }
+        }
+    }
+
+    if (explicit_shortstring)
+    {
+        if (expr != NULL && ctx != NULL)
+        {
+            int lower = 0, upper = -1, is_short = 0;
+            if (codegen_get_char_array_bounds(expr, ctx, &lower, &upper, &is_short) &&
+                is_short && upper >= lower && upper >= 0)
+            {
+                return upper - lower + 1;
+            }
+        }
+        return 256;
+    }
+
+    if (expr != NULL && expr->is_array_expr)
+    {
+        int lower_bound = expr_get_array_lower_bound(expr);
+        int upper_bound = expr_get_array_upper_bound(expr);
+        if (upper_bound >= lower_bound && upper_bound >= 0)
+            return upper_bound - lower_bound + 1;
+    }
+
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS)
+    {
+        struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+        KgpcType *base_type = NULL;
+
+        if (base_expr != NULL)
+        {
+            base_type = base_expr->resolved_kgpc_type;
+            if (base_type == NULL &&
+                base_expr->type == EXPR_VAR_ID &&
+                ctx != NULL &&
+                ctx->symtab != NULL)
+            {
+                HashNode_t *node = NULL;
+                if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
+                    node != NULL)
+                {
+                    base_type = node->type;
+                }
+            }
+        }
+
+        if (base_type != NULL && kgpc_type_is_array(base_type))
+        {
+            KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+            if (elem_type != NULL && kgpc_type_is_array(elem_type))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
+                    end >= start && end >= 0)
+                {
+                    return end - start + 1;
+                }
+            }
+        }
+    }
+
+    if (expr != NULL &&
+        expr->type == EXPR_VAR_ID &&
+        ctx != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            if (node->type != NULL)
+            {
+                int capacity = codegen_shortstring_capacity_from_type_local(node->type);
+                if (capacity > 0)
+                    return capacity;
+
+                if (kgpc_type_is_procedure(node->type) &&
+                    node->type->info.proc_info.return_type != NULL)
+                {
+                    KgpcType *ret_type = node->type->info.proc_info.return_type;
+                    capacity = codegen_shortstring_capacity_from_type_local(ret_type);
+                    if (capacity > 0)
+                        return capacity;
+                }
+            }
+
+            int start = 0;
+            int end = -1;
+            hashnode_get_array_bounds(node, &start, &end);
+            if (end >= start && end >= 0)
+                return end - start + 1;
+        }
+    }
+
+    if (expr != NULL && expr->type == EXPR_VAR_ID &&
+        (expr_get_type_tag(expr) == SHORTSTRING_TYPE ||
+         codegen_expr_is_shortstring_value_local(expr)))
+    {
+        int scope_depth = 0;
+        StackNode_t *stack_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+        if (stack_node != NULL)
+        {
+            int slot_size = stack_node->element_size > 0 ?
+                stack_node->element_size : stack_node->size;
+            if (slot_size > 1)
+                return slot_size;
+        }
+    }
+
+    return 256;
+}
+
+/* Call kgpc_string_to_shortstring(dest, src, size) to copy string to ShortString */
+static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *addr_reg, Register_t *value_reg, int array_size)
+{
+    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (array_size <= 1)
+        array_size = 256;
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
+        int value_in_rcx = (value_reg->reg_id == REG_RCX);
+        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
+
+        if (value_in_rcx && addr_in_rdx)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
+        }
+        else if (value_in_rcx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rdx)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
+        int value_in_rdi = (value_reg->reg_id == REG_RDI);
+        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
+
+        if (value_in_rdi && addr_in_rsi)
+        {
+            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
+        }
+        else if (value_in_rdi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else if (addr_in_rsi)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+    Register_t *dest_reg, int dest_size, Register_t *src_reg)
+{
+    char buffer[128];
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rsi\n", dest_size);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_shortstring");
+    free_arg_regs();
+    return inst_list;
+}
+
+/* Assign a static array value (copy all elements) */
+static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
+        return inst_list;
+
+    int dest_lower = 0, dest_upper = -1, dest_is_shortstring = 0;
+    int src_lower = 0, src_upper = -1, src_is_shortstring = 0;
+    int dest_is_char_array = codegen_get_char_array_bounds(dest_expr, ctx,
+        &dest_lower, &dest_upper, &dest_is_shortstring);
+    int src_is_char_array = codegen_get_char_array_bounds(src_expr, ctx,
+        &src_lower, &src_upper, &src_is_shortstring);
+    int src_is_shortstring_value = codegen_expr_is_shortstring_value_local(src_expr);
+    int dest_is_shortstring_value = codegen_expr_is_shortstring_value_local(dest_expr);
+
+    if ((dest_is_shortstring || dest_is_shortstring_value) &&
+        (src_is_shortstring || src_is_shortstring_value))
+    {
+        Register_t *dest_reg = NULL;
+        Register_t *src_reg = NULL;
+
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        int dest_size = codegen_get_shortstring_capacity(dest_expr, ctx);
+        if (dest_size <= 1)
+            dest_size = 256;
+
+        inst_list = codegen_call_shortstring_copy(inst_list, ctx, dest_reg, dest_size, src_reg);
+
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return inst_list;
+    }
+
+    if ((dest_is_shortstring || dest_is_shortstring_value) && src_is_char_array && !src_is_shortstring)
+    {
+        Register_t *dest_reg = NULL;
+        Register_t *src_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL || src_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        int src_len = src_upper - src_lower + 1;
+        int dest_size = dest_upper - dest_lower + 1;
+        if (src_len < 0) src_len = 0;
+        if (dest_size < 0) dest_size = 0;
+        inst_list = codegen_call_char_array_to_shortstring(inst_list, ctx,
+            dest_reg, src_reg, src_len, dest_size);
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return inst_list;
+    }
+
+    if (dest_is_char_array && !dest_is_shortstring && (src_is_shortstring || src_is_shortstring_value))
+    {
+        Register_t *dest_reg = NULL;
+        Register_t *src_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL || src_reg == NULL)
+        {
+            if (dest_reg != NULL) free_reg(get_reg_stack(), dest_reg);
+            if (src_reg != NULL) free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+
+        int dest_size = dest_upper - dest_lower + 1;
+        if (dest_size < 0) dest_size = 0;
+        inst_list = codegen_call_shortstring_to_char_array(inst_list, ctx,
+            dest_reg, src_reg, dest_size);
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return inst_list;
+    }
+
+    /* Calculate array size: (upper - lower + 1) * element_size */
+    long long lower_bound = expr_get_array_lower_bound(dest_expr);
+    long long upper_bound = expr_get_array_upper_bound(dest_expr);
+    long long num_elements = -1;
+    if (upper_bound >= lower_bound)
+        num_elements = upper_bound - lower_bound + 1;
+
+    if (num_elements <= 0)
+    {
+        if (dest_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_array(dest_expr->resolved_kgpc_type))
+        {
+            int start = 0;
+            int end = -1;
+            if (kgpc_type_get_array_bounds(dest_expr->resolved_kgpc_type, &start, &end) == 0 &&
+                end >= start)
+            {
+                num_elements = (long long)end - (long long)start + 1;
+            }
+        }
+
+        if (num_elements <= 0)
+        {
+            if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+                dest_expr->expr_data.id != NULL)
+            {
+                HashNode_t *var_node = NULL;
+                if (FindSymbol(&var_node, ctx->symtab, dest_expr->expr_data.id) != 0 &&
+                    var_node != NULL && var_node->type != NULL &&
+                    kgpc_type_is_array(var_node->type))
+                {
+                    int start = 0;
+                    int end = -1;
+                    if (kgpc_type_get_array_bounds(var_node->type, &start, &end) == 0 &&
+                        end >= start)
+                    {
+                        num_elements = (long long)end - (long long)start + 1;
+                    }
+                }
+            }
+        }
+
+        /* For pointer dereference destinations (ptr^), extract the array
+         * type from the pointer's pointee.  This handles typed constant
+         * arrays assigned through pointer indirection. */
+        if (num_elements <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+        {
+            KgpcType *deref_type = dest_expr->resolved_kgpc_type;
+            /* Try the inner pointer expression's pointee type */
+            if (deref_type == NULL || !kgpc_type_is_array(deref_type))
+            {
+                struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+                if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+                    kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+                {
+                    KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                        ptr_expr->resolved_kgpc_type, ctx->symtab);
+                    if (pointee != NULL && kgpc_type_is_array(pointee))
+                        deref_type = pointee;
+                }
+                /* Also check pointer_subtype_id on the inner expression */
+                if ((deref_type == NULL || !kgpc_type_is_array(deref_type)) &&
+                    ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+                    ctx->symtab != NULL)
+                {
+                    HashNode_t *type_node = NULL;
+                    if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                        type_node != NULL && type_node->type != NULL &&
+                        kgpc_type_is_array(type_node->type))
+                    {
+                        deref_type = type_node->type;
+                    }
+                }
+            }
+            if (deref_type != NULL && kgpc_type_is_array(deref_type))
+            {
+                int start = 0;
+                int end = -1;
+                if (kgpc_type_get_array_bounds(deref_type, &start, &end) == 0 &&
+                    end >= start)
+                {
+                    num_elements = (long long)end - (long long)start + 1;
+                }
+            }
+        }
+
+        if (num_elements <= 0)
+        {
+            struct RecordField *field = codegen_lookup_record_field(dest_expr);
+            if (field != NULL && field->is_array && !field->array_is_open)
+                num_elements = (long long)field->array_end - (long long)field->array_start + 1;
+            else if (field != NULL)
+            {
+                struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+                if (alias != NULL && alias->is_array && !alias->is_open_array &&
+                    alias->array_end >= alias->array_start)
+                {
+                    num_elements = (long long)alias->array_end - (long long)alias->array_start + 1;
+                }
+            }
+        }
+
+        /* Last resort: derive element count from source array literal.
+         * Typed constant arrays (e.g. `const foo: array[0..N] of Rec = (...)`)
+         * may have unresolved bounds on the destination when the type comes from
+         * a cross-unit declaration.  The source literal knows its own length. */
+        if (num_elements <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->expr_data.array_literal_data.element_count > 0)
+        {
+            num_elements = src_expr->expr_data.array_literal_data.element_count;
+        }
+    }
+
+    long long element_size = expr_get_array_element_size(dest_expr, ctx);
+
+    /* For pointer dereference destinations, extract element size from
+     * the pointer's pointee array type. */
+    if (element_size <= 0 && dest_expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *ptr_expr = dest_expr->expr_data.pointer_deref_data.pointer_expr;
+        KgpcType *arr_type = NULL;
+        if (ptr_expr != NULL && ptr_expr->resolved_kgpc_type != NULL &&
+            kgpc_type_is_pointer(ptr_expr->resolved_kgpc_type))
+        {
+            KgpcType *pointee = kgpc_type_resolve_pointer_pointee(
+                ptr_expr->resolved_kgpc_type, ctx->symtab);
+            if (pointee != NULL && kgpc_type_is_array(pointee))
+                arr_type = pointee;
+        }
+        if (arr_type == NULL && ptr_expr != NULL && ptr_expr->pointer_subtype_id != NULL &&
+            ctx->symtab != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, ctx->symtab, ptr_expr->pointer_subtype_id) != 0 &&
+                type_node != NULL && type_node->type != NULL &&
+                kgpc_type_is_array(type_node->type))
+            {
+                arr_type = type_node->type;
+            }
+        }
+        if (arr_type != NULL)
+        {
+            long long elem_size = kgpc_type_get_array_element_size(arr_type);
+            if (elem_size <= 0)
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(arr_type,
+                    ctx->symtab);
+                if (elem_type != NULL)
+                    elem_size = kgpc_type_sizeof(elem_type);
+            }
+            if (elem_size > 0)
+                element_size = elem_size;
+        }
+    }
+
+    if (element_size <= 0)
+    {
+        if (dest_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+            dest_expr->expr_data.id != NULL)
+        {
+            HashNode_t *var_node = NULL;
+            if (FindSymbol(&var_node, ctx->symtab, dest_expr->expr_data.id) != 0 &&
+                var_node != NULL && var_node->type != NULL &&
+                kgpc_type_is_array(var_node->type))
+            {
+                long long elem_size = kgpc_type_get_array_element_size(var_node->type);
+                if (elem_size <= 0)
+                {
+                    KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(var_node->type,
+                        ctx->symtab);
+                    if (elem_type != NULL)
+                        elem_size = kgpc_type_sizeof(elem_type);
+                }
+                if (elem_size > 0)
+                    element_size = elem_size;
+            }
+        }
+    }
+
+    if (element_size <= 0)
+    {
+        struct RecordField *field = codegen_lookup_record_field(dest_expr);
+        if (field != NULL)
+        {
+            long long computed = 0;
+            if (codegen_sizeof_type_reference(ctx, field->array_element_type,
+                    field->array_element_type_id, field->nested_record, &computed) == 0 &&
+                computed > 0)
+            {
+                element_size = computed;
+            }
+            else
+            {
+                struct TypeAlias *alias = codegen_lookup_type_alias(ctx, field->type_id);
+                if (alias != NULL && alias->is_array)
+                {
+                    long long alias_size = 0;
+                    if (codegen_sizeof_type_reference(ctx, alias->array_element_type,
+                            alias->array_element_type_id, NULL, &alias_size) == 0 &&
+                        alias_size > 0)
+                    {
+                        element_size = alias_size;
+                    }
+                }
+            }
+        }
+
+        /* Fall back to the source array literal's element size when the
+         * destination type information is incomplete (cross-unit typed consts). */
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL &&
+            src_expr->array_element_size > 0)
+        {
+            element_size = src_expr->array_element_size;
+        }
+        if (element_size <= 0 && src_expr != NULL &&
+            src_expr->type == EXPR_ARRAY_LITERAL)
+        {
+            element_size = expr_get_array_element_size(src_expr, ctx);
+        }
+
+        if (element_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for array assignment.");
+            return inst_list;
+        }
+    }
+    
+    long long array_size = num_elements * element_size;
+    if (array_size <= 0)
+    {
+        struct RecordField *field = codegen_lookup_record_field(dest_expr);
+        if (field != NULL)
+        {
+            long long total_size = 0;
+            if (codegen_sizeof_type_reference(ctx, field->type, field->type_id,
+                    field->nested_record, &total_size) == 0 && total_size > 0)
+            {
+                array_size = total_size;
+                num_elements = 1;
+                element_size = total_size;
+            }
+        }
+
+        /* Last resort: use sizeof the destination's resolved type directly.
+         * This handles pointer dereference destinations (ptr^) where the
+         * pointee is a fixed-size type (e.g. char array behind PChar). */
+        if (array_size <= 0 && dest_expr->resolved_kgpc_type != NULL)
+        {
+            long long type_size = kgpc_type_sizeof(dest_expr->resolved_kgpc_type);
+            if (type_size > 0)
+            {
+                array_size = type_size;
+                num_elements = 1;
+                element_size = type_size;
+            }
+        }
+
+        if (array_size <= 0)
+        {
+            const char *dest_name = NULL;
+            if (dest_expr != NULL)
+            {
+                if (dest_expr->type == EXPR_VAR_ID)
+                    dest_name = dest_expr->expr_data.id;
+                else if (dest_expr->type == EXPR_RECORD_ACCESS)
+                    dest_name = dest_expr->expr_data.record_access_data.field_id;
+            }
+            codegen_report_error(ctx,
+                "ERROR: Invalid array size for assignment: %lld elements * %lld bytes = %lld total (dest_type=%d%s%s).",
+                num_elements, element_size, array_size,
+                dest_expr != NULL ? dest_expr->type : -1,
+                dest_name != NULL ? " dest=" : "",
+                dest_name != NULL ? dest_name : "");
+            return inst_list;
+        }
+    }
+
+    /* Check if the source expression involves a function call.
+     * If so, we need to spill the destination address to a stack slot
+     * because the function call can clobber any caller-saved register. */
+    int src_has_function_call = (src_expr->type == EXPR_FUNCTION_CALL) ||
+        expr_returns_sret(src_expr);
+    StackNode_t *dest_spill_slot = NULL;
+    char buffer[128];
+
+    /* Get address of destination */
+    Register_t *dest_reg = NULL;
+    inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+    if (codegen_had_error(ctx) || dest_reg == NULL)
+    {
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    /* If source has a function call, spill destination address to preserve it */
+    if (src_has_function_call)
+    {
+        dest_spill_slot = add_l_t("array_dest_spill");
+        if (dest_spill_slot != NULL)
+        {
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                dest_reg->bit_64, dest_spill_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    /* Get address of source */
+    Register_t *src_reg = NULL;
+    inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+    if (codegen_had_error(ctx) || src_reg == NULL)
+    {
+        if (src_reg != NULL)
+            free_reg(get_reg_stack(), src_reg);
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    /* If we spilled the destination, reload it */
+    if (dest_spill_slot != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_spill_slot->offset, dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    /* Get register for size */
+    Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (count_reg == NULL)
+    {
+        free_reg(get_reg_stack(), dest_reg);
+        free_reg(get_reg_stack(), src_reg);
+        return codegen_fail_register(ctx, inst_list, NULL,
+            "ERROR: Unable to allocate register for array copy size.");
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", array_size, count_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+
+    /* Call memcpy(dest, src, size) */
+    /* NOTE: We must be careful about register conflicts. Load arguments in reverse order
+     * to avoid clobbering source registers before we've moved them to their destinations. */
+    if (codegen_target_is_windows())
+    {
+        /* Windows calling convention: RCX (dest), RDX (src), R8 (size)
+         * Move in reverse order to avoid conflicts */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        /* System V calling convention: RDI (dest), RSI (src), RDX (size)
+         * Move in reverse order to avoid conflicts */
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_memcpy_wrapper\n");
+    inst_list = add_inst(inst_list, buffer);
+
+    free_reg(get_reg_stack(), count_reg);
+    free_reg(get_reg_stack(), src_reg);
+    free_reg(get_reg_stack(), dest_reg);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
+    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
+        return inst_list;
+
+    if (src_expr->type == EXPR_RECORD_CONSTRUCTOR && src_expr->record_type == NULL)
+    {
+        struct RecordType *dest_record = dest_expr->record_type;
+        if (dest_record == NULL)
+        {
+            KgpcType *dest_type = expr_get_kgpc_type(dest_expr);
+            if (dest_type != NULL && kgpc_type_is_record(dest_type))
+                dest_record = kgpc_type_get_record(dest_type);
+        }
+        if (dest_record != NULL)
+        {
+            src_expr->record_type = dest_record;
+            if (src_expr->resolved_kgpc_type == NULL)
+            {
+                KgpcType *record_type = create_record_type(dest_record);
+                if (record_type != NULL)
+                {
+                    src_expr->resolved_kgpc_type = record_type;
+                }
+            }
+        }
+    }
+
+    /* Check if this is a class assignment. Classes are represented as pointers,
+     * so we should just copy the pointer value, not the entire instance. */
+    int is_class_assignment = 0;
+    if (dest_expr->record_type != NULL && record_type_is_class(dest_expr->record_type))
+        is_class_assignment = 1;
+    else if (src_expr->record_type != NULL && record_type_is_class(src_expr->record_type))
+        is_class_assignment = 1;
+
+    if (is_class_assignment)
+    {
+        /* For class variables, just copy the pointer (8 bytes) */
+        Register_t *dest_reg = NULL;
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        Register_t *src_reg = NULL;
+        
+        /* For function calls (especially constructors), the expression evaluates to the pointer value directly.
+         * For variable references, we need to load the pointer from the variable.
+         * We check if the source is addressable to distinguish these cases. */
+        int src_is_addressable = codegen_expr_is_addressable(src_expr);
+        
+        if (src_is_addressable)
+        {
+            /* Source is a variable - get its address and load the pointer value */
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            /* Load the pointer value from the variable */
+            Register_t *ptr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (ptr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class pointer copy.");
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", src_reg->bit_64, ptr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", ptr_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), ptr_reg);
+            free_reg(get_reg_stack(), src_reg);
+        }
+        else
+        {
+            /* Source is a function call or expression that returns the pointer value directly.
+             * Save dest_reg to the stack before evaluating source to prevent it from being clobbered. */
+            StackNode_t *dest_save_slot = add_l_x("__class_assign_dest__", CODEGEN_POINTER_SIZE_BYTES);
+            if (dest_save_slot == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to reserve stack slot for class assignment destination.");
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                dest_reg->bit_64, dest_save_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), dest_reg);
+            dest_reg = NULL;
+            
+            /* Evaluate the source expression (constructor call) */
+            inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &src_reg);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                return inst_list;
+            }
+            
+            /* Restore dest_reg from stack */
+            dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (dest_reg == NULL)
+            {
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for class assignment destination restore.");
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                dest_save_slot->offset, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* src_reg already contains the pointer value - store it directly */
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n", src_reg->bit_64, dest_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            free_reg(get_reg_stack(), src_reg);
+        }
+        
+        if (dest_reg != NULL)
+            free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    long long record_size = 0;
+    int size_status = codegen_get_record_size(ctx, dest_expr, &record_size);
+    if (size_status != 0)
+    {
+        size_status = codegen_get_record_size(ctx, src_expr, &record_size);
+        if (size_status != 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine record size for assignment.");
+            return inst_list;
+        }
+    }
+
+    if (record_size <= 0)
+        return inst_list;
+
+    Register_t *dest_reg = NULL;
+    Register_t *src_reg = NULL;
+    int dest_is_char_set = expr_is_char_set_ctx(dest_expr, ctx);
+
+    /* Default(TRecord) intrinsic: zero-initialize destination without evaluating source */
+    if (src_expr->is_default_initializer)
+    {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+        const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+        const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", dest_reg->bit_64, dest_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorq\t%%rax, %%rax\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", val_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "memset");
+        free_arg_regs();
+
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    if (!codegen_expr_is_addressable(src_expr))
+    {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        if (src_expr->type == EXPR_FUNCTION_CALL)
+        {
+            struct KgpcType *func_type =
+                codegen_resolve_function_call_type(ctx, src_expr, NULL);
+
+            const char *func_mangled_name = src_expr->expr_data.function_call_data.mangled_id;
+            const char *func_id = src_expr->expr_data.function_call_data.id;
+
+            /* Handle string function results assigned to ShortString arrays.
+             * Functions like Copy return AnsiString, which needs to be converted to ShortString format. */
+            int dest_is_shortstring = codegen_expr_is_shortstring_array(dest_expr);
+            int src_returns_string = (expr_get_type_tag(src_expr) == STRING_TYPE);
+            
+            if (dest_is_shortstring && src_returns_string)
+            {
+                char buffer[128];
+                
+                /* Save dest address to stack before calling function (function call may clobber registers) */
+                StackNode_t *dest_save_slot = add_l_x("__shortstring_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                if (dest_save_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to reserve stack slot for ShortString destination.");
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    dest_reg->bit_64, dest_save_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), dest_reg);
+                dest_reg = NULL;
+                
+                /* Call the function to get the string result in %rax */
+                inst_list = codegen_expr(src_expr, inst_list, ctx);
+                if (codegen_had_error(ctx))
+                {
+                    return inst_list;
+                }
+                
+                /* The string result is in %rax - save it to a register */
+                Register_t *value_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (value_reg == NULL)
+                {
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for string-to-shortstring conversion.");
+                }
+                
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                
+                /* Reload dest address from stack */
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for ShortString destination address.");
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    dest_save_slot->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                
+                /* Get ShortString capacity */
+                int array_size = codegen_get_shortstring_capacity(dest_expr, ctx);
+                if (array_size <= 1)
+                    array_size = 256;
+                
+                /* Call the string-to-shortstring conversion */
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
+                
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+
+            int call_returns_sret = expr_returns_sret(src_expr);
+            int call_returns_record = call_returns_sret;
+            if (!call_returns_record && func_type != NULL &&
+                kgpc_type_is_procedure(func_type))
+            {
+                KgpcType *return_type = kgpc_type_get_return_type(func_type);
+                if (return_type != NULL &&
+                    (kgpc_type_is_record(return_type) ||
+                     (return_type->kind == TYPE_KIND_ARRAY &&
+                      !kgpc_type_is_dynamic_array(return_type)) ||
+                     kgpc_type_is_shortstring(return_type) ||
+                     (return_type->type_alias != NULL && return_type->type_alias->is_shortstring)))
+                {
+                    call_returns_record = 1;
+                }
+            }
+            if (!call_returns_record && src_expr->resolved_kgpc_type != NULL)
+            {
+                KgpcType *src_type = src_expr->resolved_kgpc_type;
+                if (kgpc_type_is_record(src_type) ||
+                    (src_type->kind == TYPE_KIND_ARRAY &&
+                     !kgpc_type_is_dynamic_array(src_type)) ||
+                    (src_type->type_alias != NULL && src_type->type_alias->is_shortstring))
+                {
+                    call_returns_record = 1;
+                }
+            }
+            if (!call_returns_sret && call_returns_record && record_size > 8)
+                call_returns_sret = 1;
+
+            /* Detect constructors from semantic checker flag. */
+            int is_constructor = src_expr->expr_data.function_call_data.is_constructor_call;
+
+            /* Constructor chaining: when a constructor calls another constructor
+             * on Self (e.g., Create(name, mode, 438) inside TFileStream.Create),
+             * it's a regular method call, not a new allocation. The first arg
+             * will be Self, injected by the semantic checker. */
+            if (is_constructor && src_expr->expr_data.function_call_data.args_expr != NULL)
+            {
+                struct Expression *first_arg = (struct Expression *)
+                    src_expr->expr_data.function_call_data.args_expr->cur;
+                if (first_arg != NULL && first_arg->type == EXPR_VAR_ID &&
+                    first_arg->expr_data.id != NULL &&
+                    pascal_identifier_equals(first_arg->expr_data.id, "Self"))
+                    is_constructor = 0;
+            }
+            /* Record static factories can also be named Create but they are not
+             * class constructors and must not use constructor/sret calling paths. */
+            if (is_constructor && expr_has_type_tag(dest_expr, RECORD_TYPE))
+                is_constructor = 0;
+            if (is_constructor && func_type != NULL && kgpc_type_is_procedure(func_type))
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(func_type);
+                if (ret_type == NULL ||
+                    !kgpc_type_is_pointer(ret_type) ||
+                    ret_type->info.points_to == NULL ||
+                    !kgpc_type_is_record(ret_type->info.points_to) ||
+                    !record_type_is_class(ret_type->info.points_to->info.record_info))
+                {
+                    is_constructor = 0;
+                }
+            }
+
+            if (call_returns_record || is_constructor)
+            {
+                /* For constructors, allocate heap memory and initialize VMT */
+                Register_t *constructor_instance_reg = NULL;
+                if (is_constructor)
+                {
+                    /* Get the class type from the source expression or first argument */
+                    struct RecordType *class_record = src_expr->record_type;
+                    if (class_record == NULL && src_expr->resolved_kgpc_type != NULL)
+                    {
+                        KgpcType *src_type = src_expr->resolved_kgpc_type;
+                        if (src_type->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.record_info;
+                        else if (src_type->kind == TYPE_KIND_POINTER &&
+                                 src_type->info.points_to != NULL &&
+                                 src_type->info.points_to->kind == TYPE_KIND_RECORD)
+                            class_record = src_type->info.points_to->info.record_info;
+                    }
+                    
+                    if (class_record == NULL)
+                    {
+                        ListNode_t *first_arg = src_expr->expr_data.function_call_data.args_expr;
+                        if (first_arg != NULL && first_arg->cur != NULL)
+                        {
+                            struct Expression *class_expr = (struct Expression *)first_arg->cur;
+                            if (class_expr != NULL)
+                            {
+                                class_record = class_expr->record_type;
+                                if (class_record == NULL && class_expr->resolved_kgpc_type != NULL)
+                                {
+                                    KgpcType *arg_type = class_expr->resolved_kgpc_type;
+                                    if (arg_type->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.record_info;
+                                    else if (arg_type->kind == TYPE_KIND_POINTER &&
+                                             arg_type->info.points_to != NULL &&
+                                             arg_type->info.points_to->kind == TYPE_KIND_RECORD)
+                                        class_record = arg_type->info.points_to->info.record_info;
+                                }
+                                if (class_record == NULL && class_expr->type == EXPR_VAR_ID &&
+                                    class_expr->expr_data.id != NULL && ctx != NULL && ctx->symtab != NULL)
+                                {
+                                    HashNode_t *class_node = NULL;
+                                    if (FindSymbol(&class_node, ctx->symtab, class_expr->expr_data.id) != 0 &&
+                                        class_node != NULL && class_node->hash_type == HASHTYPE_TYPE &&
+                                        class_node->type != NULL)
+                                    {
+                                        if (class_node->type->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.record_info;
+                                        else if (class_node->type->kind == TYPE_KIND_POINTER &&
+                                                 class_node->type->info.points_to != NULL &&
+                                                 class_node->type->info.points_to->kind == TYPE_KIND_RECORD)
+                                            class_record = class_node->type->info.points_to->info.record_info;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (class_record != NULL && record_type_is_class(class_record))
+                    {
+                        /* Get the size of the class instance */
+                        long long instance_size = 0;
+                        if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
+                            instance_size > 0)
+                        {
+                            char buffer[128];
+                            
+                            /* Save dest_reg to stack since it will be clobbered by function calls */
+                            StackNode_t *dest_save_slot = add_l_x("__constructor_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                            if (dest_save_slot == NULL)
+                            {
+                                codegen_report_error(ctx,
+                                    "ERROR: Unable to reserve stack slot for constructor destination.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                dest_reg->bit_64, dest_save_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Allocate zero-initialized memory using calloc
+                             * This ensures all fields (including dynamic array descriptors) start at zero */
+                            const char *size_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+                            const char *count_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+                            
+                            /* calloc(1, instance_size) - allocate 1 element of size instance_size */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                                instance_size, count_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            inst_list = codegen_vect_reg(inst_list, 0);
+                            inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
+                            free_arg_regs();
+                            
+                            /* Save the allocated instance pointer */
+                            constructor_instance_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                            if (constructor_instance_reg == NULL)
+                            {
+                                codegen_report_error(ctx, 
+                                    "ERROR: Unable to allocate register for constructor instance.");
+                                free_reg(get_reg_stack(), dest_reg);
+                                return inst_list;
+                            }
+                            
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n",
+                                constructor_instance_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Initialize VMT pointer in the allocated instance */
+                            /* Use the class's TYPEINFO label instead of evaluating the first argument
+                             * to avoid side effects like storing into the destination variable */
+                            const char *class_type_id = class_record->type_id;
+                            if (class_type_id != NULL)
+                            {
+                                /* Load VMT address */
+                                Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                if (vmt_reg != NULL)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %s\n",
+                                        class_type_id, vmt_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    
+                                    /* Store VMT into first 8 bytes of instance */
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                        vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+
+                                    free_reg(get_reg_stack(), vmt_reg);
+                                }
+
+                                inst_list = codegen_emit_interface_vtable_slot_init(
+                                    inst_list, ctx, class_record, class_type_id,
+                                    constructor_instance_reg);
+                            }
+
+                            /* Pass remaining arguments starting from index 1 (skip class type argument) */
+                            inst_list = codegen_pass_arguments(
+                                src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                                func_type, func_id, 1, src_expr, 0);
+
+                            /* Emit Self AFTER argument evaluation so that arg-passing code
+                             * cannot clobber the Self register (e.g. %rdi on SysV). */
+                            const char *self_arg_reg = current_arg_reg64(0);
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
+                                constructor_instance_reg->bit_64, self_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Call the constructor */
+                            snprintf(buffer, sizeof(buffer), "\tcall\t%s\n", func_mangled_name);
+                            inst_list = add_inst(inst_list, buffer);
+                            inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                            codegen_release_function_call_mangled_id(src_expr);
+                            
+                            /* Restore dest_reg from stack */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                dest_save_slot->offset, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            /* Store the instance pointer in the destination */
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                constructor_instance_reg->bit_64, dest_reg->bit_64);
+                            inst_list = add_inst(inst_list, buffer);
+                            
+                            free_reg(get_reg_stack(), constructor_instance_reg);
+                            free_reg(get_reg_stack(), dest_reg);
+                            return inst_list;
+                        }
+                    }
+                }
+                
+                /* Normal record-returning function via sret pointer. */
+                if (call_returns_sret)
+                {
+                    const char *ret_ptr_reg = current_arg_reg64(0);
+                    if (ret_ptr_reg == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to determine register for record return pointer.");
+                        free_reg(get_reg_stack(), dest_reg);
+                        return inst_list;
+                    }
+
+                    StackNode_t *dest_save_slot = add_l_x("__record_call_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                    if (dest_save_slot == NULL)
+                    {
+                        codegen_report_error(ctx,
+                            "ERROR: Unable to reserve stack slot for record return destination.");
+                        free_reg(get_reg_stack(), dest_reg);
+                        return inst_list;
+                    }
+
+                    char buffer[128];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        dest_reg->bit_64, dest_save_slot->offset);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    inst_list = codegen_pass_arguments(
+                        src_expr->expr_data.function_call_data.args_expr, inst_list, ctx,
+                        func_type,
+                        src_expr->expr_data.function_call_data.id, 1, src_expr, 0);
+
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        dest_save_slot->offset, ret_ptr_reg);
+                    inst_list = add_inst(inst_list, buffer);
+
+                    /* For class method calls, dereference Self to get VMT pointer.
+                     * Self is at arg reg 1 (after SRET buffer at arg reg 0). */
+                    if (src_expr->expr_data.function_call_data.is_class_method_call)
+                    {
+                        const char *self_reg = current_arg_reg64(1);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n", self_reg, self_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    snprintf(buffer, sizeof(buffer), "\tcall\t%s\n",
+                        src_expr->expr_data.function_call_data.mangled_id);
+                    inst_list = add_inst(inst_list, buffer);
+                    inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+                    codegen_release_function_call_mangled_id(src_expr);
+
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+            }
+
+            /* Small record returns (<= 8 bytes) are returned in registers, not via sret.
+             * Materialize the call result into a register and store the raw value bytes
+             * directly into the destination record slot. */
+            if (!is_constructor && call_returns_record && record_size <= 8)
+            {
+                StackNode_t *dest_save_slot = add_l_x("__small_record_dest__", CODEGEN_POINTER_SIZE_BYTES);
+                if (dest_save_slot == NULL)
+                {
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                char buffer[128];
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                    dest_reg->bit_64, dest_save_slot->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), dest_reg);
+                dest_reg = NULL;
+
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(src_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    if (value_reg != NULL)
+                        free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
+
+                dest_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (dest_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    dest_save_slot->offset, dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                if (record_size <= 4)
+                    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, (%s)\n",
+                        value_reg->bit_32, dest_reg->bit_64);
+                else
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                        value_reg->bit_64, dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+        }
+
+        /* Handle character set literals - they generate a temporary buffer address */
+        if (src_expr->type == EXPR_SET &&
+            (expr_is_char_set_ctx(src_expr, ctx) || dest_is_char_set))
+        {
+            /* Generate the set literal, which returns an address register */
+            Register_t *src_reg = NULL;
+            int force_char_literal = dest_is_char_set && !expr_is_char_set_ctx(src_expr, ctx);
+            inst_list = codegen_set_literal(src_expr, inst_list, ctx, &src_reg, force_char_literal);
+            if (codegen_had_error(ctx) || src_reg == NULL)
+            {
+                if (src_reg != NULL)
+                    free_reg(get_reg_stack(), src_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+
+            /* src_reg now contains the address of the temporary set buffer */
+            /* Copy 32 bytes from src to dest using memcpy */
+            Register_t *count_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (count_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                free_reg(get_reg_stack(), src_reg);
+                return codegen_fail_register(ctx, inst_list, NULL,
+                    "ERROR: Unable to allocate register for set copy size.");
+            }
+
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t$32, %s\n", count_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", count_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+
+            snprintf(buffer, sizeof(buffer), "\tcall\tkgpc_memcpy_wrapper\n");
+            inst_list = add_inst(inst_list, buffer);
+
+            free_reg(get_reg_stack(), count_reg);
+            free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            free_arg_regs();
+            return inst_list;
+        }
+
+        /* Handle character set binary operations (union, intersection, difference).
+         * For 32-byte sets (set of Char), the standard binary codegen only operates
+         * on 4 bytes. Use runtime helpers that operate on all 32 bytes. */
+        if (dest_is_char_set &&
+            (src_expr->type == EXPR_ADDOP || src_expr->type == EXPR_MULOP))
+        {
+            const char *runtime_func = NULL;
+            struct Expression *left_op = NULL;
+            struct Expression *right_op = NULL;
+
+            if (src_expr->type == EXPR_ADDOP)
+            {
+                int op = src_expr->expr_data.addop_data.addop_type;
+                left_op = src_expr->expr_data.addop_data.left_expr;
+                right_op = src_expr->expr_data.addop_data.right_term;
+                if (op == PLUS)
+                    runtime_func = "kgpc_set_union_256";
+                else if (op == MINUS)
+                    runtime_func = "kgpc_set_diff_256";
+            }
+            else /* EXPR_MULOP */
+            {
+                int op = src_expr->expr_data.mulop_data.mulop_type;
+                left_op = src_expr->expr_data.mulop_data.left_term;
+                right_op = src_expr->expr_data.mulop_data.right_factor;
+                if (op == STAR)
+                    runtime_func = "kgpc_set_intersect_256";
+            }
+
+            if (runtime_func != NULL && left_op != NULL && right_op != NULL)
+            {
+                /* Get addresses of both operands */
+                Register_t *left_reg = NULL;
+                Register_t *right_reg = NULL;
+
+                inst_list = codegen_char_set_address(left_op, inst_list, ctx, &left_reg);
+                if (codegen_had_error(ctx) || left_reg == NULL)
+                {
+                    if (left_reg != NULL) free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                inst_list = codegen_char_set_address(right_op, inst_list, ctx, &right_reg);
+                if (codegen_had_error(ctx) || right_reg == NULL)
+                {
+                    if (right_reg != NULL) free_reg(get_reg_stack(), right_reg);
+                    free_reg(get_reg_stack(), left_reg);
+                    free_reg(get_reg_stack(), dest_reg);
+                    return inst_list;
+                }
+
+                /* Call runtime_func(dest, left, right) */
+                char buffer[128];
+                if (codegen_target_is_windows())
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r8\n", right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", left_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", right_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, runtime_func);
+
+                free_reg(get_reg_stack(), right_reg);
+                free_reg(get_reg_stack(), left_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                free_arg_regs();
+                return inst_list;
+            }
+        }
+
+        /* Handle string literal assigned to ShortString (record-like) destination.
+         * ShortStrings use Pascal format: length byte at index 0, followed by string data.
+         * We need to convert the C string literal to a ShortString. */
+        if (src_expr->type == EXPR_STRING)
+        {
+            const char *str_data = src_expr->expr_data.string;
+            int str_len = (str_data != NULL) ? (int)strlen(str_data) : 0;
+            if (str_len > 255) str_len = 255;  /* ShortString max length */
+            
+            /* Put string literal in rodata section */
+            const char *readonly_section = codegen_readonly_section_directive();
+            char label[64];
+            snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+            
+            char escaped_str[CODEGEN_MAX_INST_BUF];
+            escape_string(escaped_str, str_data ? str_data : "", sizeof(escaped_str));
+            /* Use larger buffer for string literal embedding to avoid truncation */
+            char str_literal_buffer[CODEGEN_MAX_INST_BUF + 128];
+            snprintf(str_literal_buffer, sizeof(str_literal_buffer), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                     readonly_section, label, escaped_str, codegen_text_section_resume());
+            inst_list = add_inst(inst_list, str_literal_buffer);
+            
+            /* Get register for string literal address */
+            Register_t *str_addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (str_addr_reg == NULL)
+            {
+                free_reg(get_reg_stack(), dest_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for string literal address.");
+                return inst_list;
+            }
+            
+            /* Load string literal address */
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label, str_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            
+            /* Call kgpc_string_to_shortstring(dest, src, max_len).
+             * Use the declared capacity for string[N] (= N+1) to avoid
+             * overflowing smaller-than-255 buffers.
+             * codegen_get_shortstring_capacity returns 256 when capacity
+             * cannot be determined; codegen_call_string_to_shortstring
+             * also guards against invalid (<= 1) values internally. */
+            int dest_capacity = codegen_get_shortstring_capacity(dest_expr, ctx);
+            if (codegen_target_is_windows())
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%r8d\n", dest_capacity);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", str_addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", dest_capacity);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_shortstring");
+            free_arg_regs();
+            
+            free_reg(get_reg_stack(), str_addr_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        {
+            Register_t *src_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_addr_reg);
+            if (!codegen_had_error(ctx) && src_addr_reg != NULL)
+            {
+                char copy_buf[128];
+                long long size_val = record_size > 0 ? record_size : 1;
+
+                if (codegen_target_is_windows())
+                {
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdx\n", src_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %%r8\n", size_val);
+                    inst_list = add_inst(inst_list, copy_buf);
+                }
+                else
+                {
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t%s, %%rsi\n", src_addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buf);
+                    snprintf(copy_buf, sizeof(copy_buf), "\tmovq\t$%lld, %%rdx\n", size_val);
+                    inst_list = add_inst(inst_list, copy_buf);
+                }
+
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_memcpy_wrapper");
+                free_arg_regs();
+
+                free_reg(get_reg_stack(), src_addr_reg);
+                free_reg(get_reg_stack(), dest_reg);
+                return inst_list;
+            }
+            if (src_addr_reg != NULL)
+                free_reg(get_reg_stack(), src_addr_reg);
+        }
+
+        codegen_report_error(ctx,
+            "ERROR: Unsupported record-valued source expression (type=%d).", src_expr ? src_expr->type : -1);
+        free_reg(get_reg_stack(), dest_reg);
+        return inst_list;
+    }
+
+    int src_has_call = expr_contains_function_call(src_expr) ||
+        (src_expr != NULL && src_expr->type == EXPR_RECORD_CONSTRUCTOR);
+    int dest_has_call = expr_contains_function_call(dest_expr) ||
+        (dest_expr != NULL && dest_expr->type == EXPR_RECORD_CONSTRUCTOR);
+    StackNode_t *dest_spill = NULL;
+    StackNode_t *src_spill = NULL;
+
+    if (src_has_call && !dest_has_call)
+    {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+        dest_spill = add_l_t_bytes("record_copy_dest_spill", 8);
+        if (dest_spill == NULL)
+        {
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+        char spill_buf[128];
+        snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+            dest_reg->bit_64, dest_spill->offset);
+        inst_list = add_inst(inst_list, spill_buf);
+
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+        snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t-%d(%%rbp), %s\n",
+            dest_spill->offset, dest_reg->bit_64);
+        inst_list = add_inst(inst_list, spill_buf);
+    }
+    else if (dest_has_call && !src_has_call)
+    {
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+        src_spill = add_l_t_bytes("record_copy_src_spill", 8);
+        if (src_spill == NULL)
+        {
+            free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+        char spill_buf[128];
+        snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+            src_reg->bit_64, src_spill->offset);
+        inst_list = add_inst(inst_list, spill_buf);
+
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            free_reg(get_reg_stack(), src_reg);
+            return inst_list;
+        }
+        snprintf(spill_buf, sizeof(spill_buf), "\tmovq\t-%d(%%rbp), %s\n",
+            src_spill->offset, src_reg->bit_64);
+        inst_list = add_inst(inst_list, spill_buf);
+    }
+    else
+    {
+        inst_list = codegen_address_for_expr(dest_expr, inst_list, ctx, &dest_reg);
+        if (codegen_had_error(ctx) || dest_reg == NULL)
+        {
+            if (dest_reg != NULL)
+                free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &src_reg);
+        if (codegen_had_error(ctx) || src_reg == NULL)
+        {
+            if (src_reg != NULL)
+                free_reg(get_reg_stack(), src_reg);
+            free_reg(get_reg_stack(), dest_reg);
+            return inst_list;
+        }
+    }
+
+    char buffer[128];
+
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%r8\n", record_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", dest_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %%rdx\n", record_size);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+
+    free_reg(get_reg_stack(), dest_reg);
+    free_reg(get_reg_stack(), src_reg);
+    free_arg_regs();
+    return inst_list;
+}
+
+static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
+    struct Expression *array_expr)
+{
+    if (array_node != NULL && array_node->element_size > 0)
+        return array_node->element_size;
+
+    if (array_expr != NULL)
+    {
+        long long elem_size = expr_get_array_element_size(array_expr, ctx);
+        if (elem_size <= 0 && ctx != NULL && ctx->symtab != NULL)
+        {
+            KgpcType *array_type = expr_get_kgpc_type(array_expr);
+            if (array_type != NULL && kgpc_type_is_array(array_type))
+            {
+                KgpcType *elem_type = kgpc_type_get_array_element_type_resolved(array_type, ctx->symtab);
+                if (elem_type != NULL)
+                    elem_size = kgpc_type_sizeof(elem_type);
+            }
+        }
+        if (elem_size > 0 && elem_size <= INT_MAX)
+            return (int)elem_size;
+    }
+
+    const char *array_name = NULL;
+    if (array_expr != NULL && array_expr->type == EXPR_VAR_ID)
+        array_name = array_expr->expr_data.id;
+
+    if (ctx != NULL)
+    {
+        if (array_name != NULL)
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for dynamic array %s.", array_name);
+        else
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine element size for dynamic array.");
+    }
+
+    return DOUBLEWORD;
+}
+
+static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label)
+{
+    if (ctx == NULL || exit_label == NULL || continue_label == NULL)
+        return 0;
+    if (ctx->loop_capacity == ctx->loop_depth)
+    {
+        int new_capacity = (ctx->loop_capacity > 0) ? ctx->loop_capacity * 2 : 4;
+        CodeGenLoopFrame *new_frames = (CodeGenLoopFrame *)realloc(ctx->loop_frames, sizeof(CodeGenLoopFrame) * (size_t)new_capacity);
+        if (new_frames == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate loop stack.\n");
+            return 0;
+        }
+        for (int i = ctx->loop_capacity; i < new_capacity; ++i) {
+            new_frames[i].label = NULL;
+            new_frames[i].continue_label = NULL;
+            new_frames[i].finally_depth = 0;
+        }
+        ctx->loop_frames = new_frames;
+        ctx->loop_capacity = new_capacity;
+    }
+    ctx->loop_frames[ctx->loop_depth].label = strdup(exit_label);
+    ctx->loop_frames[ctx->loop_depth].continue_label = strdup(continue_label);
+    ctx->loop_frames[ctx->loop_depth].finally_depth = ctx->finally_depth;
+    if (ctx->loop_frames[ctx->loop_depth].label == NULL || ctx->loop_frames[ctx->loop_depth].continue_label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to duplicate loop labels.\n");
+        if (ctx->loop_frames[ctx->loop_depth].label != NULL) free(ctx->loop_frames[ctx->loop_depth].label);
+        if (ctx->loop_frames[ctx->loop_depth].continue_label != NULL) free(ctx->loop_frames[ctx->loop_depth].continue_label);
+        return 0;
+    }
+    ctx->loop_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_loop(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return;
+    ctx->loop_depth -= 1;
+    if (ctx->loop_frames[ctx->loop_depth].label != NULL)
+    {
+        free(ctx->loop_frames[ctx->loop_depth].label);
+        ctx->loop_frames[ctx->loop_depth].label = NULL;
+    }
+    if (ctx->loop_frames[ctx->loop_depth].continue_label != NULL)
+    {
+        free(ctx->loop_frames[ctx->loop_depth].continue_label);
+        ctx->loop_frames[ctx->loop_depth].continue_label = NULL;
+    }
+}
+
+static struct RecordType *codegen_resolve_with_record_type(struct Expression *context_expr,
+    SymTab_t *symtab)
+{
+    if (context_expr == NULL || symtab == NULL)
+        return NULL;
+    if (context_expr->record_type != NULL)
+        return context_expr->record_type;
+    KgpcType *expr_type = expr_get_kgpc_type(context_expr);
+    if (expr_type != NULL)
+    {
+        if (kgpc_type_is_record(expr_type))
+            return kgpc_type_get_record(expr_type);
+        if (kgpc_type_is_pointer(expr_type) &&
+            expr_type->info.points_to != NULL &&
+            kgpc_type_is_record(expr_type->info.points_to))
+            return kgpc_type_get_record(expr_type->info.points_to);
+    }
+    if (context_expr->type == EXPR_VAR_ID && context_expr->expr_data.id != NULL)
+    {
+        HashNode_t *var_node = NULL;
+        if (FindSymbol(&var_node, symtab, context_expr->expr_data.id) != 0 && var_node != NULL)
+        {
+            struct RecordType *rec = get_record_type_from_node(var_node);
+            if (rec != NULL)
+                return rec;
+            if (var_node->type != NULL)
+            {
+                if (kgpc_type_is_record(var_node->type))
+                    return kgpc_type_get_record(var_node->type);
+                if (kgpc_type_is_pointer(var_node->type) &&
+                    var_node->type->info.points_to != NULL &&
+                    kgpc_type_is_record(var_node->type->info.points_to))
+                    return kgpc_type_get_record(var_node->type->info.points_to);
+            }
+        }
+    }
+    if (context_expr->resolved_kgpc_type != NULL)
+    {
+        if (kgpc_type_is_record(context_expr->resolved_kgpc_type))
+            return kgpc_type_get_record(context_expr->resolved_kgpc_type);
+        if (kgpc_type_is_pointer(context_expr->resolved_kgpc_type) &&
+            context_expr->resolved_kgpc_type->info.points_to != NULL &&
+            kgpc_type_is_record(context_expr->resolved_kgpc_type->info.points_to))
+            return kgpc_type_get_record(context_expr->resolved_kgpc_type->info.points_to);
+    }
+    if (context_expr->type == EXPR_TYPECAST)
+    {
+        const char *target_id = context_expr->expr_data.typecast_data.target_type_id;
+        if (target_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, symtab, target_id) != 0 && type_node != NULL)
+                return get_record_type_from_node(type_node);
+        }
+    }
+    if (context_expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *call_id = context_expr->expr_data.function_call_data.id;
+        if (call_id != NULL)
+        {
+            HashNode_t *type_node = NULL;
+            if (FindSymbol(&type_node, symtab, call_id) != 0 && type_node != NULL)
+                return get_record_type_from_node(type_node);
+        }
+    }
+    if (context_expr->type == EXPR_RECORD_ACCESS)
+    {
+        struct RecordField *field = codegen_lookup_record_field_expr(context_expr, NULL);
+        if (field != NULL)
+        {
+            if (field->nested_record != NULL)
+                return field->nested_record;
+            if (field->type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, symtab, field->type_id) != 0 &&
+                    type_node != NULL)
+                {
+                    struct RecordType *rec = get_record_type_from_node(type_node);
+                    if (rec != NULL)
+                        return rec;
+                }
+            }
+            if (field->pointer_type_id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, symtab, field->pointer_type_id) != 0 &&
+                    type_node != NULL)
+                {
+                    struct RecordType *rec = get_record_type_from_node(type_node);
+                    if (rec != NULL)
+                        return rec;
+                }
+            }
+        }
+    }
+    if (context_expr->pointer_subtype_id != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindSymbol(&type_node, symtab, context_expr->pointer_subtype_id) != 0 &&
+            type_node != NULL)
+            return get_record_type_from_node(type_node);
+    }
+    return NULL;
+}
+
+static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
+    struct RecordType *record_type)
+{
+    if (ctx == NULL || record_type == NULL)
+        return 0;
+    if (ctx->with_capacity == ctx->with_depth)
+    {
+        int new_capacity = (ctx->with_capacity > 0) ? ctx->with_capacity * 2 : 4;
+        CodeGenWithContext *new_stack = (CodeGenWithContext *)realloc(
+            ctx->with_stack, sizeof(CodeGenWithContext) * (size_t)new_capacity);
+        if (new_stack == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate WITH context stack.\n");
+            return 0;
+        }
+        ctx->with_stack = new_stack;
+        ctx->with_capacity = new_capacity;
+    }
+    ctx->with_stack[ctx->with_depth].context_expr = context_expr;
+    ctx->with_stack[ctx->with_depth].record_type = record_type;
+    ctx->with_depth += 1;
+    return 1;
+}
+
+static void codegen_with_pop(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->with_depth <= 0)
+        return;
+    ctx->with_depth -= 1;
+    ctx->with_stack[ctx->with_depth].context_expr = NULL;
+    ctx->with_stack[ctx->with_depth].record_type = NULL;
+}
+
+static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return NULL;
+    return ctx->loop_frames[ctx->loop_depth - 1].label;
+}
+
+static const char *codegen_current_loop_continue(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return NULL;
+    return ctx->loop_frames[ctx->loop_depth - 1].continue_label;
+}
+
+static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
+    int *out_is_real, int *out_size)
+{
+    if (out_is_real != NULL)
+        *out_is_real = 0;
+    if (out_size != NULL)
+        *out_size = 0;
+    if (ctx == NULL || symtab == NULL)
+        return;
+
+    const char *lookup_id = ctx->current_subprogram_id;
+    const char *lookup_mangled = ctx->current_subprogram_mangled;
+    if (lookup_id == NULL && lookup_mangled == NULL)
+        return;
+
+    HashNode_t *func_node = NULL;
+    if (lookup_id != NULL)
+        FindSymbol(&func_node, symtab, lookup_id);
+
+    if (func_node == NULL && lookup_id != NULL && lookup_mangled != NULL)
+    {
+        ListNode_t *matches = FindAllIdents(symtab, lookup_id);
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, lookup_mangled) == 0)
+            {
+                func_node = candidate;
+                break;
+            }
+        }
+        if (matches != NULL)
+            DestroyList(matches);
+    }
+
+    if (func_node != NULL &&
+        func_node->type != NULL)
+    {
+        KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
+        if (return_type == NULL)
+            return;
+
+        if (return_type->kind == TYPE_KIND_PRIMITIVE)
+        {
+            int tag = kgpc_type_get_primitive_tag(return_type);
+            if (out_is_real != NULL && (tag == REAL_TYPE || tag == EXTENDED_TYPE))
+                *out_is_real = 1;
+            if (out_size != NULL)
+                *out_size = codegen_statement_return_storage_size(return_type);
+        }
+        else if (return_type->kind == TYPE_KIND_POINTER)
+        {
+            if (out_size != NULL)
+                *out_size = 8;
+        }
+        else if (return_type->kind == TYPE_KIND_RECORD)
+        {
+            /* Use actual record size for movl vs movq decision */
+            if (out_size != NULL)
+            {
+                *out_size = codegen_statement_return_storage_size(return_type);
+            }
+        }
+    }
+}
+
+static int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (ctx == NULL || symtab == NULL)
+        return 0;
+
+    const char *lookup_id = ctx->current_subprogram_id;
+    const char *lookup_mangled = ctx->current_subprogram_mangled;
+    if (lookup_id == NULL && lookup_mangled == NULL)
+        return 0;
+
+    HashNode_t *func_node = NULL;
+    if (lookup_id != NULL)
+        FindSymbol(&func_node, symtab, lookup_id);
+
+    if (func_node == NULL && lookup_id != NULL && lookup_mangled != NULL)
+    {
+        ListNode_t *matches = FindAllIdents(symtab, lookup_id);
+        for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
+        {
+            HashNode_t *candidate = (HashNode_t *)cur->cur;
+            if (candidate != NULL && candidate->mangled_id != NULL &&
+                strcmp(candidate->mangled_id, lookup_mangled) == 0)
+            {
+                func_node = candidate;
+                break;
+            }
+        }
+        if (matches != NULL)
+            DestroyList(matches);
+    }
+
+    if (func_node == NULL || func_node->type == NULL)
+        return 0;
+
+    KgpcType *return_type = kgpc_type_get_return_type(func_node->type);
+    if (return_type != NULL)
+    {
+        int capacity = codegen_shortstring_capacity_from_type_local(return_type);
+        if (capacity > 0)
+            return capacity;
+    }
+
+    if (func_node->type->kind == TYPE_KIND_PROCEDURE)
+    {
+        const char *ret_id = func_node->type->info.proc_info.return_type_id;
+        if (ret_id == NULL && func_node->type->info.proc_info.definition != NULL)
+            ret_id = func_node->type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
+        if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+            return 256;
+    }
+
+    return 0;
+}
+
+static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
+    int *out_is_real, int *out_size)
+{
+    if (out_is_real != NULL)
+        *out_is_real = 0;
+    if (out_size != NULL)
+        *out_size = 0;
+    if (ctx == NULL)
+        return;
+
+    StackNode_t *return_var = ctx->current_return_slot;
+    if (return_var == NULL)
+        return;
+
+    long long size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
+    if (out_size != NULL && size > 0 && size <= INT_MAX)
+        *out_size = (int)size;
+
+    if (out_is_real != NULL && return_var->element_size == 10)
+        *out_is_real = 1;
+}
+
+static int codegen_current_loop_finally_depth(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->loop_depth <= 0)
+        return 0;
+    return ctx->loop_frames[ctx->loop_depth - 1].finally_depth;
+}
+
+static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
+{
+    if (ctx == NULL)
+        return 0;
+    if (ctx->finally_capacity == ctx->finally_depth)
+    {
+        int new_capacity = (ctx->finally_capacity > 0) ? ctx->finally_capacity * 2 : 4;
+        CodeGenFinallyFrame *new_stack = (CodeGenFinallyFrame *)realloc(
+            ctx->finally_stack, sizeof(CodeGenFinallyFrame) * (size_t)new_capacity);
+        if (new_stack == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate finally stack.\n");
+            return 0;
+        }
+        memset(new_stack + ctx->finally_capacity, 0,
+            sizeof(CodeGenFinallyFrame) * (size_t)(new_capacity - ctx->finally_capacity));
+        ctx->finally_stack = new_stack;
+        ctx->finally_capacity = new_capacity;
+    }
+    ctx->finally_stack[ctx->finally_depth].statements = statements;
+    ctx->finally_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_finally(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->finally_depth <= 0)
+        return;
+    ctx->finally_depth -= 1;
+    ctx->finally_stack[ctx->finally_depth].statements = NULL;
+}
+
+static int codegen_has_finally(const CodeGenContext *ctx)
+{
+    return (ctx != NULL && ctx->finally_depth > 0);
+}
+
+static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *entry_label, const char *target_label)
+{
+    if (!codegen_has_finally(ctx))
+        return inst_list;
+
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%s:\n", entry_label);
+    inst_list = add_inst(inst_list, buffer);
+
+    int frame_index = ctx->finally_depth - 1;
+    CodeGenFinallyFrame frame = ctx->finally_stack[frame_index];
+
+    ctx->finally_depth -= 1;
+    if (frame.statements != NULL)
+        inst_list = codegen_statement_list(frame.statements, inst_list, ctx, symtab);
+    ctx->finally_stack[frame_index] = frame;
+    ctx->finally_depth += 1;
+
+    if (target_label != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", target_label);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    return inst_list;
+}
+
+static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
+    SymTab_t *symtab, const char *target_label, int limit_depth)
+{
+    if (!codegen_has_finally(ctx))
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
+
+    int depth = ctx->finally_depth;
+    if (depth <= 0)
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
+
+    /* If limit_depth is negative, unwind everything (e.g. Exit) */
+    if (limit_depth < 0)
+        limit_depth = 0;
+
+    /* If current depth is already at or below limit, just jump */
+    if (depth <= limit_depth)
+        return gencode_jmp(NORMAL_JMP, 0, (char *)target_label, inst_list);
+
+    int unwind_count = depth - limit_depth;
+    char (*entry_labels)[18] = (char (*)[18])malloc(sizeof(*entry_labels) * (size_t)unwind_count);
+    if (entry_labels == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to allocate finally labels.\n");
+        return inst_list;
+    }
+
+    for (int i = 0; i < unwind_count; ++i)
+        gen_label(entry_labels[i], 18, ctx);
+
+    inst_list = gencode_jmp(NORMAL_JMP, 0, entry_labels[unwind_count - 1], inst_list);
+
+    int original_depth = ctx->finally_depth;
+    /* Iterate from top of stack down to limit_depth */
+    for (int i = unwind_count - 1; i >= 0; --i)
+    {
+        const char *target = (i == 0) ? target_label : entry_labels[i - 1];
+        const char *entry = entry_labels[i];
+
+        /* codegen_emit_finally_block will emit the entry label, so we don't emit it here */
+        inst_list = codegen_emit_finally_block(ctx, inst_list, symtab, entry, target);
+    }
+    ctx->finally_depth = original_depth;
+
+    free(entry_labels);
+    return inst_list;
+}
+
+static int codegen_push_except(CodeGenContext *ctx, const char *label)
+{
+    if (ctx == NULL || label == NULL)
+        return 0;
+    if (ctx->except_capacity == ctx->except_depth)
+    {
+        int new_capacity = (ctx->except_capacity > 0) ? ctx->except_capacity * 2 : 4;
+        CodeGenExceptFrame *new_frames = (CodeGenExceptFrame *)realloc(ctx->except_frames, sizeof(CodeGenExceptFrame) * (size_t)new_capacity);
+        if (new_frames == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Unable to allocate except stack.\n");
+            return 0;
+        }
+        for (int i = ctx->except_capacity; i < new_capacity; ++i) {
+            new_frames[i].label = NULL;
+            new_frames[i].finally_depth = 0;
+        }
+        ctx->except_frames = new_frames;
+        ctx->except_capacity = new_capacity;
+    }
+    ctx->except_frames[ctx->except_depth].label = strdup(label);
+    ctx->except_frames[ctx->except_depth].finally_depth = ctx->finally_depth;
+    if (ctx->except_frames[ctx->except_depth].label == NULL)
+    {
+        codegen_report_error(ctx, "ERROR: Unable to duplicate except label.\n");
+        return 0;
+    }
+    ctx->except_depth += 1;
+    return 1;
+}
+
+static void codegen_pop_except(CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return;
+    ctx->except_depth -= 1;
+    if (ctx->except_frames[ctx->except_depth].label != NULL)
+    {
+        free(ctx->except_frames[ctx->except_depth].label);
+        ctx->except_frames[ctx->except_depth].label = NULL;
+    }
+}
+
+static const char *codegen_current_except_label(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return NULL;
+    return ctx->except_frames[ctx->except_depth - 1].label;
+}
+
+static int codegen_current_except_finally_depth(const CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->except_depth <= 0)
+        return 0;
+    return ctx->except_frames[ctx->except_depth - 1].finally_depth;
+}
+
+static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
+    CodeGenContext *ctx, SymTab_t *symtab)
+{
+    if (stmts == NULL) {
+        if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+            fprintf(stderr, "[CodeGen] codegen_statement_list: stmts is NULL\n");
+        }
+        return inst_list;
+    }
+
+    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: starting\n");
+    }
+
+    ListNode_t *node = stmts;
+    while (node != NULL)
+    {
+        if (node->type == LIST_STMT)
+        {
+            struct Statement *stmt = (struct Statement *)node->cur;
+            if (stmt != NULL) {
+                if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+                    fprintf(stderr, "[CodeGen]   generating statement type=%d line=%d\n", stmt->type, stmt->line_num);
+                }
+                inst_list = codegen_stmt(stmt, inst_list, ctx, symtab);
+            }
+        }
+        node = node->next;
+    }
+    
+    if (kgpc_getenv("KGPC_DEBUG_CODEGEN") != NULL) {
+        fprintf(stderr, "[CodeGen] codegen_statement_list: finished\n");
+    }
+
+    return inst_list;
+}
+
+/* Codegen for a statement */
