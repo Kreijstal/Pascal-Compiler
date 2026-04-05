@@ -1,4 +1,6 @@
-static ListNode_t *convert_identifier_list(ast_t **cursor) {
+#include "../from_cparser_internal.h"
+
+ListNode_t *convert_identifier_list(ast_t **cursor) {
     ListBuilder builder;
     list_builder_init(&builder);
     ast_t *cur = *cursor;
@@ -13,12 +15,8 @@ static ListNode_t *convert_identifier_list(ast_t **cursor) {
 }
 
 static ListNode_t *convert_field_decl(ast_t *field_decl_node);
-static void convert_record_members(ast_t *node, ListBuilder *builder,
-    ListBuilder *property_builder, ListBuilder *method_template_builder);
 static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t **out_tag_fields);
 static struct VariantBranch *convert_variant_branch(ast_t *branch_node);
-static void qualify_param_decl_types(ListNode_t *params, const char *owner_full,
-    const char *owner_outer, SymTab_t *symtab);
 
 static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (field_decl_node == NULL || field_decl_node->typ != PASCAL_T_FIELD_DECL)
@@ -363,7 +361,7 @@ static struct ClassProperty *convert_property_decl(ast_t *property_node)
     return property;
 }
 
-static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *property_node)
+void append_module_property_wrappers(ListNode_t **subprograms, ast_t *property_node)
 {
     if (subprograms == NULL || property_node == NULL)
         return;
@@ -516,7 +514,7 @@ static void append_module_property_wrappers(ListNode_t **subprograms, ast_t *pro
     free(prop);
 }
 
-static void annotate_method_template(struct MethodTemplate *method_template, ast_t *method_ast)
+void annotate_method_template(struct MethodTemplate *method_template, ast_t *method_ast)
 {
     if (method_template == NULL || method_ast == NULL)
         return;
@@ -770,7 +768,7 @@ static int extract_interface_delegation_info(ast_t *method_decl_node,
     return 1;
 }
 
-static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
+struct MethodTemplate *create_method_template(ast_t *method_decl_node)
 {
     if (method_decl_node == NULL)
         return NULL;
@@ -833,7 +831,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
     return template;
 }
 
-static void destroy_method_template_instance(struct MethodTemplate *template)
+void destroy_method_template_instance(struct MethodTemplate *template)
 {
     if (template == NULL)
         return;
@@ -1065,7 +1063,7 @@ static void collect_class_members(ast_t *node, const char *class_name,
     }
 }
 
-static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *class_node, ListNode_t **nested_types_out) {
+struct RecordType *convert_class_type_ex(const char *class_name, ast_t *class_node, ListNode_t **nested_types_out) {
     if (class_node == NULL)
         return NULL;
 
@@ -1252,7 +1250,7 @@ static struct RecordType *convert_class_type_ex(const char *class_name, ast_t *c
     return record;
 }
 
-static struct RecordType *convert_interface_type_ex(const char *interface_name, ast_t *interface_node, ListNode_t **nested_types_out)
+struct RecordType *convert_interface_type_ex(const char *interface_name, ast_t *interface_node, ListNode_t **nested_types_out)
 {
     if (interface_node == NULL)
         return NULL;
@@ -1754,7 +1752,7 @@ static struct VariantPart *convert_variant_part(ast_t *variant_node, ListNode_t 
     return variant;
 }
 
-static void convert_record_members(ast_t *node, ListBuilder *builder,
+void convert_record_members(ast_t *node, ListBuilder *builder,
     ListBuilder *property_builder, ListBuilder *method_template_builder) {
     for (ast_t *cur = node; cur != NULL; cur = cur->next) {
         if (cur->typ == PASCAL_T_FIELD_DECL) {
@@ -1855,7 +1853,7 @@ static void convert_record_members(ast_t *node, ListBuilder *builder,
 }
 
 /* Helper: scan record AST for nested type sections (Delphi advanced records) */
-static void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_builder) {
+void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_builder) {
     for (ast_t *cur = node; cur != NULL; cur = cur->next) {
         ast_t *unwrapped = unwrap_pascal_node(cur);
         if (unwrapped == NULL)
@@ -1876,7 +1874,7 @@ static void collect_record_nested_types(ast_t *node, ListBuilder *nested_type_bu
     }
 }
 
-static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t **nested_types_out) {
+struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t **nested_types_out) {
     if (record_node == NULL)
         return NULL;
 
@@ -2091,11 +2089,11 @@ static struct RecordType *convert_record_type_ex(ast_t *record_node, ListNode_t 
     return record;
 }
 
-static struct RecordType *convert_record_type(ast_t *record_node) {
+struct RecordType *convert_record_type(ast_t *record_node) {
     return convert_record_type_ex(record_node, NULL);
 }
 
-static char *pop_last_identifier(ListNode_t **ids) {
+char *pop_last_identifier(ListNode_t **ids) {
     if (ids == NULL || *ids == NULL)
         return NULL;
 
@@ -2116,7 +2114,7 @@ static char *pop_last_identifier(ListNode_t **ids) {
     return value;
 }
 
-static ListNode_t *convert_param(ast_t *param_node) {
+ListNode_t *convert_param(ast_t *param_node) {
     if (param_node == NULL || param_node->typ != PASCAL_T_PARAM)
         return NULL;
 
@@ -2288,7 +2286,7 @@ static ListNode_t *convert_param(ast_t *param_node) {
     return list_builder_finish(&result_builder);
 }
 
-static ListNode_t *convert_param_list(ast_t **cursor) {
+ListNode_t *convert_param_list(ast_t **cursor) {
     ListNode_t *params = NULL;
     ast_t *cur = *cursor;
     ast_t *slow = cur;
@@ -2428,7 +2426,7 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     return proc_type;
 }
 
-static bool is_var_hint_clause(ast_t *node) {
+bool is_var_hint_clause(ast_t *node) {
     if (node == NULL || node->typ != PASCAL_T_NONE)
         return false;
     ast_t *child = node->child;
@@ -2442,7 +2440,7 @@ static bool is_var_hint_clause(ast_t *node) {
         || strcasecmp(name, "library") == 0;
 }
 
-static ast_t *absolute_clause_target(ast_t *node) {
+ast_t *absolute_clause_target(ast_t *node) {
     if (node == NULL || node->typ != PASCAL_T_ABSOLUTE_CLAUSE)
         return NULL;
     /* The PASCAL_T_ABSOLUTE_CLAUSE node contains the target identifier as its child
@@ -2458,12 +2456,10 @@ static ast_t *absolute_clause_target(ast_t *node) {
  * - PASCAL_T_ABSOLUTE_CLAUSE: absolute variable aliasing (e.g., "X: Integer absolute Y")
  * - PASCAL_T_IDENTIFIER: trailing identifiers that aren't initializers (legacy case)
  */
-static int is_node_to_skip_as_initializer(ast_t *node) {
+int is_node_to_skip_as_initializer(ast_t *node) {
     if (node == NULL)
         return 0;
     return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
 
-static int select_range_primitive_tag(const TypeInfo *info);
-static long long compute_range_storage_size(const TypeInfo *info);
 

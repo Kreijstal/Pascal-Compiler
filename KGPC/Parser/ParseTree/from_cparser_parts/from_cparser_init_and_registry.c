@@ -1,3 +1,5 @@
+#include "../from_cparser_internal.h"
+
 /* ============================================================================
  * Circular Reference Detection for AST Traversal
  * ============================================================================
@@ -6,22 +8,9 @@
  * provides a visited set mechanism to detect and prevent such loops.
  */
 
-/* Simple hash set implementation for tracking visited AST nodes */
-#define VISITED_SET_INITIAL_CAPACITY 256
-#define VISITED_SET_LOAD_FACTOR 0.75
+/* VisitedSetEntry, VisitedSet typedefs moved to from_cparser_internal.h */
 
-typedef struct VisitedSetEntry {
-    ast_t *node;
-    struct VisitedSetEntry *next;
-} VisitedSetEntry;
-
-typedef struct {
-    VisitedSetEntry **buckets;
-    size_t capacity;
-    size_t size;
-} VisitedSet;
-
-static int kgpc_debug_subprog_enabled(void)
+int kgpc_debug_subprog_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
@@ -29,7 +18,7 @@ static int kgpc_debug_subprog_enabled(void)
     return cached;
 }
 
-static int kgpc_debug_decl_scan_enabled(void)
+int kgpc_debug_decl_scan_enabled(void)
 {
     static int cached = -1;
     if (cached == -1)
@@ -37,23 +26,19 @@ static int kgpc_debug_decl_scan_enabled(void)
     return cached;
 }
 
-struct TypeHelperMapping
-{
-    char *helper_id;
-    char *base_type_id;
-};
+/* struct TypeHelperMapping moved to from_cparser_internal.h */
 
-static ListNode_t *type_helper_mappings = NULL;
-static ast_t *g_interface_type_section_ast = NULL;
-static ast_t *g_implementation_type_section_ast = NULL;
-static ast_t *g_interface_section_ast = NULL;
-static ast_t *g_implementation_section_ast = NULL;
+ListNode_t *type_helper_mappings = NULL;
+ast_t *g_interface_type_section_ast = NULL;
+ast_t *g_implementation_type_section_ast = NULL;
+ast_t *g_interface_section_ast = NULL;
+ast_t *g_implementation_section_ast = NULL;
 /* Method context for expression conversion (e.g., bare "inherited" expressions). */
-static const char *g_current_method_name = NULL;
+const char *g_current_method_name = NULL;
 /* When instantiating a generic method template, this points to the owning
  * RecordType so that type_name_is_class_like can answer without touching the
  * (possibly freed) raw parser AST globals. */
-static struct RecordType *g_instantiate_record = NULL;
+struct RecordType *g_instantiate_record = NULL;
 
 /* Global registry of enum type ranges across unit loads.
  * Persists across calls to tree_from_pascal_ast so that enum types
@@ -93,7 +78,7 @@ static void enum_ht_init(void) {
     g_enum_ht.size = 0;
 }
 
-static void enum_registry_add(const char *name, int start, int end) {
+void enum_registry_add(const char *name, int start, int end) {
     if (name == NULL) return;
     enum_ht_init();
     size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
@@ -115,7 +100,7 @@ static void enum_registry_add(const char *name, int start, int end) {
     g_enum_ht.size++;
 }
 
-static int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
+int enum_registry_lookup(const char *name, int *out_start, int *out_end) {
     if (name == NULL || g_enum_ht.buckets == NULL) return -1;
     size_t idx = enum_ht_hash(name, g_enum_ht.capacity);
     for (EnumTypeEntry *e = g_enum_ht.buckets[idx]; e != NULL; e = e->next) {
@@ -128,7 +113,7 @@ static int enum_registry_lookup(const char *name, int *out_start, int *out_end) 
     return -1;
 }
 
-static void enum_registry_free(void) {
+void enum_registry_free(void) {
     if (g_enum_ht.buckets == NULL) return;
     for (size_t i = 0; i < g_enum_ht.capacity; i++) {
         EnumTypeEntry *e = g_enum_ht.buckets[i];
@@ -146,10 +131,9 @@ static void enum_registry_free(void) {
 }
 
 /* Forward declaration for const expression evaluator (defined later in the file). */
-static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth);
 
 /* Scan a PASCAL_T_TYPE_SECTION and register all enumerated and subrange types in the global registry. */
-static void enum_registry_scan_type_section(ast_t *type_section) {
+void enum_registry_scan_type_section(ast_t *type_section) {
     if (type_section == NULL) return;
     for (ast_t *decl = type_section->child; decl != NULL; decl = decl->next) {
         if (decl->typ != PASCAL_T_TYPE_DECL) continue;
@@ -184,7 +168,7 @@ static void enum_registry_scan_type_section(ast_t *type_section) {
     }
 }
 
-static int is_external_directive(const char *directive)
+int is_external_directive(const char *directive)
 {
     if (directive == NULL)
         return 0;
@@ -192,7 +176,7 @@ static int is_external_directive(const char *directive)
             strcasecmp(directive, "weakexternal") == 0);
 }
 
-static void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
+void register_type_helper_mapping(const char *helper_id, const char *base_type_id)
 {
     if (helper_id == NULL || base_type_id == NULL)
         return;
@@ -232,7 +216,7 @@ static void register_type_helper_mapping(const char *helper_id, const char *base
     type_helper_mappings = node;
 }
 
-static const char *lookup_type_helper_base(const char *helper_id)
+const char *lookup_type_helper_base(const char *helper_id)
 {
     if (helper_id == NULL)
         return NULL;
@@ -249,7 +233,7 @@ static const char *lookup_type_helper_base(const char *helper_id)
     return NULL;
 }
 
-static const char *ast_symbol_name(ast_t *node)
+const char *ast_symbol_name(ast_t *node)
 {
     if (node == NULL)
         return NULL;
@@ -258,7 +242,7 @@ static const char *ast_symbol_name(ast_t *node)
     return NULL;
 }
 
-static VisitedSet *visited_set_create(void) {
+VisitedSet *visited_set_create(void) {
     VisitedSet *set = (VisitedSet *)malloc(sizeof(VisitedSet));
     if (set == NULL) return NULL;
     
@@ -273,7 +257,7 @@ static VisitedSet *visited_set_create(void) {
     return set;
 }
 
-static void visited_set_destroy(VisitedSet *set) {
+void visited_set_destroy(VisitedSet *set) {
     if (set == NULL) return;
     
     for (size_t i = 0; i < set->capacity; i++) {
@@ -295,7 +279,7 @@ static size_t visited_set_hash(ast_t *node, size_t capacity) {
     return (size_t)(addr % capacity);
 }
 
-static bool visited_set_contains(VisitedSet *set, ast_t *node) {
+bool visited_set_contains(VisitedSet *set, ast_t *node) {
     if (set == NULL || node == NULL) return false;
     
     size_t index = visited_set_hash(node, set->capacity);
@@ -332,7 +316,7 @@ static void visited_set_rehash(VisitedSet *set) {
     set->capacity = new_capacity;
 }
 
-static bool visited_set_add(VisitedSet *set, ast_t *node) {
+bool visited_set_add(VisitedSet *set, ast_t *node) {
     if (set == NULL || node == NULL) return false;
 
     /* Check if already present */
@@ -369,7 +353,7 @@ static bool visited_set_add(VisitedSet *set, ast_t *node) {
          __iter_tmp = node_var->next)
 
 /* Helper to check if continuing iteration is safe */
-static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
+bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     if (node == NULL) return false;
     if (node == ast_nil) return false;
     
@@ -383,66 +367,16 @@ static inline bool is_safe_to_continue(VisitedSet *visited, ast_t *node) {
     return true;
 }
 
-typedef struct {
-    int is_array;
-    int is_array_of_const;
-    int start;
-    int end;
-    int element_type;
-    char *element_type_id;
-    TypeRef *element_type_ref;
-    struct KgpcType *element_kgpc_type; /* For nested array elements (array of array of ...) */
-    int is_shortstring;
-    int is_open_array;
-    ListNode_t *array_dimensions;
-    char *array_dim_start_str;  /* Symbolic lower bound */
-    char *array_dim_end_str;    /* Symbolic upper bound */
-    int array_dims_parsed;
-    int is_pointer;
-    int pointer_type;
-    char *pointer_type_id;
-    TypeRef *pointer_type_ref;
-    int is_set;
-    int set_element_type;
-    char *set_element_type_id;
-    TypeRef *set_element_type_ref;
-    int is_enum_set;           /* Set with inline anonymous enum as element type */
-    ListNode_t *inline_enum_values; /* Enum values for inline enum in set type */
-    int is_enum;
-    int enum_is_scoped;
-    int enum_has_explicit_values;
-    ListNode_t *enum_literals;
-    int is_file;
-    int file_type;
-    char *file_type_id;
-    TypeRef *file_type_ref;
-    int is_record;
-    struct RecordType *record_type;
-    int is_generic_specialization;
-    char *generic_base_name;
-    ListNode_t *generic_type_args;
-    TypeRef *type_ref;
-    int is_range;
-    int range_known;
-    long long range_start;
-    long long range_end;
-    char *range_start_str;  /* Symbolic lower bound for range aliases */
-    char *range_end_str;    /* Symbolic upper bound for range aliases */
-    int is_class_reference;  /* For "class of T" types */
-    char *unresolved_index_type;  /* Deferred enum index type name */
-} TypeInfo;
+/* TypeInfo typedef moved to from_cparser_internal.h */
 
 /* Frontend error counter for errors during AST to tree conversion */
-static int g_frontend_error_count = 0;
-static char *g_scoped_enum_source_path = NULL;
-static char *g_scoped_enum_source_buffer = NULL;
-static size_t g_scoped_enum_source_length = 0;
+int g_frontend_error_count = 0;
+char *g_scoped_enum_source_path = NULL;
+char *g_scoped_enum_source_buffer = NULL;
+size_t g_scoped_enum_source_length = 0;
 
-static ast_t *unwrap_pascal_node(ast_t *node);
-static char *dup_symbol(ast_t *node);
-static char *extract_external_name_from_node(ast_t *node);
 
-static int split_absolute_target(const char *absolute_target,
+int split_absolute_target(const char *absolute_target,
     char **out_base, char **out_field)
 {
     if (out_base != NULL)
@@ -478,7 +412,7 @@ static int split_absolute_target(const char *absolute_target,
     return 1;
 }
 
-static char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count)
+char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count)
 {
     if (qid == NULL || qid->segments == NULL || count <= 0 || count > qid->count)
         return NULL;
@@ -504,7 +438,7 @@ static char *qualified_ident_join_prefix(const QualifiedIdent *qid, int count)
     return out;
 }
 
-static TypeRef *type_ref_from_single_name(const char *name)
+TypeRef *type_ref_from_single_name(const char *name)
 {
     if (name == NULL)
         return NULL;
@@ -518,7 +452,7 @@ static TypeRef *type_ref_from_single_name(const char *name)
     return type_ref_create(qid, NULL, 0);
 }
 
-static TypeRef *type_ref_from_name_and_args(const char *base_name, ListNode_t *type_args)
+TypeRef *type_ref_from_name_and_args(const char *base_name, ListNode_t *type_args)
 {
     if (base_name == NULL)
         return NULL;
@@ -614,7 +548,7 @@ static int append_qualified_segments_from_dotted(char ***segments, int *count, i
     return 1;
 }
 
-static QualifiedIdent *qualified_ident_from_ast(ast_t *node)
+QualifiedIdent *qualified_ident_from_ast(ast_t *node)
 {
     ast_t *unwrapped = unwrap_pascal_node(node);
     if (unwrapped == NULL)
@@ -709,7 +643,7 @@ static QualifiedIdent *qualified_ident_from_ast(ast_t *node)
     return NULL;
 }
 
-static TypeRef *type_ref_from_info_or_id(const TypeInfo *info, const char *type_id)
+TypeRef *type_ref_from_info_or_id(const TypeInfo *info, const char *type_id)
 {
     if (info != NULL && info->type_ref != NULL)
         return type_ref_clone(info->type_ref);
@@ -718,7 +652,7 @@ static TypeRef *type_ref_from_info_or_id(const TypeInfo *info, const char *type_
     return NULL;
 }
 
-static TypeRef *type_ref_from_element_info(const TypeInfo *info, const char *type_id)
+TypeRef *type_ref_from_element_info(const TypeInfo *info, const char *type_id)
 {
     if (info != NULL && info->element_type_ref != NULL)
         return type_ref_clone(info->element_type_ref);
@@ -727,7 +661,7 @@ static TypeRef *type_ref_from_element_info(const TypeInfo *info, const char *typ
     return NULL;
 }
 
-static TypeRef *type_ref_from_pointer_info(const TypeInfo *info, const char *type_id)
+TypeRef *type_ref_from_pointer_info(const TypeInfo *info, const char *type_id)
 {
     if (info != NULL && info->pointer_type_ref != NULL)
         return type_ref_clone(info->pointer_type_ref);
@@ -736,7 +670,7 @@ static TypeRef *type_ref_from_pointer_info(const TypeInfo *info, const char *typ
     return NULL;
 }
 
-static TypeRef *type_ref_from_qualifier_and_id(const char *qualifier, const char *id)
+TypeRef *type_ref_from_qualifier_and_id(const char *qualifier, const char *id)
 {
     if (id == NULL)
         return NULL;
@@ -780,7 +714,7 @@ static void from_cparser_trim_ascii(char *s)
     }
 }
 
-static int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
+int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint16_t *d3, uint8_t d4[8])
 {
     if (d1 != NULL)
         *d1 = 0;
@@ -850,7 +784,7 @@ static int parse_guid_literal(const char *guid, uint32_t *d1, uint16_t *d2, uint
 
 /* Determine SCOPEDENUMS state at a parser line by scanning compiler directives
  * in the preprocessed source up to that logical line. */
-static int from_cparser_scopedenums_enabled_at_line(int target_line)
+int from_cparser_scopedenums_enabled_at_line(int target_line)
 {
     if (target_line <= 0)
         return 0;
@@ -982,7 +916,7 @@ int from_cparser_get_error_count(void) {
 }
 
 /* Report a frontend error and increment the counter */
-static void frontend_error(const char *format, ...) {
+void frontend_error(const char *format, ...) {
     va_list args;
     va_start(args, format);
     vfprintf(stderr, format, args);
@@ -991,26 +925,18 @@ static void frontend_error(const char *format, ...) {
     g_frontend_error_count++;
 }
 
-typedef struct PendingGenericAlias {
-    Tree_t *decl;
-    char *base_name;
-    ListNode_t *type_args;
-    struct PendingGenericAlias *next;
-} PendingGenericAlias;
+/* PendingGenericAlias typedef moved to from_cparser_internal.h */
 
-static PendingGenericAlias *g_pending_generic_aliases = NULL;
-static int g_allow_pending_specializations = 0;
+PendingGenericAlias *g_pending_generic_aliases = NULL;
+int g_allow_pending_specializations = 0;
 
 /* Deferred inline specializations: when `specialize Foo<T>` appears in
  * expression context (e.g. `specialize Foo<T>.Method(...)`), we need to
  * instantiate the generic record and create a type declaration so that
  * append_generic_method_clones() can emit method implementations. */
-typedef struct DeferredInlineSpec {
-    Tree_t *type_decl;
-    struct DeferredInlineSpec *next;
-} DeferredInlineSpec;
-static DeferredInlineSpec *g_deferred_inline_specs = NULL;
-static ListNode_t *g_const_sections = NULL;
+/* DeferredInlineSpec typedef moved to from_cparser_internal.h */
+DeferredInlineSpec *g_deferred_inline_specs = NULL;
+ListNode_t *g_const_sections = NULL;
 static ListNode_t *g_const_sections_tail = NULL; /* tail pointer for O(1) append */
 
 /* ---- Hash table for const int cache (replaces linear-search linked list) ---- */
@@ -1150,7 +1076,7 @@ static void const_decl_index_insert(const char *name, ast_t *value_node, ast_t *
 }
 
 /* Lookup a const declaration by name. Returns the value AST node or NULL. */
-static ast_t *const_decl_index_lookup(const char *name) {
+ast_t *const_decl_index_lookup(const char *name) {
     if (name == NULL || g_const_decl_index.buckets == NULL) return NULL;
     size_t idx = const_int_ht_hash(name, g_const_decl_index.capacity);
     for (ConstDeclIndexEntry *e = g_const_decl_index.buckets[idx]; e != NULL; e = e->next) {
@@ -1162,7 +1088,7 @@ static ast_t *const_decl_index_lookup(const char *name) {
 
 /* Scan a const section and index all CONST_DECL entries.
  * Walks the AST iteratively (siblings only) to find CONST_DECL nodes. */
-static void const_decl_index_scan_section(ast_t *section) {
+void const_decl_index_scan_section(ast_t *section) {
     if (section == NULL) return;
     const_decl_index_init();
     for (ast_t *node = section->child; node != NULL; node = node->next) {
@@ -1179,7 +1105,7 @@ static void const_decl_index_scan_section(ast_t *section) {
     }
 }
 
-static void destroy_type_info_contents(TypeInfo *info) {
+void destroy_type_info_contents(TypeInfo *info) {
     if (info == NULL)
         return;
 
@@ -1273,7 +1199,7 @@ static void destroy_type_info_contents(TypeInfo *info) {
     }
 }
 
-static void reset_const_sections(void) {
+void reset_const_sections(void) {
     if (g_const_sections != NULL) {
         DestroyList(g_const_sections);
         g_const_sections = NULL;
@@ -1287,7 +1213,7 @@ static void reset_const_sections(void) {
     const_decl_index_destroy();
 }
 
-static void register_const_section(ast_t *const_section) {
+void register_const_section(ast_t *const_section) {
     if (const_section == NULL)
         return;
     for (ListNode_t *cur = g_const_sections; cur != NULL; cur = cur->next) {
@@ -1306,7 +1232,7 @@ static void register_const_section(ast_t *const_section) {
     const_decl_index_scan_section(const_section);
 }
 
-static int const_section_is_resourcestring(ast_t *const_section) {
+int const_section_is_resourcestring(ast_t *const_section) {
     if (const_section == NULL)
         return 0;
 
@@ -1330,20 +1256,18 @@ static int const_section_is_resourcestring(ast_t *const_section) {
     return 0;
 }
 
-static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
 
 /* Parse a range bound string that may be a number or boolean literal.
  * Used for multi-dimensional array range extraction. */
-static int parse_range_bound(const char *s) {
+int parse_range_bound(const char *s) {
     if (s == NULL) return 0;
     if (strcasecmp(s, "true") == 0) return 1;
     if (strcasecmp(s, "false") == 0) return 0;
     return atoi(s);
 }
 
-static int select_range_primitive_tag(const TypeInfo *info);
 
-static int resolve_const_expr_from_sections(const char *expr, int *result)
+int resolve_const_expr_from_sections(const char *expr, int *result)
 {
     if (expr == NULL || result == NULL)
         return -1;
@@ -1368,7 +1292,7 @@ static int resolve_const_expr_from_sections(const char *expr, int *result)
     return -1;
 }
 
-static int lookup_const_int(const char *name, int *out_value) {
+int lookup_const_int(const char *name, int *out_value) {
     if (name == NULL || out_value == NULL)
         return -1;
     if (g_const_int_ht.buckets == NULL)
@@ -1383,7 +1307,7 @@ static int lookup_const_int(const char *name, int *out_value) {
     return -1;
 }
 
-static void register_const_int(const char *name, int value) {
+void register_const_int(const char *name, int value) {
     if (name == NULL)
         return;
     const_int_ht_init();
@@ -1414,7 +1338,7 @@ static void register_const_int(const char *name, int value) {
         const_int_ht_grow();
 }
 
-static void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
+void register_pending_generic_alias(Tree_t *decl, TypeInfo *type_info) {
     if (!g_allow_pending_specializations || decl == NULL || type_info == NULL)
         return;
     if (type_info->generic_base_name == NULL || type_info->generic_type_args == NULL)
@@ -1449,13 +1373,11 @@ void from_cparser_disable_pending_specializations(void) {
     g_allow_pending_specializations = 0;
 }
 
-static ast_t *unwrap_pascal_node(ast_t *node);
-static struct Expression *convert_expression(ast_t *expr_node);
 
 /* Global offset added to all source_index values during conversion.
  * Set via from_cparser_set_source_offset() before converting each unit's AST,
  * so that source_index values are globally unique across all source buffers. */
-static int g_source_offset = 0;
+int g_source_offset = 0;
 
 void from_cparser_set_source_offset(int offset)
 {
@@ -1465,34 +1387,17 @@ void from_cparser_set_source_offset(int offset)
 /* Helper to copy source index from AST node to Expression for accurate error context.
  * node->index == -1 means the parser position is unknown; preserve that sentinel
  * rather than producing a bogus global offset (-1 + g_source_offset). */
-static inline struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
+struct Expression *set_expr_source_index(struct Expression *expr, ast_t *node) {
     if (expr != NULL && node != NULL && node->index >= 0) {
         expr->source_index = node->index + g_source_offset;
     }
     return expr;
 }
-static int convert_type_spec(ast_t *type_spec, char **type_id_out,
-                             struct RecordType **record_out, TypeInfo *type_info);
-static int extract_constant_int(struct Expression *expr, long long *out_value);
-static struct Expression *convert_set_literal(ast_t *set_node);
-static char *pop_last_identifier(ListNode_t **ids);
-static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value);
-static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result);
-static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section);
-static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end);
-static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *type_section,
-                                                 int *out_start, int *out_end);
-static int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section);
-static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name);
-static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth);
-static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error);
-static ast_t *find_node_by_type(ast_t *node, int target_type);
-static void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count);
 
 
 /* ClassMethodBinding typedef moved to from_cparser.h */
 
-static ListNode_t *class_method_bindings = NULL;
+ListNode_t *class_method_bindings = NULL;
 
 /* ---- Class-method hash index (keyed by interned class_name pointer) ----
  *
@@ -1566,7 +1471,7 @@ static void cmb_index_add(const char *interned_class, ClassMethodBinding *bindin
     e->bindings[e->count++] = binding;
 }
 
-static void cmb_index_reset(void)
+void cmb_index_reset(void)
 {
     for (int i = 0; i < CMB_INDEX_SIZE; i++) {
         CMBIndexEntry *e = cmb_index[i];
@@ -1639,7 +1544,7 @@ static void cmb_method_index_add(const char *interned_method, ClassMethodBinding
     e->bindings[e->count++] = binding;
 }
 
-static void cmb_method_index_reset(void)
+void cmb_method_index_reset(void)
 {
     for (int i = 0; i < CMB_METHOD_INDEX_SIZE; i++) {
         CMBMethodEntry *e = cmb_method_index[i];
@@ -1654,12 +1559,12 @@ static void cmb_method_index_reset(void)
 }
 
 /* Counter for generating unique anonymous method names */
-static int anonymous_method_counter = 0;
+int anonymous_method_counter = 0;
 
 #define ANON_METHOD_NAME_SIZE 64
 
 /* Helper function to generate unique names for anonymous methods */
-static char *generate_anonymous_method_name(int is_function) {
+char *generate_anonymous_method_name(int is_function) {
     char *name = (char *)malloc(ANON_METHOD_NAME_SIZE);
     if (name == NULL) return NULL;
     snprintf(name, ANON_METHOD_NAME_SIZE, "_anon_%s_%d", is_function ? "func" : "proc", ++anonymous_method_counter);
@@ -1762,7 +1667,7 @@ static char *param_type_string_from_type_node(ast_t *type_node) {
     return rendered;
 }
 
-static char *param_type_signature_from_params_ast(ast_t *params_ast) {
+char *param_type_signature_from_params_ast(ast_t *params_ast) {
     if (params_ast == NULL)
         return NULL;
     ast_t *param = params_ast;
@@ -1784,7 +1689,7 @@ static char *param_type_signature_from_params_ast(ast_t *params_ast) {
     return sig;
 }
 
-static int count_params_in_method_impl(ast_t *method_node) {
+int count_params_in_method_impl(ast_t *method_node) {
     if (method_node == NULL)
         return -1;
     int count = 0;
@@ -1798,7 +1703,7 @@ static int count_params_in_method_impl(ast_t *method_node) {
     return count;
 }
 
-static char *param_type_signature_from_method_impl(ast_t *method_node) {
+char *param_type_signature_from_method_impl(ast_t *method_node) {
     if (method_node == NULL)
         return NULL;
     char *sig = NULL;
@@ -1822,7 +1727,7 @@ static char *param_type_signature_from_method_impl(ast_t *method_node) {
     return sig;
 }
 
-static void register_class_method_ex(const char *class_name, const char *method_name,
+void register_class_method_ex(const char *class_name, const char *method_name,
                                       int is_virtual, int is_override, int is_static,
                                       int is_class_method,
                                       int param_count, char *param_sig) {
@@ -1877,7 +1782,7 @@ void from_cparser_register_method_template(const char *class_name, const char *m
 
 
 
-static const char *find_class_for_method(const char *method_name) {
+const char *find_class_for_method(const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
@@ -1921,7 +1826,7 @@ static int is_method_static(const char *class_name, const char *method_name) {
     return has_static;
 }
 
-static int is_method_static_with_signature(const char *class_name, const char *method_name,
+int is_method_static_with_signature(const char *class_name, const char *method_name,
                                            int param_count, const char *param_sig) {
     if (class_name == NULL || method_name == NULL)
         return 0;
@@ -2220,11 +2125,11 @@ ListNode_t *from_cparser_find_classes_with_method(const char *method_name, int *
     return result;
 }
 
-static int typed_const_counter = 0;
-static const char *g_typed_const_unit_tag = "p"; /* set per unit in tree_from_pascal_ast */
+int typed_const_counter = 0;
+const char *g_typed_const_unit_tag = "p"; /* set per unit in tree_from_pascal_ast */
 
 /* Mark a TREE_VAR_DECL as having static storage (for local typed constants) */
-static void mark_var_decl_static_storage(Tree_t *decl)
+void mark_var_decl_static_storage(Tree_t *decl)
 {
     if (decl == NULL || decl->type != TREE_VAR_DECL)
         return;
@@ -2235,7 +2140,7 @@ static void mark_var_decl_static_storage(Tree_t *decl)
     ++typed_const_counter;
 }
 
-static int is_operator_token_name(const char *name)
+int is_operator_token_name(const char *name)
 {
     if (name == NULL)
         return 0;
@@ -2260,14 +2165,14 @@ static int is_operator_token_name(const char *name)
 }
 
 /* Tag a function call expression as an operator dispatch if applicable. */
-static void tag_operator_call(struct Expression *expr, int is_operator)
+void tag_operator_call(struct Expression *expr, int is_operator)
 {
     if (expr != NULL && is_operator)
         expr->expr_data.function_call_data.is_operator_call = 1;
 }
 
 /* Encode operator symbols into valid identifier names for assembly */
-static char *encode_operator_name(const char *op_name) {
+char *encode_operator_name(const char *op_name) {
     if (op_name == NULL)
         return NULL;
     
@@ -2312,7 +2217,7 @@ static char *encode_operator_name(const char *op_name) {
     return strdup(op_name);
 }
 
-static char *mangle_method_name(const char *class_name, const char *method_name) {
+char *mangle_method_name(const char *class_name, const char *method_name) {
     if (method_name == NULL)
         return NULL;
 
@@ -2341,7 +2246,7 @@ static char *mangle_method_name(const char *class_name, const char *method_name)
 /* Method mangling without operator alias encoding.
  * Use this for ordinary method declarations/implementations so names like Add
  * are preserved as methods instead of being treated as operators. */
-static char *mangle_method_name_raw(const char *class_name, const char *method_name) {
+char *mangle_method_name_raw(const char *class_name, const char *method_name) {
     if (method_name == NULL)
         return NULL;
     if (class_name == NULL || class_name[0] == '\0')
@@ -2357,7 +2262,7 @@ static char *mangle_method_name_raw(const char *class_name, const char *method_n
     return result;
 }
 
-static char *method_param_type_suffix(Tree_t *param_decl)
+char *method_param_type_suffix(Tree_t *param_decl)
 {
     if (param_decl == NULL)
         return NULL;

@@ -1,3 +1,5 @@
+#include "../from_cparser_internal.h"
+
 static Tree_t *convert_var_decl(ast_t *decl_node) {
     ast_t *cur = decl_node->child;
     ast_t *first_non_identifier = cur;
@@ -462,7 +464,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
     return decl;
 }
 
-static ListNode_t *convert_var_section(ast_t *section_node) {
+ListNode_t *convert_var_section(ast_t *section_node) {
     ListBuilder decls_builder;
     list_builder_init(&decls_builder);
     
@@ -1897,7 +1899,7 @@ static Tree_t *convert_const_decl(ast_t *const_decl_node, ListBuilder *var_build
     return decl;
 }
 
-static void append_const_decls_from_section(ast_t *const_section, ListNode_t **dest,
+void append_const_decls_from_section(ast_t *const_section, ListNode_t **dest,
                                             ListBuilder *var_builder, ast_t *type_section) {
     if (const_section == NULL || dest == NULL)
         return;
@@ -1931,7 +1933,7 @@ static void append_const_decls_from_section(ast_t *const_section, ListNode_t **d
     }
 }
 
-static int select_range_primitive_tag(const TypeInfo *info)
+int select_range_primitive_tag(const TypeInfo *info)
 {
     if (info == NULL || !info->is_range)
         return INT_TYPE;
@@ -1977,9 +1979,8 @@ static int select_range_primitive_tag(const TypeInfo *info)
     return INT64_TYPE;
 }
 
-static long long compute_range_storage_size(const TypeInfo *info);
 
-static long long compute_range_storage_size(const TypeInfo *info)
+long long compute_range_storage_size(const TypeInfo *info)
 {
     if (info == NULL || !info->is_range || !info->range_known)
         return 0;
@@ -2666,16 +2667,9 @@ static Tree_t *convert_generic_type_decl(ast_t *type_decl_node) {
     return decl;
 }
 
-static struct Statement *convert_statement(ast_t *stmt_node);
-static struct Statement *convert_block(ast_t *block_node);
-static Tree_t *convert_procedure(ast_t *proc_node);
-static Tree_t *convert_function(ast_t *func_node);
-static Tree_t *convert_method_impl(ast_t *method_node);
-static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t *args_start);
 
-static void append_labels_from_section(ast_t *label_node, ListBuilder *builder);
 
-static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
+void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
                                  ListBuilder *var_builder,
                                  ListBuilder *label_builder,
                                  ListNode_t **nested_subs,
@@ -2754,7 +2748,7 @@ static void convert_routine_body(ast_t *body_node, ListNode_t **const_decls,
     }
 }
 
-static void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
+void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
     if (uses_node == NULL || dest == NULL)
         return;
 
@@ -2791,7 +2785,7 @@ static void append_uses_from_section(ast_t *uses_node, ListNode_t **dest) {
     visited_set_destroy(visited);
 }
 
-static void append_labels_from_section(ast_t *label_node, ListBuilder *builder) {
+void append_labels_from_section(ast_t *label_node, ListBuilder *builder) {
     if (label_node == NULL || builder == NULL)
         return;
 
@@ -3005,7 +2999,7 @@ static void qualify_param_type_id(char **type_id, struct TypeRef **type_ref,
     }
 }
 
-static void qualify_param_decl_types(ListNode_t *params,
+void qualify_param_decl_types(ListNode_t *params,
     const char *owner_full, const char *owner_outer, SymTab_t *symtab)
 {
     if (params == NULL || symtab == NULL)
@@ -3950,7 +3944,7 @@ static void qualify_record_field_nested_types(struct RecordType *record,
     }
 }
 
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
+void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
     ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder,
     const char *parent_type_name) {
     if (type_section == NULL || dest == NULL)

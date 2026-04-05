@@ -1,4 +1,6 @@
-static struct Statement *convert_statement(ast_t *stmt_node) {
+#include "../from_cparser_internal.h"
+
+struct Statement *convert_statement(ast_t *stmt_node) {
     stmt_node = unwrap_pascal_node(stmt_node);
     if (stmt_node == NULL)
     {
@@ -478,7 +480,7 @@ static struct Statement *convert_statement(ast_t *stmt_node) {
     return NULL;
 }
 
-static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
+ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
     ListBuilder builder;
     list_builder_init(&builder);
     
@@ -550,7 +552,7 @@ static ListNode_t *convert_statement_list(ast_t *stmt_list_node) {
     return list_builder_finish(&builder);
 }
 
-static struct Statement *convert_block(ast_t *block_node) {
+struct Statement *convert_block(ast_t *block_node) {
     if (block_node == NULL)
     {
         if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL)
@@ -705,7 +707,7 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
     return alias;
 }
 
-static Tree_t *convert_method_impl(ast_t *method_node) {
+Tree_t *convert_method_impl(ast_t *method_node) {
     if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
         fprintf(stderr, "[KGPC] convert_method_impl entry (method_node=%p)\n", (void*)method_node);
     }
@@ -1506,7 +1508,7 @@ static Tree_t *convert_method_impl(ast_t *method_node) {
 /* Extract generic type parameter names from a PASCAL_T_TYPE_PARAM_LIST AST node.
  * Returns the number of type parameters found, and fills *out_params with
  * a malloc'd array of strdup'd parameter names. */
-static int extract_generic_type_params(ast_t *type_param_list, char ***out_params) {
+int extract_generic_type_params(ast_t *type_param_list, char ***out_params) {
     assert(type_param_list != NULL);
     assert(type_param_list->typ == PASCAL_T_TYPE_PARAM_LIST);
     assert(out_params != NULL);
@@ -1534,7 +1536,7 @@ static int extract_generic_type_params(ast_t *type_param_list, char ***out_param
     return count;
 }
 
-static char *extract_external_name_from_node(ast_t *node)
+char *extract_external_name_from_node(ast_t *node)
 {
     if (node == NULL || node->child == NULL)
         return NULL;
@@ -1842,7 +1844,7 @@ static void finalize_subprogram_tree(Tree_t *tree, ast_t *node,
 
 /* ---- End shared subprogram helpers ---- */
 
-static Tree_t *convert_procedure(ast_t *proc_node) {
+Tree_t *convert_procedure(ast_t *proc_node) {
     ast_t *cur = proc_node->child;
     char *id = NULL;
     static int debug_external_nodes = -1;
@@ -1909,7 +1911,7 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
     return tree;
 }
 
-static Tree_t *convert_function(ast_t *func_node) {
+Tree_t *convert_function(ast_t *func_node) {
     ast_t *cur = func_node->child;
     char *id = NULL;
     char *operator_symbol = NULL;  /* For standalone operators */
@@ -2131,7 +2133,7 @@ static Tree_t *convert_function(ast_t *func_node) {
  * @param target_type The type ID to search for
  * @return The first node found with the target type, or NULL if not found
  */
-static ast_t *find_node_by_type(ast_t *node, int target_type) {
+ast_t *find_node_by_type(ast_t *node, int target_type) {
     if (node == NULL) {
         return NULL;
     }

@@ -1,3 +1,5 @@
+#include "../from_cparser_internal.h"
+
 static int map_relop_tag(int tag) {
     switch (tag) {
     case PASCAL_T_EQ: return EQ;
@@ -63,14 +65,14 @@ static void collect_asm_lines(ast_t *node, char **buffer, size_t *length) {
     }
 }
 
-static char *collect_asm_text(ast_t *block_node) {
+char *collect_asm_text(ast_t *block_node) {
     char *buffer = NULL;
     size_t length = 0;
     collect_asm_lines(block_node, &buffer, &length);
     return buffer;
 }
 
-static int extract_constant_int(struct Expression *expr, long long *out_value) {
+int extract_constant_int(struct Expression *expr, long long *out_value) {
     if (expr == NULL || out_value == NULL)
         return 1;
 
@@ -143,7 +145,7 @@ static ListNode_t *append_set_element(ListNode_t *elements, struct SetElement *e
     return PushListNodeBack(elements, node);
 }
 
-static struct Expression *convert_set_literal(ast_t *set_node) {
+struct Expression *convert_set_literal(ast_t *set_node) {
     if (set_node == NULL)
         return mk_set(0, 0, NULL, 1);
 
@@ -674,12 +676,12 @@ static struct Expression *convert_unary_expr(ast_t *node) {
     return inner;
 }
 
-static const char *tag_name(tag_t tag) {
+const char *tag_name(tag_t tag) {
     const char *name = pascal_tag_to_string(tag);
     return (name != NULL) ? name : "UNKNOWN";
 }
 
-static struct Expression *convert_expression(ast_t *expr_node) {
+struct Expression *convert_expression(ast_t *expr_node) {
     ast_t *original_node = expr_node;  /* Save for source_index */
     expr_node = unwrap_pascal_node(expr_node);
 
@@ -1411,7 +1413,7 @@ tuple_cleanup:
     return NULL;
 }
 
-static ListNode_t *convert_expression_list(ast_t *arg_node) {
+ListNode_t *convert_expression_list(ast_t *arg_node) {
     ListBuilder builder;
     list_builder_init(&builder);
     
@@ -1514,7 +1516,7 @@ static ListNode_t *convert_expression_list(ast_t *arg_node) {
     return list_builder_finish(&builder);
 }
 
-static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
+struct Expression *convert_field_width_expr(ast_t *field_width_node) {
     if (field_width_node == NULL)
         return NULL;
 
@@ -1570,7 +1572,7 @@ static struct Expression *convert_field_width_expr(ast_t *field_width_node) {
 static struct Expression *convert_member_access_chain(int line,
     struct Expression *base_expr, ast_t *field_node);
 
-static struct Expression *convert_member_access(ast_t *node) {
+struct Expression *convert_member_access(ast_t *node) {
     if (node == NULL)
         return NULL;
 
@@ -2115,7 +2117,7 @@ static struct Expression *convert_member_access_chain(int line,
     return NULL;
 }
 
-static struct Statement *convert_assignment(ast_t *assign_node) {
+struct Statement *convert_assignment(ast_t *assign_node) {
     ast_t *lhs = assign_node->child;
     ast_t *rhs = lhs != NULL ? lhs->next : NULL;
 
@@ -2176,7 +2178,7 @@ static struct Statement *convert_assignment(ast_t *assign_node) {
     return stmt;
 }
 
-static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
+struct Statement *convert_proc_call(ast_t *call_node, bool implicit_identifier) {
     if (kgpc_getenv("KGPC_DEBUG_BODY") != NULL) {
         fprintf(stderr, "[KGPC] convert_proc_call: typ=%d line=%d\n",
             call_node ? call_node->typ : -1, call_node ? call_node->line : -1);
@@ -2301,7 +2303,7 @@ static struct Statement *convert_proc_call(ast_t *call_node, bool implicit_ident
     return call;
 }
 
-static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t *args_start) {
+struct Statement *convert_method_call_statement(ast_t *member_node, ast_t *args_start) {
     if (member_node == NULL)
         return NULL;
 
@@ -2398,7 +2400,7 @@ static struct Statement *convert_method_call_statement(ast_t *member_node, ast_t
     return call;
 }
 
-static struct Statement *build_nested_with_statements(int line,
+struct Statement *build_nested_with_statements(int line,
                                                       ast_t *context_node,
                                                       struct Statement *body_stmt) {
     if (context_node == NULL || context_node == ast_nil)

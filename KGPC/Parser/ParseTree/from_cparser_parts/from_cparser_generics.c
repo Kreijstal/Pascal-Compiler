@@ -1,4 +1,6 @@
-static char *dup_symbol(ast_t *node) {
+#include "../from_cparser_internal.h"
+
+char *dup_symbol(ast_t *node) {
     while (node != NULL) {
         if (node->sym != NULL && node->sym->name != NULL)
             return strdup(node->sym->name);
@@ -9,7 +11,7 @@ static char *dup_symbol(ast_t *node) {
 
 /* list_builder_* functions are now in List.h - no local definition needed */
 
-static char *dup_first_identifier_in_node(ast_t *node)
+char *dup_first_identifier_in_node(ast_t *node)
 {
     if (node == NULL)
         return NULL;
@@ -35,7 +37,7 @@ static char *dup_first_identifier_in_node(ast_t *node)
     return NULL;
 }
 
-static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
+ListNode_t *collect_constructed_type_args(ast_t *args_node) {
     if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
         fprintf(stderr, "[KGPC] collect_constructed_type_args start node=%p typ=%d (%s)\n",
             (void *)args_node,
@@ -78,7 +80,7 @@ static ListNode_t *collect_constructed_type_args(ast_t *args_node) {
     return list_builder_finish(&builder);
 }
 
-static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
+int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
     if (base_name_out != NULL)
         *base_name_out = NULL;
     if (type_args_out != NULL)
@@ -152,7 +154,7 @@ static char *mangle_specialized_type_name(const char *base_name, char **type_ids
     return result;
 }
 
-static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args) {
+char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args) {
     if (base_name == NULL)
         return NULL;
     int count = ListLength(type_args);
@@ -281,7 +283,7 @@ static void substitute_record_type_parameters(struct RecordType *record, Generic
     }
 }
 
-static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out) {
+struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out) {
     if (specialized_name_out != NULL)
         *specialized_name_out = NULL;
     if (base_name == NULL)
@@ -468,7 +470,7 @@ static int type_info_has_resolution(const TypeInfo *info)
             info->is_class_reference || info->is_array_of_const);
 }
 
-static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_args,
+int resolve_generic_alias_type(const char *base_name, ListNode_t *type_args,
     char **type_id_out, TypeInfo *type_info, int *result_out)
 {
     if (base_name == NULL || type_info == NULL)
@@ -537,7 +539,7 @@ static int resolve_generic_alias_type(const char *base_name, ListNode_t *type_ar
     return 0;
 }
 
-static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast)
+void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast)
 {
     if (class_name == NULL || method_name == NULL || method_ast == NULL)
         return;
@@ -670,11 +672,7 @@ static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record
     substitute_generic_identifier_nodes(method_ast, record);
 }
 
-static Tree_t *convert_method_impl(ast_t *method_node);
 
-static Tree_t *convert_procedure(ast_t *proc_node);
-static Tree_t *convert_function(ast_t *func_node);
-static Tree_t *convert_method_impl(ast_t *method_node);
 
 static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record)
 {
@@ -727,7 +725,7 @@ static Tree_t *instantiate_method_template(struct MethodTemplate *method_templat
     return method_tree;
 }
 
-static void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
+void append_subprogram_node(ListNode_t **dest, Tree_t *tree)
 {
     if (dest == NULL || tree == NULL)
         return;
@@ -830,7 +828,7 @@ static int parse_generic_mangled_id(const char *mangled, char **base_out,
     return 1;
 }
 
-static void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count)
+void substitute_generic_identifiers(ast_t *node, char **params, char **args, int count)
 {
     if (node == NULL || params == NULL || args == NULL || count <= 0)
         return;
@@ -1539,7 +1537,7 @@ static void append_subprogram_if_unique(ListNode_t **dest, Tree_t *tree)
     append_subprogram_node(dest, tree);
 }
 
-static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subprograms,
+void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subprograms,
     VisitedSet *visited)
 {
     /* Iterate over siblings to avoid deep recursion on node->next chains */
@@ -1579,7 +1577,7 @@ static void append_subprograms_from_ast_recursive(ast_t *node, ListNode_t **subp
     }
 }
 
-static void append_top_level_subprograms_from_ast(ast_t *node, ListNode_t **subprograms,
+void append_top_level_subprograms_from_ast(ast_t *node, ListNode_t **subprograms,
     VisitedSet *visited, int in_subprogram)
 {
     /* Iterate over siblings to avoid deep recursion on node->next chains */
@@ -1678,7 +1676,7 @@ static int subprogram_list_has_mangled(const ListNode_t *subprograms, const char
     return 0;
 }
 
-static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms)
+void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms)
 {
     if (decl == NULL || subprograms == NULL)
         return;
@@ -2145,17 +2143,12 @@ void resolve_pending_generic_aliases(Tree_t *program_tree)
     }
 }
 
-static ListNode_t *collect_constructed_type_args(ast_t *args_node);
-static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out);
-static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out);
 static char *mangle_specialized_type_name(const char *base_name, char **type_ids, int num_types);
-static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args);
 static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
 static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types);
-static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast);
 static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record);
 
-static ast_t *find_ast_node_type(ast_t *node, int typ)
+ast_t *find_ast_node_type(ast_t *node, int typ)
 {
     if (node == NULL)
         return NULL;
@@ -2170,7 +2163,7 @@ static ast_t *find_ast_node_type(ast_t *node, int typ)
     return NULL;
 }
 
-static int is_method_decl_keyword(const char *sym_name)
+int is_method_decl_keyword(const char *sym_name)
 {
     if (sym_name == NULL)
         return 0;
@@ -2188,10 +2181,5 @@ static int is_method_decl_keyword(const char *sym_name)
             strcasecmp(sym_name, "operator") == 0 ||
             strcasecmp(sym_name, "class") == 0);
 }
-static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms);
 static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
 static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
-static void append_subprogram_node(ListNode_t **dest, Tree_t *tree);
-static int extract_generic_type_params(ast_t *type_param_list, char ***out_params);
-static char *dup_first_identifier_in_node(ast_t *node);
-static char *dup_first_identifier_in_node(ast_t *node);

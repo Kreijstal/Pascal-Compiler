@@ -1,55 +1,16 @@
-#include <assert.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
-#include <stdint.h>
-#include <stdarg.h>
-#include <limits.h>
-#include <errno.h>
-#ifndef _WIN32
-#include <strings.h>
-#else
-#define strcasecmp _stricmp
-#define strncasecmp _strnicmp
-static char* strndup(const char* s, size_t n)
-{
-    size_t len = strnlen(s, n);
-    char* buf = (char*)malloc(len + 1);
-    if (buf == NULL)
-        return NULL;
-    memcpy(buf, s, len);
-    buf[len] = '\0';
-    return buf;
-}
-#endif
-
-#include "from_cparser.h"
-#include "../../string_intern.h"
-#include "../../unit_registry.h"
-#include "../../compilation_context.h"
-#include "../pascal_frontend.h"
-
-/* Cached getenv() — defined in SemCheck.c */
-extern const char *kgpc_getenv(const char *name);
-
-#include "../List/List.h"
-#include "tree.h"
-#include "tree_types.h"
-#include "ident_ref.h"
-#include "type_tags.h"
-#include "pascal_parser.h"
-#include "KgpcType.h"
-#include "generic_types.h"
-#include "../SemanticCheck/SymTab/SymTab.h"
-#include "../../identifier_utils.h"
-#include "../pascal_frontend.h"
-#include "../ErrVars.h"
-#include "from_cparser_parts/from_cparser_init_and_registry.inc"
-#include "from_cparser_parts/from_cparser_generics.inc"
-#include "from_cparser_parts/from_cparser_const_and_types.inc"
-#include "from_cparser_parts/from_cparser_records.inc"
-#include "from_cparser_parts/from_cparser_declarations.inc"
-#include "from_cparser_parts/from_cparser_expressions.inc"
-#include "from_cparser_parts/from_cparser_statements_and_programs.inc"
+/*
+ * from_cparser.c — Parse tree construction from cparser AST (public API wrapper).
+ *
+ * The implementation is split across separate compilation units under
+ * from_cparser_parts/ for maintainability:
+ *   - from_cparser_init_and_registry.c       — globals, enum/const registries
+ *   - from_cparser_generics.c                — generic type substitution, specialization
+ *   - from_cparser_const_and_types.c         — const evaluation, type name mapping
+ *   - from_cparser_records.c                 — record/class member conversion
+ *   - from_cparser_declarations.c            — var/const declarations, routine body
+ *   - from_cparser_expressions.c             — expression conversion, operator mapping
+ *   - from_cparser_statements_and_programs.c — statements, subprograms, tree_from_pascal_ast
+ *
+ * This file is intentionally empty; the public API declared in
+ * from_cparser.h is implemented across the above files.
+ */

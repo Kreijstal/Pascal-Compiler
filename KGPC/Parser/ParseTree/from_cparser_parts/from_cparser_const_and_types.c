@@ -1,3 +1,5 @@
+#include "../from_cparser_internal.h"
+
 
 
 
@@ -34,7 +36,7 @@ static ListNode_t *collect_specialize_type_args(ast_t *args_node) {
  * specification, such as:
  *   specialize TFPGList<TMyRecord>
  * The input node may be either the PASCAL_T_TYPE_SPEC wrapper or its child. */
-static int extract_specialize_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
+int extract_specialize_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out) {
     if (base_name_out != NULL)
         *base_name_out = NULL;
     if (type_args_out != NULL)
@@ -136,7 +138,7 @@ static struct Expression *convert_case_label_expression(ast_t *node) {
     return expr;
 }
 
-static void append_case_label(ListBuilder *builder, ast_t *label_node) {
+void append_case_label(ListBuilder *builder, ast_t *label_node) {
     if (builder == NULL || label_node == NULL)
         return;
 
@@ -175,7 +177,7 @@ static void append_case_label(ListBuilder *builder, ast_t *label_node) {
         list_builder_append(builder, label_expr, LIST_EXPR);
 }
 
-static void extend_list(ListNode_t **dest, ListNode_t *src) {
+void extend_list(ListNode_t **dest, ListNode_t *src) {
     if (src == NULL) {
         return;
     }
@@ -190,7 +192,7 @@ static void extend_list(ListNode_t **dest, ListNode_t *src) {
     cur->next = src;
 }
 
-static ast_t *unwrap_pascal_node(ast_t *node) {
+ast_t *unwrap_pascal_node(ast_t *node) {
     ast_t *cur = node;
     while (cur != NULL) {
         switch (cur->typ) {
@@ -215,14 +217,14 @@ static ast_t *unwrap_pascal_node(ast_t *node) {
  * SHORTSTRING_TYPE.  Only remap when the name is literally "string"
  * (case-insensitive) so that explicit AnsiString/UnicodeString are
  * left untouched. */
-static int apply_shortstring_mode(int type_tag, const char *name) {
+int apply_shortstring_mode(int type_tag, const char *name) {
     if (type_tag == STRING_TYPE && pascal_frontend_default_shortstring() &&
         name != NULL && strcasecmp(name, "string") == 0)
         return SHORTSTRING_TYPE;
     return type_tag;
 }
 
-static int map_type_name(const char *name, char **type_id_out) {
+int map_type_name(const char *name, char **type_id_out) {
     if (name == NULL) {
         return UNKNOWN_TYPE;
     }
@@ -399,7 +401,7 @@ static int map_type_name(const char *name, char **type_id_out) {
     return UNKNOWN_TYPE;
 }
 
-static int helper_self_param_is_var(const char *base_type_id, struct SymTab *symtab)
+int helper_self_param_is_var(const char *base_type_id, struct SymTab *symtab)
 {
     if (base_type_id == NULL)
         return 0;
@@ -432,7 +434,7 @@ static int helper_self_param_is_var(const char *base_type_id, struct SymTab *sym
     return 1;
 }
 
-static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
+struct TypeAlias *helper_self_real_alias(const char *base_type_id)
 {
     if (base_type_id == NULL)
         return NULL;
@@ -456,20 +458,8 @@ static struct TypeAlias *helper_self_real_alias(const char *base_type_id)
     return alias;
 }
 
-static struct RecordType *convert_record_type(ast_t *record_node);
-static struct Expression *convert_expression(ast_t *expr_node);
-static struct Expression *convert_member_access(ast_t *node);
-static struct Expression *convert_field_width_expr(ast_t *field_width_node);
-static ListNode_t *convert_expression_list(ast_t *arg_node);
-static ListNode_t *convert_statement_list(ast_t *stmt_list_node);
-static struct Statement *build_nested_with_statements(int line,
-                                                      ast_t *context_node,
-                                                      struct Statement *body_stmt);
-static void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
-    ListNode_t **subprograms, ListNode_t **const_decls, ListBuilder *var_builder,
-    const char *parent_type_name);
 
-static ast_t *unwrap_record_constructor_elem(ast_t *elem)
+ast_t *unwrap_record_constructor_elem(ast_t *elem)
 {
     ast_t *unwrapped = unwrap_pascal_node(elem);
     if (unwrapped != NULL && unwrapped->typ == PASCAL_T_STATEMENT &&
@@ -478,7 +468,7 @@ static ast_t *unwrap_record_constructor_elem(ast_t *elem)
     return unwrapped;
 }
 
-static int tuple_is_record_constructor(ast_t *tuple_node)
+int tuple_is_record_constructor(ast_t *tuple_node)
 {
     if (tuple_node == NULL || tuple_node->typ != PASCAL_T_TUPLE)
         return 0;
@@ -521,7 +511,7 @@ static int tuple_is_record_constructor(ast_t *tuple_node)
     return has_fields;
 }
 
-static struct Expression *convert_record_constructor_expr(ast_t *expr_node)
+struct Expression *convert_record_constructor_expr(ast_t *expr_node)
 {
     if (expr_node == NULL)
         return NULL;
@@ -633,7 +623,7 @@ record_ctor_cleanup:
  * by searching through AST type section.
  * Returns the ordinal value if found (>= 0), -1 if not found.
  */
-static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
+int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_section) {
     if (identifier == NULL || type_section == NULL)
         return -1;
     
@@ -684,7 +674,7 @@ static int resolve_enum_ordinal_from_ast(const char *identifier, ast_t *type_sec
 
 /* Helper to resolve an enum literal within a specific enumerated type.
  * Returns ordinal value if found, -1 otherwise. */
-static int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section) {
+int resolve_enum_literal_in_type(const char *type_name, const char *literal, ast_t *type_section) {
     if (type_name == NULL || literal == NULL || type_section == NULL)
         return -1;
 
@@ -733,7 +723,7 @@ static int resolve_enum_literal_in_type(const char *type_name, const char *liter
  * will set out_start=0 and out_end=2 (for 3 values: red, blue, yellow).
  * Returns 0 on success, -1 if the type is not found or is not an enum type.
  */
-static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end) {
+int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_section, int *out_start, int *out_end) {
     if (type_name == NULL || type_section == NULL || out_start == NULL || out_end == NULL)
         return -1;
     
@@ -813,7 +803,6 @@ static int resolve_enum_type_range_from_ast(const char *type_name, ast_t *type_s
  */
 static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *const_section,
                                                int fallback_value, int depth);
-static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth);
 static int resolve_const_int_in_node(const char *identifier, ast_t *node,
                                      ast_t *const_section, int *out_value, int depth) {
     if (node == NULL)
@@ -878,15 +867,10 @@ static int resolve_const_int_in_node(const char *identifier, ast_t *node,
 
 static int resolve_const_string_in_node(const char *identifier, ast_t *node,
                                         ast_t *const_section, const char **out_value, int depth);
-static int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
-                                                  const char **out_value, int depth);
 
-typedef struct AstStringValue {
-    char *data;
-    size_t len;
-} AstStringValue;
+/* AstStringValue typedef moved to from_cparser_internal.h */
 
-static void ast_string_value_reset(AstStringValue *value)
+void ast_string_value_reset(AstStringValue *value)
 {
     if (value == NULL)
         return;
@@ -970,7 +954,7 @@ static int parse_ast_char_code(ast_t *node, unsigned int *out_value)
     return 0;
 }
 
-static int evaluate_const_string_ast(ast_t *node, ast_t *const_section,
+int evaluate_const_string_ast(ast_t *node, ast_t *const_section,
                                      AstStringValue *out_value, int depth)
 {
     ast_t *unwrapped;
@@ -1047,7 +1031,7 @@ concat_cleanup:
     }
 }
 
-static int type_info_targets_char_array(const TypeInfo *type_info, int *is_widechar_out)
+int type_info_targets_char_array(const TypeInfo *type_info, int *is_widechar_out)
 {
     int is_char_array_target = 0;
     int is_widechar_array_target = 0;
@@ -1072,7 +1056,7 @@ static int type_info_targets_char_array(const TypeInfo *type_info, int *is_widec
     return is_char_array_target || is_widechar_array_target;
 }
 
-static struct Expression *mk_const_array_element_lhs(int line_num, const char *array_name,
+struct Expression *mk_const_array_element_lhs(int line_num, const char *array_name,
     int outer_index, int inner_index, int is_multidim)
 {
     struct Expression *base_expr = mk_varid(line_num, strdup(array_name));
@@ -1100,7 +1084,7 @@ static int resolve_const_string_in_section(const char *identifier, ast_t *const_
     return resolve_const_string_in_node(identifier, const_section->child, const_section, out_value, depth);
 }
 
-static int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
+int resolve_const_string_from_ast_internal(const char *identifier, ast_t *const_section,
                                                   const char **out_value, int depth) {
     if (identifier == NULL || const_section == NULL || out_value == NULL)
         return -1;
@@ -1188,7 +1172,7 @@ static int resolve_enum_type_range_in_section_chain(const char *type_name, ast_t
     return -1;
 }
 
-static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *type_section,
+int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *type_section,
                                                  int *out_start, int *out_end) {
     if (resolve_enum_type_range_from_ast(type_name, type_section, out_start, out_end) == 0)
         return 0;
@@ -1202,7 +1186,7 @@ static int resolve_enum_type_range_with_fallback(const char *type_name, ast_t *t
     return -1;
 }
 
-static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name) {
+ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_name) {
     if (type_section == NULL || type_name == NULL)
         return NULL;
 
@@ -1218,7 +1202,7 @@ static ast_t *find_type_decl_in_section(ast_t *type_section, const char *type_na
     return NULL;
 }
 
-static int type_name_is_class_like(const char *type_name) {
+int type_name_is_class_like(const char *type_name) {
     if (type_name == NULL)
         return 0;
 
@@ -1255,7 +1239,7 @@ static int type_name_is_class_like(const char *type_name) {
             spec_node->typ == PASCAL_T_INTERFACE_TYPE);
 }
 
-static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth) {
+int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_section, TypeInfo *out_info, int depth) {
     if (type_name == NULL || type_section == NULL || out_info == NULL)
         return -1;
     if (depth > 16)
@@ -1300,7 +1284,7 @@ static int resolve_array_type_info_from_ast(const char *type_name, ast_t *type_s
     return -1;
 }
 
-static void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error) {
+void resolve_array_bounds(TypeInfo *info, ast_t *type_section, ast_t *const_section, const char *id_for_error) {
     if (info == NULL)
         return;
     if (info->start != 0 || info->end != 0)
@@ -1383,7 +1367,7 @@ static int resolve_const_int_in_section(const char *identifier, ast_t *const_sec
     return resolve_const_int_in_node(identifier, const_section->child, const_section, out_value, depth);
 }
 
-static int type_name_exists_in_section(const char *name, ast_t *type_section) {
+int type_name_exists_in_section(const char *name, ast_t *type_section) {
     if (name == NULL || type_section == NULL)
         return 0;
     ast_t *type_decl = type_section->child;
@@ -1401,7 +1385,7 @@ static int type_name_exists_in_section(const char *name, ast_t *type_section) {
     return 0;
 }
 
-static int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
+int evaluate_const_int_expr(ast_t *expr, int *out_value, int depth) {
     if (expr == NULL || out_value == NULL)
         return -1;
     if (depth > 32)
@@ -1624,7 +1608,7 @@ static int resolve_const_int_from_ast_internal(const char *identifier, ast_t *co
     return fallback_value; /* Not found */
 }
 
-static int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value) {
+int resolve_const_int_from_ast(const char *identifier, ast_t *const_section, int fallback_value) {
     return resolve_const_int_from_ast_internal(identifier, const_section, fallback_value, 0);
 }
 
@@ -1663,7 +1647,7 @@ static int const_expr_match_keyword(ConstExprScanner *scanner, const char *kw) {
     return 1;
 }
 
-static int parse_integer_literal(const char *num_str, int base, long long *out_value, char **out_endptr)
+int parse_integer_literal(const char *num_str, int base, long long *out_value, char **out_endptr)
 {
     if (num_str == NULL || out_value == NULL)
         return -1;
@@ -1997,7 +1981,7 @@ static int const_expr_parse_expression(ConstExprScanner *scanner, long long *out
     return 0;
 }
 
-static int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
+int evaluate_simple_const_expr(const char *expr, ast_t *const_section, int *result) {
     if (expr == NULL || result == NULL)
         return -1;
 
@@ -2223,7 +2207,7 @@ static int resolve_const_expr_to_int(ast_t *expr, int *out_value)
     return 0;
 }
 
-static struct RecordField *find_record_field_by_name(const struct RecordType *record,
+struct RecordField *find_record_field_by_name(const struct RecordType *record,
     const char *field_name)
 {
     if (record == NULL || field_name == NULL)
@@ -2242,7 +2226,7 @@ static struct RecordField *find_record_field_by_name(const struct RecordType *re
     return NULL;
 }
 
-static int convert_type_spec(ast_t *type_spec, char **type_id_out,
+int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
         *type_id_out = NULL;
@@ -3109,9 +3093,6 @@ static int convert_type_spec(ast_t *type_spec, char **type_id_out,
 }
 
 /* Forward declare functions we need */
-static ListNode_t *convert_param_list(ast_t **cursor);
-static ListNode_t *convert_param(ast_t *param_node);
-static struct RecordType *convert_interface_type_ex(const char *interface_name, ast_t *interface_node, ListNode_t **nested_types_out);
 
 /* Convert an AST type specification to a KgpcType object.
  * This is the Phase 2 bridge function that creates KgpcType objects from AST nodes.
