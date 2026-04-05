@@ -1819,9 +1819,6 @@ ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_lis
     inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
     if (value_reg == NULL)
     {
-        if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
-            fprintf(stderr, "[codegen-debug] condition_expr: value_reg NULL for expr type=%d line=%d\n",
-                (int)expr->type, expr->line_num);
         if (relop_type != NULL)
             *relop_type = NE;
         return inst_list;
@@ -3490,15 +3487,6 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
             /* Look up the record field to check if it's a char array */
             struct RecordField *field = codegen_lookup_record_field((struct Expression *)expr);
             int short_capacity = codegen_record_field_shortstring_capacity(expr, ctx);
-            if (kgpc_getenv("KGPC_DEBUG_CHARARRAY") != NULL)
-            {
-                const char *fid = expr->expr_data.record_access_data.field_id;
-                fprintf(stderr, "[CHARARRAY] field_lookup=%p name=%s is_array=%d elem_type=%d type=%d\n",
-                    (void*)field, fid ? fid : "<null>",
-                    field ? field->is_array : -1,
-                    field ? field->array_element_type : -1,
-                    field ? field->type : -1);
-            }
             if (field != NULL && field->is_array &&
                 (field->array_element_type == CHAR_TYPE || field->array_element_type == BYTE_TYPE))
             {
@@ -8443,17 +8431,6 @@ static ListNode_t *codegen_builtin_incdec(struct Statement *stmt, ListNode_t *in
     {
         if (codegen_sizeof_pointer_target(ctx, target_expr, &pointer_step) != 0 || pointer_step <= 0)
         {
-            if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
-            {
-                fprintf(stderr, "[codegen-debug] Inc/Dec pointer target size fail: target type=%d line=%d",
-                    (int)target_expr->type, target_expr->line_num);
-                if (target_expr->type == EXPR_VAR_ID)
-                    fprintf(stderr, " id=%s", target_expr->expr_data.id ? target_expr->expr_data.id : "<null>");
-                fprintf(stderr, " pointer_subtype=%d pointer_subtype_id=%s func=%s\n",
-                    target_expr->pointer_subtype,
-                    target_expr->pointer_subtype_id ? target_expr->pointer_subtype_id : "<null>",
-                    ctx->current_subprogram_id ? ctx->current_subprogram_id : "<unknown>");
-            }
             pointer_step = 1;
         }
     }
@@ -11630,14 +11607,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
         {
-            if (kgpc_getenv("KGPC_DEBUG_CG_ERR"))
-            {
-                fprintf(stderr, "[codegen-debug] pointer-assign reg fail: pointer_expr type=%d line=%d",
-                    (int)pointer_expr->type, pointer_expr->line_num);
-                if (pointer_expr->type == EXPR_VAR_ID)
-                    fprintf(stderr, " id=%s", pointer_expr->expr_data.id ? pointer_expr->expr_data.id : "<null>");
-                fprintf(stderr, "\n");
-            }
             free_expr_tree(pointer_tree);
             return codegen_fail_register(ctx, inst_list, NULL,
                 "ERROR: Unable to allocate register for pointer assignment address.");
@@ -14305,11 +14274,6 @@ static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, C
         struct RecordType *record_type = codegen_resolve_with_record_type(context_expr, symtab);
         if (record_type != NULL)
             pushed = codegen_with_push(ctx, context_expr, record_type);
-        if (kgpc_getenv("KGPC_DEBUG_WITH_CODEGEN") != NULL)
-        {
-            fprintf(stderr, "[KGPC_DEBUG_WITH_CODEGEN] with push=%d record=%s\n",
-                pushed, (record_type != NULL && record_type->type_id != NULL) ? record_type->type_id : "<null>");
-        }
         int is_record_context = expr_has_type_tag(context_expr, RECORD_TYPE) ||
             context_expr->record_type != NULL;
         if (is_record_context && codegen_expr_is_addressable(context_expr))
