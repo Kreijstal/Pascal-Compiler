@@ -1060,6 +1060,8 @@ static enum VarType map_type_tag_to_var_type(int type_tag)
         case WORD_TYPE:       return HASHVAR_INTEGER;
         case LONGWORD_TYPE:   return HASHVAR_LONGINT;
         case QWORD_TYPE:      return HASHVAR_QWORD;
+        case SET_TYPE:        return HASHVAR_SET;
+        case ENUM_TYPE:       return HASHVAR_ENUM;
         case FILE_TYPE:       return HASHVAR_FILE;
         default:              return HASHVAR_UNTYPED;
     }
@@ -3197,26 +3199,28 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     free(class_name);
 }
 
-static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+static void add_class_vars_to_method_scope_for(SymTab_t *symtab, Tree_t *subprogram, int use_outer)
 {
     if (subprogram == NULL)
         return;
+    const char *owner = use_outer
+        ? subprogram->tree_data.subprogram_data.owner_class_outer
+        : subprogram->tree_data.subprogram_data.owner_class;
     add_class_vars_to_method_scope_impl(symtab,
-        subprogram->tree_data.subprogram_data.owner_class,
+        owner,
         subprogram->tree_data.subprogram_data.method_name,
         subprogram->tree_data.subprogram_data.is_operator,
         subprogram->tree_data.subprogram_data.args_var);
 }
 
+static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+{
+    add_class_vars_to_method_scope_for(symtab, subprogram, 0);
+}
+
 static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
 {
-    if (subprogram == NULL)
-        return;
-    add_class_vars_to_method_scope_impl(symtab,
-        subprogram->tree_data.subprogram_data.owner_class_outer,
-        subprogram->tree_data.subprogram_data.method_name,
-        subprogram->tree_data.subprogram_data.is_operator,
-        subprogram->tree_data.subprogram_data.args_var);
+    add_class_vars_to_method_scope_for(symtab, subprogram, 1);
 }
 
 /**
@@ -3956,25 +3960,7 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
         case TYPE_KIND_PRIMITIVE:
         {
             int tag = kgpc_type_get_primitive_tag(node->type);
-            switch (tag)
-            {
-                case INT_TYPE: return HASHVAR_INTEGER;
-                case LONGINT_TYPE: return HASHVAR_LONGINT;
-                case INT64_TYPE: return HASHVAR_INT64;
-                case BYTE_TYPE: return HASHVAR_INTEGER;
-                case WORD_TYPE: return HASHVAR_INTEGER;
-                case LONGWORD_TYPE: return HASHVAR_LONGINT;
-                case QWORD_TYPE: return HASHVAR_QWORD;
-                case REAL_TYPE:
-                case EXTENDED_TYPE: return HASHVAR_REAL;
-                case BOOL: return HASHVAR_BOOLEAN;
-                case CHAR_TYPE: return HASHVAR_CHAR;
-                case STRING_TYPE: return HASHVAR_PCHAR;
-                case SET_TYPE: return HASHVAR_SET;
-                case ENUM_TYPE: return HASHVAR_ENUM;
-                case FILE_TYPE: return HASHVAR_FILE;
-                default: return HASHVAR_UNTYPED;
-            }
+            return map_type_tag_to_var_type(tag);
         }
         case TYPE_KIND_POINTER:
             return HASHVAR_POINTER;
