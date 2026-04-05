@@ -162,4 +162,41 @@ static inline int is_64bit_integer_type(int type_tag)
     return (type_tag == INT64_TYPE || type_tag == QWORD_TYPE);
 }
 
+/**
+ * Get the size in bytes for a given type tag.
+ * This provides a centralized mapping of type tags to their sizes,
+ * consolidating logic previously duplicated across multiple modules.
+ *
+ * @param type_tag The type tag to get the size for
+ * @return Size in bytes, or 0 if the type tag is not a fixed-size primitive type
+ */
+static inline int get_type_tag_size(int type_tag)
+{
+    switch (type_tag)
+    {
+        case BOOL:
+        case CHAR_TYPE:
+        case BYTE_TYPE:
+            return 1;
+        case WORD_TYPE:
+            return 2;
+        case LONGINT_TYPE:
+        case INT_TYPE:
+        case LONGWORD_TYPE:
+        case ENUM_TYPE:
+            return 4;
+        case INT64_TYPE:
+        case QWORD_TYPE:
+        case POINTER_TYPE:
+        case PROCEDURE:
+        case FILE_TYPE:
+        case REAL_TYPE:
+            return 8;
+        case SHORTSTRING_TYPE:
+            return 256;  /* ShortString is 256 bytes (length byte + 255 chars) */
+        default:
+            return 0;  /* Unknown or composite types need special handling */
+    }
+}
+
 #endif /* TYPE_TAGS_H */
