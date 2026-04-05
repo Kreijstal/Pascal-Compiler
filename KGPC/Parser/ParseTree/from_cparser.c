@@ -9116,8 +9116,16 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
 {
     if (template == NULL)
         return;
-    if (template->name != NULL)
-        free(template->name);
+    free(template->name);
+    free(template->delegated_interface_name);
+    free(template->delegated_target_name);
+    /* Free detached AST copies when this template owns them.
+     * Templates created by create_method_template always have owns_ast=1. */
+    if (template->owns_ast)
+    {
+        free_ast_detached(template->method_ast);
+        free_ast_detached(template->method_impl_ast);
+    }
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);

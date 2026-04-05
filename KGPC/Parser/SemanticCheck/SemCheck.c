@@ -14503,11 +14503,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         if (ppchar != NULL)
         {
             char *envp_name = strdup("EnvP");
-            if (envp_name != NULL)
+            if (envp_name != NULL) {
                 PushVarOntoScope_Typed(symtab, envp_name, ppchar);
+                free(envp_name);
+            }
             char *envp_lower = strdup("envp");
-            if (envp_lower != NULL)
+            if (envp_lower != NULL) {
                 PushVarOntoScope_Typed(symtab, envp_lower, ppchar);
+                free(envp_lower);
+            }
             destroy_kgpc_type(ppchar);
         }
     }
@@ -14643,7 +14647,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stdin_type != NULL && "Failed to create stdin type");
             PushVarOntoScope_Typed(symtab, stdin_name, stdin_type);
             destroy_kgpc_type(stdin_type);
-            /* Note: stdin_name ownership transferred to symtab, don't free */
+            free(stdin_name);
         }
         char *stdout_name = strdup("stdout");
         if (stdout_name != NULL) {
@@ -14651,6 +14655,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stdout_type != NULL && "Failed to create stdout type");
             PushVarOntoScope_Typed(symtab, stdout_name, stdout_type);
             destroy_kgpc_type(stdout_type);
+            free(stdout_name);
         }
         char *stderr_name = strdup("stderr");
         if (stderr_name != NULL) {
@@ -14658,6 +14663,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stderr_type != NULL && "Failed to create stderr type");
             PushVarOntoScope_Typed(symtab, stderr_name, stderr_type);
             destroy_kgpc_type(stderr_type);
+            free(stderr_name);
         }
         /* Input and Output - standard Pascal file variables */
         int sys_unit_idx = unit_registry_add("System");
@@ -14673,6 +14679,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 input_node->unit_is_public = 1;
                 mark_hashnode_source_unit(input_node, sys_unit_idx);
             }
+            free(input_name);
         }
         char *output_name = strdup("Output");
         if (output_name != NULL) {
@@ -14686,6 +14693,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 output_node->unit_is_public = 1;
                 mark_hashnode_source_unit(output_node, sys_unit_idx);
             }
+            free(output_name);
         }
     }
 
@@ -18474,11 +18482,9 @@ static void register_nested_type_short_alias(SymTab_t *symtab,
             PushFunctionOntoScope_Typed(symtab, short_name, mangled_dup, type);
         else
             PushProcedureOntoScope_Typed(symtab, short_name, mangled_dup, type);
+        free(mangled_dup);
     }
-    else
-    {
-        free(short_name);
-    }
+    free(short_name);
 }
 
 /* Semantic check on an entire subprogram */
