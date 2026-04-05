@@ -8,6 +8,7 @@
 #include "codegen.h"
 #include "codegen_statement.h"
 #include "stackmng/stackmng.h"
+#include "asm_emit.h"  /* Assembly instruction emission helpers */
 #include "expr_tree/expr_tree.h"
 
 static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
@@ -21,7 +22,7 @@ static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
         int_offsets[i] = slot != NULL ? slot->offset : 0;
         if (slot != NULL && reg != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            asm_emit_movq_to_stack(buffer, sizeof(buffer), reg, slot->offset);
             inst_list = add_inst(inst_list, buffer);
         }
     }
@@ -32,7 +33,7 @@ static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
         xmm_offsets[i] = slot != NULL ? slot->offset : 0;
         if (slot != NULL && reg != NULL)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovdqu\t%s, -%d(%%rbp)\n", reg, slot->offset);
+            asm_emit_movdqu_to_stack(buffer, sizeof(buffer), reg, slot->offset);
             inst_list = add_inst(inst_list, buffer);
         }
     }
@@ -48,7 +49,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
         const char *reg = current_arg_reg64(i);
         if (reg != NULL && int_offsets[i] > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", int_offsets[i], reg);
+            asm_emit_movq_from_stack(buffer, sizeof(buffer), int_offsets[i], reg);
             inst_list = add_inst(inst_list, buffer);
         }
     }
@@ -57,7 +58,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
         const char *reg = current_arg_reg_xmm(i);
         if (reg != NULL && xmm_offsets[i] > 0)
         {
-            snprintf(buffer, sizeof(buffer), "\tmovdqu\t-%d(%%rbp), %s\n", xmm_offsets[i], reg);
+            asm_emit_movdqu_from_stack(buffer, sizeof(buffer), xmm_offsets[i], reg);
             inst_list = add_inst(inst_list, buffer);
         }
     }
