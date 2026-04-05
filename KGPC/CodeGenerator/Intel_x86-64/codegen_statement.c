@@ -77,29 +77,8 @@ static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
 
 static int codegen_local_type_tag_size(int type_tag)
 {
-    switch (type_tag)
-    {
-        case BOOL:
-        case CHAR_TYPE:
-        case BYTE_TYPE:
-            return 1;
-        case WORD_TYPE:
-            return 2;
-        case LONGINT_TYPE:
-        case INT_TYPE:
-        case LONGWORD_TYPE:
-        case ENUM_TYPE:
-            return 4;
-        case INT64_TYPE:
-        case QWORD_TYPE:
-        case POINTER_TYPE:
-        case PROCEDURE:
-        case FILE_TYPE:
-        case REAL_TYPE:
-            return 8;
-        default:
-            return 0;
-    }
+    /* Use centralized type size mapping from type_tags.h */
+    return get_type_tag_size(type_tag);
 }
 
 static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
