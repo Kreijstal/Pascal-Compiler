@@ -11,11 +11,8 @@
 #include "asm_emit.h"  /* Assembly instruction emission helpers */
 #include "expr_tree/expr_tree.h"
 
-
-#include "codegen_statement_parts/codegen_statement_part1.inc"
-#include "codegen_statement_parts/codegen_statement_part2.inc"
-#include "codegen_statement_parts/codegen_statement_part3.inc"
-#include "codegen_statement_parts/codegen_statement_part4.inc"
-#include "codegen_statement_parts/codegen_statement_part5.inc"
-#include "codegen_statement_parts/codegen_statement_part6.inc"
-
+#include "codegen_statement_parts/codegen_stmt_infrastructure.inc"
+#include "codegen_statement_parts/codegen_stmt_assignment.inc"
+#include "codegen_statement_parts/codegen_stmt_dispatch.inc"
+#include "codegen_statement_parts/codegen_stmt_builtins.inc"
+#include "codegen_statement_parts/codegen_stmt_calls_and_control.inc"

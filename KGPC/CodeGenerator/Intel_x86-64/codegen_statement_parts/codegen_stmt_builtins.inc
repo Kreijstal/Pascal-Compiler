@@ -1,596 +1,3 @@
-ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
-{
-    #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
-    #endif
-    if (stmt == NULL)
-        return inst_list;
-    
-    
-
-    assert(ctx != NULL);
-    assert(symtab != NULL);
-
-    /* Invalidate the static link register cache at each statement boundary.
-     * The cached register may have been reused for other purposes by a
-     * previous statement's codegen (e.g., the first inner while loop in
-     * QuickSort caches r12 as the static link, but if its condition
-     * short-circuits, r12 is never loaded at runtime yet the second while
-     * loop's codegen reuses the cached register without emitting a reload). */
-    codegen_reset_static_link_cache(ctx);
-
-    switch(stmt->type)
-    {
-        case STMT_VAR_ASSIGN:
-            inst_list = codegen_var_assignment(stmt, inst_list, ctx);
-            break;
-        case STMT_PROCEDURE_CALL:
-            inst_list = codegen_proc_call(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_EXPR:
-            if (stmt->stmt_data.expr_stmt_data.expr != NULL)
-                inst_list = codegen_expr(stmt->stmt_data.expr_stmt_data.expr, inst_list, ctx);
-            break;
-        case STMT_COMPOUND_STATEMENT:
-            inst_list = codegen_compound_stmt(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_LABEL:
-        {
-            char label_name[256];
-            format_pascal_label(label_name, sizeof(label_name), ctx, stmt->stmt_data.label_data.label);
-            char buffer[272];
-            snprintf(buffer, sizeof(buffer), "%s:\n", label_name);
-            inst_list = add_inst(inst_list, buffer);
-            if (stmt->stmt_data.label_data.stmt != NULL)
-                inst_list = codegen_stmt(stmt->stmt_data.label_data.stmt, inst_list, ctx, symtab);
-            break;
-        }
-        case STMT_GOTO:
-        {
-            char label_name[256];
-            format_pascal_label(label_name, sizeof(label_name), ctx, stmt->stmt_data.goto_data.label);
-            char buffer[272];
-            snprintf(buffer, sizeof(buffer), "\tjmp\t%s\n", label_name);
-            inst_list = add_inst(inst_list, buffer);
-            break;
-        }
-        case STMT_IF_THEN:
-            inst_list = codegen_if_then(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_WHILE:
-            inst_list = codegen_while(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_REPEAT:
-            inst_list = codegen_repeat(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_FOR:
-            inst_list = codegen_for(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_FOR_IN:
-            inst_list = codegen_for_in(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_BREAK:
-            inst_list = codegen_break_stmt(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_CONTINUE:
-            inst_list = codegen_continue_stmt(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_ASM_BLOCK:
-        {
-            const char *src = stmt->stmt_data.asm_block_data.code;
-            if (src != NULL)
-            {
-                /* Detect Intel-syntax inline assembly (emitted by {$asmmode intel} blocks).
-                 * KGPC targets AT&T syntax; Intel-syntax asm needs wrapping with
-                 * .intel_syntax noprefix / .att_syntax prefix directives.
-                 *
-                 * Detection heuristics (any match → Intel syntax):
-                 *   1. Memory operand keywords: "dword ptr", "qword ptr", etc.
-                 *   2. Bracket memory operands: [...] (AT&T uses parentheses)
-                 *   3. Bare register operands without '%' prefix in operand position
-                 * Heuristic 2 is the strongest signal since AT&T never uses [] for
-                 * memory addressing, while Intel always does. */
-                int is_intel_syntax = 0;
-                if (pascal_strcasestr(src, "dword ptr") != NULL ||
-                    pascal_strcasestr(src, "qword ptr") != NULL ||
-                    pascal_strcasestr(src, "byte ptr")  != NULL ||
-                    pascal_strcasestr(src, "word ptr")  != NULL)
-                    is_intel_syntax = 1;
-
-                /* Check for Intel-style bracket memory operands: [reg], [reg+off] etc.
-                 * AT&T syntax uses parentheses for memory: (%reg), off(%reg) etc.
-                 * Skip [...] inside comments {...} and strings. */
-                if (!is_intel_syntax) {
-                    int in_brace_comment = 0;
-                    for (const char *p = src; *p != '\0'; p++) {
-                        if (*p == '{') { in_brace_comment = 1; continue; }
-                        if (*p == '}') { in_brace_comment = 0; continue; }
-                        if (in_brace_comment) continue;
-                        if (*p == '[') {
-                            /* Skip Pascal asm clobber lists: end ['eax','edx']
-                             * These have [ followed by ' — Intel memory operands
-                             * use [reg] or [reg+offset], never ['...'] */
-                            if (*(p + 1) == '\'')
-                                continue;
-                            /* Found a bracket — this is Intel memory syntax */
-                            is_intel_syntax = 1;
-                            break;
-                        }
-                    }
-                }
-
-                if (is_intel_syntax)
-                {
-                    /* Special case: sincos_r_r_r — generate a fallback that calls
-                     * fpc_in_sin_real / fpc_in_cos_real so the function body is not empty.
-                     * The Intel-mode asm in FPC's mathu.inc computes:
-                     *   sinus   := sin(theta)
-                     *   cosinus := cos(theta)
-                     * theta may be Single (size=4) or Double (size=8); out-params are
-                     * always 8-byte Double vars (KGPC's Real type). */
-                    if (ctx->current_subprogram_mangled != NULL &&
-                        strcmp(ctx->current_subprogram_mangled, "sincos_r_r_r") == 0)
-                    {
-                        StackNode_t *theta_node   = find_label((char *)"theta");
-                        StackNode_t *sinus_node   = find_label((char *)"sinus");
-                        StackNode_t *cosinus_node = find_label((char *)"cosinus");
-                        if (theta_node != NULL && sinus_node != NULL && cosinus_node != NULL)
-                        {
-                            char buf[256];
-                            int theta_off   = theta_node->offset;
-                            int theta_size  = theta_node->size;
-                            int sinus_off   = sinus_node->offset;
-                            int cosinus_off = cosinus_node->offset;
-                            /* Load theta into xmm0 as Double */
-                            if (theta_size == 4)
-                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            else
-                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
-                            /* Load sinus* and cosinus* pointers */
-                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", sinus_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
-                            snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", cosinus_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
-                            /* Call fpc_in_sin_real; write Double result to *sinus */
-                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_sin_real\n"));
-                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r12)\n"));
-                            /* Reload theta for fpc_in_cos_real */
-                            if (theta_size == 4)
-                                snprintf(buf, sizeof(buf), "\tcvtss2sd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            else
-                                snprintf(buf, sizeof(buf), "\tmovsd\t-%d(%%rbp), %%xmm0\n", theta_off);
-                            inst_list = add_inst(inst_list, strdup(buf));
-                            /* Call fpc_in_cos_real; write Double result to *cosinus */
-                            inst_list = add_inst(inst_list, strdup("\tmovl\t$0, %eax\n"));
-                            inst_list = add_inst(inst_list, strdup("\tcall\tfpc_in_cos_real\n"));
-                            inst_list = add_inst(inst_list, strdup("\tmovsd\t%xmm0, (%r13)\n"));
-                            break;
-                        }
-                    }
-                    /* For other Intel-syntax asm blocks, wrap with GAS
-                     * syntax-switching directives so they assemble correctly
-                     * in the otherwise AT&T-syntax output file. */
-                    inst_list = add_inst(inst_list, strdup(".intel_syntax noprefix\n"));
-                    inst_list = add_inst(inst_list, strdup(src));
-                    inst_list = add_inst(inst_list, strdup("\n.att_syntax prefix\n"));
-                    break;
-                }
-
-                static int asm_block_counter = 0;
-                int block_id = asm_block_counter++;
-                size_t len = strlen(src);
-                /* Allocate generously for label suffix expansion */
-                size_t alloc_size = len * 2 + 4096;
-                char *cleaned = malloc(alloc_size);
-                if (cleaned != NULL)
-                {
-                    size_t j = 0;
-                    for (size_t i = 0; i < len && j < alloc_size - 64; i++)
-                    {
-                        /* Strip Pascal-style {...} comments */
-                        if (src[i] == '{')
-                        {
-                            while (i < len && src[i] != '}')
-                                i++;
-                            continue;
-                        }
-                        /* Strip C++ style // comments */
-                        if (src[i] == '/' && i + 1 < len && src[i + 1] == '/')
-                        {
-                            while (i < len && src[i] != '\n')
-                                i++;
-                            if (i < len)
-                                cleaned[j++] = '\n';
-                            continue;
-                        }
-                        /* Fix jmpq -> jmp for direct jumps (jmpq only valid for indirect) */
-                        if (i + 4 < len && strncmp(src + i, "jmpq", 4) == 0 &&
-                            (i == 0 || isspace((unsigned char)src[i-1])) &&
-                            isspace((unsigned char)src[i + 4]))
-                        {
-                            cleaned[j++] = 'j';
-                            cleaned[j++] = 'm';
-                            cleaned[j++] = 'p';
-                            i += 3; /* skip "jmpq", loop will advance past 'q' */
-                            continue;
-                        }
-                        /* Make local labels unique by appending block_id suffix.
-                         * Match ".L" at start of line (label definition) or after whitespace/comma (reference) */
-                        if (src[i] == '.' && i + 1 < len && src[i + 1] == 'L' &&
-                            (i == 0 || src[i-1] == '\n' || isspace((unsigned char)src[i-1]) ||
-                             src[i-1] == ',' || src[i-1] == '$'))
-                        {
-                            /* Copy the label name */
-                            while (i < len && j < alloc_size - 32 &&
-                                   (isalnum((unsigned char)src[i]) || src[i] == '.' || src[i] == '_' || src[i] == 'L'))
-                            {
-                                cleaned[j++] = src[i++];
-                            }
-                            /* Append unique suffix */
-                            j += snprintf(cleaned + j, 16, "_%d", block_id);
-                            i--; /* will be incremented by loop */
-                            continue;
-                        }
-                        cleaned[j++] = src[i];
-                    }
-                    cleaned[j] = '\0';
-
-                    /* Resolve identifiers in asm blocks:
-                       1. For nostackframe: substitute parameter names → ABI registers
-                       2. For all asm: resolve Pascal global variables → static labels
-                       Pascal is case-insensitive, but ELF symbols are case-sensitive,
-                       so we must resolve identifiers to their canonical label names. */
-                    {
-                        size_t clen = strlen(cleaned);
-                        size_t sub_alloc = clen * 3 + 4096;
-                        char *substituted = malloc(sub_alloc);
-                        if (substituted != NULL) {
-                            size_t si = 0, sj = 0;
-                            /* Track whether we have seen the instruction mnemonic on
-                             * the current line.  In AT&T syntax the FIRST identifier on
-                             * each line (after optional whitespace / label) is the
-                             * mnemonic — it must never be substituted with a Pascal
-                             * variable name, or e.g. `sub %rdi,%rcx` becomes
-                             * `__kgpc_program_var_sub_N %rdi,%rcx` when the program
-                             * happens to declare a variable named "sub". */
-                            int line_has_mnemonic = 0;
-                            while (si < clen && sj < sub_alloc - 64) {
-                                /* Reset mnemonic flag on each new line. */
-                                if (cleaned[si] == '\n') {
-                                    line_has_mnemonic = 0;
-                                    substituted[sj++] = cleaned[si++];
-                                    continue;
-                                }
-                                if ((isalpha((unsigned char)cleaned[si]) || cleaned[si] == '_') &&
-                                    (si == 0 || (!isalnum((unsigned char)cleaned[si-1]) &&
-                                                 cleaned[si-1] != '_' && cleaned[si-1] != '%' &&
-                                                 cleaned[si-1] != '.')))
-                                {
-                                    size_t id_start = si;
-                                    while (si < clen && (isalnum((unsigned char)cleaned[si]) || cleaned[si] == '_'))
-                                        si++;
-                                    size_t id_len = si - id_start;
-                                    /* Skip past a ':' that makes this a label (not mnemonic). */
-                                    size_t si_after = si;
-                                    while (si_after < clen && cleaned[si_after] == ' ')
-                                        si_after++;
-                                    int is_label = (si_after < clen && cleaned[si_after] == ':');
-                                    /* If we haven't seen a mnemonic yet and this is not a
-                                     * label, it IS the mnemonic — copy verbatim, no subst. */
-                                    int is_mnemonic = (!line_has_mnemonic && !is_label);
-                                    if (!is_label)
-                                        line_has_mnemonic = 1;
-                                    char id_buf[256];
-                                    int did_substitute = 0;
-                                    if (!is_mnemonic && id_len < sizeof(id_buf)) {
-                                        memcpy(id_buf, cleaned + id_start, id_len);
-                                        id_buf[id_len] = '\0';
-                                        /* Try nostackframe parameter substitution first */
-                                        if (ctx->is_nostackframe && ctx->asm_param_count > 0) {
-                                            for (int pi = 0; pi < ctx->asm_param_count; pi++) {
-                                                if (ctx->asm_params[pi].name != NULL &&
-                                                    strcasecmp(id_buf, ctx->asm_params[pi].name) == 0) {
-                                                    /* Pick register width from parameter type size */
-                                                    int ri = ctx->asm_params[pi].reg_index;
-                                                    int sz = ctx->asm_params[pi].size_bytes;
-                                                    const char *reg;
-                                                    switch (sz) {
-                                                    case 1:  reg = current_arg_reg8(ri); break;
-                                                    case 2:  reg = current_arg_reg16(ri); break;
-                                                    case 4:  reg = current_arg_reg32(ri); break;
-                                                    default: reg = current_arg_reg64(ri); break;
-                                                    }
-                                                    if (reg != NULL) {
-                                                        int n = snprintf(substituted + sj, sub_alloc - sj, "%s", reg);
-                                                        sj += (n > 0 ? (size_t)n : 0);
-                                                        did_substitute = 1;
-                                                    }
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                        /* Try resolving as a global variable (case-insensitive) */
-                                        if (!did_substitute) {
-                                            StackNode_t *var = find_label(id_buf);
-                                            if (var != NULL) {
-                                                if (var->is_static && var->static_label != NULL) {
-                                                    const char *label = var->static_label;
-                                                    /* Use RIP-relative addressing for AT&T syntax
-                                                     * to avoid 32-bit absolute relocation failures
-                                                     * on Windows x64 (image base > 4GB).
-                                                     * But skip if the template already has (%rip)
-                                                     * immediately after the identifier. */
-                                                    int already_has_rip = (si + 6 <= clen &&
-                                                        strncmp(cleaned + si, "(%rip)", 6) == 0);
-                                                    const char *fmt = (is_intel_syntax || already_has_rip)
-                                                        ? "%s" : "%s(%%rip)";
-                                                    int n = snprintf(substituted + sj, sub_alloc - sj,
-                                                        fmt, label);
-                                                    if (n > 0) {
-                                                        sj += (size_t)n;
-                                                        did_substitute = 1;
-                                                    }
-                                                } else if (var->offset > 0) {
-                                                    int n = snprintf(substituted + sj, sub_alloc - sj, "-%d(%%rbp)", var->offset);
-                                                    if (n > 0) {
-                                                        sj += (size_t)n;
-                                                        did_substitute = 1;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        /* Try resolving as a function/procedure name */
-                                        if (!did_substitute) {
-                                            HashNode_t *proc_node = NULL;
-                                            if (FindSymbol(&proc_node, symtab, id_buf) != 0 &&
-                                                proc_node != NULL &&
-                                                (proc_node->hash_type == HASHTYPE_FUNCTION ||
-                                                 proc_node->hash_type == HASHTYPE_PROCEDURE) &&
-                                                proc_node->mangled_id != NULL) {
-                                                const char *label = proc_node->mangled_id;
-                                                size_t llen = strlen(label);
-                                                if (sj + llen < sub_alloc - 64) {
-                                                    memcpy(substituted + sj, label, llen);
-                                                    sj += llen;
-                                                    did_substitute = 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (!did_substitute) {
-                                        memcpy(substituted + sj, cleaned + id_start, id_len);
-                                        sj += id_len;
-                                    }
-                                } else {
-                                    substituted[sj++] = cleaned[si++];
-                                }
-                            }
-                            substituted[sj] = '\0';
-                            inst_list = add_inst(inst_list, substituted);
-                            free(substituted);
-                        } else {
-                            inst_list = add_inst(inst_list, cleaned);
-                        }
-                    }
-                    free(cleaned);
-                }
-                else
-                {
-                    inst_list = add_inst(inst_list, src);
-                }
-            }
-            break;
-        }
-        case STMT_EXIT:
-        {
-            inst_list = add_inst(inst_list, "\t# EXIT statement\n");
-
-            int return_is_real = 0;
-            int return_size = 0;
-            codegen_get_current_return_info(ctx, symtab, &return_is_real, &return_size);
-            if (return_size == 0 || (return_is_real == 0 && return_size == 10))
-            {
-                int slot_is_real = 0;
-                int slot_size = 0;
-                codegen_get_current_return_slot_info(ctx, &slot_is_real, &slot_size);
-                if (return_size == 0)
-                    return_size = slot_size;
-                if (return_is_real == 0)
-                    return_is_real = slot_is_real;
-            }
-
-            /* Handle Exit(value) - evaluate value and return it */
-            struct Expression *return_expr = stmt->stmt_data.exit_data.return_expr;
-            if (return_expr != NULL)
-            {
-                /* Evaluate the return expression */
-                Register_t *result_reg = NULL;
-                inst_list = codegen_expr_with_result(return_expr, inst_list, ctx, &result_reg);
-
-                if (result_reg != NULL && codegen_had_error(ctx) == 0)
-                {
-                    char buffer[128];
-                    int expr_is_real = expr_has_type_tag(return_expr, REAL_TYPE) ||
-                        expr_has_type_tag(return_expr, EXTENDED_TYPE);
-                    int is_real = return_is_real || expr_is_real;
-
-                    int use_qword = return_size >= 8;
-                    if (return_size == 0)
-                    {
-                        KgpcType *expr_type = expr_get_kgpc_type(return_expr);
-                        long long expr_size = 0;
-                        if (expr_type != NULL)
-                            expr_size = kgpc_type_sizeof(expr_type);
-
-                        if (expr_has_type_tag(return_expr, STRING_TYPE) ||
-                            expr_has_type_tag(return_expr, POINTER_TYPE) ||
-                            expr_has_type_tag(return_expr, INT64_TYPE) ||
-                            expr_uses_qword_kgpctype(return_expr) ||
-                            expr_size >= 8)
-                            use_qword = 1;
-                    }
-
-                    if (!is_real)
-                    {
-                        int value_is_qword = expr_uses_qword_kgpctype(return_expr);
-                        if (!value_is_qword && return_expr != NULL)
-                        {
-                            int return_tag = expr_get_type_tag(return_expr);
-                            if (codegen_type_uses_qword(return_tag))
-                                value_is_qword = 1;
-                        }
-                        if (use_qword && !value_is_qword)
-                            inst_list = codegen_sign_extend32_to64(inst_list,
-                                result_reg->bit_32, result_reg->bit_64);
-
-                        if (use_qword)
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rax\n", result_reg->bit_64);
-                        else
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %%eax\n", result_reg->bit_32);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
-                    else
-                    {
-                        /* For real types, arithmetic operations leave their result in
-                         * xmm0 as a side effect, but simple variable reads put the
-                         * 64-bit bit pattern into a GPR.  Always copy GPR → xmm0 so
-                         * the caller sees the correct float return value regardless of
-                         * which expression form was used. */
-                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%xmm0\n", result_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
-
-                    free_reg(get_reg_stack(), result_reg);
-                }
-            }
-            else
-            {
-                StackNode_t *return_var = ctx != NULL ? ctx->current_return_slot : NULL;
-
-                if (return_var != NULL)
-                {
-                    char buffer[128];
-                    
-                    /* Check if this function returns a dynamic array */
-                    if (ctx != NULL && ctx->returns_dynamic_array)
-                    {
-                        /* For dynamic arrays, call kgpc_dynarray_clone_descriptor
-                         * to return a cloned descriptor, not the local one */
-                        if (codegen_target_is_windows())
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n", return_var->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%edx\n", ctx->dynamic_array_descriptor_size);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        else
-                        {
-                            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n", return_var->offset);
-                            inst_list = add_inst(inst_list, buffer);
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %%esi\n", ctx->dynamic_array_descriptor_size);
-                            inst_list = add_inst(inst_list, buffer);
-                        }
-                        /* Zero vector register count before call (required by ABI) */
-                        inst_list = codegen_vect_reg(inst_list, 0);
-                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_dynarray_clone_descriptor");
-                        free_arg_regs();
-                    }
-                    else
-                    {
-                        int use_qword = return_size >= 8;
-                        if (return_size == 0 && return_var->size >= 8)
-                            use_qword = 1;
-
-                        /* Check element_size for unaligned Single type (4 bytes) */
-                        long long unaligned_return_size = return_var->element_size > 0 ? return_var->element_size : return_var->size;
-                        if (return_is_real && return_var->element_size == 10)
-                            snprintf(buffer, sizeof(buffer), "\tfldt\t-%d(%%rbp)\n", return_var->offset);
-                        else if (return_is_real && unaligned_return_size <= 4)
-                            snprintf(buffer, sizeof(buffer), "\tmovss\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-                        else if (return_is_real)
-                            snprintf(buffer, sizeof(buffer), "\tmovsd\t-%d(%%rbp), %%xmm0\n", return_var->offset);
-                        else if (use_qword)
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rax\n", return_var->offset);
-                        else
-                            snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %%eax\n", return_var->offset);
-                        inst_list = add_inst(inst_list, buffer);
-                    }
-                }
-            }
-            
-            if (codegen_has_finally(ctx))
-            {
-                char exit_label[18];
-                gen_label(exit_label, sizeof(exit_label), ctx);
-                /* Exit unwinds everything, so limit_depth is 0 */
-                inst_list = codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, 0);
-                char buffer[32];
-                snprintf(buffer, sizeof(buffer), "%s:\n", exit_label);
-                inst_list = add_inst(inst_list, buffer);
-            }
-            /* Restore callee-saved registers before leaving the frame */
-            if (ctx->callee_save_rbx_offset > 0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%rbx\n", ctx->callee_save_rbx_offset);
-                inst_list = add_inst(inst_list, buf);
-            }
-            if (ctx->callee_save_r12_offset > 0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r12\n", ctx->callee_save_r12_offset);
-                inst_list = add_inst(inst_list, buf);
-            }
-            if (ctx->callee_save_r13_offset > 0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r13\n", ctx->callee_save_r13_offset);
-                inst_list = add_inst(inst_list, buf);
-            }
-            if (ctx->callee_save_r14_offset > 0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r14\n", ctx->callee_save_r14_offset);
-                inst_list = add_inst(inst_list, buf);
-            }
-            if (ctx->callee_save_r15_offset > 0) {
-                char buf[64];
-                snprintf(buf, sizeof(buf), "\tmovq\t-%d(%%rbp), %%r15\n", ctx->callee_save_r15_offset);
-                inst_list = add_inst(inst_list, buf);
-            }
-            inst_list = add_inst(inst_list, "\tleave\n");
-            inst_list = add_inst(inst_list, "\tret\n");
-            break;
-        }
-        case STMT_CASE:
-            inst_list = codegen_case(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_WITH:
-            inst_list = codegen_with(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_TRY_FINALLY:
-            inst_list = codegen_try_finally(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_TRY_EXCEPT:
-            inst_list = codegen_try_except(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_ON_EXCEPTION:
-            inst_list = codegen_on_exception(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_RAISE:
-            inst_list = codegen_raise(stmt, inst_list, ctx, symtab);
-            break;
-        case STMT_INHERITED:
-            inst_list = codegen_inherited(stmt, inst_list, ctx, symtab);
-            break;
-        default:
-            assert(0 && "Unrecognized statement type in codegen");
-            break;
-    }
-    #ifdef DEBUG_CODEGEN
-    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
-    #endif
-    return inst_list;
-}
-
 static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
@@ -3713,3 +3120,307 @@ static ListNode_t *codegen_builtin_move(struct Statement *stmt, ListNode_t *inst
     return codegen_cleanup_call_stack(inst_list, ctx);
 }
 
+ListNode_t *codegen_builtin_proc(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+{
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
+    #endif
+    assert(stmt != NULL);
+    assert(stmt->type == STMT_PROCEDURE_CALL);
+    assert(ctx != NULL);
+
+    char *proc_name;
+    ListNode_t *args_expr;
+    /* Long mangled procedure names require a generous buffer for emitted instructions. */
+    char buffer[CODEGEN_MAX_INST_BUF];
+
+    proc_name = stmt->stmt_data.procedure_call_data.mangled_id;
+    args_expr = stmt->stmt_data.procedure_call_data.expr_args;
+
+    const char *proc_id_lookup = stmt->stmt_data.procedure_call_data.id;
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetLength"))
+    {
+        inst_list = codegen_builtin_setlength(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "SetString"))
+    {
+        inst_list = codegen_builtin_setstring(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "write"))
+    {
+        inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 0);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "writeln"))
+    {
+        inst_list = codegen_builtin_write_like(stmt, inst_list, ctx, 1);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "writestr"))
+    {
+        inst_list = codegen_builtin_writestr(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "read"))
+    {
+        inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 0);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "readln"))
+    {
+        inst_list = codegen_builtin_read_like(stmt, inst_list, ctx, 1);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Str"))
+    {
+        inst_list = codegen_builtin_str(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Insert"))
+    {
+        inst_list = codegen_builtin_insert(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Delete"))
+    {
+        inst_list = codegen_builtin_delete(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Inc"))
+    {
+        inst_list = codegen_builtin_inc(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dec"))
+    {
+        inst_list = codegen_builtin_dec(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "New"))
+    {
+        inst_list = codegen_builtin_new(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Dispose"))
+    {
+        inst_list = codegen_builtin_dispose(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Val"))
+    {
+        inst_list = codegen_builtin_val(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Move"))
+    {
+        inst_list = codegen_builtin_move(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Include"))
+    {
+        inst_list = codegen_builtin_include(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Exclude"))
+    {
+        inst_list = codegen_builtin_exclude(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    if (proc_id_lookup != NULL && pascal_identifier_equals(proc_id_lookup, "Assert"))
+    {
+        /* Assert(condition [, message])
+         * Evaluate the boolean condition. If true, continue execution.
+         * If false, call kgpc_assert_failed(msg, filename, line) which
+         * prints the assertion failure and exits with code 227. */
+        ListNode_t *assert_args = stmt->stmt_data.procedure_call_data.expr_args;
+        struct Expression *cond_expr = (assert_args != NULL) ? (struct Expression *)assert_args->cur : NULL;
+        struct Expression *msg_expr = (assert_args != NULL && assert_args->next != NULL)
+                                      ? (struct Expression *)assert_args->next->cur : NULL;
+
+        if (cond_expr != NULL)
+        {
+            int relop_type = 0;
+            inst_list = codegen_condition_expr(cond_expr, inst_list, ctx, &relop_type);
+
+            /* Generate label for the "pass" path (condition was true) */
+            char pass_label[18];
+            gen_label(pass_label, 18, ctx);
+
+            /* Jump to pass_label if condition is TRUE (non-zero).
+             * codegen_condition_expr with a boolean expr does testl and sets relop_type=NE.
+             * gencode_jmp(NE, inverse=0, ...) emits jne label (jump if not-equal-to-zero = true). */
+            inst_list = gencode_jmp(relop_type, 0, pass_label, inst_list);
+
+            /* Failure path: call kgpc_assert_failed(msg, filename, line)
+             * ABI: Windows uses rcx/rdx/r8, SysV uses rdi/rsi/rdx */
+            const char *arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+            const char *arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+            const char *arg3_reg_32 = codegen_target_is_windows() ? "%r8d" : "%edx";
+
+            /* Set up message argument (arg1) */
+            if (msg_expr != NULL && msg_expr->type == EXPR_STRING && msg_expr->expr_data.string != NULL)
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char escaped_msg[CODEGEN_MAX_INST_BUF];
+                escape_string(escaped_msg, msg_expr->expr_data.string, sizeof(escaped_msg));
+                char rodata_buf[CODEGEN_MAX_INST_BUF + 128];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                         readonly_section, msg_label, escaped_msg, codegen_text_section_resume());
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            else
+            {
+                /* No message provided - pass empty string */
+                const char *readonly_section = codegen_readonly_section_directive();
+                char msg_label[64];
+                snprintf(msg_label, sizeof(msg_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, msg_label, codegen_text_section_resume());
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", msg_label, arg1_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* filename argument (arg2) - empty for now */
+            {
+                const char *readonly_section = codegen_readonly_section_directive();
+                char fn_label[64];
+                snprintf(fn_label, sizeof(fn_label), ".LC%d", ctx->write_label_counter++);
+                char rodata_buf[256];
+                snprintf(rodata_buf, sizeof(rodata_buf), "%s\n%s:\n\t.string \"\"\n%s\n",
+                         readonly_section, fn_label, codegen_text_section_resume());
+                inst_list = add_inst(inst_list, rodata_buf);
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", fn_label, arg2_reg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+            /* line number argument (arg3) */
+            snprintf(buffer, sizeof(buffer), "\tmovl\t$%d, %s\n", stmt->line_num, arg3_reg_32);
+            inst_list = add_inst(inst_list, buffer);
+            /* Zero %eax (no vector regs) and call with shadow space */
+            inst_list = add_inst(inst_list, "\txorl\t%eax, %eax\n");
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_assert_failed");
+
+            /* Emit pass label */
+            snprintf(buffer, sizeof(buffer), "%s:\n", pass_label);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s (Assert)\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    const char *builtin_id = stmt->stmt_data.procedure_call_data.id;
+    if ((proc_name != NULL && pascal_identifier_equals(proc_name, "fpc_in_prefetch_var")) ||
+        (builtin_id != NULL && pascal_identifier_equals(builtin_id, "Prefetch")))
+    {
+        inst_list = codegen_builtin_prefetch(stmt, inst_list, ctx);
+        #ifdef DEBUG_CODEGEN
+        CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+        #endif
+        return inst_list;
+    }
+
+    const char *proc_name_hint = stmt->stmt_data.procedure_call_data.id;
+    if (proc_name_hint == NULL)
+        proc_name_hint = stmt->stmt_data.procedure_call_data.mangled_id;
+
+    inst_list = codegen_pass_arguments(args_expr, inst_list, ctx, NULL,
+        proc_name_hint, 0, NULL, 0);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    const char *call_target = (proc_name != NULL) ? proc_name : stmt->stmt_data.procedure_call_data.id;
+    if (call_target != NULL && pascal_identifier_equals(call_target, "fpc_in_prefetch_var"))
+    {
+        return codegen_builtin_prefetch(stmt, inst_list, ctx);
+    }
+    if (call_target == NULL)
+        call_target = "";
+    snprintf(buffer, 50, "\tcall\t%s\n", call_target);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_cleanup_call_stack(inst_list, ctx);
+    #ifdef DEBUG_CODEGEN
+    CODEGEN_DEBUG("DEBUG: LEAVING %s\n", __func__);
+    #endif
+    return inst_list;
+}
+
+/* Returns a list of instructions */

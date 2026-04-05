@@ -4171,3 +4171,4 @@ static void append_type_decls_from_section(ast_t *type_section, ListNode_t **des
         type_decl = type_decl->next;
     }
 }
+

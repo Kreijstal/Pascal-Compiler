@@ -1656,3 +1656,888 @@ static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     return inst_list;
 }
 
+ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *target)
+{
+    if (target == NULL)
+        return inst_list;
+
+    int shadow_space = 0;
+    if (codegen_target_is_windows())
+    {
+        shadow_space = codegen_align_to(current_stack_home_space(), REQUIRED_OFFSET);
+        if (shadow_space > 0)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tsubq\t$%d, %%rsp\n", shadow_space);
+            inst_list = add_inst(inst_list, buffer);
+        }
+    }
+
+    char call_buffer[64];
+    snprintf(call_buffer, sizeof(call_buffer), "\tcall\t%s\n", target);
+    inst_list = add_inst(inst_list, call_buffer);
+
+    if (shadow_space > 0)
+    {
+        char restore_buffer[64];
+        snprintf(restore_buffer, sizeof(restore_buffer), "\taddq\t$%d, %%rsp\n", shadow_space);
+        inst_list = add_inst(inst_list, restore_buffer);
+    }
+
+    return inst_list;
+}
+
+static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
+{
+    if (value_reg == NULL)
+        return inst_list;
+
+    const char *arg_reg32 = current_arg_reg32(0);
+    if (arg_reg32 == NULL)
+        return inst_list;
+
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n", value_reg->bit_32, arg_reg32);
+    inst_list = add_inst(inst_list, buffer);
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, value_reg->bit_64);
+    inst_list = add_inst(inst_list, buffer);
+    free_arg_regs();
+    return inst_list;
+}
+
+static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
+    CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg)
+{
+    if (ctx == NULL || exc_expr == NULL || value_reg == NULL)
+        return inst_list;
+
+    if (!expr_uses_qword_kgpctype(exc_expr))
+    {
+        if (codegen_expr_is_signed(exc_expr))
+            inst_list = codegen_sign_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_64);
+        else
+            inst_list = codegen_zero_extend32_to64(inst_list, value_reg->bit_32, value_reg->bit_32);
+    }
+
+    char buffer[96];
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, kgpc_current_exception(%%rip)\n", value_reg->bit_64);
+    return add_inst(inst_list, buffer);
+}
+
+static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+    Register_t **out_reg, const char *message)
+{
+    if (out_reg != NULL)
+        *out_reg = NULL;
+    if (message != NULL)
+        codegen_report_error(ctx, "%s", message);
+    return inst_list;
+}
+
+static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        return inst_list;
+
+    if (expr->type == EXPR_IS)
+        return codegen_emit_is_expr(expr, inst_list, ctx, out_reg);
+
+    if (expr->type == EXPR_AS && expr->expr_data.as_data.expr != NULL)
+    {
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            return inst_list;
+        inst_list = codegen_emit_class_cast_check_from_address(expr, inst_list, ctx, addr_reg);
+        *out_reg = addr_reg;
+        return inst_list;
+    }
+
+    expr_node_t *expr_tree = build_expr_tree(expr);
+    Register_t *reg = get_free_reg(get_reg_stack(), &inst_list);
+    if (reg == NULL)
+        reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+    if (reg == NULL)
+        return codegen_fail_register(ctx, inst_list, out_reg,
+            "ERROR: Unable to allocate register for expression evaluation.");
+    inst_list = gencode_expr_tree(expr_tree, inst_list, ctx, reg);
+    free_expr_tree(expr_tree);
+    *out_reg = reg;
+    return inst_list;
+}
+
+ListNode_t *codegen_condition_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, int *relop_type)
+{
+    if (expr == NULL)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+        return inst_list;
+    }
+
+    if (expr->type == EXPR_RELOP)
+        return codegen_simple_relop(expr, inst_list, ctx, relop_type);
+
+    Register_t *value_reg = NULL;
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
+    if (value_reg == NULL)
+    {
+        if (relop_type != NULL)
+            *relop_type = NE;
+        return inst_list;
+    }
+
+    char buffer[64];
+    snprintf(buffer, sizeof(buffer), "\ttestl\t%s, %s\n", value_reg->bit_32, value_reg->bit_32);
+    inst_list = add_inst(inst_list, buffer);
+    free_reg(get_reg_stack(), value_reg);
+
+    if (relop_type != NULL)
+        *relop_type = NE;
+    return inst_list;
+}
+
+ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t **out_reg)
+{
+    int began_expr = 0;
+    if (ctx != NULL)
+    {
+        codegen_begin_expression(ctx);
+        began_expr = 1;
+    }
+
+    if (expr == NULL || ctx == NULL || out_reg == NULL)
+        goto cleanup;
+
+    if (expr->type == EXPR_VAR_ID)
+    {
+        if (codegen_is_current_return_var_id(expr, ctx))
+        {
+            StackNode_t *return_var = ctx->current_return_slot;
+            if (return_var != NULL)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Unable to allocate register for return variable address.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                if (return_var->is_static)
+                {
+                    const char *label = (return_var->static_label != NULL) ?
+                        return_var->static_label : return_var->label;
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                }
+                else if (return_var->is_reference)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                        return_var->offset, addr_reg->bit_64);
+                }
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
+        int scope_depth = 0;
+        StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
+
+        /* Check if this is a set constant - need to emit rodata even if var_node is found */
+        if (ctx->symtab != NULL)
+        {
+            HashNode_t *const_node = NULL;
+            if (FindSymbol(&const_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                const_node->const_set_value != NULL && const_node->const_set_size > 0)
+            {
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for set constant.");
+                        goto cleanup;
+                    }
+                }
+
+                inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                if (const_node->const_set_label == NULL)
+                {
+                    inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                        "ERROR: Failed to materialize set constant.");
+                    goto cleanup;
+                }
+
+                char buffer[96];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                    const_node->const_set_label, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+        }
+
+        /* Fallback: resolve via symbol table mangled_id (e.g. class constants
+           registered as "TSingleHelper__Epsilon" but referenced as "Epsilon") */
+        if (var_node == NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *sym_node = NULL;
+            if (FindSymbol(&sym_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                sym_node != NULL && sym_node->mangled_id != NULL)
+            {
+                var_node = find_label_with_depth(sym_node->mangled_id, &scope_depth);
+            }
+        }
+
+        if (var_node == NULL)
+        {
+            /* Procedures/functions used as values (e.g. @Proc, typed proc constants) */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *proc_node = NULL;
+                if (FindSymbol(&proc_node, ctx->symtab, expr->expr_data.id) != 0 &&
+                    proc_node != NULL &&
+                    (proc_node->hash_type == HASHTYPE_PROCEDURE ||
+                     proc_node->hash_type == HASHTYPE_FUNCTION) &&
+                    proc_node->mangled_id != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for procedure address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        proc_node->mangled_id, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            /* Constant set literals (set of char) are materialized in rodata */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *const_node = NULL;
+                int found = FindSymbol(&const_node, ctx->symtab, expr->expr_data.id);
+                if (found != 0 &&
+                    const_node != NULL && const_node->hash_type == HASHTYPE_CONST &&
+                    const_node->const_set_value != NULL && const_node->const_set_size > 0)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                        if (addr_reg == NULL)
+                        {
+                            inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                                "ERROR: Unable to allocate register for set constant.");
+                            goto cleanup;
+                        }
+                    }
+
+                    inst_list = codegen_emit_const_set_rodata(const_node, inst_list, ctx);
+                    if (const_node->const_set_label == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Failed to materialize set constant.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        const_node->const_set_label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            /* String constants need to be emitted to rodata so their address can be taken */
+            if (ctx->symtab != NULL)
+            {
+                HashNode_t *str_const_node = NULL;
+                int str_found = FindSymbol(&str_const_node, ctx->symtab, expr->expr_data.id);
+                if (str_found != 0 && str_const_node != NULL &&
+                    str_const_node->hash_type == HASHTYPE_CONST &&
+                    str_const_node->const_string_value != NULL &&
+                    !(str_const_node->type != NULL && str_const_node->type->kind == TYPE_KIND_PROCEDURE))
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for string constant address.");
+                        goto cleanup;
+                    }
+
+                    char label[20];
+                    snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
+                    char add_rodata[1024];
+                    const char *readonly_section = codegen_readonly_section_directive();
+                    /* Simple assembly-safe emit — control chars are rare in constants */
+                    snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                        readonly_section, label, str_const_node->const_string_value, codegen_text_section_resume());
+                    inst_list = add_inst(inst_list, add_rodata);
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                        label, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            if (expr->expr_data.id != NULL)
+            {
+                const char *builtin_file_ptr = NULL;
+                if (pascal_identifier_equals(expr->expr_data.id, "stdin"))
+                    builtin_file_ptr = "stdin_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stdout"))
+                    builtin_file_ptr = "stdout_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "stderr"))
+                    builtin_file_ptr = "stderr_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Input"))
+                    builtin_file_ptr = "Input_ptr";
+                else if (pascal_identifier_equals(expr->expr_data.id, "Output"))
+                    builtin_file_ptr = "Output_ptr";
+
+                if (builtin_file_ptr != NULL)
+                {
+                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for file variable address.");
+                        goto cleanup;
+                    }
+
+                    char buffer[96];
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                        builtin_file_ptr, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                    *out_reg = addr_reg;
+                    goto cleanup;
+                }
+            }
+
+            if (nonlocal_flag() == 1)
+            {
+                int offset = 0;
+                inst_list = codegen_get_nonlocal(inst_list, expr->expr_data.id, &offset, ctx);
+                Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (addr_reg == NULL)
+                {
+                    addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    if (addr_reg == NULL)
+                    {
+                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                            "ERROR: Unable to allocate register for address expression.");
+                        goto cleanup;
+                    }
+                }
+                char buffer[64];
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n", offset,
+                    current_non_local_reg64(), addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+            inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+        
+        HashNode_t *symbol = NULL;
+        int treat_as_reference = 0;
+        if (ctx->symtab != NULL)
+        {
+            if (FindSymbol(&symbol, ctx->symtab, expr->expr_data.id) != 0 && symbol != NULL)
+                treat_as_reference = symbol->is_var_parameter;
+        }
+        if (var_node->is_reference)
+            treat_as_reference = 1;
+        if (treat_as_reference && symbol != NULL && expr->expr_data.id != NULL &&
+            pascal_identifier_equals(expr->expr_data.id, "Self") &&
+            symbol->type != NULL)
+        {
+            struct RecordType *self_record = NULL;
+            if (kgpc_type_is_pointer(symbol->type) &&
+                symbol->type->info.points_to != NULL &&
+                symbol->type->info.points_to->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.points_to->info.record_info;
+            }
+            else if (symbol->type->kind == TYPE_KIND_RECORD)
+            {
+                self_record = symbol->type->info.record_info;
+            }
+            if (self_record != NULL && record_type_is_class(self_record))
+                treat_as_reference = 0;
+        }
+        /* ShortStrings may be stored as pointers in a single qword slot.
+         * In that case we need to load the pointer value, not take the
+         * address of the spill slot itself. */
+        if (!treat_as_reference && symbol != NULL && symbol->type != NULL &&
+            var_node->size <= CODEGEN_POINTER_SIZE_BYTES)
+        {
+            struct TypeAlias *alias = kgpc_type_get_type_alias(symbol->type);
+            int is_shortstring = kgpc_type_is_shortstring(symbol->type) ||
+                (alias != NULL && alias->is_shortstring);
+            if (!is_shortstring && alias != NULL)
+            {
+                if ((alias->alias_name != NULL &&
+                     pascal_identifier_equals(alias->alias_name, "ShortString")) ||
+                    (alias->target_type_id != NULL &&
+                     pascal_identifier_equals(alias->target_type_id, "ShortString")))
+                {
+                    is_shortstring = 1;
+                }
+            }
+            if (is_shortstring)
+                treat_as_reference = 1;
+        }
+
+        /* Try normal allocation first, then spill if needed */
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for address expression.");
+                goto cleanup;
+            }
+        }
+
+        char buffer[96];
+        
+        const char *static_label = NULL;
+        if (var_node->is_static)
+            static_label = (var_node->static_label != NULL) ? var_node->static_label : var_node->label;
+
+        if (static_label != NULL)
+        {
+            /* Static/global variables live at a fixed address; even when used for
+             * var parameters we need the address, not the first qword of storage. */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                static_label, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        
+        /* For non-local variables (scope_depth > 0), use static link */
+        if (scope_depth > 0)
+        {
+            Register_t *frame_reg = codegen_acquire_static_link(ctx, &inst_list, scope_depth);
+            if (frame_reg == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Failed to acquire static link for variable %s.",
+                    expr->expr_data.id);
+                /* Fallback to local access (will be wrong but prevents crash) */
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                *out_reg = addr_reg;
+                goto cleanup;
+            }
+            
+            if (treat_as_reference)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%s), %s\n",
+                    var_node->offset, frame_reg->bit_64, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        
+        /* Local variable (scope_depth == 0) */
+        if (treat_as_reference)
+        {
+            if (var_node->is_static)
+            {
+                const char *label = var_node->static_label != NULL ?
+                    var_node->static_label : var_node->label;
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                    label != NULL ? label : "",
+                    addr_reg->bit_64);
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    var_node->offset, addr_reg->bit_64);
+            }
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+        if (var_node->is_static)
+        {
+            const char *label = var_node->static_label != NULL ?
+                var_node->static_label : var_node->label;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                label != NULL ? label : "",
+                addr_reg->bit_64);
+        }
+        else
+        {
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                var_node->offset, addr_reg->bit_64);
+        }
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        inst_list = codegen_array_element_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_RECORD_ACCESS)
+    {
+        inst_list = codegen_record_field_address(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_RECORD_CONSTRUCTOR)
+    {
+        long long record_size = 0;
+        if (codegen_get_record_size(ctx, expr, &record_size) != 0 || record_size <= 0)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to determine size for record constructor.");
+            goto cleanup;
+        }
+
+        StackNode_t *temp_slot = codegen_alloc_record_ctor_temp(record_size);
+        if (temp_slot == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate temporary storage for record constructor.");
+            goto cleanup;
+        }
+
+        const char *dest_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
+        const char *val_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
+        const char *size_arg_reg = codegen_target_is_windows() ? "%r8"  : "%rdx";
+        char buffer[128];
+
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, dest_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\txorq\t%%rax, %%rax\n");
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", val_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n", record_size, size_arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+
+        inst_list = codegen_vect_reg(inst_list, 0);
+        inst_list = codegen_call_with_shadow_space(inst_list, "memset");
+        free_arg_regs();
+
+        struct Expression *temp_var = mk_varid(expr->line_num, strdup(temp_slot->label));
+        if (temp_var == NULL)
+            goto cleanup;
+        temp_var->record_type = expr->record_type;
+        if (expr->record_type != NULL)
+            temp_var->resolved_kgpc_type = create_record_type(expr->record_type);
+
+        ListNode_t *field_node = expr->expr_data.record_constructor_data.fields;
+        while (field_node != NULL)
+        {
+            struct RecordConstructorField *field =
+                (struct RecordConstructorField *)field_node->cur;
+            if (field != NULL && field->field_id != NULL && field->value != NULL)
+            {
+                struct Expression *field_access =
+                    mk_recordaccess(expr->line_num, temp_var, strdup(field->field_id));
+                if (field_access == NULL)
+                    goto cleanup;
+                field_access->expr_data.record_access_data.field_offset = field->field_offset;
+                if (field->field_type == RECORD_TYPE)
+                {
+                    field_access->record_type = field->field_record_type;
+                    if (field->field_record_type != NULL)
+                        field_access->resolved_kgpc_type = create_record_type(field->field_record_type);
+                }
+                else if (field->field_type == POINTER_TYPE)
+                {
+                    field_access->resolved_kgpc_type = create_pointer_type(NULL);
+                }
+                else if (field->field_type != UNKNOWN_TYPE)
+                {
+                    /* Compute the field's actual storage size from record layout.
+                     * create_primitive_type(INT_TYPE) defaults to 4 bytes, but in
+                     * FPC mode Integer=SmallInt is only 2 bytes.  Derive the real
+                     * size from consecutive field offsets and the record's cached
+                     * total size. */
+                    long long field_storage = 0;
+                    if (expr->record_type != NULL && expr->record_type->has_cached_size)
+                    {
+                        long long next_off = expr->record_type->cached_size;
+                        ListNode_t *scan = expr->expr_data.record_constructor_data.fields;
+                        while (scan != NULL)
+                        {
+                            struct RecordConstructorField *other =
+                                (struct RecordConstructorField *)scan->cur;
+                            if (other != NULL &&
+                                other->field_offset > field->field_offset &&
+                                other->field_offset < next_off)
+                                next_off = other->field_offset;
+                            scan = scan->next;
+                        }
+                        field_storage = next_off - field->field_offset;
+                    }
+                    if (field_storage > 0 && field_storage != 4 &&
+                        field_storage <= INT_MAX)
+                        field_access->resolved_kgpc_type =
+                            create_primitive_type_with_size(field->field_type, (int)field_storage);
+                    else
+                        field_access->resolved_kgpc_type = create_primitive_type(field->field_type);
+                }
+
+                if (field->field_is_array)
+                {
+                    field_access->is_array_expr = 1;
+                    field_access->array_lower_bound = field->array_start;
+                    field_access->array_upper_bound = field->array_end;
+                    field_access->array_is_dynamic = field->array_is_open;
+                    field_access->array_element_type = field->array_element_type;
+                    if (field->array_element_type_id != NULL)
+                        field_access->array_element_type_id = strdup(field->array_element_type_id);
+                    field_access->array_element_record_type = field->array_element_record_type;
+                }
+
+                struct RecordField *actual_field = codegen_lookup_record_field_expr(field_access, ctx);
+                if (actual_field != NULL && actual_field->is_array && !field_access->is_array_expr)
+                {
+                    field_access->is_array_expr = 1;
+                    field_access->array_lower_bound = actual_field->array_start;
+                    field_access->array_upper_bound = actual_field->array_end;
+                    field_access->array_is_dynamic = actual_field->array_is_open;
+                    field_access->array_element_type = actual_field->array_element_type;
+                    if (field_access->array_element_type_id == NULL &&
+                        actual_field->array_element_type_id != NULL)
+                    {
+                        field_access->array_element_type_id =
+                            strdup(actual_field->array_element_type_id);
+                    }
+                    field_access->array_element_record_type =
+                        actual_field->array_element_record;
+                    if (field_access->array_element_size <= 0 &&
+                        actual_field->array_element_type != UNKNOWN_TYPE)
+                    {
+                        int elem_size = codegen_local_type_tag_size(actual_field->array_element_type);
+                        if (elem_size > 0)
+                            field_access->array_element_size = elem_size;
+                    }
+                }
+                if (!field_access->is_array_expr &&
+                    field->value->type == EXPR_ARRAY_LITERAL &&
+                    field->field_type != UNKNOWN_TYPE)
+                {
+                    int elem_size = codegen_local_type_tag_size(field->field_type);
+                    if (elem_size > 0)
+                    {
+                        field_access->is_array_expr = 1;
+                        field_access->array_lower_bound = 0;
+                        field_access->array_upper_bound =
+                            field->value->expr_data.array_literal_data.element_count - 1;
+                        field_access->array_is_dynamic = 0;
+                        field_access->array_element_type = field->field_type;
+                        field_access->array_element_size = elem_size;
+                        if (field_access->array_element_type_id == NULL &&
+                            field->field_type_id != NULL)
+                        {
+                            field_access->array_element_type_id = strdup(field->field_type_id);
+                        }
+                    }
+                }
+
+                if (field_access->is_array_expr &&
+                    field->value->type == EXPR_ARRAY_LITERAL)
+                {
+                    ListNode_t *element_node = field->value->expr_data.array_literal_data.elements;
+                    int index = field_access->array_lower_bound;
+                    while (element_node != NULL && index <= field_access->array_upper_bound)
+                    {
+                        struct Expression *element_expr = (struct Expression *)element_node->cur;
+                        struct Expression *index_expr = mk_inum(expr->line_num, index);
+                        struct Expression *array_access = mk_arrayaccess(expr->line_num,
+                            field_access, index_expr);
+                        if (array_access == NULL)
+                            goto cleanup;
+                        array_access->is_array_expr = 1;
+                        array_access->array_lower_bound = field_access->array_lower_bound;
+                        array_access->array_upper_bound = field_access->array_upper_bound;
+                        array_access->array_is_dynamic = field_access->array_is_dynamic;
+                        array_access->array_element_type = field_access->array_element_type;
+                        array_access->array_element_size = field_access->array_element_size;
+                        if (field_access->array_element_type_id != NULL)
+                            array_access->array_element_type_id = strdup(field_access->array_element_type_id);
+                        array_access->array_element_record_type = field_access->array_element_record_type;
+
+                        struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                            array_access, element_expr);
+                        if (assign_stmt == NULL)
+                            goto cleanup;
+                        inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                        free(assign_stmt);
+                        element_node = element_node->next;
+                        ++index;
+                    }
+                    field_node = field_node->next;
+                    continue;
+                }
+
+                struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
+                    field_access, field->value);
+                if (assign_stmt == NULL)
+                    goto cleanup;
+                inst_list = codegen_var_assignment(assign_stmt, inst_list, ctx);
+                free(assign_stmt);
+            }
+            field_node = field_node->next;
+        }
+
+        Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for record constructor address.");
+                goto cleanup;
+            }
+        }
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+            temp_slot->offset, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ARRAY_LITERAL)
+    {
+        /* Array literals are materialized into a temporary stack slot by
+         * codegen_expr_with_result, which returns a register pointing to
+         * the data.  Use that address directly instead of falling through
+         * to codegen_evaluate_expr/build_expr_tree which cannot handle
+         * compound expressions. */
+        inst_list = codegen_expr_with_result(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_POINTER_DEREF)
+    {
+        struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Pointer dereference missing operand.");
+            goto cleanup;
+        }
+
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_evaluate_expr(pointer_expr, inst_list, ctx, &addr_reg);
+        if (addr_reg == NULL)
+            goto cleanup;
+
+        *out_reg = addr_reg;
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_ADDR)
+    {
+        struct Expression *inner = expr->expr_data.addr_data.expr;
+        if (inner == NULL)
+        {
+            codegen_report_error(ctx, "ERROR: Address-of expression missing operand.");
+            goto cleanup;
+        }
+
+        inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_TYPECAST)
+    {
+        struct Expression *inner = expr->expr_data.typecast_data.expr;
+        /* Typecast on an addressable expression: pass the address of the inner
+         * expression. This handles reinterpret casts for var parameters, e.g.
+         * InterLockedExchange(longint(TLSInitialized), ...) where the first
+         * param is 'var Target: longint' and TLSInitialized is longbool. */
+        if (inner != NULL && codegen_expr_is_addressable(inner))
+        {
+            inst_list = codegen_address_for_expr(inner, inst_list, ctx, out_reg);
+            goto cleanup;
+        }
+    }
+    else if (expr->type == EXPR_FUNCTION_CALL &&
+        (expr_has_type_tag(expr, RECORD_TYPE) || expr_has_type_tag(expr, SHORTSTRING_TYPE) ||
+         (expr->resolved_kgpc_type != NULL &&
+          expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
+          !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))))
+    {
+        /* Record-valued function calls evaluate to a temporary addressable object
+         * (sret/hidden pointer), which callers may pass by reference. */
+        inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+        goto cleanup;
+    }
+    else if (expr->type == EXPR_AS)
+    {
+        if (expr->expr_data.as_data.expr != NULL)
+        {
+            Register_t *operand_addr = NULL;
+            inst_list = codegen_address_for_expr(expr->expr_data.as_data.expr, inst_list, ctx, &operand_addr);
+            if (operand_addr != NULL)
+            {
+                inst_list = codegen_emit_class_cast_check_from_address((struct Expression *)expr,
+                    inst_list, ctx, operand_addr);
+                *out_reg = operand_addr;
+                goto cleanup;
+            }
+        }
+        goto cleanup;
+    }
+
+    inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
+
+cleanup:
+    if (began_expr)
+        codegen_end_expression(ctx);
+    return inst_list;
+}
+

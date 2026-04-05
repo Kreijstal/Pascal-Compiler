@@ -46,11 +46,10 @@ extern const char *kgpc_getenv(const char *name);
 #include "../../identifier_utils.h"
 #include "../pascal_frontend.h"
 #include "../ErrVars.h"
-
-#include "from_cparser_parts/from_cparser_part1.inc"
-#include "from_cparser_parts/from_cparser_part2.inc"
-#include "from_cparser_parts/from_cparser_part3.inc"
-#include "from_cparser_parts/from_cparser_part4.inc"
-#include "from_cparser_parts/from_cparser_part5.inc"
-#include "from_cparser_parts/from_cparser_part6.inc"
-
+#include "from_cparser_parts/from_cparser_init_and_registry.inc"
+#include "from_cparser_parts/from_cparser_generics.inc"
+#include "from_cparser_parts/from_cparser_const_and_types.inc"
+#include "from_cparser_parts/from_cparser_records.inc"
+#include "from_cparser_parts/from_cparser_declarations.inc"
+#include "from_cparser_parts/from_cparser_expressions.inc"
+#include "from_cparser_parts/from_cparser_statements_and_programs.inc"

@@ -61,12 +61,11 @@ HashNode_t *semcheck_find_type_node_in_owner_chain(SymTab_t *symtab,
 #include "NameMangling.h"
 #include <stdarg.h>
 
-void semcheck_expr_set_resolved_type(struct Expression *expr, int type_tag);
-
-#include "SemCheck_parts/SemCheck_part1.inc"
-#include "SemCheck_parts/SemCheck_part2.inc"
-#include "SemCheck_parts/SemCheck_part3.inc"
-#include "SemCheck_parts/SemCheck_part4.inc"
-#include "SemCheck_parts/SemCheck_part5.inc"
-#include "SemCheck_parts/SemCheck_part6.inc"
-
+#include "SemCheck_parts/SemCheck_env_types_errors.inc"
+#include "SemCheck_parts/SemCheck_symbols_and_class.inc"
+#include "SemCheck_parts/SemCheck_const_eval.inc"
+#include "SemCheck_parts/SemCheck_init_and_inheritance.inc"
+#include "SemCheck_parts/SemCheck_vmt_and_type_decls.inc"
+#include "SemCheck_parts/SemCheck_const_decls_and_builtins.inc"
+#include "SemCheck_parts/SemCheck_program_and_vars.inc"
+#include "SemCheck_parts/SemCheck_subprograms.inc"

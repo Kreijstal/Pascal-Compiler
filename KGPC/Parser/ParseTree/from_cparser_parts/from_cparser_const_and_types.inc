@@ -1,417 +1,3 @@
-void flush_deferred_inline_specializations(Tree_t *program_tree)
-{
-    DeferredInlineSpec *cur = g_deferred_inline_specs;
-    g_deferred_inline_specs = NULL;
-
-    ListNode_t **type_list = NULL;
-    ListNode_t **subprograms = NULL;
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
-        type_list = &program_tree->tree_data.program_data.type_declaration;
-        subprograms = &program_tree->tree_data.program_data.subprograms;
-    } else if (program_tree != NULL && program_tree->type == TREE_UNIT) {
-        type_list = &program_tree->tree_data.unit_data.interface_type_decls;
-        subprograms = &program_tree->tree_data.unit_data.subprograms;
-    }
-
-    if (type_list == NULL) {
-        while (cur != NULL) {
-            DeferredInlineSpec *next = cur->next;
-            if (cur->type_decl != NULL)
-                destroy_tree(cur->type_decl);
-            free(cur);
-            cur = next;
-        }
-        return;
-    }
-
-    while (cur != NULL) {
-        DeferredInlineSpec *next = cur->next;
-        if (cur->type_decl != NULL) {
-            /* Emit method clones for this inline specialization */
-            if (subprograms != NULL)
-                append_specialized_method_clones(cur->type_decl, subprograms);
-            ListNode_t *node = CreateListNode(cur->type_decl, LIST_TREE);
-            if (node != NULL) {
-                node->next = *type_list;
-                *type_list = node;
-            } else {
-                destroy_tree(cur->type_decl);
-            }
-        }
-        free(cur);
-        cur = next;
-    }
-}
-
-void append_generic_method_clones(Tree_t *program_tree)
-{
-    if (program_tree == NULL || program_tree->type != TREE_PROGRAM_TYPE)
-        return;
-
-    ListNode_t *type_cursor = program_tree->tree_data.program_data.type_declaration;
-    while (type_cursor != NULL)
-    {
-        if (type_cursor->type == LIST_TREE && type_cursor->cur != NULL)
-        {
-            Tree_t *decl = (Tree_t *)type_cursor->cur;
-            append_specialized_method_clones(decl,
-                &program_tree->tree_data.program_data.subprograms);
-        }
-        type_cursor = type_cursor->next;
-    }
-}
-
-/* Clone nested type declarations from a generic class for a specialization.
- * For example, if TFPGList has nested type TFPGList.PT = ^T, then specializing
- * TFPGList<TMyRecord> produces TFPGList$TMyRecord.PT = ^TMyRecord.
- * The cloned declarations are appended to the program's type declaration list. */
-static void clone_nested_types_for_specialization(
-    GenericTypeDecl *generic_decl,
-    const char *specialized_name, /* e.g. "TFPGList$TMyRecord" */
-    ListNode_t *type_args,        /* concrete type arguments */
-    ListNode_t **type_list_out,   /* where to append new type decls */
-    ListNode_t **subprograms_out) /* where to append method clones (may be NULL) */
-{
-    if (generic_decl == NULL || generic_decl->nested_type_decls == NULL ||
-        specialized_name == NULL || type_list_out == NULL)
-        return;
-
-    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
-    const char *generic_name = generic_decl->name;
-    size_t prefix_len = generic_name != NULL ? strlen(generic_name) : 0;
-
-    /* Build arg_types array for substitution */
-    int arg_count = 0;
-    ListNode_t *arg_cur = type_args;
-    while (arg_cur != NULL) {
-        if (arg_cur->type == LIST_STRING) arg_count++;
-        arg_cur = arg_cur->next;
-    }
-
-    ListNode_t *cur = generic_decl->nested_type_decls;
-    while (cur != NULL) {
-        if (cur->type == LIST_TREE && cur->cur != NULL) {
-            Tree_t *orig = (Tree_t *)cur->cur;
-            if (orig->type == TREE_TYPE_DECL && orig->tree_data.type_decl_data.id != NULL) {
-                const char *orig_id = orig->tree_data.type_decl_data.id;
-                /* Check that orig_id starts with generic_name + "." */
-                if (prefix_len > 0 && strncmp(orig_id, generic_name, prefix_len) == 0 &&
-                    orig_id[prefix_len] == '.')
-                {
-                    const char *suffix = orig_id + prefix_len; /* e.g., ".PT" */
-                    /* Build new id: specialized_name + suffix */
-                    size_t new_id_len = strlen(specialized_name) + strlen(suffix) + 1;
-                    char *new_id = (char *)malloc(new_id_len);
-                    if (new_id == NULL) { cur = cur->next; continue; }
-                    snprintf(new_id, new_id_len, "%s%s", specialized_name, suffix);
-
-                    Tree_t *clone = mk_typedecl(orig->line_num, new_id, 0, 0);
-                    if (clone == NULL) { free(new_id); cur = cur->next; continue; }
-
-                    clone->source_index = orig->source_index;
-                    clone->tree_data.type_decl_data.kind = orig->tree_data.type_decl_data.kind;
-                    clone->tree_data.type_decl_data.defined_in_unit = orig->tree_data.type_decl_data.defined_in_unit;
-
-                    if (orig->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                        struct TypeAlias *src_alias = &orig->tree_data.type_decl_data.info.alias;
-                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
-                        *dst_alias = *src_alias; /* Shallow copy */
-                        dst_alias->target_type_id = src_alias->target_type_id ?
-                            strdup(src_alias->target_type_id) : NULL;
-                        dst_alias->pointer_type_id = src_alias->pointer_type_id ?
-                            strdup(src_alias->pointer_type_id) : NULL;
-                        dst_alias->array_element_type_id = src_alias->array_element_type_id ?
-                            strdup(src_alias->array_element_type_id) : NULL;
-                        dst_alias->inline_record_type = NULL;
-                        dst_alias->target_type_ref = src_alias->target_type_ref ?
-                            type_ref_clone(src_alias->target_type_ref) : NULL;
-                        dst_alias->array_element_type_ref = src_alias->array_element_type_ref ?
-                            type_ref_clone(src_alias->array_element_type_ref) : NULL;
-
-                        /* Substitute generic type parameters in type identifiers.
-                         * For example, if T → TMyRecord, then "T" → "TMyRecord",
-                         * and pointer_type_id "T" → "TMyRecord". */
-                        for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
-                            const char *param = generic_decl->type_parameters[pi];
-                            /* Get the concrete type for this parameter */
-                            ListNode_t *a = type_args;
-                            for (int ai = 0; ai < pi && a != NULL; ai++)
-                                a = a->next;
-                            if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
-                                continue;
-                            const char *concrete = (const char *)a->cur;
-
-                            if (dst_alias->target_type_id != NULL &&
-                                strcasecmp(dst_alias->target_type_id, param) == 0) {
-                                free(dst_alias->target_type_id);
-                                dst_alias->target_type_id = strdup(concrete);
-                            }
-                            if (dst_alias->pointer_type_id != NULL &&
-                                strcasecmp(dst_alias->pointer_type_id, param) == 0) {
-                                free(dst_alias->pointer_type_id);
-                                dst_alias->pointer_type_id = strdup(concrete);
-                            }
-                            if (dst_alias->array_element_type_id != NULL &&
-                                strcasecmp(dst_alias->array_element_type_id, param) == 0) {
-                                free(dst_alias->array_element_type_id);
-                                dst_alias->array_element_type_id = strdup(concrete);
-                            }
-                        }
-
-                        /* Substitute type parameters in mangled names like
-                         * "TFPGListEnumerator$T" -> "TFPGListEnumerator$TMyRecord" */
-                        if (dst_alias->target_type_id != NULL) {
-                            for (int pi = 0; pi < generic_decl->num_type_params && pi < arg_count; pi++) {
-                                const char *param = generic_decl->type_parameters[pi];
-                                ListNode_t *a = type_args;
-                                for (int ai = 0; ai < pi && a != NULL; ai++)
-                                    a = a->next;
-                                if (a == NULL || a->type != LIST_STRING || a->cur == NULL)
-                                    continue;
-                                const char *concrete = (const char *)a->cur;
-                                if (param == NULL || concrete == NULL) continue;
-                                size_t param_len = strlen(param);
-                                /* Look for "$T" pattern at the end or "$T$" in the middle */
-                                char *pos = dst_alias->target_type_id;
-                                while ((pos = strchr(pos, '$')) != NULL) {
-                                    pos++; /* skip '$' */
-                                    if (strncasecmp(pos, param, param_len) == 0 &&
-                                        (pos[param_len] == '\0' || pos[param_len] == '$')) {
-                                        /* Found "$T" — rebuild the string with "$TMyRecord" */
-                                        size_t prefix_len2 = (pos - dst_alias->target_type_id);
-                                        size_t suffix_len = strlen(pos + param_len);
-                                        size_t concrete_len = strlen(concrete);
-                                        char *new_target = malloc(prefix_len2 + concrete_len + suffix_len + 1);
-                                        if (new_target != NULL) {
-                                            memcpy(new_target, dst_alias->target_type_id, prefix_len2);
-                                            memcpy(new_target + prefix_len2, concrete, concrete_len);
-                                            memcpy(new_target + prefix_len2 + concrete_len,
-                                                   pos + param_len, suffix_len + 1);
-                                            free(dst_alias->target_type_id);
-                                            dst_alias->target_type_id = new_target;
-                                        }
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        /* Also substitute qualified names: if target_type_id refers
-                         * to another nested type of the same generic (e.g., "TFPGList.PT"),
-                         * rewrite to "TFPGList$TMyRecord.PT" */
-                        if (dst_alias->target_type_id != NULL &&
-                            strncmp(dst_alias->target_type_id, generic_name, prefix_len) == 0 &&
-                            dst_alias->target_type_id[prefix_len] == '.') {
-                            const char *inner_suffix = dst_alias->target_type_id + prefix_len;
-                            size_t new_target_len = strlen(specialized_name) + strlen(inner_suffix) + 1;
-                            char *new_target = (char *)malloc(new_target_len);
-                            if (new_target != NULL) {
-                                snprintf(new_target, new_target_len, "%s%s", specialized_name, inner_suffix);
-                                free(dst_alias->target_type_id);
-                                dst_alias->target_type_id = new_target;
-                            }
-                        }
-                    }
-
-                    /* If the target_type_id is a mangled generic name like
-                     * "TFPGListEnumerator$TMyRecord", ensure that specialization
-                     * actually exists by triggering instantiation. */
-                    int alias_type_set = 0;
-                    if (clone->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS) {
-                        struct TypeAlias *dst_alias = &clone->tree_data.type_decl_data.info.alias;
-                        if (debug_env != NULL && dst_alias->target_type_id != NULL)
-                            fprintf(stderr, "[KGPC] clone alias %s target_type_id=%s\n",
-                                clone->tree_data.type_decl_data.id, dst_alias->target_type_id);
-                        if (dst_alias->target_type_id != NULL) {
-                            char *dollar = strchr(dst_alias->target_type_id, '$');
-                            if (dollar != NULL) {
-                                /* Extract base name and type args from mangled name */
-                                size_t base_len = dollar - dst_alias->target_type_id;
-                                char *inner_base = strndup(dst_alias->target_type_id, base_len);
-                                GenericTypeDecl *inner_generic = generic_registry_find_decl(inner_base);
-                                if (inner_generic != NULL) {
-                                    /* Build type args from the suffix */
-                                    const char *arg_str = dollar + 1;
-                                    ListNode_t *inner_args = CreateListNode(strdup(arg_str), LIST_STRING);
-                                    char *inner_spec_name = NULL;
-                                    struct RecordType *inner_record =
-                                        instantiate_generic_record(inner_base, inner_args, &inner_spec_name);
-                                    if (inner_record != NULL) {
-                                        /* Set the alias clone's inline_record_type to the
-                                         * specialized record.  The semantic checker will
-                                         * register both the mangled name (inner_record->type_id)
-                                         * and the alias name in the symbol table (see line 7012+
-                                         * in SemCheck.c).  This also enables constructor
-                                         * resolution via record_info. */
-                                        dst_alias->inline_record_type = inner_record;
-                                        dst_alias->base_type = RECORD_TYPE;
-                                        KgpcType *alias_type = create_record_type(inner_record);
-                                        if (inner_record->is_class) {
-                                            KgpcType *ptr = create_pointer_type(alias_type);
-                                            kgpc_type_release(alias_type);
-                                            alias_type = ptr;
-                                        }
-                                        clone->tree_data.type_decl_data.kgpc_type = alias_type;
-                                        alias_type_set = 1;
-                                        if (debug_env != NULL)
-                                            fprintf(stderr, "[KGPC] triggered nested specialization %s\n",
-                                                inner_spec_name);
-                                    }
-                                    if (inner_spec_name != NULL) free(inner_spec_name);
-                                    destroy_list(inner_args);
-                                }
-                                free(inner_base);
-                            }
-                        }
-                    }
-
-                    /* Also handle procedure/function type declarations */
-                    if (!alias_type_set && orig->tree_data.type_decl_data.kgpc_type != NULL) {
-                        clone->tree_data.type_decl_data.kgpc_type = orig->tree_data.type_decl_data.kgpc_type;
-                        kgpc_type_retain(clone->tree_data.type_decl_data.kgpc_type);
-                    }
-
-                    ListNode_t *node = CreateListNode(clone, LIST_TREE);
-                    if (node != NULL) {
-                        node->next = *type_list_out;
-                        *type_list_out = node;
-                    } else {
-                        destroy_tree(clone);
-                    }
-
-                    /* If we triggered a nested specialization via inline_record_type,
-                     * also emit method clones for the inner specialization. */
-                    if (alias_type_set && subprograms_out != NULL)
-                        append_specialized_method_clones(clone, subprograms_out);
-
-                    if (debug_env != NULL)
-                        fprintf(stderr, "[KGPC] cloned nested type %s -> %s\n", orig_id, clone->tree_data.type_decl_data.id);
-                }
-            }
-        }
-        cur = cur->next;
-    }
-}
-
-void resolve_pending_generic_aliases(Tree_t *program_tree)
-{
-    PendingGenericAlias *cur = g_pending_generic_aliases;
-    g_pending_generic_aliases = NULL;
-    ListNode_t **clone_dest = NULL;
-    ListNode_t **type_list = NULL;
-    const char *debug_env = kgpc_getenv("KGPC_DEBUG_TFPG");
-    if (program_tree != NULL && program_tree->type == TREE_PROGRAM_TYPE) {
-        clone_dest = &program_tree->tree_data.program_data.subprograms;
-        type_list = &program_tree->tree_data.program_data.type_declaration;
-    }
-
-    while (cur != NULL) {
-        PendingGenericAlias *next = cur->next;
-        char *specialized_name = NULL;
-        struct RecordType *record = instantiate_generic_record(cur->base_name, cur->type_args, &specialized_name);
-        if (record != NULL && cur->decl != NULL &&
-            cur->decl->type == TREE_TYPE_DECL &&
-            cur->decl->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
-        {
-            struct TypeAlias *alias = &cur->decl->tree_data.type_decl_data.info.alias;
-            if (alias->inline_record_type != NULL)
-                destroy_record_type(alias->inline_record_type);
-            alias->inline_record_type = record;
-            alias->base_type = RECORD_TYPE;
-            if (cur->decl->tree_data.type_decl_data.kgpc_type == NULL) {
-                KgpcType *inline_type = create_record_type(record);
-                if (record->is_class) {
-                    KgpcType *ptr = create_pointer_type(inline_type);
-                    kgpc_type_release(inline_type);
-                    inline_type = ptr;
-                }
-                cur->decl->tree_data.type_decl_data.kgpc_type = inline_type;
-            }
-            if (clone_dest != NULL)
-                append_specialized_method_clones(cur->decl, clone_dest);
-
-            /* Clone nested type declarations for this specialization */
-            if (type_list != NULL && specialized_name != NULL && cur->base_name != NULL) {
-                GenericTypeDecl *generic = generic_registry_find_decl(cur->base_name);
-                if (generic != NULL && generic->nested_type_decls != NULL) {
-                    clone_nested_types_for_specialization(generic, specialized_name,
-                        cur->type_args, type_list, clone_dest);
-                }
-            }
-
-            if (debug_env != NULL && cur->decl->tree_data.type_decl_data.id != NULL &&
-                cur->base_name != NULL)
-            {
-                fprintf(stderr, "[KGPC] resolved generic alias %s for %s\n",
-                        cur->decl->tree_data.type_decl_data.id, cur->base_name);
-            }
-        } else {
-            fprintf(stderr, "ERROR: Failed to instantiate generic record %s for deferred alias.\n",
-                    cur->base_name != NULL ? cur->base_name : "<unknown>");
-            if (record != NULL)
-                destroy_record_type(record);
-        }
-        if (specialized_name != NULL)
-            free(specialized_name);
-        if (cur->base_name != NULL)
-            free(cur->base_name);
-        if (cur->type_args != NULL)
-            destroy_list(cur->type_args);
-        free(cur);
-        cur = next;
-    }
-}
-
-static ListNode_t *collect_constructed_type_args(ast_t *args_node);
-static int extract_constructed_type_info(ast_t *spec_node, char **base_name_out, ListNode_t **type_args_out);
-static struct RecordType *instantiate_generic_record(const char *base_name, ListNode_t *type_args, char **specialized_name_out);
-static char *mangle_specialized_type_name(const char *base_name, char **type_ids, int num_types);
-static char *mangle_specialized_name_from_list(const char *base_name, ListNode_t *type_args);
-static void substitute_record_type_parameters(struct RecordType *record, GenericTypeDecl *generic_decl, char **arg_types);
-static void substitute_record_field(struct RecordField *field, GenericTypeDecl *generic_decl, char **arg_types);
-static void record_generic_method_impl(const char *class_name, const char *method_name, ast_t *method_ast);
-static Tree_t *instantiate_method_template(struct MethodTemplate *method_template, struct RecordType *record);
-
-static ast_t *find_ast_node_type(ast_t *node, int typ)
-{
-    if (node == NULL)
-        return NULL;
-    if (node->typ == typ)
-        return node;
-    for (ast_t *child = node->child; child != NULL; child = child->next)
-    {
-        ast_t *found = find_ast_node_type(child, typ);
-        if (found != NULL)
-            return found;
-    }
-    return NULL;
-}
-
-static int is_method_decl_keyword(const char *sym_name)
-{
-    if (sym_name == NULL)
-        return 0;
-    return (strcasecmp(sym_name, "virtual") == 0 ||
-            strcasecmp(sym_name, "override") == 0 ||
-            strcasecmp(sym_name, "static") == 0 ||
-            strcasecmp(sym_name, "abstract") == 0 ||
-            strcasecmp(sym_name, "inline") == 0 ||
-            strcasecmp(sym_name, "cdecl") == 0 ||
-            strcasecmp(sym_name, "stdcall") == 0 ||
-            strcasecmp(sym_name, "constructor") == 0 ||
-            strcasecmp(sym_name, "destructor") == 0 ||
-            strcasecmp(sym_name, "function") == 0 ||
-            strcasecmp(sym_name, "procedure") == 0 ||
-            strcasecmp(sym_name, "operator") == 0 ||
-            strcasecmp(sym_name, "class") == 0);
-}
-static void append_specialized_method_clones(Tree_t *decl, ListNode_t **subprograms);
-static void rewrite_method_impl_ast(ast_t *method_ast, struct RecordType *record);
-static void substitute_generic_identifier_nodes(ast_t *node, struct RecordType *record);
-static void append_subprogram_node(ListNode_t **dest, Tree_t *tree);
-static int extract_generic_type_params(ast_t *type_param_list, char ***out_params);
-static char *dup_first_identifier_in_node(ast_t *node);
-static char *dup_first_identifier_in_node(ast_t *node);
 
 
 
@@ -3531,3 +3117,462 @@ static struct RecordType *convert_interface_type_ex(const char *interface_name, 
  * This is the Phase 2 bridge function that creates KgpcType objects from AST nodes.
  * Returns NULL if the type cannot be converted or if symtab is needed but not provided.
  */
+KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab) {
+    if (type_spec == NULL)
+        return NULL;
+
+    ast_t *spec_node = type_spec;
+    if (spec_node->typ == PASCAL_T_TYPE_SPEC && spec_node->child != NULL)
+        spec_node = spec_node->child;
+    spec_node = unwrap_pascal_node(spec_node);
+
+    if (spec_node == NULL)
+        return NULL;
+
+    if (kgpc_getenv("KGPC_DEBUG_TFPG") != NULL)
+        fprintf(stderr, "[KGPC] convert_type_spec_to_kgpctype node typ=%d sym=%s\n",
+            spec_node->typ,
+            (spec_node->sym != NULL && spec_node->sym->name != NULL) ? spec_node->sym->name : "<null>");
+    /* Generic type specializations: constructed TFoo<T> or \"specialize TFoo<T>\" */
+    {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        int is_generic = 0;
+
+        if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+            is_generic = extract_constructed_type_info(type_spec, &base_name, &type_args);
+        } else {
+            is_generic = extract_specialize_type_info(type_spec, &base_name, &type_args);
+        }
+
+        if (is_generic) {
+            char *specialized_name = NULL;
+            struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+            free(base_name);
+            if (type_args != NULL)
+                destroy_list(type_args);
+            if (specialized_name != NULL)
+                free(specialized_name);
+            if (record != NULL) {
+                return create_record_type(record);
+            }
+        }
+    }
+
+    /* Handle primitive types by identifier */
+    if (spec_node->typ == PASCAL_T_IDENTIFIER) {
+        char *type_name = dup_symbol(spec_node);
+        if (type_name == NULL)
+            return NULL;
+
+        /* Get the preserved type name for RawByteString/UnicodeString */
+        char *preserved_type_id = NULL;
+        int type_tag = map_type_name(type_name, &preserved_type_id);
+        type_tag = apply_shortstring_mode(type_tag, type_name);
+        if (type_tag != UNKNOWN_TYPE) {
+            KgpcType *type = create_primitive_type(type_tag);
+            /* Preserve distinct string-family aliases needed for helper lookup and overloads. */
+            if (type != NULL && preserved_type_id != NULL &&
+                (strcasecmp(preserved_type_id, "AnsiString") == 0 ||
+                 strcasecmp(preserved_type_id, "RawByteString") == 0 ||
+                 strcasecmp(preserved_type_id, "UnicodeString") == 0 ||
+                 strcasecmp(preserved_type_id, "WideString") == 0)) {
+                /* Create a TypeAlias to preserve the original type name */
+                struct TypeAlias *alias = (struct TypeAlias *)calloc(1, sizeof(struct TypeAlias));
+                if (alias != NULL) {
+                    alias->alias_name = strdup(preserved_type_id);
+                    alias->base_type = type_tag;
+                    /* Set type_alias on the KgpcType */
+                    kgpc_type_set_type_alias(type, alias);
+                    /* Free the temporary alias after copying */
+                    free(alias->alias_name);
+                    free(alias);
+                }
+            }
+            free(type_name);
+            free(preserved_type_id);
+            return type;
+        }
+        
+        free(type_name);
+        free(preserved_type_id);
+
+        /* If unknown type and we have a symbol table, try to look it up */
+        if (symtab != NULL) {
+            /* This will be resolved later during semantic checking */
+            /* For now, we need to look up the type in the symbol table */
+            /* But that requires SymTab.h which creates circular dependency */
+            /* So we return NULL and let the caller handle named type lookup */
+            return NULL;
+        }
+
+        return NULL;
+    }
+    if (spec_node->typ == PASCAL_T_CONSTRUCTED_TYPE) {
+        char *base_name = NULL;
+        ListNode_t *type_args = NULL;
+        if (extract_constructed_type_info(spec_node, &base_name, &type_args)) {
+            char *specialized_name = NULL;
+            struct RecordType *record = instantiate_generic_record(base_name, type_args, &specialized_name);
+            free(base_name);
+            if (record != NULL) {
+                free(specialized_name);
+                return create_record_type(record);
+            }
+            if (specialized_name != NULL)
+                free(specialized_name);
+        }
+    }
+
+    /* Handle array types */
+    if (spec_node->typ == PASCAL_T_ARRAY_TYPE) {
+        ast_t *child = spec_node->child;
+        ast_t *element_node = child;
+        
+        /* Find the element type node (last child) */
+        while (element_node != NULL && element_node->next != NULL)
+            element_node = element_node->next;
+
+        /* Get range if available (first dimension only for now) */
+        int start = 0, end = -1;
+        if (child != NULL && child->typ == PASCAL_T_RANGE_TYPE) {
+            ast_t *lower = child->child;
+            ast_t *upper = (lower != NULL) ? lower->next : NULL;
+            if (lower != NULL && upper != NULL && lower->sym != NULL && upper->sym != NULL) {
+                start = atoi(lower->sym->name);
+                end = atoi(upper->sym->name);
+            }
+        }
+
+        /* Recursively convert element type */
+        KgpcType *element_type = convert_type_spec_to_kgpctype(element_node, symtab);
+        if (element_type == NULL) {
+            /* Try to get a primitive type from identifier */
+            if (element_node != NULL && element_node->typ == PASCAL_T_IDENTIFIER) {
+                char *elem_type_name = dup_symbol(element_node);
+                if (elem_type_name != NULL) {
+                    int elem_tag = map_type_name(elem_type_name, NULL);
+                    free(elem_type_name);
+                    if (elem_tag != UNKNOWN_TYPE) {
+                        element_type = create_primitive_type(elem_tag);
+                    }
+                }
+            }
+        }
+
+        if (element_type == NULL)
+            return NULL;
+
+        {
+            KgpcType *arr = create_array_type(element_type, start, end);
+            kgpc_type_release(element_type);
+            return arr;
+        }
+    }
+
+    /* Handle file types */
+    if (spec_node->typ == PASCAL_T_FILE_TYPE) {
+        ast_t *elem = spec_node->child;
+        while (elem != NULL && (elem->typ == PASCAL_T_NONE || elem->typ == PASCAL_T_TYPE_SPEC))
+            elem = elem->child;
+
+        if (elem == NULL) {
+            /* Untyped file - represented as primitive FILE_TYPE */
+            return create_primitive_type(FILE_TYPE);
+        }
+
+        /* Typed file: attempt to convert element type */
+        KgpcType *element_type = convert_type_spec_to_kgpctype(elem, symtab);
+        if (element_type == NULL && elem->typ == PASCAL_T_IDENTIFIER) {
+            char *elem_name = dup_symbol(elem);
+            if (elem_name != NULL) {
+                int elem_tag = map_type_name(elem_name, NULL);
+                free(elem_name);
+                if (elem_tag != UNKNOWN_TYPE) {
+                    element_type = create_primitive_type(elem_tag);
+                }
+            }
+        }
+
+        if (element_type == NULL) {
+            /* Fallback: treat as generic file */
+            return create_primitive_type(FILE_TYPE);
+        }
+
+        /* For now, represent file types as primitive FILE_TYPE with alias metadata.
+         * The detailed element type is tracked in the TypeAlias/TypeInfo structures. */
+        destroy_kgpc_type(element_type);
+        return create_primitive_type(FILE_TYPE);
+    }
+
+    /* Handle pointer types */
+    if (spec_node->typ == PASCAL_T_POINTER_TYPE) {
+        ast_t *target = spec_node->child;
+        while (target != NULL && target->typ != PASCAL_T_IDENTIFIER && target->typ != PASCAL_T_TYPE_SPEC)
+            target = target->next;
+
+        if (target != NULL) {
+            KgpcType *points_to = convert_type_spec_to_kgpctype(target, symtab);
+            if (points_to == NULL) {
+                /* Try primitive type lookup */
+                if (target->typ == PASCAL_T_IDENTIFIER) {
+                    char *target_name = dup_symbol(target);
+                    if (target_name != NULL) {
+                        int target_tag = map_type_name(target_name, NULL);
+                        free(target_name);
+                        if (target_tag != UNKNOWN_TYPE) {
+                            points_to = create_primitive_type(target_tag);
+                        }
+                    }
+                }
+            }
+
+            KgpcType *ptr = create_pointer_type(points_to);
+            if (points_to != NULL) kgpc_type_release(points_to);
+            return ptr;
+        }
+        return create_pointer_type(NULL);
+    }
+
+    /* Handle procedure and function types */
+    if (spec_node->typ == PASCAL_T_PROCEDURE_TYPE || spec_node->typ == PASCAL_T_FUNCTION_TYPE) {
+        int is_function = (spec_node->typ == PASCAL_T_FUNCTION_TYPE);
+        
+        #ifdef DEBUG_KGPC_TYPE_CREATION
+        fprintf(stderr, "DEBUG: convert_type_spec_to_kgpctype: handling %s\n",
+                is_function ? "FUNCTION_TYPE" : "PROCEDURE_TYPE");
+        #endif
+        
+        /* Parse parameters */
+        ast_t *cursor = spec_node->child;
+        ListNode_t *params = NULL;
+        
+        /* Check if first child is a PARAM_LIST */
+        if (cursor != NULL && cursor->typ == PASCAL_T_PARAM_LIST) {
+            #ifdef DEBUG_KGPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: Found PARAM_LIST node\n");
+            #endif
+            /* The PARAM_LIST node should contain PARAM children */
+            ast_t *param_cursor = cursor->child;
+            params = convert_param_list(&param_cursor);
+            /* Move cursor to the next sibling after PARAM_LIST */
+            cursor = cursor->next;
+            #ifdef DEBUG_KGPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: After PARAM_LIST, cursor=%p, cursor->typ=%d\n",
+                    (void*)cursor, cursor ? cursor->typ : -1);
+            #endif
+        } else {
+            /* Skip to parameter list if present, but stop at return type (for parameterless functions) */
+            while (cursor != NULL && 
+                   cursor->typ != PASCAL_T_PARAM && 
+                   cursor->typ != PASCAL_T_TYPE_SPEC &&
+                   cursor->typ != PASCAL_T_RETURN_TYPE)
+                cursor = cursor->next;
+            
+            if (cursor != NULL && cursor->typ == PASCAL_T_PARAM) {
+                params = convert_param_list(&cursor);
+            }
+        }
+        
+        /* For functions, get return type */
+        KgpcType *return_type = NULL;
+        char *return_type_id = NULL;
+        int owns_return_type = 0;
+        if (is_function) {
+            #ifdef DEBUG_KGPC_TYPE_CREATION
+            fprintf(stderr, "DEBUG: Looking for return type, cursor=%p, cursor->typ=%d, cursor->sym=%s, cursor->child=%p\n",
+                    (void*)cursor, cursor ? cursor->typ : -1,
+                    (cursor && cursor->sym && cursor->sym->name) ? cursor->sym->name : "NULL",
+                    cursor ? (void*)cursor->child : NULL);
+            if (cursor && cursor->child) {
+                fprintf(stderr, "DEBUG: cursor->child->typ=%d, cursor->child->sym=%s\n",
+                        cursor->child->typ,
+                        (cursor->child->sym && cursor->child->sym->name) ? cursor->child->sym->name : "NULL");
+            }
+            #endif
+            /* Look for return type specification */
+            /* The return type might be:
+             * 1. A direct sibling (PASCAL_T_TYPE_SPEC or PASCAL_T_IDENTIFIER)
+             * 2. A child of an intermediate wrapper node (check child->typ)
+             * 3. Wrapped in PASCAL_T_RETURN_TYPE node
+             */
+            while (cursor != NULL && cursor->typ != PASCAL_T_TYPE_SPEC && cursor->typ != PASCAL_T_IDENTIFIER)
+            {
+                /* Check for RETURN_TYPE wrapper */
+                if (cursor->typ == PASCAL_T_RETURN_TYPE) {
+                    if (cursor->child != NULL &&
+                        (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
+                    {
+                        cursor = cursor->child;
+                        break;
+                    }
+                }
+                /* Check if the child is a TYPE_SPEC or IDENTIFIER */
+                if (cursor->child != NULL && 
+                    (cursor->child->typ == PASCAL_T_TYPE_SPEC || cursor->child->typ == PASCAL_T_IDENTIFIER))
+                {
+                    cursor = cursor->child;
+                    break;
+                }
+                #ifdef DEBUG_KGPC_TYPE_CREATION
+                fprintf(stderr, "DEBUG: Skipping node type %d (PASCAL_T_TYPE_SPEC=%d, PASCAL_T_IDENTIFIER=%d)\n", 
+                        cursor->typ, PASCAL_T_TYPE_SPEC, PASCAL_T_IDENTIFIER);
+                #endif
+                cursor = cursor->next;
+            }
+
+            if (cursor == NULL)
+            {
+                /* Fallback: scan the function type node for a return type */
+                ast_t *scan = spec_node->child;
+                while (scan != NULL)
+                {
+                    ast_t *node = unwrap_pascal_node(scan);
+                    if (node != NULL)
+                    {
+                        if (node->typ == PASCAL_T_RETURN_TYPE)
+                        {
+                            if (node->child != NULL)
+                            {
+                                cursor = node->child;
+                                break;
+                            }
+                        }
+                        else if (node->typ == PASCAL_T_TYPE_SPEC || node->typ == PASCAL_T_IDENTIFIER)
+                        {
+                            cursor = node;
+                            break;
+                        }
+                    }
+                    scan = scan->next;
+                }
+            }
+                
+            if (cursor != NULL) {
+                #ifdef DEBUG_KGPC_TYPE_CREATION
+                fprintf(stderr, "DEBUG: Found return type node, typ=%d\n", cursor->typ);
+                #endif
+                if (cursor->typ == PASCAL_T_TYPE_SPEC) {
+                    return_type = convert_type_spec_to_kgpctype(cursor, symtab);
+                    owns_return_type = (return_type != NULL);
+                    if (return_type_id == NULL && cursor->child != NULL &&
+                        cursor->child->sym != NULL && cursor->child->sym->name != NULL)
+                    {
+                        return_type_id = strdup(cursor->child->sym->name);
+                    }
+                } else if (cursor->typ == PASCAL_T_IDENTIFIER) {
+                    char *ret_type_name = dup_symbol(cursor);
+                    if (ret_type_name != NULL) {
+                        // First check if it's a primitive type
+                        int ret_tag = map_type_name(ret_type_name, NULL);
+                        ret_tag = apply_shortstring_mode(ret_tag, ret_type_name);
+                        if (ret_tag != UNKNOWN_TYPE) {
+                            return_type = create_primitive_type(ret_tag);
+                            owns_return_type = 1;
+                        } else {
+                            // Check if it's a user-defined type in the symbol table
+                            HashNode_t *type_node = NULL;
+                            if (symtab != NULL && FindSymbol(&type_node, symtab, ret_type_name) != 0 &&
+                                type_node != NULL && type_node->type != NULL) {
+                                return_type = type_node->type;
+                            }
+                        }
+                        if (return_type_id == NULL)
+                            return_type_id = strdup(ret_type_name);
+                        free(ret_type_name);
+                    }
+                }
+            }
+            #ifdef DEBUG_KGPC_TYPE_CREATION
+            else {
+                fprintf(stderr, "DEBUG: No return type node found!\n");
+            }
+            #endif
+        }
+        
+        KgpcType *proc_type = create_procedure_type(params, return_type);
+        /* create_procedure_type retains return_type; release our ref if we own it */
+        if (owns_return_type && return_type != NULL)
+            kgpc_type_release(return_type);
+        if (proc_type != NULL) {
+            /* create_procedure_type makes a shallow copy of params; tell the
+             * type to own (deeply free) its copy so the TREE_VAR_DECL param
+             * nodes are eventually freed.  Then free the original list nodes. */
+            proc_type->info.proc_info.owns_params = 1;
+            DestroyList(params);
+            if (return_type_id != NULL)
+                proc_type->info.proc_info.return_type_id = return_type_id;
+        } else {
+            destroy_list(params);
+            if (return_type_id != NULL)
+                free(return_type_id);
+        }
+        return proc_type;
+    }
+
+    /* Handle reference to types (wraps procedure/function types) */
+    if (spec_node->typ == PASCAL_T_REFERENCE_TO_TYPE) {
+        // The child should be a PROCEDURE_TYPE or FUNCTION_TYPE
+        ast_t *wrapped_type = spec_node->child;
+        if (wrapped_type != NULL) {
+            return convert_type_spec_to_kgpctype(wrapped_type, symtab);
+        }
+        return NULL;
+    }
+
+    /* Handle record types and legacy object types */
+    if (spec_node->typ == PASCAL_T_RECORD_TYPE || spec_node->typ == PASCAL_T_OBJECT_TYPE) {
+        struct RecordType *record = convert_record_type(spec_node);
+        if (record != NULL) {
+            return create_record_type(record);
+        }
+        return NULL;
+    }
+
+    /* Handle interface types */
+    if (spec_node->typ == PASCAL_T_INTERFACE_TYPE) {
+        struct RecordType *record = convert_interface_type_ex(NULL, spec_node, NULL);
+        if (record != NULL) {
+            KgpcType *rec_type = create_record_type(record);
+            if (rec_type != NULL) {
+                KgpcType *ptr = create_pointer_type(rec_type);
+                kgpc_type_release(rec_type);
+                return ptr;
+            }
+        }
+        return NULL;
+    }
+
+    /* Handle set types */
+    if (spec_node->typ == PASCAL_T_SET) {
+        /* For sets, we currently just return a primitive SET_TYPE */
+        /* In the future, we could extend KgpcType to include set element type info */
+        return create_primitive_type(SET_TYPE);
+    }
+
+    /* Handle enum types */
+    if (spec_node->typ == PASCAL_T_ENUMERATED_TYPE) {
+        /* For enums, we currently just return a primitive ENUM_TYPE */
+        return create_primitive_type(ENUM_TYPE);
+    }
+
+    /* Handle class types */
+    if (spec_node->typ == PASCAL_T_CLASS_TYPE) {
+        /* Note: We can't get the class name here because we're inside the type spec, not the type decl.
+         * For now, we return NULL to let the class be handled by the legacy path.
+         * The class's RecordType will be properly populated during semantic checking. */
+        return NULL;
+    }
+
+    /* Handle "class of T" - class reference type */
+    if (spec_node->typ == PASCAL_T_CLASS_OF_TYPE) {
+        /* Class reference type (class of TMyClass).
+         * This is structurally the same as the target class type - a pointer to the class record.
+         * Return NULL here to let it be handled by the convert_type_spec path which creates
+         * the appropriate pointer type. */
+        return NULL;
+    }
+
+    return NULL;
+}
+

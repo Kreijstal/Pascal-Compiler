@@ -1,4 +1,3 @@
-
 static int map_relop_tag(int tag) {
     switch (tag) {
     case PASCAL_T_EQ: return EQ;
