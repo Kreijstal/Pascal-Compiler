@@ -16,6 +16,10 @@
 #include <string.h>
 #include <ctype.h>
 #include <limits.h>
+#ifndef _WIN32
+#include <strings.h>
+#endif
+#include "../../common_utils.h"
 #include "register_types.h"
 #include "codegen.h"
 #include "codegen_statement.h"

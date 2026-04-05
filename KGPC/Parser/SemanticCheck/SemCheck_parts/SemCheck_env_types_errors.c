@@ -45,11 +45,6 @@ const char *kgpc_getenv(const char *name) {
     return getenv(name);
 }
 
-#ifdef _WIN32
-/* Windows CRT does not provide strndup; caller owns returned buffer. */
-/* strndup is defined as static inline in SemCheck_internal.h */
-#endif
-
 static ListNode_t *g_semcheck_unit_names = NULL;
 int g_semcheck_current_unit_index = 0;
 int g_semcheck_imported_decl_unit_index = 0;

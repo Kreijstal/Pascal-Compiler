@@ -22,12 +22,12 @@
 #include <unistd.h>
 #include <fcntl.h>
 #else
-#define strcasecmp _stricmp
 #include <io.h>
 #include <fcntl.h>
 #endif
 #include <math.h>
 #include <stdarg.h>
+#include "../../common_utils.h"
 #include "SemCheck.h"
 #include "../ParseTree/ident_ref.h"
 #include "SemChecks/SemCheck_sizeof.h"

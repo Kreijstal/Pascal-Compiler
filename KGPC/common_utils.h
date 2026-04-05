@@ -1,10 +1,37 @@
 #ifndef KGPC_COMMON_UTILS_H
 #define KGPC_COMMON_UTILS_H
 
+#include <stdlib.h>
+#include <string.h>
+
 /**
  * Common utility functions and macros to reduce code duplication
  * across the KGPC codebase.
  */
+
+/* ===================================================================
+ * Platform portability: POSIX string functions missing on Windows
+ * =================================================================== */
+
+#ifdef _WIN32
+#ifndef strcasecmp
+#define strcasecmp _stricmp
+#endif
+#ifndef strncasecmp
+#define strncasecmp _strnicmp
+#endif
+static inline char* kgpc_strndup(const char* s, size_t n)
+{
+    size_t len = strnlen(s, n);
+    char* buf = (char*)malloc(len + 1);
+    if (buf == NULL)
+        return NULL;
+    memcpy(buf, s, len);
+    buf[len] = '\0';
+    return buf;
+}
+#define strndup kgpc_strndup
+#endif /* _WIN32 */
 
 /**
  * Guard clause helpers for NULL pointer validation.

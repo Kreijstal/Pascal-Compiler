@@ -2199,10 +2199,6 @@ static void resolve_deferred_arrays_in_list(ListNode_t *decl_list)
             free(decl->tree_data.arr_decl_data.unresolved_index_type);
             decl->tree_data.arr_decl_data.unresolved_index_type = NULL;
         } else {
-            const char *id = "(unknown)";
-            if (decl->tree_data.arr_decl_data.ids != NULL &&
-                decl->tree_data.arr_decl_data.ids->cur != NULL)
-                id = (const char *)decl->tree_data.arr_decl_data.ids->cur;
             /* Not an error: semcheck will resolve enum-indexed array bounds
              * from the symbol table at a later stage. */
         }
