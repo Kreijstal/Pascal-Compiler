@@ -1,4 +1,6 @@
-static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
+#include "../codegen_stmt_internal.h"
+
+int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
     struct Expression *array_expr)
 {
     if (array_node != NULL && array_node->element_size > 0)
@@ -38,7 +40,7 @@ static int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *
     return DOUBLEWORD;
 }
 
-static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label)
+int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label)
 {
     if (ctx == NULL || exit_label == NULL || continue_label == NULL)
         return 0;
@@ -73,7 +75,7 @@ static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const 
     return 1;
 }
 
-static void codegen_pop_loop(CodeGenContext *ctx)
+void codegen_pop_loop(CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return;
@@ -90,7 +92,7 @@ static void codegen_pop_loop(CodeGenContext *ctx)
     }
 }
 
-static struct RecordType *codegen_resolve_with_record_type(struct Expression *context_expr,
+struct RecordType *codegen_resolve_with_record_type(struct Expression *context_expr,
     SymTab_t *symtab)
 {
     if (context_expr == NULL || symtab == NULL)
@@ -196,7 +198,7 @@ static struct RecordType *codegen_resolve_with_record_type(struct Expression *co
     return NULL;
 }
 
-static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
+int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
     struct RecordType *record_type)
 {
     if (ctx == NULL || record_type == NULL)
@@ -220,7 +222,7 @@ static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_exp
     return 1;
 }
 
-static void codegen_with_pop(CodeGenContext *ctx)
+void codegen_with_pop(CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->with_depth <= 0)
         return;
@@ -229,21 +231,21 @@ static void codegen_with_pop(CodeGenContext *ctx)
     ctx->with_stack[ctx->with_depth].record_type = NULL;
 }
 
-static const char *codegen_current_loop_exit(const CodeGenContext *ctx)
+const char *codegen_current_loop_exit(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return NULL;
     return ctx->loop_frames[ctx->loop_depth - 1].label;
 }
 
-static const char *codegen_current_loop_continue(const CodeGenContext *ctx)
+const char *codegen_current_loop_continue(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return NULL;
     return ctx->loop_frames[ctx->loop_depth - 1].continue_label;
 }
 
-static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
+void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
     int *out_is_real, int *out_size)
 {
     if (out_is_real != NULL)
@@ -310,7 +312,7 @@ static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symta
     }
 }
 
-static int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_t *symtab)
+int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (ctx == NULL || symtab == NULL)
         return 0;
@@ -364,7 +366,7 @@ static int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, 
     return 0;
 }
 
-static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
+void codegen_get_current_return_slot_info(CodeGenContext *ctx,
     int *out_is_real, int *out_size)
 {
     if (out_is_real != NULL)
@@ -386,14 +388,14 @@ static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
         *out_is_real = 1;
 }
 
-static int codegen_current_loop_finally_depth(const CodeGenContext *ctx)
+int codegen_current_loop_finally_depth(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->loop_depth <= 0)
         return 0;
     return ctx->loop_frames[ctx->loop_depth - 1].finally_depth;
 }
 
-static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
+int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
 {
     if (ctx == NULL)
         return 0;
@@ -417,7 +419,7 @@ static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements)
     return 1;
 }
 
-static void codegen_pop_finally(CodeGenContext *ctx)
+void codegen_pop_finally(CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->finally_depth <= 0)
         return;
@@ -425,12 +427,12 @@ static void codegen_pop_finally(CodeGenContext *ctx)
     ctx->finally_stack[ctx->finally_depth].statements = NULL;
 }
 
-static int codegen_has_finally(const CodeGenContext *ctx)
+int codegen_has_finally(const CodeGenContext *ctx)
 {
     return (ctx != NULL && ctx->finally_depth > 0);
 }
 
-static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
+ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
     SymTab_t *symtab, const char *entry_label, const char *target_label)
 {
     if (!codegen_has_finally(ctx))
@@ -458,7 +460,7 @@ static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *i
     return inst_list;
 }
 
-static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
+ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
     SymTab_t *symtab, const char *target_label, int limit_depth)
 {
     if (!codegen_has_finally(ctx))
@@ -505,7 +507,7 @@ static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_
     return inst_list;
 }
 
-static int codegen_push_except(CodeGenContext *ctx, const char *label)
+int codegen_push_except(CodeGenContext *ctx, const char *label)
 {
     if (ctx == NULL || label == NULL)
         return 0;
@@ -536,7 +538,7 @@ static int codegen_push_except(CodeGenContext *ctx, const char *label)
     return 1;
 }
 
-static void codegen_pop_except(CodeGenContext *ctx)
+void codegen_pop_except(CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->except_depth <= 0)
         return;
@@ -548,21 +550,21 @@ static void codegen_pop_except(CodeGenContext *ctx)
     }
 }
 
-static const char *codegen_current_except_label(const CodeGenContext *ctx)
+const char *codegen_current_except_label(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->except_depth <= 0)
         return NULL;
     return ctx->except_frames[ctx->except_depth - 1].label;
 }
 
-static int codegen_current_except_finally_depth(const CodeGenContext *ctx)
+int codegen_current_except_finally_depth(const CodeGenContext *ctx)
 {
     if (ctx == NULL || ctx->except_depth <= 0)
         return 0;
     return ctx->except_frames[ctx->except_depth - 1].finally_depth;
 }
 
-static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
+ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
     CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmts == NULL) {

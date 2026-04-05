@@ -1,3 +1,5 @@
+#include "../codegen_stmt_internal.h"
+
 static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
@@ -341,7 +343,7 @@ static ListNode_t *codegen_builtin_setlength(struct Statement *stmt, ListNode_t 
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     if (ctx == NULL)
@@ -454,7 +456,7 @@ static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt, List
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stmt,
+ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
@@ -555,7 +557,7 @@ static ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stm
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     if (ctx == NULL)
@@ -634,7 +636,7 @@ static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt,
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     assert(stmt != NULL);
     if (ctx == NULL)
@@ -821,7 +823,7 @@ static ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t 
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -1179,7 +1181,7 @@ static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_
 }
 
 /* WriteStr(var S: string; args...) - format values into string S */
-static ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -1330,7 +1332,7 @@ static ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -1491,7 +1493,7 @@ static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -1593,7 +1595,7 @@ static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *in
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
+ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)
         return inst_list;
@@ -1817,7 +1819,7 @@ cleanup:
     return inst_list;
 }
 
-static ListNode_t *codegen_builtin_prefetch(struct Statement *stmt, ListNode_t *inst_list,
+ListNode_t *codegen_builtin_prefetch(struct Statement *stmt, ListNode_t *inst_list,
     CodeGenContext *ctx)
 {
     if (stmt == NULL || ctx == NULL)

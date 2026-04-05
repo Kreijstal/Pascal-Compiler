@@ -1,3 +1,5 @@
+#include "../codegen_stmt_internal.h"
+
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
@@ -24,13 +26,13 @@ ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list,
     return inst_list;
 }
 
-static int codegen_expr_is_extended_storage(const struct Expression *expr)
+int codegen_expr_is_extended_storage(const struct Expression *expr)
 {
     KgpcType *type = expr_get_kgpc_type(expr);
     return kgpc_type_is_extended(type);
 }
 
-static ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
+ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
@@ -2563,7 +2565,7 @@ ListNode_t *codegen_repeat(struct Statement *stmt, ListNode_t *inst_list, CodeGe
 }
 
 /* Code generation for for-in statements - lower to regular for loop */
-static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
     CODEGEN_DEBUG("DEBUG: ENTERING %s\n", __func__);
@@ -4271,7 +4273,7 @@ ListNode_t *codegen_case(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     return inst_list;
 }
 
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     const char *exit_label = codegen_current_loop_exit(ctx);
     if (exit_label == NULL)
@@ -4285,7 +4287,7 @@ static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_l
     return codegen_branch_through_finally(ctx, inst_list, symtab, exit_label, limit_depth);
 }
 
-static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     const char *continue_label = codegen_current_loop_continue(ctx);
     if (continue_label == NULL)
@@ -4301,7 +4303,7 @@ static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *ins
 
 
 
-static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmt == NULL)
         return inst_list;
@@ -4333,7 +4335,7 @@ static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, C
     return inst_list;
 }
 
-static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmt == NULL)
         return inst_list;
@@ -4364,7 +4366,7 @@ static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_
     return inst_list;
 }
 
-static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmt == NULL)
         return inst_list;
@@ -4449,7 +4451,7 @@ static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_l
     return inst_list;
 }
 
-static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     StackNode_t *exception_var_node = NULL;
     char buffer[CODEGEN_MAX_INST_BUF];
@@ -4555,7 +4557,7 @@ static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst
     return inst_list;
 }
 
-static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     if (stmt == NULL)
         return inst_list;
@@ -4621,7 +4623,7 @@ static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, 
     return inst_list;
 }
 
-static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
+ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     (void)symtab;
 

@@ -1,4 +1,6 @@
-static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
+#include "../codegen_stmt_internal.h"
+
+ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
 {
     char buffer[128];
@@ -27,7 +29,7 @@ static ListNode_t *codegen_spill_call_arg_regs_stmt(ListNode_t *inst_list,
     return inst_list;
 }
 
-static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
+ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
     const int *int_offsets, const int *xmm_offsets)
 {
     char buffer[128];
@@ -52,16 +54,7 @@ static ListNode_t *codegen_restore_call_arg_regs_stmt(ListNode_t *inst_list,
     return inst_list;
 }
 
-static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
-    Register_t **out_reg, const char *message);
-static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx);
-struct KgpcType *expr_get_kgpc_type(const struct Expression *expr);
-static struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr);
-static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
-    CodeGenContext *ctx);
 static int codegen_local_type_tag_size(int type_tag);
-static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
-    struct Expression *rhs_expr, CodeGenContext *ctx);
 
 static int codegen_local_type_tag_size(int type_tag)
 {
@@ -69,7 +62,7 @@ static int codegen_local_type_tag_size(int type_tag)
     return get_type_tag_size(type_tag);
 }
 
-static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
+void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
     struct Expression *rhs_expr, CodeGenContext *ctx)
 {
     if (lhs_expr == NULL || rhs_expr == NULL || ctx == NULL ||
@@ -185,7 +178,7 @@ static void codegen_hydrate_array_literal_from_lhs(struct Expression *lhs_expr,
     }
 }
 
-static ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
+ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
     CodeGenContext *ctx, int compare_as_qword, long long imm_value,
     int spill_offset)
 {
@@ -220,17 +213,8 @@ static ListNode_t *codegen_emit_cmp_spill_immediate(ListNode_t *inst_list,
     return add_inst(inst_list, buffer);
 }
 
-#include "codegen_expression.h"
-#include "../../flags.h"
-#include "../../Parser/List/List.h"
-#include "../../Parser/ParseTree/tree.h"
-#include "../../Parser/ParseTree/ident_ref.h"
-#include "../../Parser/ParseTree/tree_types.h"
-#include "../../Parser/ParseTree/KgpcType.h"
-#include "../../Parser/ParseTree/type_tags.h"
-#include "../../identifier_utils.h"
 
-static int codegen_statement_return_storage_size(KgpcType *return_type)
+int codegen_statement_return_storage_size(KgpcType *return_type)
 {
     if (return_type == NULL)
         return 0;
@@ -262,12 +246,6 @@ static int codegen_statement_return_storage_size(KgpcType *return_type)
 
     return 0;
 }
-#include "../../Parser/SemanticCheck/SymTab/SymTab.h"
-#include "../../Parser/SemanticCheck/HashTable/HashTable.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
-#include "../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
-#include "../../Parser/ParseTree/from_cparser.h"
 
 
 /* Cached getenv() — defined in SemCheck.c */
@@ -276,46 +254,10 @@ extern const char *kgpc_getenv(const char *name);
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #endif
 
-/* Helper function to get RecordType from HashNode */
-static inline struct RecordType* get_record_type_from_node(HashNode_t *node)
-{
-    return hashnode_get_record_type(node);
-}
+/* get_record_type_from_node is defined as static inline in codegen_stmt_internal.h */
 
-static int codegen_push_loop(CodeGenContext *ctx, const char *exit_label, const char *continue_label);
-static void codegen_pop_loop(CodeGenContext *ctx);
-static const char *codegen_current_loop_exit(const CodeGenContext *ctx);
-static const char *codegen_current_loop_continue(const CodeGenContext *ctx);
-static int codegen_with_push(CodeGenContext *ctx, struct Expression *context_expr,
-    struct RecordType *record_type);
-static void codegen_with_pop(CodeGenContext *ctx);
-static void codegen_get_current_return_info(CodeGenContext *ctx, SymTab_t *symtab,
-    int *out_is_real, int *out_size);
-static void codegen_get_current_return_slot_info(CodeGenContext *ctx,
-    int *out_is_real, int *out_size);
-static int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_continue_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static int codegen_push_finally(CodeGenContext *ctx, ListNode_t *statements);
-static void codegen_pop_finally(CodeGenContext *ctx);
-static int codegen_has_finally(const CodeGenContext *ctx);
-static ListNode_t *codegen_emit_finally_block(CodeGenContext *ctx, ListNode_t *inst_list,
-    SymTab_t *symtab, const char *entry_label, const char *target_label);
-static ListNode_t *codegen_branch_through_finally(CodeGenContext *ctx, ListNode_t *inst_list,
-    SymTab_t *symtab, const char *target_label, int limit_depth);
-static int codegen_push_except(CodeGenContext *ctx, const char *label);
-static void codegen_pop_except(CodeGenContext *ctx);
-static const char *codegen_current_except_label(const CodeGenContext *ctx);
-static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
-    CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg);
-static ListNode_t *codegen_statement_list(ListNode_t *stmts, ListNode_t *inst_list,
-    CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_break_stmt(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_with(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_for_in(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
-static HashNode_t *codegen_find_zero_arg_method_node(SymTab_t *symtab,
+HashNode_t *codegen_find_zero_arg_method_node(SymTab_t *symtab,
     const struct RecordType *record, const char *method_name)
 {
     if (symtab == NULL || record == NULL || record->type_id == NULL || method_name == NULL)
@@ -379,7 +321,7 @@ static struct ClassProperty *codegen_find_class_property(const struct RecordType
     return NULL;
 }
 
-static int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordType *enum_record,
+int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordType *enum_record,
     HashNode_t **out_current_node, KgpcType **out_current_type)
 {
     if (out_current_node != NULL)
@@ -430,9 +372,8 @@ static int codegen_get_enumerator_current_info(SymTab_t *symtab, struct RecordTy
 
     return 0;
 }
-static ListNode_t *codegen_try_finally(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
 
-static int codegen_expr_is_string_like(const struct Expression *expr)
+int codegen_expr_is_string_like(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -449,7 +390,7 @@ static int codegen_expr_is_string_like(const struct Expression *expr)
     return 0;
 }
 
-static int codegen_enum_type_literal_count(KgpcType *type)
+int codegen_enum_type_literal_count(KgpcType *type)
 {
     if (type == NULL || type->kind != TYPE_KIND_PRIMITIVE ||
         type->info.primitive_type_tag != ENUM_TYPE ||
@@ -458,7 +399,7 @@ static int codegen_enum_type_literal_count(KgpcType *type)
     return ListLength(type->type_alias->enum_literals);
 }
 
-static int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_type)
+int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_type)
 {
     if (set_type == NULL || !kgpc_type_is_set(set_type))
         return -1;
@@ -494,15 +435,6 @@ static int codegen_set_iteration_upper_bound(CodeGenContext *ctx, KgpcType *set_
 
     return 31;
 }
-static ListNode_t *codegen_try_except(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_raise(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static ListNode_t *codegen_inherited(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab);
-static int codegen_expr_is_shortstring_array(const struct Expression *expr);
-static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
-static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx);
-static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx);
-static int codegen_expr_is_shortstring_value_local(const struct Expression *expr);
 #if KGPC_ENABLE_REG_DEBUG
 extern const char *g_reg_debug_context;
 #endif
@@ -551,52 +483,13 @@ ListNode_t *codegen_emit_const_set_rodata(HashNode_t *node, ListNode_t *inst_lis
 
     return inst_list;
 }
-static int record_type_is_mp_integer(const struct RecordType *record_type);
-static int codegen_expr_is_mp_integer(struct Expression *expr);
-static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
-    Register_t *value_reg);
-static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
-    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
-    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
     Register_t *value_reg, int source_type);
-static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
-    struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
-    int *coerced_to_real);
-static int expr_is_dynamic_array(const struct Expression *expr);
 static int codegen_dynamic_array_descriptor_size(const struct Expression *expr);
-static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
-    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 static ListNode_t *codegen_call_dynarray_copy(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *dest_reg, Register_t *src_reg, int descriptor_size);
 static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *dest_reg, Register_t *temp_reg, int descriptor_size);
-static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
-    Register_t **out_reg, const char *message);
-static ListNode_t *codegen_builtin_setlength_string(struct Statement *stmt,
-    ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_setlength_unicodestring(struct Statement *stmt,
-    ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_setlength_shortstring(struct Statement *stmt,
-    ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_setstring(struct Statement *stmt,
-    ListNode_t *inst_list, CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_str(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_writestr(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_insert(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_delete(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_val(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static ListNode_t *codegen_builtin_prefetch(struct Statement *stmt, ListNode_t *inst_list,
-    CodeGenContext *ctx);
-static int codegen_expr_is_extended_storage(const struct Expression *expr);
-static ListNode_t *codegen_assign_extended_value(struct Expression *dest_expr,
-    struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx);
 
 /* Check if a type name represents an unsigned integer type */
 static int is_unsigned_type_name(const char *type_name)
@@ -623,7 +516,7 @@ static int is_unsigned_type_name(const char *type_name)
     return 0;
 }
 
-static int expr_integer_store_size(const struct Expression *expr)
+int expr_integer_store_size(const struct Expression *expr)
 {
     int type_tag = expr_get_type_tag(expr);
     if (expr != NULL && expr->resolved_kgpc_type != NULL)
@@ -689,7 +582,7 @@ static int expr_is_64bit_integer(const struct Expression *expr)
  * This is like expr_is_64bit_integer but also checks const variable values
  * by looking up the symbol table.
  */
-static int expr_value_requires_64bit(const struct Expression *expr, CodeGenContext *ctx)
+int expr_value_requires_64bit(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
         return 0;
@@ -726,13 +619,13 @@ static int expr_value_requires_64bit(const struct Expression *expr, CodeGenConte
  * Check if a variable target is a Single (4-byte float) type.
  * Used to determine when to use 32-bit operations and double-to-single conversion.
  */
-static int is_single_float_type(int type_tag, long long storage_size)
+int is_single_float_type(int type_tag, long long storage_size)
 {
     return (type_tag == REAL_TYPE && storage_size == 4);
 }
 
 /* Check if an expression's type is unsigned */
-static int expr_is_unsigned_type(const struct Expression *expr)
+int expr_is_unsigned_type(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -875,7 +768,7 @@ static struct RecordType *codegen_statement_expr_record_type(const struct Expres
     return NULL;
 }
 
-static struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
+struct RecordField *codegen_lookup_record_field_expr(struct Expression *record_access_expr,
     CodeGenContext *ctx)
 {
     if (record_access_expr == NULL ||
@@ -909,7 +802,7 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
 }
 
 /* Best-effort field size honoring packed/range aliases */
-static long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
+long long codegen_record_field_effective_size(struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL || ctx == NULL)
         return expr_effective_size_bytes(expr);
@@ -944,7 +837,7 @@ static long long codegen_record_field_effective_size(struct Expression *expr, Co
 }
 
 
-static int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
+int lookup_record_field_type(struct RecordType *record_type, const char *field_name)
 {
     if (record_type == NULL || field_name == NULL)
         return UNKNOWN_TYPE;
@@ -969,7 +862,7 @@ static int lookup_record_field_type(struct RecordType *record_type, const char *
     return UNKNOWN_TYPE;
 }
 
-static void format_pascal_label(char *buffer, size_t size, const CodeGenContext *ctx, const char *label_text)
+void format_pascal_label(char *buffer, size_t size, const CodeGenContext *ctx, const char *label_text)
 {
     if (buffer == NULL || size == 0)
         return;
@@ -1009,7 +902,7 @@ static void format_pascal_label(char *buffer, size_t size, const CodeGenContext 
     snprintf(buffer, size, "%s__label_%s", scope, sanitized);
 }
 
-static const char *register_name8(const Register_t *reg)
+const char *register_name8(const Register_t *reg)
 {
     if (reg == NULL || reg->bit_64 == NULL)
         return NULL;
@@ -1036,7 +929,7 @@ static const char *register_name8(const Register_t *reg)
     }
 }
 
-static inline RegisterId_t codegen_arg_reg_id_num(int num)
+RegisterId_t codegen_arg_reg_id_num(int num)
 {
     static const RegisterId_t windows_regs[] = { REG_RCX, REG_RDX, REG_R8, REG_R9 };
     static const RegisterId_t sysv_regs[] = { REG_RDI, REG_RSI, REG_RDX, REG_RCX, REG_R8, REG_R9 };
@@ -1064,7 +957,7 @@ static ListNode_t *codegen_convert_int_like_to_real(ListNode_t *inst_list,
     return add_inst(inst_list, buffer);
 }
 
-static ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
+ListNode_t *codegen_maybe_convert_int_like_to_real(int target_type,
     struct Expression *source_expr, Register_t *value_reg, ListNode_t *inst_list,
     int *coerced_to_real)
 {
@@ -1091,7 +984,7 @@ static unsigned long codegen_next_temp_suffix(void)
     return ++counter;
 }
 
-static StackNode_t *codegen_alloc_temp_slot(const char *prefix)
+StackNode_t *codegen_alloc_temp_slot(const char *prefix)
 {
     char label[32];
     snprintf(label, sizeof(label), "%s_%lu", prefix != NULL ? prefix : "temp", codegen_next_temp_suffix());
@@ -1115,7 +1008,7 @@ static StackNode_t *codegen_alloc_record_ctor_temp(long long size)
     return add_l_x(label, (int)size);
 }
 
-static ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
+ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *stmt,
     ListNode_t *inst_list, CodeGenContext *ctx, struct Expression *target_expr,
     struct Expression *method_expr)
 {
@@ -1214,19 +1107,19 @@ static ListNode_t *codegen_emit_new_dispose_method_fallback(struct Statement *st
     return inst_list;
 }
 
-static StackNode_t *codegen_alloc_incdec_temp(int size)
+StackNode_t *codegen_alloc_incdec_temp(int size)
 {
     char label[32];
     snprintf(label, sizeof(label), "incdec_%lu", codegen_next_temp_suffix());
     return add_l_t_bytes(label, size);
 }
 
-static int expr_is_dynamic_array(const struct Expression *expr)
+int expr_is_dynamic_array(const struct Expression *expr)
 {
     return (expr != NULL && expr->is_array_expr && expr->array_is_dynamic);
 }
 
-static struct TypeAlias *codegen_lookup_type_alias(CodeGenContext *ctx, const char *type_id)
+struct TypeAlias *codegen_lookup_type_alias(CodeGenContext *ctx, const char *type_id)
 {
     if (ctx == NULL || ctx->symtab == NULL || type_id == NULL)
         return NULL;
@@ -1282,7 +1175,7 @@ static struct RecordType *codegen_deref_pointer_to_record(KgpcType *type)
     return NULL;
 }
 
-static struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr)
+struct RecordField *codegen_lookup_record_field(struct Expression *record_access_expr)
 {
     if (record_access_expr == NULL || record_access_expr->type != EXPR_RECORD_ACCESS)
         return NULL;
@@ -1346,7 +1239,7 @@ static struct RecordField *codegen_lookup_record_field(struct Expression *record
     return codegen_lookup_record_field_in_members(record_type->fields, field_name);
 }
 
-static int expr_is_static_array_like(const struct Expression *expr, CodeGenContext *ctx)
+int expr_is_static_array_like(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
         return 0;
@@ -1496,7 +1389,7 @@ static ListNode_t *codegen_call_dynarray_assign_from_temp(ListNode_t *inst_list,
 }
 
 
-static ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
+ListNode_t *codegen_assign_dynamic_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     Register_t *dest_reg = NULL;
@@ -1687,7 +1580,7 @@ ListNode_t *codegen_call_with_shadow_space(ListNode_t *inst_list, const char *ta
     return inst_list;
 }
 
-static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
+ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Register_t *value_reg)
 {
     if (value_reg == NULL)
         return inst_list;
@@ -1707,7 +1600,7 @@ static ListNode_t *codegen_promote_char_reg_to_string(ListNode_t *inst_list, Reg
     return inst_list;
 }
 
-static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
+ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
     CodeGenContext *ctx, struct Expression *exc_expr, Register_t *value_reg)
 {
     if (ctx == NULL || exc_expr == NULL || value_reg == NULL)
@@ -1726,7 +1619,7 @@ static ListNode_t *codegen_store_exception_value(ListNode_t *inst_list,
     return add_inst(inst_list, buffer);
 }
 
-static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
+ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_list,
     Register_t **out_reg, const char *message)
 {
     if (out_reg != NULL)
@@ -1736,7 +1629,7 @@ static ListNode_t *codegen_fail_register(CodeGenContext *ctx, ListNode_t *inst_l
     return inst_list;
 }
 
-static ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
+ListNode_t *codegen_evaluate_expr(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
     if (expr == NULL || ctx == NULL || out_reg == NULL)

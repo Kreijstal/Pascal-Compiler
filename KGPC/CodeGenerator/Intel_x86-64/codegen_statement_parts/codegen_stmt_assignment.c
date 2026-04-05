@@ -1,4 +1,6 @@
-static int record_type_is_mp_integer(const struct RecordType *record_type)
+#include "../codegen_stmt_internal.h"
+
+int record_type_is_mp_integer(const struct RecordType *record_type)
 {
     if (record_type == NULL)
         return 0;
@@ -13,7 +15,7 @@ static int record_type_is_mp_integer(const struct RecordType *record_type)
     return strcmp(field->name, "__kgpc_mp_handle") == 0;
 }
 
-static int codegen_expr_is_mp_integer(struct Expression *expr)
+int codegen_expr_is_mp_integer(struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -40,7 +42,7 @@ static int codegen_expr_is_mp_integer(struct Expression *expr)
     return 0;
 }
 
-static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
+ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *addr_reg,
     Register_t *value_reg)
 {
     if (addr_reg == NULL || value_reg == NULL)
@@ -115,7 +117,7 @@ static ListNode_t *codegen_setup_two_arg_regs(ListNode_t *inst_list,
 
 /* Call a 2-arg runtime function: func(addr_reg, value_reg)
  * addr_reg → first arg (char**), value_reg → second arg (const char*) */
-static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, const char *func_name)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -128,13 +130,13 @@ static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGe
     return inst_list;
 }
 
-static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg)
 {
     return codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg, "kgpc_string_assign");
 }
 
-static int codegen_expr_is_wide_string_value(const struct Expression *expr)
+int codegen_expr_is_wide_string_value(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -188,7 +190,7 @@ static int codegen_expr_is_wide_string_value(const struct Expression *expr)
 }
 
 /* Call kgpc_string_to_char_array(dest, src, size) to copy string to char array */
-static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, int array_size)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -211,7 +213,7 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
 }
 
 /* Call kgpc_shortstring_to_char_array(dest, src, size) */
-static ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, int array_size)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -234,7 +236,7 @@ static ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
 }
 
 /* Call kgpc_char_array_to_shortstring(dest, src, src_len, dest_size) */
-static ListNode_t *codegen_call_char_array_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_char_array_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, int src_len, int dest_size)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -272,7 +274,7 @@ static ListNode_t *codegen_call_char_array_to_shortstring(ListNode_t *inst_list,
     return inst_list;
 }
 
-static ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_list,
+ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t *addr_reg, Register_t *value_reg, int src_len)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -306,7 +308,7 @@ static ListNode_t *codegen_call_string_assign_from_char_array(ListNode_t *inst_l
 
 /* Check if an array access expression targets a shortstring element.
  * This handles cases like Names[0] where Names is array[...] of ShortString. */
-static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
+int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL || ctx == NULL)
         return 0;
@@ -372,7 +374,7 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
     return 0;
 }
 
-static int codegen_expr_is_shortstring_array(const struct Expression *expr)
+int codegen_expr_is_shortstring_array(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -434,7 +436,7 @@ static int codegen_expr_has_widechar_array_metadata_local(const struct Expressio
     return 0;
 }
 
-static int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
+int codegen_expr_is_shortstring_value_local(const struct Expression *expr)
 {
     if (expr == NULL)
         return 0;
@@ -452,7 +454,7 @@ static int codegen_expr_is_shortstring_value_local(const struct Expression *expr
     return 0;
 }
 
-static int codegen_shortstring_capacity_from_type_local(KgpcType *type)
+int codegen_shortstring_capacity_from_type_local(KgpcType *type)
 {
     if (type == NULL)
         return 0;
@@ -561,7 +563,7 @@ static int codegen_record_field_shortstring_capacity(const struct Expression *ex
 
     return 0;
 }
-static int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx)
+int codegen_is_current_return_var_id(const struct Expression *expr, CodeGenContext *ctx)
 {
     const char *expr_id = NULL;
     const char *current_id = NULL;
@@ -618,7 +620,7 @@ static int codegen_is_current_return_var_id(const struct Expression *expr, CodeG
     return 0;
 }
 
-static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext *ctx,
+int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext *ctx,
     int *lower_out, int *upper_out, int *is_shortstring_out)
 {
     if (lower_out != NULL) *lower_out = 0;
@@ -817,7 +819,7 @@ static int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenC
  * shortstring markers, the SHORTSTRING_TYPE tag, and typecast wrappers.
  * Used by both the "LHS is shortstring" and "LHS is AnsiString" assignment
  * branches to keep the detection logic in a single place. */
-static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx)
+int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr == NULL)
         return 0;
@@ -836,7 +838,7 @@ static int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGe
     return 0;
 }
 
-static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
+int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenContext *ctx)
 {
     int explicit_shortstring = 0;
     if (expr != NULL)
@@ -1006,7 +1008,7 @@ static int codegen_get_shortstring_capacity(const struct Expression *expr, CodeG
 }
 
 /* Call kgpc_string_to_shortstring(dest, src, size) to copy string to ShortString */
-static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg, int array_size)
 {
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
@@ -1091,7 +1093,7 @@ static ListNode_t *codegen_call_string_to_shortstring(ListNode_t *inst_list, Cod
     return inst_list;
 }
 
-static ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list, CodeGenContext *ctx,
+ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *dest_reg, int dest_size, Register_t *src_reg)
 {
     char buffer[128];
@@ -1122,7 +1124,7 @@ static ListNode_t *codegen_call_shortstring_copy(ListNode_t *inst_list, CodeGenC
 }
 
 /* Assign a static array value (copy all elements) */
-static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
+ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
@@ -1593,7 +1595,7 @@ static ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     return inst_list;
 }
 
-static ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
+ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     struct Expression *src_expr, ListNode_t *inst_list, CodeGenContext *ctx)
 {
     if (dest_expr == NULL || src_expr == NULL || ctx == NULL)
