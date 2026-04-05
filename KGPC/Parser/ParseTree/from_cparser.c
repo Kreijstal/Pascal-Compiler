@@ -18907,7 +18907,15 @@ static char *extract_external_name_from_node(ast_t *node)
 
 /* Mutable state accumulated while walking routine declaration AST children.
  * Used by process_subprogram_declarations() to avoid duplicating ~190 lines
- * of switch/case logic between convert_procedure and convert_function. */
+ * of switch/case logic between convert_procedure and convert_function.
+ *
+ * Lifecycle: init with subprogram_decl_state_init(), populate via
+ * process_subprogram_declarations(), then transfer ownership of results
+ * to the Tree_t via finalize_subprogram_tree().
+ *
+ * Ownership: external_alias, internproc_id_str, internconst_id_str are
+ * heap-allocated strings owned by this struct.  finalize_subprogram_tree()
+ * transfers them to the tree node or frees them if tree is NULL. */
 typedef struct {
     ListNode_t  *const_decls;
     ListBuilder  var_decls_builder;

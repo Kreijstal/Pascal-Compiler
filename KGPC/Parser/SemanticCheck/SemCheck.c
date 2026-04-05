@@ -3199,11 +3199,11 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     free(class_name);
 }
 
-static void add_class_vars_to_method_scope_for(SymTab_t *symtab, Tree_t *subprogram, int use_outer)
+static void add_class_vars_to_method_scope_for(SymTab_t *symtab, Tree_t *subprogram, int use_outer_class)
 {
     if (subprogram == NULL)
         return;
-    const char *owner = use_outer
+    const char *owner = use_outer_class
         ? subprogram->tree_data.subprogram_data.owner_class_outer
         : subprogram->tree_data.subprogram_data.owner_class;
     add_class_vars_to_method_scope_impl(symtab,
