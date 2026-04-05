@@ -2476,42 +2476,7 @@ static char *dup_symbol(ast_t *node) {
     return NULL;
 }
 
-typedef struct {
-    ListNode_t *head;
-    ListNode_t **tail_next;
-} ListBuilder;
-
-static void list_builder_init(ListBuilder *builder) {
-    if (builder == NULL)
-        return;
-    builder->head = NULL;
-    builder->tail_next = &builder->head;
-}
-
-static ListNode_t *list_builder_append(ListBuilder *builder, void *value, enum ListType type) {
-    if (builder == NULL)
-        return NULL;
-
-    ListNode_t *node = CreateListNode(value, type);
-    *builder->tail_next = node;
-    builder->tail_next = &node->next;
-    return node;
-}
-
-static ListNode_t *list_builder_finish(ListBuilder *builder) {
-    if (builder == NULL)
-        return NULL;
-    return builder->head;
-}
-
-static void list_builder_extend(ListBuilder *builder, ListNode_t *nodes) {
-    if (builder == NULL || nodes == NULL)
-        return;
-
-    *builder->tail_next = nodes;
-    while (*builder->tail_next != NULL)
-        builder->tail_next = &(*builder->tail_next)->next;
-}
+/* list_builder_* functions are now in List.h - no local definition needed */
 
 static char *dup_first_identifier_in_node(ast_t *node)
 {
