@@ -1060,6 +1060,8 @@ static enum VarType map_type_tag_to_var_type(int type_tag)
         case WORD_TYPE:       return HASHVAR_INTEGER;
         case LONGWORD_TYPE:   return HASHVAR_LONGINT;
         case QWORD_TYPE:      return HASHVAR_QWORD;
+        case SET_TYPE:        return HASHVAR_SET;
+        case ENUM_TYPE:       return HASHVAR_ENUM;
         case FILE_TYPE:       return HASHVAR_FILE;
         default:              return HASHVAR_UNTYPED;
     }
@@ -3197,26 +3199,28 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
     free(class_name);
 }
 
-static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+static void add_class_vars_to_method_scope_for(SymTab_t *symtab, Tree_t *subprogram, int use_outer_class)
 {
     if (subprogram == NULL)
         return;
+    const char *owner = use_outer_class
+        ? subprogram->tree_data.subprogram_data.owner_class_outer
+        : subprogram->tree_data.subprogram_data.owner_class;
     add_class_vars_to_method_scope_impl(symtab,
-        subprogram->tree_data.subprogram_data.owner_class,
+        owner,
         subprogram->tree_data.subprogram_data.method_name,
         subprogram->tree_data.subprogram_data.is_operator,
         subprogram->tree_data.subprogram_data.args_var);
 }
 
+static void add_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
+{
+    add_class_vars_to_method_scope_for(symtab, subprogram, 0);
+}
+
 static void add_outer_class_vars_to_method_scope(SymTab_t *symtab, Tree_t *subprogram)
 {
-    if (subprogram == NULL)
-        return;
-    add_class_vars_to_method_scope_impl(symtab,
-        subprogram->tree_data.subprogram_data.owner_class_outer,
-        subprogram->tree_data.subprogram_data.method_name,
-        subprogram->tree_data.subprogram_data.is_operator,
-        subprogram->tree_data.subprogram_data.args_var);
+    add_class_vars_to_method_scope_for(symtab, subprogram, 1);
 }
 
 /**
@@ -3956,25 +3960,7 @@ static inline enum VarType get_var_type_from_node(HashNode_t *node)
         case TYPE_KIND_PRIMITIVE:
         {
             int tag = kgpc_type_get_primitive_tag(node->type);
-            switch (tag)
-            {
-                case INT_TYPE: return HASHVAR_INTEGER;
-                case LONGINT_TYPE: return HASHVAR_LONGINT;
-                case INT64_TYPE: return HASHVAR_INT64;
-                case BYTE_TYPE: return HASHVAR_INTEGER;
-                case WORD_TYPE: return HASHVAR_INTEGER;
-                case LONGWORD_TYPE: return HASHVAR_LONGINT;
-                case QWORD_TYPE: return HASHVAR_QWORD;
-                case REAL_TYPE:
-                case EXTENDED_TYPE: return HASHVAR_REAL;
-                case BOOL: return HASHVAR_BOOLEAN;
-                case CHAR_TYPE: return HASHVAR_CHAR;
-                case STRING_TYPE: return HASHVAR_PCHAR;
-                case SET_TYPE: return HASHVAR_SET;
-                case ENUM_TYPE: return HASHVAR_ENUM;
-                case FILE_TYPE: return HASHVAR_FILE;
-                default: return HASHVAR_UNTYPED;
-            }
+            return map_type_tag_to_var_type(tag);
         }
         case TYPE_KIND_POINTER:
             return HASHVAR_POINTER;
@@ -14503,11 +14489,15 @@ void semcheck_add_builtins(SymTab_t *symtab)
         if (ppchar != NULL)
         {
             char *envp_name = strdup("EnvP");
-            if (envp_name != NULL)
+            if (envp_name != NULL) {
                 PushVarOntoScope_Typed(symtab, envp_name, ppchar);
+                free(envp_name);
+            }
             char *envp_lower = strdup("envp");
-            if (envp_lower != NULL)
+            if (envp_lower != NULL) {
                 PushVarOntoScope_Typed(symtab, envp_lower, ppchar);
+                free(envp_lower);
+            }
             destroy_kgpc_type(ppchar);
         }
     }
@@ -14643,7 +14633,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stdin_type != NULL && "Failed to create stdin type");
             PushVarOntoScope_Typed(symtab, stdin_name, stdin_type);
             destroy_kgpc_type(stdin_type);
-            /* Note: stdin_name ownership transferred to symtab, don't free */
+            free(stdin_name);
         }
         char *stdout_name = strdup("stdout");
         if (stdout_name != NULL) {
@@ -14651,6 +14641,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stdout_type != NULL && "Failed to create stdout type");
             PushVarOntoScope_Typed(symtab, stdout_name, stdout_type);
             destroy_kgpc_type(stdout_type);
+            free(stdout_name);
         }
         char *stderr_name = strdup("stderr");
         if (stderr_name != NULL) {
@@ -14658,6 +14649,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
             assert(stderr_type != NULL && "Failed to create stderr type");
             PushVarOntoScope_Typed(symtab, stderr_name, stderr_type);
             destroy_kgpc_type(stderr_type);
+            free(stderr_name);
         }
         /* Input and Output - standard Pascal file variables */
         int sys_unit_idx = unit_registry_add("System");
@@ -14673,6 +14665,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 input_node->unit_is_public = 1;
                 mark_hashnode_source_unit(input_node, sys_unit_idx);
             }
+            free(input_name);
         }
         char *output_name = strdup("Output");
         if (output_name != NULL) {
@@ -14686,6 +14679,7 @@ void semcheck_add_builtins(SymTab_t *symtab)
                 output_node->unit_is_public = 1;
                 mark_hashnode_source_unit(output_node, sys_unit_idx);
             }
+            free(output_name);
         }
     }
 
@@ -18474,11 +18468,9 @@ static void register_nested_type_short_alias(SymTab_t *symtab,
             PushFunctionOntoScope_Typed(symtab, short_name, mangled_dup, type);
         else
             PushProcedureOntoScope_Typed(symtab, short_name, mangled_dup, type);
+        free(mangled_dup);
     }
-    else
-    {
-        free(short_name);
-    }
+    free(short_name);
 }
 
 /* Semantic check on an entire subprogram */

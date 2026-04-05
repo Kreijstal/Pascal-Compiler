@@ -2643,6 +2643,52 @@ static ListNode_t *codegen_call_mpint_assign(ListNode_t *inst_list, Register_t *
     return inst_list;
 }
 
+/* Move two registers into the first two ABI argument registers (arg0, arg1),
+ * handling all possible register conflict scenarios. Uses xchgq when both
+ * registers are cross-assigned, otherwise moves in the correct order.
+ * arg0_reg → first ABI arg register, arg1_reg → second ABI arg register. */
+static ListNode_t *codegen_setup_two_arg_regs(ListNode_t *inst_list,
+    Register_t *arg0_reg, Register_t *arg1_reg)
+{
+    char buffer[128];
+    const char *abi_arg0 = codegen_target_is_windows() ? "%rcx" : "%rdi";
+    const char *abi_arg1 = codegen_target_is_windows() ? "%rdx" : "%rsi";
+    int arg0_id = codegen_target_is_windows() ? REG_RCX : REG_RDI;
+    int arg1_id = codegen_target_is_windows() ? REG_RDX : REG_RSI;
+
+    int val_in_arg0 = (arg1_reg->reg_id == arg0_id);
+    int addr_in_arg1 = (arg0_reg->reg_id == arg1_id);
+
+    if (val_in_arg0 && addr_in_arg1)
+    {
+        snprintf(buffer, sizeof(buffer), "\txchgq\t%s, %s\n", abi_arg0, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (val_in_arg0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else if (addr_in_arg1)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg0_reg->bit_64, abi_arg0);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", arg1_reg->bit_64, abi_arg1);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
+    return inst_list;
+}
+
 /* Call a 2-arg runtime function: func(addr_reg, value_reg)
  * addr_reg → first arg (char**), value_reg → second arg (const char*) */
 static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGenContext *ctx,
@@ -2651,66 +2697,7 @@ static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGe
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
         return inst_list;
 
-    char buffer[256];
-    if (codegen_target_is_windows())
-    {
-        int value_in_rcx = (value_reg->reg_id == REG_RCX);
-        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
-
-        if (value_in_rcx && addr_in_rdx)
-            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
-        else if (value_in_rcx)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rdx)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-    }
-    else
-    {
-        int value_in_rdi = (value_reg->reg_id == REG_RDI);
-        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
-
-        if (value_in_rdi && addr_in_rsi)
-            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
-        else if (value_in_rdi)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rsi)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-    }
-
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, func_name);
     free_arg_regs();
@@ -2720,91 +2707,7 @@ static ListNode_t *codegen_call_string_assign_func(ListNode_t *inst_list, CodeGe
 static ListNode_t *codegen_call_string_assign(ListNode_t *inst_list, CodeGenContext *ctx,
     Register_t *addr_reg, Register_t *value_reg)
 {
-    if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
-        return inst_list;
-
-    char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        /* Windows x64 ABI: first arg in %rcx, second in %rdx */
-        /* Handle register conflicts by checking if value_reg is already in %rcx */
-        int value_in_rcx = (value_reg->reg_id == REG_RCX);
-        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
-
-        if (value_in_rcx && addr_in_rdx)
-        {
-            /* Both registers conflict - swap them */
-            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
-        }
-        else if (value_in_rcx)
-        {
-            /* value is in %rcx but needs to go to %rdx, addr needs to go to %rcx */
-            /* Move value to %rdx first to avoid overwriting */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rdx)
-        {
-            /* addr is in %rdx but needs to go to %rcx, value needs to go to %rdx */
-            /* Move addr to %rcx first to avoid overwriting */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            /* No conflicts - standard order */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-    }
-    else
-    {
-        /* System V ABI: first arg in %rdi, second in %rsi */
-        /* Handle register conflicts similarly */
-        int value_in_rdi = (value_reg->reg_id == REG_RDI);
-        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
-
-        if (value_in_rdi && addr_in_rsi)
-        {
-            /* Both registers conflict - swap them */
-            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
-        }
-        else if (value_in_rdi)
-        {
-            /* value is in %rdi but needs to go to %rsi, addr needs to go to %rdi */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rsi)
-        {
-            /* addr is in %rsi but needs to go to %rdi, value needs to go to %rsi */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            /* No conflicts - standard order */
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-    }
-
-    inst_list = codegen_vect_reg(inst_list, 0);
-    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_assign");
-    free_arg_regs();
-    return inst_list;
+    return codegen_call_string_assign_func(inst_list, ctx, addr_reg, value_reg, "kgpc_string_assign");
 }
 
 static int codegen_expr_is_wide_string_value(const struct Expression *expr)
@@ -2867,75 +2770,15 @@ static ListNode_t *codegen_call_string_to_char_array(ListNode_t *inst_list, Code
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
         return inst_list;
 
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
+
     char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        /* Windows x64 ABI: first arg in %rcx, second in %rdx, third in %r8 */
-        int value_in_rcx = (value_reg->reg_id == REG_RCX);
-        int addr_in_rdx = (addr_reg->reg_id == REG_RDX);
-
-        if (value_in_rcx && addr_in_rdx)
-        {
-            inst_list = add_inst(inst_list, "\txchgq\t%rcx, %rdx\n");
-        }
-        else if (value_in_rcx)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rdx)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
+    if (codegen_target_is_windows()) {
         snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        /* System V ABI: first arg in %rdi, second in %rsi, third in %rdx */
-        int value_in_rdi = (value_reg->reg_id == REG_RDI);
-        int addr_in_rsi = (addr_reg->reg_id == REG_RSI);
-
-        if (value_in_rdi && addr_in_rsi)
-        {
-            inst_list = add_inst(inst_list, "\txchgq\t%rdi, %rsi\n");
-        }
-        else if (value_in_rdi)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else if (addr_in_rsi)
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
-        else
-        {
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-        }
+    } else {
         snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
-        inst_list = add_inst(inst_list, buffer);
     }
+    inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_to_char_array");
@@ -2950,25 +2793,15 @@ static ListNode_t *codegen_call_shortstring_to_char_array(ListNode_t *inst_list,
     if (inst_list == NULL || ctx == NULL || addr_reg == NULL || value_reg == NULL)
         return inst_list;
 
+    inst_list = codegen_setup_two_arg_regs(inst_list, addr_reg, value_reg);
+
     char buffer[128];
-    if (codegen_target_is_windows())
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdx\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+    if (codegen_target_is_windows()) {
         snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%r8\n", array_size);
-        inst_list = add_inst(inst_list, buffer);
-    }
-    else
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rsi\n", value_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
+    } else {
         snprintf(buffer, sizeof(buffer), "\tmovq\t$%d, %%rdx\n", array_size);
-        inst_list = add_inst(inst_list, buffer);
     }
+    inst_list = add_inst(inst_list, buffer);
 
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_shortstring_to_char_array");

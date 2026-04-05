@@ -9108,6 +9108,7 @@ static struct MethodTemplate *create_method_template(ast_t *method_decl_node)
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
     template->source_offset = g_source_offset;
+    template->owns_ast = 1; /* Template owns its detached AST copy */
     return template;
 }
 
@@ -9115,8 +9116,16 @@ static void destroy_method_template_instance(struct MethodTemplate *template)
 {
     if (template == NULL)
         return;
-    if (template->name != NULL)
-        free(template->name);
+    free(template->name);
+    free(template->delegated_interface_name);
+    free(template->delegated_target_name);
+    /* Free detached AST copies when this template owns them.
+     * Templates created by create_method_template always have owns_ast=1. */
+    if (template->owns_ast)
+    {
+        free_ast_detached(template->method_ast);
+        free_ast_detached(template->method_impl_ast);
+    }
     if (template->method_tree != NULL)
         destroy_tree(template->method_tree);
     free(template);
@@ -18894,6 +18903,289 @@ static char *extract_external_name_from_node(ast_t *node)
     return NULL;
 }
 
+/* ---- Shared state and helpers for convert_procedure/convert_function ---- */
+
+/* Mutable state accumulated while walking routine declaration AST children.
+ * Used by process_subprogram_declarations() to avoid duplicating ~190 lines
+ * of switch/case logic between convert_procedure and convert_function.
+ *
+ * Lifecycle: init with subprogram_decl_state_init(), populate via
+ * process_subprogram_declarations(), then transfer ownership of results
+ * to the Tree_t via finalize_subprogram_tree().
+ *
+ * Ownership: external_alias, internproc_id_str, internconst_id_str are
+ * heap-allocated strings owned by this struct.  finalize_subprogram_tree()
+ * transfers them to the tree node or frees them if tree is NULL. */
+typedef struct {
+    ListNode_t  *const_decls;
+    ListBuilder  var_decls_builder;
+    ListBuilder  label_decls_builder;
+    ListNode_t  *nested_subs;
+    struct Statement *body;
+    int           is_external;
+    int           is_nostackframe;
+    int           is_varargs;
+    char         *external_alias;
+    char         *internproc_id_str;
+    char         *internconst_id_str;
+    ast_t        *type_section_ast;
+    ListNode_t   *type_decls;
+} SubprogramDeclState;
+
+static void subprogram_decl_state_init(SubprogramDeclState *s) {
+    s->const_decls = NULL;
+    list_builder_init(&s->var_decls_builder);
+    list_builder_init(&s->label_decls_builder);
+    s->nested_subs = NULL;
+    s->body = NULL;
+    s->is_external = 0;
+    s->is_nostackframe = 0;
+    s->is_varargs = 0;
+    s->external_alias = NULL;
+    s->internproc_id_str = NULL;
+    s->internconst_id_str = NULL;
+    s->type_section_ast = NULL;
+    s->type_decls = NULL;
+}
+
+/* Process the body/declaration children of a procedure or function AST node.
+ * This is the shared core that handles type/const/var sections, nested
+ * subprograms, body blocks, directives, extern names, etc.
+ * On entry, *cursor points to the first child node to process.
+ * On return, *cursor is NULL (all children consumed). */
+static void process_subprogram_declarations(ast_t **cursor, SubprogramDeclState *s) {
+    ast_t *cur = *cursor;
+    while (cur != NULL) {
+        switch (cur->typ) {
+        case PASCAL_T_TYPE_SECTION:
+            append_type_decls_from_section(cur, &s->type_decls, &s->nested_subs,
+                &s->const_decls, &s->var_decls_builder, NULL);
+            s->type_section_ast = cur;
+            break;
+        case PASCAL_T_CONST_SECTION:
+            append_const_decls_from_section(cur, &s->const_decls, &s->var_decls_builder, s->type_section_ast);
+            break;
+        case PASCAL_T_VAR_SECTION:
+            list_builder_extend(&s->var_decls_builder, convert_var_section(cur));
+            break;
+        case PASCAL_T_LABEL_SECTION:
+            append_labels_from_section(cur, &s->label_decls_builder);
+            break;
+        case PASCAL_T_PROCEDURE_DECL:
+        case PASCAL_T_FUNCTION_DECL: {
+            Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
+                              ? convert_procedure(cur)
+                              : convert_function(cur);
+            append_subprogram_node(&s->nested_subs, sub);
+            break;
+        }
+        case PASCAL_T_METHOD_IMPL: {
+            Tree_t *method_tree = convert_method_impl(cur);
+            append_subprogram_node(&s->nested_subs, method_tree);
+            break;
+        }
+        case PASCAL_T_FUNCTION_BODY:
+            convert_routine_body(cur, &s->const_decls, &s->var_decls_builder, &s->label_decls_builder,
+                                 &s->nested_subs, &s->body, &s->type_decls);
+            break;
+        case PASCAL_T_BEGIN_BLOCK:
+            s->body = convert_block(cur);
+            break;
+        case PASCAL_T_ASM_BLOCK: {
+            struct Statement *stmt = convert_statement(cur);
+            ListBuilder stmts_builder;
+            list_builder_init(&stmts_builder);
+            if (stmt != NULL)
+                list_builder_append(&stmts_builder, stmt, LIST_STMT);
+            s->body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
+            break;
+        }
+        case PASCAL_T_IDENTIFIER: {
+            char *self_sym = dup_symbol(cur);
+            if (self_sym != NULL) {
+                if (is_external_directive(self_sym))
+                    s->is_external = 1;
+                else if (strcasecmp(self_sym, "alias") == 0) {
+                    ast_t *val = cur->child;
+                    if (val == NULL || val->typ != PASCAL_T_STRING)
+                        val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_STRING) {
+                        char *name = dup_symbol(val);
+                        if (name != NULL) {
+                            if (s->external_alias != NULL)
+                                free(s->external_alias);
+                            s->external_alias = name;
+                        }
+                        if (val == cur->next)
+                            cur = cur->next;
+                    }
+                } else if (strcasecmp(self_sym, "internproc") == 0 ||
+                           strcasecmp(self_sym, "internconst") == 0 ||
+                           strcasecmp(self_sym, "compilerproc") == 0) {
+                    s->is_external = 1;
+                    ast_t *val = cur->next;
+                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
+                        val->sym != NULL && val->sym->name != NULL) {
+                        if (strcasecmp(self_sym, "internconst") == 0) {
+                            if (s->internconst_id_str != NULL)
+                                free(s->internconst_id_str);
+                            s->internconst_id_str = strdup(val->sym->name);
+                        } else {
+                            if (s->internproc_id_str != NULL)
+                                free(s->internproc_id_str);
+                            s->internproc_id_str = strdup(val->sym->name);
+                        }
+                        if (s->external_alias != NULL)
+                            free(s->external_alias);
+                        s->external_alias = strdup(val->sym->name);
+                        cur = cur->next;
+                    }
+                } else {
+                    if (strncasecmp(self_sym, "fpc_in_", 7) == 0 ||
+                        strncasecmp(self_sym, "fpc_", 4) == 0) {
+                        s->is_external = 1;
+                        if (s->external_alias != NULL)
+                            free(s->external_alias);
+                        s->external_alias = strdup(self_sym);
+                        if (s->internproc_id_str != NULL)
+                            free(s->internproc_id_str);
+                        s->internproc_id_str = strdup(self_sym);
+                    }
+                }
+                free(self_sym);
+            }
+            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
+                char *directive = dup_symbol(cur->child);
+                if (directive != NULL) {
+                    if (is_external_directive(directive))
+                        s->is_external = 1;
+                }
+                free(directive);
+            }
+            break;
+        }
+        case PASCAL_T_EXTERNAL_NAME:
+        case PASCAL_T_EXTERNAL_NAME_EXPR:
+            {
+                char *name = extract_external_name_from_node(cur);
+                if (name != NULL) {
+                    if (s->external_alias != NULL)
+                        free(s->external_alias);
+                    s->external_alias = name;
+                }
+                s->is_external = 1;
+            }
+            break;
+        case PASCAL_T_NONE:
+            {
+                for (ast_t *child = cur->child; child != NULL; child = child->next) {
+                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
+                        char *kw = child->sym->name;
+                        if (strcasecmp(kw, "internproc") == 0 ||
+                            strcasecmp(kw, "internconst") == 0 ||
+                            strcasecmp(kw, "compilerproc") == 0) {
+                            s->is_external = 1;
+                            ast_t *val = child->next;
+                            while (val != NULL && val->typ == PASCAL_T_NONE)
+                                val = val->child;
+                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (s->internconst_id_str != NULL)
+                                        free(s->internconst_id_str);
+                                    s->internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (s->internproc_id_str != NULL)
+                                        free(s->internproc_id_str);
+                                    s->internproc_id_str = dup_symbol(val);
+                                }
+                                if (s->external_alias != NULL)
+                                    free(s->external_alias);
+                                s->external_alias = dup_symbol(val);
+                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
+                                if (strcasecmp(kw, "internconst") == 0) {
+                                    if (s->internconst_id_str != NULL)
+                                        free(s->internconst_id_str);
+                                    s->internconst_id_str = dup_symbol(val);
+                                } else {
+                                    if (s->internproc_id_str != NULL)
+                                        free(s->internproc_id_str);
+                                    s->internproc_id_str = dup_symbol(val);
+                                }
+                                if (s->external_alias != NULL)
+                                    free(s->external_alias);
+                                s->external_alias = dup_symbol(val);
+                            }
+                        } else if (strcasecmp(kw, "external") == 0) {
+                            s->is_external = 1;
+                        }
+                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
+                        char *name = extract_external_name_from_node(child);
+                        if (name != NULL) {
+                            if (s->external_alias != NULL)
+                                free(s->external_alias);
+                            s->external_alias = name;
+                        }
+                        s->is_external = 1;
+                    }
+                }
+            }
+            break;
+        default:
+            break;
+        }
+        cur = cur->next;
+    }
+    *cursor = cur;
+}
+
+/* Finalize the externals/generic state on a freshly-created subprogram tree.
+ * Transfers ownership of external_alias, internproc_id_str, internconst_id_str
+ * and generic_type_params to the tree, or frees them if tree is NULL.
+ * Also sets nostackframe/varargs/source_index. */
+static void finalize_subprogram_tree(Tree_t *tree, ast_t *node,
+    SubprogramDeclState *s, char **generic_type_params, int num_generic_type_params)
+{
+    if (tree != NULL && node->index >= 0)
+        tree->source_index = node->index + g_source_offset;
+    if (!s->is_nostackframe)
+        s->is_nostackframe = ast_has_routine_directive(node, "nostackframe", 8);
+    if (tree != NULL && s->is_nostackframe)
+        tree->tree_data.subprogram_data.nostackframe = 1;
+    if (tree != NULL && s->is_varargs)
+        tree->tree_data.subprogram_data.is_varargs = 1;
+    if (tree != NULL && s->is_external && s->external_alias == NULL &&
+        tree->tree_data.subprogram_data.id != NULL)
+        s->external_alias = strdup(tree->tree_data.subprogram_data.id);
+    if (tree != NULL && s->external_alias != NULL)
+        tree->tree_data.subprogram_data.cname_override = s->external_alias;
+    else if (s->external_alias != NULL)
+        free(s->external_alias);
+    s->external_alias = NULL;
+    if (tree != NULL && s->internproc_id_str != NULL)
+        tree->tree_data.subprogram_data.internproc_id = s->internproc_id_str;
+    else if (s->internproc_id_str != NULL)
+        free(s->internproc_id_str);
+    s->internproc_id_str = NULL;
+    if (tree != NULL && s->internconst_id_str != NULL)
+        tree->tree_data.subprogram_data.internconst_id = s->internconst_id_str;
+    else if (s->internconst_id_str != NULL)
+        free(s->internconst_id_str);
+    s->internconst_id_str = NULL;
+    if (tree != NULL && num_generic_type_params > 0) {
+        tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
+        tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
+        tree->tree_data.subprogram_data.is_generic_template = 1;
+        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(node);
+        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
+    } else if (generic_type_params != NULL) {
+        for (int i = 0; i < num_generic_type_params; i++)
+            free(generic_type_params[i]);
+        free(generic_type_params);
+    }
+}
+
+/* ---- End shared subprogram helpers ---- */
+
 static Tree_t *convert_procedure(ast_t *proc_node) {
     ast_t *cur = proc_node->child;
     char *id = NULL;
@@ -18947,257 +19239,17 @@ static Tree_t *convert_procedure(ast_t *proc_node) {
         }
     }
 
-    ListNode_t *const_decls = NULL;
-    ListBuilder var_decls_builder;
-    list_builder_init(&var_decls_builder);
-    ListBuilder label_decls_builder;
-    list_builder_init(&label_decls_builder);
-    ListNode_t *nested_subs = NULL;
-    struct Statement *body = NULL;
-    int is_external = 0;
-    int is_nostackframe = 0;
-    int is_varargs = 0;
-    char *external_alias = NULL;
-    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name (e.g. "fpc_in_Rewrite_TypedFile") */
-    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name (e.g. "fpc_in_const_ptr") */
-    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
-    ListNode_t *type_decls = NULL;
+    SubprogramDeclState ds;
+    subprogram_decl_state_init(&ds);
+    process_subprogram_declarations(&cur, &ds);
 
-    while (cur != NULL) {
-        if (kgpc_getenv("KGPC_DEBUG_PROC_DIRECTIVE") != NULL) {
-            fprintf(stderr, "[KGPC] convert_procedure directive node: typ=%d sym=%s child_typ=%d\n",
-                cur->typ,
-                (cur->sym != NULL && cur->sym->name != NULL) ? cur->sym->name : "<null>",
-                (cur->child != NULL) ? cur->child->typ : -1);
-        }
-        switch (cur->typ) {
-        case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls, &nested_subs,
-                &const_decls, &var_decls_builder, NULL);
-            type_section_ast = cur;  /* Save for const array enum resolution */
-            break;
-        case PASCAL_T_CONST_SECTION:
-            append_const_decls_from_section(cur, &const_decls, &var_decls_builder, type_section_ast);
-            break;
-        case PASCAL_T_VAR_SECTION:
-            list_builder_extend(&var_decls_builder, convert_var_section(cur));
-            break;
-        case PASCAL_T_LABEL_SECTION:
-            append_labels_from_section(cur, &label_decls_builder);
-            break;
-        case PASCAL_T_PROCEDURE_DECL:
-        case PASCAL_T_FUNCTION_DECL: {
-            Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
-                              ? convert_procedure(cur)
-                              : convert_function(cur);
-            append_subprogram_node(&nested_subs, sub);
-            break;
-        }
-        case PASCAL_T_METHOD_IMPL: {
-            Tree_t *method_tree = convert_method_impl(cur);
-            append_subprogram_node(&nested_subs, method_tree);
-            break;
-        }
-        case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
-                                 &nested_subs, &body, &type_decls);
-            break;
-        case PASCAL_T_BEGIN_BLOCK:
-            body = convert_block(cur);
-            break;
-        case PASCAL_T_ASM_BLOCK: {
-            struct Statement *stmt = convert_statement(cur);
-            ListBuilder stmts_builder;
-            list_builder_init(&stmts_builder);
-            if (stmt != NULL)
-                list_builder_append(&stmts_builder, stmt, LIST_STMT);
-            body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
-            break;
-        }
-        case PASCAL_T_IDENTIFIER: {
-            char *self_sym = dup_symbol(cur);
-            if (self_sym != NULL) {
-                if (strcasecmp(self_sym, "alias") == 0) {
-                    /* [Alias:'NAME'] bracket directive — the string value is
-                       either a child node or the next sibling (depending on
-                       how the PEG grammar flattened the seq). */
-                    ast_t *val = cur->child;
-                    if (val == NULL || val->typ != PASCAL_T_STRING)
-                        val = cur->next;  /* sibling layout */
-                    if (val != NULL && val->typ == PASCAL_T_STRING) {
-                        char *name = dup_symbol(val);
-                        if (name != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = name;
-                        }
-                        /* Skip the string node so the outer loop doesn't revisit it */
-                        if (val == cur->next)
-                            cur = cur->next;
-                    }
-                } else if (strcasecmp(self_sym, "internproc") == 0 ||
-                           strcasecmp(self_sym, "internconst") == 0 ||
-                           strcasecmp(self_sym, "compilerproc") == 0) {
-                    is_external = 1;
-                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
-                       is the next sibling. */
-                    ast_t *val = cur->next;
-                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
-                        val->sym != NULL && val->sym->name != NULL) {
-                        if (strcasecmp(self_sym, "internconst") == 0) {
-                            if (internconst_id_str != NULL)
-                                free(internconst_id_str);
-                            internconst_id_str = strdup(val->sym->name);
-                        } else {
-                            if (internproc_id_str != NULL)
-                                free(internproc_id_str);
-                            internproc_id_str = strdup(val->sym->name);
-                        }
-                        if (external_alias != NULL)
-                            free(external_alias);
-                        external_alias = strdup(val->sym->name);
-                        cur = cur->next;  /* Skip the value node */
-                    }
-                } else {
-                    /* Fallback: if the identifier itself is an internproc value
-                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
-                       consumed by the parser and only the value survived.
-                       Only treat it as an internproc if it looks like an FPC intrinsic name. */
-                    if (strncasecmp(self_sym, "fpc_in_", 7) == 0 ||
-                        strncasecmp(self_sym, "fpc_", 4) == 0) {
-                        is_external = 1;
-                        if (external_alias != NULL)
-                            free(external_alias);
-                        external_alias = strdup(self_sym);
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(self_sym);
-                    }
-                }
-                free(self_sym);
-            }
-            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
-                char *directive = dup_symbol(cur->child);
-                if (directive != NULL) {
-                    if (is_external_directive(directive))
-                        is_external = 1;
-                }
-                free(directive);
-            }
-            break;
-        }
-        case PASCAL_T_EXTERNAL_NAME:
-        case PASCAL_T_EXTERNAL_NAME_EXPR:
-            {
-                char *name = extract_external_name_from_node(cur);
-                if (name != NULL) {
-                    if (external_alias != NULL)
-                        free(external_alias);
-                    external_alias = name;
-                }
-                is_external = 1;
-            }
-            break;
-        case PASCAL_T_NONE:
-            {
-                for (ast_t *child = cur->child; child != NULL; child = child->next) {
-                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
-                        char *kw = child->sym->name;
-                        if (strcasecmp(kw, "internproc") == 0 ||
-                            strcasecmp(kw, "internconst") == 0 ||
-                            strcasecmp(kw, "compilerproc") == 0) {
-                            is_external = 1;
-                            ast_t *val = child->next;
-                            while (val != NULL && val->typ == PASCAL_T_NONE)
-                                val = val->child;
-                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
-                                if (strcasecmp(kw, "internconst") == 0) {
-                                    if (internconst_id_str != NULL)
-                                        free(internconst_id_str);
-                                    internconst_id_str = dup_symbol(val);
-                                } else {
-                                    if (internproc_id_str != NULL)
-                                        free(internproc_id_str);
-                                    internproc_id_str = dup_symbol(val);
-                                }
-                                if (external_alias != NULL)
-                                    free(external_alias);
-                                external_alias = dup_symbol(val);
-                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
-                                if (strcasecmp(kw, "internconst") == 0) {
-                                    if (internconst_id_str != NULL)
-                                        free(internconst_id_str);
-                                    internconst_id_str = dup_symbol(val);
-                                } else {
-                                    if (internproc_id_str != NULL)
-                                        free(internproc_id_str);
-                                    internproc_id_str = dup_symbol(val);
-                                }
-                                if (external_alias != NULL)
-                                    free(external_alias);
-                                external_alias = dup_symbol(val);
-                            }
-                        } else if (strcasecmp(kw, "external") == 0) {
-                            is_external = 1;
-                        }
-                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
-                        char *name = extract_external_name_from_node(child);
-                        if (name != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = name;
-                        }
-                        is_external = 1;
-                    }
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        cur = cur->next;
-    }
-
-    if (!is_varargs)
-        is_varargs = ast_has_routine_directive(proc_node, "varargs", 8);
-    ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
-    Tree_t *tree = mk_procedure(proc_node->line, id, params, const_decls,
-                                label_decls, type_decls, list_builder_finish(&var_decls_builder),
-                                nested_subs, body, is_external, 0);
-    if (tree != NULL && proc_node->index >= 0)
-        tree->source_index = proc_node->index + g_source_offset;
-    if (!is_nostackframe)
-        is_nostackframe = ast_has_routine_directive(proc_node, "nostackframe", 8);
-    if (tree != NULL && is_nostackframe)
-        tree->tree_data.subprogram_data.nostackframe = 1;
-    if (tree != NULL && is_varargs)
-        tree->tree_data.subprogram_data.is_varargs = 1;
-    if (tree != NULL && is_external && external_alias == NULL &&
-        tree->tree_data.subprogram_data.id != NULL)
-        external_alias = strdup(tree->tree_data.subprogram_data.id);
-    if (tree != NULL && external_alias != NULL)
-        tree->tree_data.subprogram_data.cname_override = external_alias;
-    else if (external_alias != NULL)
-        free(external_alias);
-    if (tree != NULL && internproc_id_str != NULL)
-        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
-    else if (internproc_id_str != NULL)
-        free(internproc_id_str);
-    if (tree != NULL && internconst_id_str != NULL)
-        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
-    else if (internconst_id_str != NULL)
-        free(internconst_id_str);
-    if (tree != NULL && num_generic_type_params > 0) {
-        tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
-        tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
-        tree->tree_data.subprogram_data.is_generic_template = 1;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(proc_node);
-        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
-    } else if (generic_type_params != NULL) {
-        for (int i = 0; i < num_generic_type_params; i++)
-            free(generic_type_params[i]);
-        free(generic_type_params);
-    }
+    if (!ds.is_varargs)
+        ds.is_varargs = ast_has_routine_directive(proc_node, "varargs", 8);
+    ListNode_t *label_decls = list_builder_finish(&ds.label_decls_builder);
+    Tree_t *tree = mk_procedure(proc_node->line, id, params, ds.const_decls,
+                                label_decls, ds.type_decls, list_builder_finish(&ds.var_decls_builder),
+                                ds.nested_subs, ds.body, ds.is_external, 0);
+    finalize_subprogram_tree(tree, proc_node, &ds, generic_type_params, num_generic_type_params);
     return tree;
 }
 
@@ -19380,260 +19432,22 @@ static Tree_t *convert_function(ast_t *func_node) {
     }
     if (deferred_encoded_op != NULL) free(deferred_encoded_op);
 
-    ListNode_t *const_decls = NULL;
-    ListBuilder var_decls_builder;
-    list_builder_init(&var_decls_builder);
-    ListBuilder label_decls_builder;
-    list_builder_init(&label_decls_builder);
-    ListNode_t *nested_subs = NULL;
-    struct Statement *body = NULL;
-    int is_external = 0;
-    int is_nostackframe = 0;
-    int is_varargs = 0;
-    char *external_alias = NULL;
-    char *internproc_id_str = NULL;  /* Raw FPC INTERNPROC name */
-    char *internconst_id_str = NULL; /* Raw FPC INTERNCONST name */
-    ast_t *type_section_ast = NULL;  /* Track local type section for enum resolution */
-    ListNode_t *type_decls = NULL;
+    SubprogramDeclState ds;
+    subprogram_decl_state_init(&ds);
+    process_subprogram_declarations(&cur, &ds);
 
-    while (cur != NULL) {
-
-        switch (cur->typ) {
-        case PASCAL_T_TYPE_SECTION:
-            append_type_decls_from_section(cur, &type_decls, &nested_subs,
-                &const_decls, &var_decls_builder, NULL);
-            type_section_ast = cur;  /* Save for const array enum resolution */
-            break;
-        case PASCAL_T_CONST_SECTION:
-            append_const_decls_from_section(cur, &const_decls, &var_decls_builder, type_section_ast);
-            break;
-        case PASCAL_T_VAR_SECTION:
-            list_builder_extend(&var_decls_builder, convert_var_section(cur));
-            break;
-        case PASCAL_T_LABEL_SECTION:
-            append_labels_from_section(cur, &label_decls_builder);
-            break;
-        case PASCAL_T_PROCEDURE_DECL:
-        case PASCAL_T_FUNCTION_DECL: {
-            Tree_t *sub = (cur->typ == PASCAL_T_PROCEDURE_DECL)
-                              ? convert_procedure(cur)
-                              : convert_function(cur);
-            append_subprogram_node(&nested_subs, sub);
-            break;
-        }
-        case PASCAL_T_METHOD_IMPL: {
-            Tree_t *method_tree = convert_method_impl(cur);
-            append_subprogram_node(&nested_subs, method_tree);
-            break;
-        }
-        case PASCAL_T_FUNCTION_BODY:
-            convert_routine_body(cur, &const_decls, &var_decls_builder, &label_decls_builder,
-                                 &nested_subs, &body, &type_decls);
-            break;
-        case PASCAL_T_BEGIN_BLOCK:
-            body = convert_block(cur);
-            break;
-        case PASCAL_T_ASM_BLOCK: {
-            struct Statement *stmt = convert_statement(cur);
-            ListBuilder stmts_builder;
-            list_builder_init(&stmts_builder);
-            if (stmt != NULL)
-                list_builder_append(&stmts_builder, stmt, LIST_STMT);
-            body = mk_compoundstatement(cur->line, list_builder_finish(&stmts_builder));
-            break;
-        }
-        case PASCAL_T_IDENTIFIER: {
-            char *self_sym = dup_symbol(cur);
-            if (self_sym != NULL) {
-                if (is_external_directive(self_sym))
-                    is_external = 1;
-                else if (strcasecmp(self_sym, "alias") == 0) {
-                    /* [Alias:'NAME'] bracket directive — the string value is
-                       either a child node or the next sibling (depending on
-                       how the PEG grammar flattened the seq). */
-                    ast_t *val = cur->child;
-                    if (val == NULL || val->typ != PASCAL_T_STRING)
-                        val = cur->next;  /* sibling layout */
-                    if (val != NULL && val->typ == PASCAL_T_STRING) {
-                        char *name = dup_symbol(val);
-                        if (name != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = name;
-                        }
-                        /* Skip the string node so the outer loop doesn't revisit it */
-                        if (val == cur->next)
-                            cur = cur->next;
-                    }
-                } else if (strcasecmp(self_sym, "internproc") == 0 ||
-                           strcasecmp(self_sym, "internconst") == 0 ||
-                           strcasecmp(self_sym, "compilerproc") == 0) {
-                    is_external = 1;
-                    /* The intrinsic value (e.g. fpc_in_trunc_real / fpc_in_const_ptr)
-                       is the next sibling. */
-                    ast_t *val = cur->next;
-                    if (val != NULL && val->typ == PASCAL_T_IDENTIFIER &&
-                        val->sym != NULL && val->sym->name != NULL) {
-                        if (strcasecmp(self_sym, "internconst") == 0) {
-                            if (internconst_id_str != NULL)
-                                free(internconst_id_str);
-                            internconst_id_str = strdup(val->sym->name);
-                        } else {
-                            if (internproc_id_str != NULL)
-                                free(internproc_id_str);
-                            internproc_id_str = strdup(val->sym->name);
-                        }
-                        if (external_alias != NULL)
-                            free(external_alias);
-                        external_alias = strdup(val->sym->name);
-                        cur = cur->next;  /* Skip the value node */
-                    }
-                } else {
-                    /* Fallback: if the identifier itself is an internproc value
-                       (e.g. fpc_in_trunc_real), the "internproc" keyword was
-                       consumed by the parser and only the value survived.
-                       Only treat it as an internproc if it looks like an FPC intrinsic name. */
-                    if (strncasecmp(self_sym, "fpc_in_", 7) == 0 ||
-                        strncasecmp(self_sym, "fpc_", 4) == 0) {
-                        is_external = 1;
-                        if (external_alias != NULL)
-                            free(external_alias);
-                        external_alias = strdup(self_sym);
-                        if (internproc_id_str != NULL)
-                            free(internproc_id_str);
-                        internproc_id_str = strdup(self_sym);
-                    }
-                }
-                free(self_sym);
-            }
-
-            if (cur->child != NULL && cur->child->typ == PASCAL_T_IDENTIFIER) {
-                char *directive = dup_symbol(cur->child);
-                if (directive != NULL) {
-                    if (is_external_directive(directive))
-                        is_external = 1;
-                }
-                free(directive);
-            }
-            break;
-        }
-        case PASCAL_T_EXTERNAL_NAME:
-        case PASCAL_T_EXTERNAL_NAME_EXPR:
-            {
-                char *name = extract_external_name_from_node(cur);
-                if (name != NULL) {
-                    if (external_alias != NULL)
-                        free(external_alias);
-                    external_alias = name;
-                }
-                is_external = 1;
-            }
-            break;
-        case PASCAL_T_NONE:
-            {
-                for (ast_t *child = cur->child; child != NULL; child = child->next) {
-                    if (child->typ == PASCAL_T_IDENTIFIER && child->sym != NULL) {
-                        char *kw = child->sym->name;
-                        if (strcasecmp(kw, "internproc") == 0 ||
-                            strcasecmp(kw, "internconst") == 0 ||
-                            strcasecmp(kw, "compilerproc") == 0) {
-                            is_external = 1;
-                            ast_t *val = child->next;
-                            while (val != NULL && val->typ == PASCAL_T_NONE)
-                                val = val->child;
-                            if (val != NULL && val->typ == PASCAL_T_IDENTIFIER) {
-                                if (strcasecmp(kw, "internconst") == 0) {
-                                    if (internconst_id_str != NULL)
-                                        free(internconst_id_str);
-                                    internconst_id_str = dup_symbol(val);
-                                } else {
-                                    if (internproc_id_str != NULL)
-                                        free(internproc_id_str);
-                                    internproc_id_str = dup_symbol(val);
-                                }
-                                if (external_alias != NULL)
-                                    free(external_alias);
-                                external_alias = dup_symbol(val);
-                            } else if (val != NULL && val->typ == PASCAL_T_STRING) {
-                                if (strcasecmp(kw, "internconst") == 0) {
-                                    if (internconst_id_str != NULL)
-                                        free(internconst_id_str);
-                                    internconst_id_str = dup_symbol(val);
-                                } else {
-                                    if (internproc_id_str != NULL)
-                                        free(internproc_id_str);
-                                    internproc_id_str = dup_symbol(val);
-                                }
-                                if (external_alias != NULL)
-                                    free(external_alias);
-                                external_alias = dup_symbol(val);
-                            }
-                        } else if (strcasecmp(kw, "external") == 0) {
-                            is_external = 1;
-                        }
-                    } else if (child->typ == PASCAL_T_EXTERNAL_NAME || child->typ == PASCAL_T_EXTERNAL_NAME_EXPR) {
-                        char *name = extract_external_name_from_node(child);
-                        if (name != NULL) {
-                            if (external_alias != NULL)
-                                free(external_alias);
-                            external_alias = name;
-                        }
-                        is_external = 1;
-                    }
-                }
-            }
-            break;
-        default:
-            break;
-        }
-        cur = cur->next;
-    }
-
-    if (!is_varargs)
-        is_varargs = ast_has_routine_directive(func_node, "varargs", 8);
-    ListNode_t *label_decls = list_builder_finish(&label_decls_builder);
-    Tree_t *tree = mk_function(func_node->line, id, params, const_decls,
-                                label_decls, type_decls, list_builder_finish(&var_decls_builder), nested_subs, body,
-                                return_type, return_type_id, inline_return_type, is_external, 0);
-    if (tree != NULL && func_node->index >= 0)
-        tree->source_index = func_node->index + g_source_offset;
-    if (!is_nostackframe)
-        is_nostackframe = ast_has_routine_directive(func_node, "nostackframe", 8);
-    if (tree != NULL && is_nostackframe)
-        tree->tree_data.subprogram_data.nostackframe = 1;
-    if (tree != NULL && is_varargs)
-        tree->tree_data.subprogram_data.is_varargs = 1;
+    if (!ds.is_varargs)
+        ds.is_varargs = ast_has_routine_directive(func_node, "varargs", 8);
+    ListNode_t *label_decls = list_builder_finish(&ds.label_decls_builder);
+    Tree_t *tree = mk_function(func_node->line, id, params, ds.const_decls,
+                                label_decls, ds.type_decls, list_builder_finish(&ds.var_decls_builder), ds.nested_subs, ds.body,
+                                return_type, return_type_id, inline_return_type, ds.is_external, 0);
     if (tree != NULL)
         tree->tree_data.subprogram_data.return_type_ref =
             return_type_ref != NULL ? return_type_ref : type_ref_from_single_name(return_type_id);
     else if (return_type_ref != NULL)
         type_ref_free(return_type_ref);
-    if (tree != NULL && is_external && external_alias == NULL &&
-        tree->tree_data.subprogram_data.id != NULL)
-        external_alias = strdup(tree->tree_data.subprogram_data.id);
-    if (tree != NULL && external_alias != NULL)
-        tree->tree_data.subprogram_data.cname_override = external_alias;
-    else if (external_alias != NULL)
-        free(external_alias);
-    if (tree != NULL && internproc_id_str != NULL)
-        tree->tree_data.subprogram_data.internproc_id = internproc_id_str;
-    else if (internproc_id_str != NULL)
-        free(internproc_id_str);
-    if (tree != NULL && internconst_id_str != NULL)
-        tree->tree_data.subprogram_data.internconst_id = internconst_id_str;
-    else if (internconst_id_str != NULL)
-        free(internconst_id_str);
-    if (tree != NULL && num_generic_type_params > 0) {
-        tree->tree_data.subprogram_data.generic_type_params = generic_type_params;
-        tree->tree_data.subprogram_data.num_generic_type_params = num_generic_type_params;
-        tree->tree_data.subprogram_data.is_generic_template = 1;
-        tree->tree_data.subprogram_data.generic_template_ast = copy_ast_detached(func_node);
-        tree->tree_data.subprogram_data.generic_template_source_offset = g_source_offset;
-    } else if (generic_type_params != NULL) {
-        for (int i = 0; i < num_generic_type_params; i++)
-            free(generic_type_params[i]);
-        free(generic_type_params);
-    }
+    finalize_subprogram_tree(tree, func_node, &ds, generic_type_params, num_generic_type_params);
     if (tree != NULL && result_var_name != NULL) {
         tree->tree_data.subprogram_data.result_var_name = result_var_name;
     } else if (result_var_name != NULL) {

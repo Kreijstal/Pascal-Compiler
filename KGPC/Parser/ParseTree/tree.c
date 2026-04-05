@@ -213,11 +213,16 @@ static void destroy_method_template(struct MethodTemplate *method)
     free(method->name);
     free(method->delegated_interface_name);
     free(method->delegated_target_name);
-    /* Method templates keep detached AST copies for later specialization and
-     * semantic queries. Several code paths still share substructure across those
-     * detached copies, so reclaiming them during compiler teardown can trip
-     * double-free/use-after-free bugs. The compiler is a short-lived process, so
-     * let process exit reclaim these detached template ASTs. */
+    /* Free detached AST copies only when this template owns them.
+     * Shallow clones (clone_method_template_detached) share AST pointers
+     * with the original so they must not free them.
+     * free_ast_detached() uses a visited set internally, so cycles or
+     * overlap within a single tree are handled safely. */
+    if (method->owns_ast)
+    {
+        free_ast_detached(method->method_ast);
+        free_ast_detached(method->method_impl_ast);
+    }
     if (method->method_tree != NULL)
         destroy_tree(method->method_tree);
     free(method);
@@ -251,6 +256,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast_detached(method->method_impl_ast) : NULL;
     clone->source_offset = method->source_offset;
+    clone->owns_ast = 1; /* Deep clone owns its own AST copies */
 
     return clone;
 }
@@ -283,6 +289,7 @@ struct MethodTemplate *clone_method_template_detached(const struct MethodTemplat
     clone->directives_ast = method->directives_ast;
     clone->method_impl_ast = method->method_impl_ast;
     clone->source_offset = method->source_offset;
+    clone->owns_ast = 0; /* Shallow clone shares AST pointers with the original */
 
     return clone;
 }
