@@ -1422,9 +1422,10 @@ void destroy_tree(Tree_t *tree)
 
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
-            if (tree->tree_data.type_decl_data.kgpc_type != NULL)
+            KgpcType *decl_kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
+            if (decl_kgpc_type != NULL)
             {
-                destroy_kgpc_type(tree->tree_data.type_decl_data.kgpc_type);
+                destroy_kgpc_type(decl_kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
             }
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
@@ -1432,6 +1433,11 @@ void destroy_tree(Tree_t *tree)
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
             {
                 struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
+                if (alias->kgpc_type != NULL && alias->kgpc_type != decl_kgpc_type)
+                {
+                    destroy_kgpc_type(alias->kgpc_type);
+                    alias->kgpc_type = NULL;
+                }
                 clear_type_alias_fields(alias);
             }
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)
@@ -3535,6 +3541,16 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
         destroy_list(alias->array_dimensions);
         alias->array_dimensions = NULL;
     }
+    if (alias->array_dim_start_str != NULL)
+    {
+        free(alias->array_dim_start_str);
+        alias->array_dim_start_str = NULL;
+    }
+    if (alias->array_dim_end_str != NULL)
+    {
+        free(alias->array_dim_end_str);
+        alias->array_dim_end_str = NULL;
+    }
     if (alias->pointer_type_id != NULL)
     {
         free(alias->pointer_type_id);
@@ -3597,6 +3613,7 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     }
     alias->is_char_alias = 0;
     alias->is_shortstring = 0;
+    alias->array_dims_parsed = 0;
     alias->enum_is_scoped = 0;
     alias->enum_has_explicit_values = 0;
     alias->is_range = 0;
