@@ -241,6 +241,13 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
 
             if (field_is_static_array && src_is_static_array)
                 return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+            /* EXPR_ARRAY_LITERAL is created with array_is_dynamic=1 by default,
+             * but when assigned to a static array field (e.g., optypes: array[0..3]
+             * of int64 in a packed record), it must be treated as a static array
+             * copy, not a pointer store. */
+            if (field_is_static_array && assign_expr != NULL &&
+                assign_expr->type == EXPR_ARRAY_LITERAL)
+                return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
 
             /* Large set fields (> 4 bytes, e.g. set of enum with > 32 elements)
              * need memory-based construction via codegen_assign_record_value,
@@ -1529,7 +1536,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         }
         else
         {
-            if (var_type_2 == CHAR_TYPE)
+            if (var_type_2 == CHAR_TYPE || record_element_size == 1)
             {
                 const char *value_reg8 = register_name8(value_reg);
                 if (value_reg8 == NULL)
@@ -1543,7 +1550,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     inst_list = add_inst(inst_list, buffer);
                 }
             }
-            else if (use_word)
+            else if (use_word || record_element_size == 2)
             {
                 const char *value_reg16 = codegen_register_name16(value_reg);
                 if (value_reg16 == NULL)
@@ -1819,6 +1826,21 @@ static struct Expression *codegen_build_temp_call_expr_from_stmt(
     }
     call_expr->expr_data.function_call_data.is_class_method_call =
         stmt->stmt_data.procedure_call_data.is_class_method_call;
+    call_expr->expr_data.function_call_data.is_constructor_call =
+        stmt->stmt_data.procedure_call_data.is_constructor_call;
+    /* For constructor-as-statement, create a constructor_receiver_expr from the
+     * class name so the codegen knows which class to allocate. */
+    if (stmt->stmt_data.procedure_call_data.is_constructor_call &&
+        stmt->stmt_data.procedure_call_data.constructor_class_name != NULL)
+    {
+        struct Expression *receiver = (struct Expression *)calloc(1, sizeof(struct Expression));
+        if (receiver != NULL)
+        {
+            receiver->type = EXPR_VAR_ID;
+            receiver->expr_data.id = strdup(stmt->stmt_data.procedure_call_data.constructor_class_name);
+            call_expr->expr_data.function_call_data.constructor_receiver_expr = receiver;
+        }
+    }
     return call_expr;
 }
 

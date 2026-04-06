@@ -1538,6 +1538,17 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
     }
 
+    /* For EXPR_ARRAY_LITERAL, codegen_address_for_expr returns a pointer to a
+     * descriptor {data_ptr, count}, not the data itself.  Dereference the
+     * descriptor to get the actual data pointer for the memcpy source. */
+    if (src_expr->type == EXPR_ARRAY_LITERAL &&
+        src_expr->expr_data.array_literal_data.element_count > 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+            src_reg->bit_64, src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     /* If we spilled the destination, reload it */
     if (dest_spill_slot != NULL)
     {
@@ -2016,20 +2027,13 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                                 dest_reg->bit_64, dest_save_slot->offset);
                             inst_list = add_inst(inst_list, buffer);
                             
-                            /* Allocate zero-initialized memory using calloc
-                             * This ensures all fields (including dynamic array descriptors) start at zero */
-                            const char *size_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
-                            const char *count_arg_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
-                            
-                            /* calloc(1, instance_size) - allocate 1 element of size instance_size */
-                            snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_arg_reg);
-                            inst_list = add_inst(inst_list, buffer);
+                            /* Allocate zero-initialized memory through the runtime helper. */
+                            const char *alloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
                             snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                                instance_size, count_arg_reg);
+                                instance_size, alloc_arg_reg);
                             inst_list = add_inst(inst_list, buffer);
-                            
                             inst_list = codegen_vect_reg(inst_list, 0);
-                            inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
+                            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_allocmem");
                             free_arg_regs();
                             
                             /* Save the allocated instance pointer */
@@ -2597,4 +2601,3 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     free_arg_regs();
     return inst_list;
 }
-

@@ -2755,6 +2755,8 @@ void Initialize(void *value)
     (void)value;
 }
 
+static void *kgpc_memory_manager_allocmem(uintptr_t size);
+
 /* Generic default constructor for classes without explicit constructors */
 /* Initialize interface vtable pointer slots in a class instance.
  * For each interface the class implements, the instance has a slot at
@@ -2794,7 +2796,7 @@ void __kgpc_init_interface_vtables(void *instance)
 void *__kgpc_default_create(size_t class_size, const void *vmt_ptr)
 {
     /* Allocate and zero-initialize the class instance */
-    void *instance = calloc(1, class_size);
+    void *instance = kgpc_memory_manager_allocmem((uintptr_t)class_size);
     if (instance == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes for class instance.\\n", class_size);
@@ -2828,6 +2830,7 @@ static void *const KGPC_STRING_TOMBSTONE = (void *)1;
 static void **kgpc_string_set_slots = NULL;
 static size_t kgpc_string_set_cap = 0;
 static size_t kgpc_string_set_count = 0;
+static int kgpc_string_cleanup_registered = 0;
 
 static size_t kgpc_hash_ptr(const void *value)
 {
@@ -2872,10 +2875,38 @@ static void kgpc_string_set_grow(size_t new_cap)
     }
 }
 
+static void kgpc_string_set_cleanup(void)
+{
+    if (kgpc_string_set_slots == NULL)
+        return;
+
+    for (size_t i = 0; i < kgpc_string_set_cap; i++)
+    {
+        void *entry = kgpc_string_set_slots[i];
+        if (entry == NULL || entry == KGPC_STRING_TOMBSTONE)
+            continue;
+        KgpcStringHeader *hdr =
+            (KgpcStringHeader *)((char *)entry - (int64_t)sizeof(KgpcStringHeader));
+        free(hdr);
+        kgpc_string_set_slots[i] = NULL;
+    }
+
+    free(kgpc_string_set_slots);
+    kgpc_string_set_slots = NULL;
+    kgpc_string_set_cap = 0;
+    kgpc_string_set_count = 0;
+    kgpc_string_cleanup_registered = 0;
+}
+
 static void kgpc_string_set_insert(const void *value)
 {
     if (value == NULL || value == KGPC_STRING_TOMBSTONE)
         return;
+    if (!kgpc_string_cleanup_registered)
+    {
+        if (atexit(kgpc_string_set_cleanup) == 0)
+            kgpc_string_cleanup_registered = 1;
+    }
     for (;;)
     {
         if (kgpc_string_set_cap == 0)
@@ -3136,6 +3167,7 @@ void FPC_ANSISTR_UNIQUE(char **value)
     new_hdr->length = len;
     char *new_data = new_str + sizeof(KgpcStringHeader);
     memcpy(new_data, *value, len + 1);
+    kgpc_string_set_insert(new_data);
     kgpc_string_release(*value);
     *value = new_data;
 }
@@ -4519,6 +4551,20 @@ static uintptr_t kgpc_mm_memsize(void *p)
 }
 
 static void kgpc_mm_noop(void) {}
+
+typedef void *(*kgpc_mm_allocmem_fn)(uintptr_t size);
+
+static void *kgpc_memory_manager_allocmem(uintptr_t size)
+{
+    if (size == 0)
+        return NULL;
+
+    kgpc_mm_allocmem_fn alloc_fn = NULL;
+    memcpy(&alloc_fn, MemoryManager + 32, sizeof(alloc_fn));
+    if (alloc_fn == NULL)
+        return kgpc_mm_allocmem(size);
+    return alloc_fn(size);
+}
 
 __attribute__((constructor))
 static void kgpc_init_memory_manager(void)

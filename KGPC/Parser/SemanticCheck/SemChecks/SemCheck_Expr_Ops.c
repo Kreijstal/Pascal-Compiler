@@ -2515,6 +2515,11 @@ int semcheck_varid(int *type_return,
         expr->expr_data.record_access_data.field_offset = 0;
         return semcheck_recordaccess(type_return, symtab, expr, max_scope_lev, mutating);
     }
+    if (with_expr != NULL)
+    {
+        destroy_expr(with_expr);
+        with_expr = NULL;
+    }
     if (with_status == 1 && with_context_count > 0 && id != NULL &&
         !direct_current_scope_value)
     {

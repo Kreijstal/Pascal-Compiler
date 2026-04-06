@@ -10593,6 +10593,37 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                         return inst_list;
                     }
 
+                    /* When the argument expression is a char value (e.g. a single-char
+                     * string constant like version_nr = '3' which the semantic checker
+                     * resolves to CHAR_TYPE with ordinal value), we must promote it to
+                     * an AnsiString before kgpc_string_to_shortstring dereferences it
+                     * as a pointer.  Without this, the raw char ordinal (e.g. 51 for '3')
+                     * is passed as a pointer and causes a segfault. */
+                    if (expr_has_type_tag(arg_expr, CHAR_TYPE))
+                    {
+                        /* Save buf_addr_reg across the call since kgpc_char_to_string
+                         * clobbers caller-saved registers. */
+                        StackNode_t *buf_save = add_l_t("shortstr_buf_save");
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            buf_addr_reg->bit_64, buf_save->offset);
+                        inst_list = add_inst(inst_list, buffer);
+
+                        const char *char_arg_reg32 = codegen_target_is_windows() ? "%ecx" : "%edi";
+                        snprintf(buffer, sizeof(buffer), "\tmovl\t%s, %s\n",
+                            value_reg->bit_32, char_arg_reg32);
+                        inst_list = add_inst(inst_list, buffer);
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%%rax, %s\n", value_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_arg_regs();
+
+                        /* Restore buf_addr_reg */
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                            buf_save->offset, buf_addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
                     if (codegen_target_is_windows())
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", buf_addr_reg->bit_64);

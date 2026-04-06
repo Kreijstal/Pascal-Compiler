@@ -1245,11 +1245,17 @@ ListNode_t *semcheck_create_builtin_param(const char *name, int type_tag)
 
     ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
     if (ids == NULL)
+    {
+        free(param_name);
         return NULL;
+    }
 
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 0, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
+    {
+        destroy_list(ids);
         return NULL;
+    }
 
     return CreateListNode(decl, LIST_TREE);
 }
@@ -1262,11 +1268,17 @@ ListNode_t *semcheck_create_builtin_param_var(const char *name, int type_tag)
 
     ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
     if (ids == NULL)
+    {
+        free(param_name);
         return NULL;
+    }
 
     Tree_t *decl = mk_vardecl(0, ids, type_tag, NULL, 1, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
+    {
+        destroy_list(ids);
         return NULL;
+    }
 
     return CreateListNode(decl, LIST_TREE);
 }
@@ -1280,7 +1292,10 @@ __attribute__((unused)) static ListNode_t *semcheck_create_builtin_param_with_id
 
     ListNode_t *ids = CreateListNode(param_name, LIST_STRING);
     if (ids == NULL)
+    {
+        free(param_name);
         return NULL;
+    }
 
     char *type_id_copy = NULL;
     if (type_id != NULL)
@@ -1290,6 +1305,7 @@ __attribute__((unused)) static ListNode_t *semcheck_create_builtin_param_with_id
         is_var_param, 0, NULL, NULL, NULL, NULL);
     if (decl == NULL)
     {
+        destroy_list(ids);
         if (type_id_copy != NULL)
             free(type_id_copy);
         return NULL;
@@ -2481,4 +2497,3 @@ int semcheck_id_not_main(char *id)
     }
     return 0;
 }
-

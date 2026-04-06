@@ -8105,6 +8105,25 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     inst_list = codegen_var_initializers(proc->declarations, inst_list, ctx, symtab);
     inst_list = codegen_stmt(proc->statement_list, inst_list, ctx, symtab);
 
+    if (proc->owner_class != NULL &&
+        proc->method_name != NULL &&
+        pascal_identifier_equals(proc->owner_class, "TObject") &&
+        pascal_identifier_equals(proc->method_name, "Free"))
+    {
+        int self_depth = 0;
+        StackNode_t *self_var = find_label_with_depth("self", &self_depth);
+        char buffer[128];
+        const char *arg_reg = current_arg_reg64(0);
+
+        if (self_var != NULL)
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", self_var->offset, arg_reg);
+        else
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %s\n", arg_reg);
+        inst_list = add_inst(inst_list, buffer);
+        inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
+    }
+
     /* For constructors, return Self in %rax.
      * Constructors receive Self in the first parameter and should return it
      * to allow constructor chaining and assignment. */
@@ -8816,6 +8835,29 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
             record_return_inst = add_inst(record_return_inst, ptr_buffer);
             add_inst_invalidate_cache(); /* ConcatList changes head */
             inst_list = ConcatList(record_return_inst, inst_list);
+        }
+    }
+
+    /* Constructors routed through codegen_function must return Self.
+     * Initialize the return variable with Self (-8(%rbp)) so that even if
+     * the constructor body doesn't explicitly set Result, the return value
+     * is the allocated instance pointer (not zero). */
+    {
+        int func_is_constructor = func->is_constructor;
+        if (!func_is_constructor && func->owner_class != NULL &&
+            func->method_name != NULL &&
+            strncasecmp(func->method_name, "Create", 6) == 0)
+        {
+            func_is_constructor = 1;
+        }
+        if (func_is_constructor && return_var != NULL)
+        {
+            char ctor_buf[128];
+            snprintf(ctor_buf, sizeof(ctor_buf), "\tmovq\t-8(%%rbp), %%rax\n");
+            inst_list = add_inst(inst_list, ctor_buf);
+            snprintf(ctor_buf, sizeof(ctor_buf), "\tmovq\t%%rax, -%d(%%rbp)\n",
+                return_var->offset);
+            inst_list = add_inst(inst_list, ctor_buf);
         }
     }
 
@@ -10856,19 +10898,17 @@ static ListNode_t *codegen_store_class_typeinfo(ListNode_t *inst_list,
      * and zero-initialize with calloc. A better approach would compute the actual size from the RecordType.
      */
     
-    /* Call calloc to allocate and zero-initialize the instance */
+    /* Allocate the instance through the runtime helper. This path is used in
+     * early generic class materialization where the Pascal heap bootstrap may
+     * not be ready yet. */
     char buffer[1024];
     const char *size_reg = current_arg_reg64(0);  /* RDI on Linux, RCX on Windows */
-    const char *count_reg = current_arg_reg64(1); /* RSI on Linux, RDX on Windows */
-    
-    if (size_reg != NULL && count_reg != NULL)
+
+    if (size_reg != NULL)
     {
-        /* calloc(1, 64) - allocate one 64-byte block */
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", size_reg);
+        snprintf(buffer, sizeof(buffer), "\tmovq\t$64, %s\n", size_reg);
         inst_list = add_inst(inst_list, buffer);
-        snprintf(buffer, sizeof(buffer), "\tmovq\t$64, %s\n", count_reg);
-        inst_list = add_inst(inst_list, buffer);
-        inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_allocmem");
         
         /* RAX now contains the pointer to the allocated instance */
         /* Store the typeinfo pointer in the first field */

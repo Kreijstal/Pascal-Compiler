@@ -6119,6 +6119,22 @@ int semcheck_proccall(SymTab_t *symtab, struct Statement *stmt, int max_scope_le
                         }
                         else
                         {
+                            /* Check if this is a constructor call (e.g., TMyItem.Create(...)).
+                             * If so, mark it for the codegen so it allocates a new instance. */
+                            int is_ctor = 0;
+                            if (strncasecmp(method_name, "Create", 6) == 0)
+                            {
+                                struct MethodTemplate *tmpl =
+                                    from_cparser_get_method_template(record_info, method_name);
+                                if (tmpl != NULL && tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
+                                    is_ctor = 1;
+                            }
+                            if (is_ctor)
+                            {
+                                stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
+                                stmt->stmt_data.procedure_call_data.constructor_class_name =
+                                    strdup(record_info->type_id);
+                            }
                             ListNode_t *remaining_args = args_given->next;
                             destroy_expr(first_arg);
                             args_given->cur = NULL;

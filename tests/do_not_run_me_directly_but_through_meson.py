@@ -1351,6 +1351,8 @@ class TestCompiler(unittest.TestCase):
     def _callTestMethod(self, method):
         try:
             super()._callTestMethod(method)
+        except unittest.SkipTest:
+            raise
         except Exception:
             if FAILURE_ARTIFACT_DIR is not None:
                 ctx = self._artifact_context or {}
@@ -1751,7 +1753,7 @@ class TestCompiler(unittest.TestCase):
             )
 
         # 2. Verify the expected call sequence:
-        #    calloc → save instance → VMT init → Self move → call constructor.
+        #    allocation helper → save instance → VMT init → Self move → call constructor.
         #    There must be exactly ONE movq into the first arg register between
         #    the VMT store and the constructor call.
         call_idx = None
@@ -1761,21 +1763,22 @@ class TestCompiler(unittest.TestCase):
                 break
         self.assertIsNotNone(call_idx, "constructor call not found in assembly")
 
-        # Count movq ..., <first_arg_reg> instructions between calloc return and the call.
-        calloc_idx = None
+        # Count movq ..., <first_arg_reg> instructions between the instance allocation
+        # helper return and the constructor call.
+        alloc_idx = None
         for i in range(call_idx - 1, -1, -1):
-            if "\tcall\tcalloc" in asm_lines[i]:
-                calloc_idx = i
+            if "\tcall\tkgpc_allocmem" in asm_lines[i] or "\tcall\tcalloc" in asm_lines[i]:
+                alloc_idx = i
                 break
-        self.assertIsNotNone(calloc_idx, "calloc call not found before constructor")
+        self.assertIsNotNone(alloc_idx, "allocation call not found before constructor")
 
         self_moves = [
-            line for line in asm_lines[calloc_idx:call_idx]
+            line for line in asm_lines[alloc_idx:call_idx]
             if line.startswith("\tmovq\t") and line.endswith(f", {first_arg_reg}")
         ]
         self.assertEqual(
             len(self_moves), 1,
-            f"Expected exactly 1 Self-move into {first_arg_reg} between calloc and constructor call, "
+            f"Expected exactly 1 Self-move into {first_arg_reg} between allocation and constructor call, "
             f"found {len(self_moves)}: {self_moves}",
         )
 

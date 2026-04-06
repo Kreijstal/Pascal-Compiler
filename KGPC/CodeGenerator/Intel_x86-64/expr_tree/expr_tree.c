@@ -2989,19 +2989,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 if (codegen_sizeof_record_type(ctx, class_record, &instance_size) == 0 &&
                     instance_size > 0)
                 {
-                    /* Allocate memory using calloc to zero-initialize all fields */
-                    const char *calloc_arg1_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
-                    const char *calloc_arg2_reg = codegen_target_is_windows() ? "%rdx" : "%rsi";
-                    
-                    /* calloc(1, size) - allocate 1 element of instance_size bytes, zeroed */
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$1, %s\n", calloc_arg1_reg);
-                    inst_list = add_inst(inst_list, buffer);
+                    /* Allocate memory through the runtime helper. */
+                    const char *alloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
                     snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                        instance_size, calloc_arg2_reg);
+                        instance_size, alloc_arg_reg);
                     inst_list = add_inst(inst_list, buffer);
-                    
                     inst_list = codegen_vect_reg(inst_list, 0);
-                    inst_list = codegen_call_with_shadow_space(inst_list, "calloc");
+                    inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_allocmem");
                     free_arg_regs();
                     
                     /* Save the allocated instance pointer */
@@ -3108,9 +3102,28 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
              * codegen_pass_arguments. */
             self_index = arg_start_index;
 
-            /* Skip the first argument (class type) in the argument list */
-            if (args_to_pass != NULL)
-                args_to_pass = args_to_pass->next;
+            /* Skip the first argument (class type / Self placeholder) unless
+             * the constructor was set up from a STMT_PROCEDURE_CALL path where
+             * the type receiver was already removed by the semcheck.  In that
+             * case, constructor_receiver_expr is set but the first arg is a
+             * real user argument, not a placeholder to skip. */
+            {
+                int skip_first = 1;
+                if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL &&
+                    args_to_pass != NULL)
+                {
+                    struct Expression *fa = (struct Expression *)args_to_pass->cur;
+                    if (fa != NULL && fa->type != EXPR_NIL)
+                    {
+                        /* First arg is not a Self placeholder — it's a real arg.
+                         * The class was derived from constructor_receiver_expr
+                         * which was set by the proc_call codegen path. */
+                        skip_first = 0;
+                    }
+                }
+                if (skip_first && args_to_pass != NULL)
+                    args_to_pass = args_to_pass->next;
+            }
             /* Shift register allocation by 1 for Self parameter */
             arg_start_index += 1;
         }
