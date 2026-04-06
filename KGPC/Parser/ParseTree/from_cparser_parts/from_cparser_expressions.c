@@ -1678,16 +1678,17 @@ struct Expression *convert_member_access(ast_t *node) {
         /* Prepend base expression to args */
         args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
         
-        struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
-        call_expr->line_num = node->line;
-        call_expr->type = EXPR_FUNCTION_CALL;
-        call_expr->expr_data.function_call_data.id = method_id;
-        call_expr->expr_data.function_call_data.args_expr = args_list;
-        call_expr->expr_data.function_call_data.resolved_func = NULL;
-        call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-        call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+        struct Expression *call_expr = mk_functioncall(node->line, method_id, args_list);
+        if (call_expr != NULL)
+        {
+            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+            call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+            return call_expr;
+        }
 
-        return call_expr;
+        free(method_id);
+        destroy_list(args_list);
+        return NULL;
     }
 
     struct Expression *record_expr = convert_expression(base_node);
@@ -1845,19 +1846,21 @@ static struct Expression *convert_member_access_chain(int line,
                 args_list = PushListNodeFront(args_list, base_node_list);
             }
             
-            struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
-            call_expr->line_num = line;
-            call_expr->type = EXPR_FUNCTION_CALL;
-            call_expr->expr_data.function_call_data.id = method_id;
-            call_expr->expr_data.function_call_data.args_expr = args_list;
-            call_expr->expr_data.function_call_data.resolved_func = NULL;
-            call_expr->resolved_kgpc_type = NULL;
-            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-            call_expr->expr_data.function_call_data.placeholder_method_name =
-                (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
-            placeholder_name = NULL;
+            struct Expression *call_expr = mk_functioncall(line, method_id, args_list);
+            if (call_expr != NULL)
+            {
+                call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+                call_expr->expr_data.function_call_data.placeholder_method_name =
+                    (placeholder_name != NULL) ? placeholder_name : strdup(method_id);
+                placeholder_name = NULL;
+                return call_expr;
+            }
 
-            return call_expr;
+            if (placeholder_name != NULL)
+                free(placeholder_name);
+            free(method_id);
+            destroy_list(args_list);
+            return NULL;
         }
         if (placeholder_name != NULL)
             free(placeholder_name);
@@ -1893,16 +1896,17 @@ static struct Expression *convert_member_access_chain(int line,
         /* Prepend base expression to args */
         args_list = PushListNodeFront(args_list, CreateListNode(base_expr, LIST_EXPR));
         
-        struct Expression *call_expr = (struct Expression *)calloc(1, sizeof(struct Expression));
-        call_expr->line_num = line;
-        call_expr->type = EXPR_FUNCTION_CALL;
-        call_expr->expr_data.function_call_data.id = method_id;
-        call_expr->expr_data.function_call_data.args_expr = args_list;
-        call_expr->expr_data.function_call_data.resolved_func = NULL;
-        call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
-        call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+        struct Expression *call_expr = mk_functioncall(line, method_id, args_list);
+        if (call_expr != NULL)
+        {
+            call_expr->expr_data.function_call_data.is_method_call_placeholder = 1;
+            call_expr->expr_data.function_call_data.placeholder_method_name = strdup(method_id);
+            return call_expr;
+        }
 
-        return call_expr;
+        free(method_id);
+        destroy_list(args_list);
+        return NULL;
     }
 
     if (unwrapped == NULL)
@@ -2421,4 +2425,3 @@ struct Statement *build_nested_with_statements(int line,
 
     return mk_with(line, expr, inner_stmt);
 }
-
