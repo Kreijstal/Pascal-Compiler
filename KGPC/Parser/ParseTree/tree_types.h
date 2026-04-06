@@ -309,6 +309,8 @@ struct Statement
             int vmt_index;                   /* VMT index for virtual calls (-1 if not set) */
             char *self_class_name;           /* Class name for VMT lookup in virtual calls */
             int is_class_method_call;        /* 1 if calling a class method (Self = VMT, not instance) */
+            int is_constructor_call;         /* 1 if this is a class constructor call (needs object allocation) */
+            char *constructor_class_name;    /* Class to allocate for constructor calls (NULL if not constructor) */
             char *call_qualifier;            /* Unit prefix if call was qualified, e.g. "System" (NULL if unqualified) */
         } procedure_call_data;
 

@@ -602,8 +602,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
         if (result_check == NULL)
         {
             /* "Result" is not already declared in this scope, so add it as an alias */
-            if (return_kgpc_type != NULL)
-                kgpc_type_retain(return_kgpc_type);
             PushFuncRetOntoScope_Typed(symtab, "Result", return_kgpc_type);
             if (kgpc_getenv("KGPC_DEBUG_RESULT") != NULL)
             {
@@ -857,9 +855,6 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
                             }
                             if (param_type != NULL &&
                                 param_type == param_tree->tree_data.var_decl_data.cached_kgpc_type)
-                            {
-                                kgpc_type_retain(param_type);
-                            }
                             PushVarOntoScope_Typed(symtab, (char *)ids->cur, param_type);
                             if (param_type != NULL &&
                                 param_type != param_tree->tree_data.var_decl_data.cached_kgpc_type)
@@ -974,14 +969,13 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
 
             if (self_type != NULL)
             {
-                if (FindSymbol(&self_node, symtab, "Self") == 0)
-                {
-                    /* Push Self to the method scope (stack head) so it is cleaned up
-                     * when the method exits. */
-                    kgpc_type_retain(self_type);
-                    PushVarOntoScope_Typed(symtab, "Self", self_type);
-                    if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
-                        self_node->is_var_parameter = self_is_var_param;
+                    if (FindSymbol(&self_node, symtab, "Self") == 0)
+                    {
+                        /* Push Self to the method scope (stack head) so it is cleaned up
+                         * when the method exits. */
+                        PushVarOntoScope_Typed(symtab, "Self", self_type);
+                        if (FindSymbol(&self_node, symtab, "Self") != 0 && self_node != NULL)
+                            self_node->is_var_parameter = self_is_var_param;
                     if (trace_nonlocal != NULL)
                     {
                         fprintf(stderr,

@@ -8837,6 +8837,29 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
 
+    /* Constructors routed through codegen_function must return Self.
+     * Initialize the return variable with Self (-8(%rbp)) so that even if
+     * the constructor body doesn't explicitly set Result, the return value
+     * is the allocated instance pointer (not zero). */
+    {
+        int func_is_constructor = func->is_constructor;
+        if (!func_is_constructor && func->owner_class != NULL &&
+            func->method_name != NULL &&
+            strncasecmp(func->method_name, "Create", 6) == 0)
+        {
+            func_is_constructor = 1;
+        }
+        if (func_is_constructor && return_var != NULL)
+        {
+            char ctor_buf[128];
+            snprintf(ctor_buf, sizeof(ctor_buf), "\tmovq\t-8(%%rbp), %%rax\n");
+            inst_list = add_inst(inst_list, ctor_buf);
+            snprintf(ctor_buf, sizeof(ctor_buf), "\tmovq\t%%rax, -%d(%%rbp)\n",
+                return_var->offset);
+            inst_list = add_inst(inst_list, ctor_buf);
+        }
+    }
+
     codegen_function_locals(func->declarations, ctx, symtab);
 
     /* Allocate callee-save slots AFTER args (z) and locals (x) so that

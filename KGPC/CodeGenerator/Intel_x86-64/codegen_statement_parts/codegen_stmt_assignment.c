@@ -1538,6 +1538,17 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
     }
 
+    /* For EXPR_ARRAY_LITERAL, codegen_address_for_expr returns a pointer to a
+     * descriptor {data_ptr, count}, not the data itself.  Dereference the
+     * descriptor to get the actual data pointer for the memcpy source. */
+    if (src_expr->type == EXPR_ARRAY_LITERAL &&
+        src_expr->expr_data.array_literal_data.element_count > 0)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+            src_reg->bit_64, src_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+    }
+
     /* If we spilled the destination, reload it */
     if (dest_spill_slot != NULL)
     {

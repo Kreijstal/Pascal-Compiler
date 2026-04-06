@@ -3102,9 +3102,28 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
              * codegen_pass_arguments. */
             self_index = arg_start_index;
 
-            /* Skip the first argument (class type) in the argument list */
-            if (args_to_pass != NULL)
-                args_to_pass = args_to_pass->next;
+            /* Skip the first argument (class type / Self placeholder) unless
+             * the constructor was set up from a STMT_PROCEDURE_CALL path where
+             * the type receiver was already removed by the semcheck.  In that
+             * case, constructor_receiver_expr is set but the first arg is a
+             * real user argument, not a placeholder to skip. */
+            {
+                int skip_first = 1;
+                if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL &&
+                    args_to_pass != NULL)
+                {
+                    struct Expression *fa = (struct Expression *)args_to_pass->cur;
+                    if (fa != NULL && fa->type != EXPR_NIL)
+                    {
+                        /* First arg is not a Self placeholder — it's a real arg.
+                         * The class was derived from constructor_receiver_expr
+                         * which was set by the proc_call codegen path. */
+                        skip_first = 0;
+                    }
+                }
+                if (skip_first && args_to_pass != NULL)
+                    args_to_pass = args_to_pass->next;
+            }
             /* Shift register allocation by 1 for Self parameter */
             arg_start_index += 1;
         }
