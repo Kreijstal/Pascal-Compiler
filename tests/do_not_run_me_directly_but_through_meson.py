@@ -1351,6 +1351,8 @@ class TestCompiler(unittest.TestCase):
     def _callTestMethod(self, method):
         try:
             super()._callTestMethod(method)
+        except unittest.SkipTest:
+            raise
         except Exception:
             if FAILURE_ARTIFACT_DIR is not None:
                 ctx = self._artifact_context or {}
