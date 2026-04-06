@@ -8113,14 +8113,15 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         int self_depth = 0;
         StackNode_t *self_var = find_label_with_depth("self", &self_depth);
         char buffer[128];
+        const char *arg_reg = current_arg_reg64(0);
 
         if (self_var != NULL)
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %%rdi\n", self_var->offset);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n", self_var->offset, arg_reg);
         else
-            snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %%rdi\n");
+            snprintf(buffer, sizeof(buffer), "\tmovq\t-8(%%rbp), %s\n", arg_reg);
         inst_list = add_inst(inst_list, buffer);
         inst_list = add_inst(inst_list, "\tmovl\t$0, %eax\n");
-        inst_list = add_inst(inst_list, "\tcall\tkgpc_freemem\n");
+        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_freemem");
     }
 
     /* For constructors, return Self in %rax.
