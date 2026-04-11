@@ -266,6 +266,44 @@ if FPC_RTL_MODE:
     FPC_RTL_FLAGS.append("--codegen-cache-dir=" + _FPC_RTL_CODEGEN_CACHE_DIR)
 
 # ---------------------------------------------------------------------------
+# Background AST cache primer for FPC RTL mode.
+# Spawns a lightweight compiler process that compiles a minimal Pascal program
+# importing the most common RTL units (SysUtils, Classes).  This populates the
+# AST cache so that subsequent parallel test compilations get cache hits
+# instead of all redundantly parsing system.pp.
+#
+# The primer runs outside the compiler semaphore — it does NOT block test
+# execution.  It runs concurrently with the first batch of tests.  Tests
+# that start before the primer finishes will parse from source (the AST
+# cache uses atomic write-then-rename, so concurrent writes are safe).
+# Tests that start after the primer finishes benefit from cached ASTs.
+# ---------------------------------------------------------------------------
+_CACHE_PRIMER_PROC = None
+if FPC_RTL_MODE and _FPC_RTL_AST_CACHE_DIR is not None:
+    # Only prime if the AST cache is empty (cold start).
+    _existing_cache_files = [
+        f for f in os.listdir(_FPC_RTL_AST_CACHE_DIR)
+        if f.endswith(".ast_cache")
+    ]
+    if not _existing_cache_files:
+        import tempfile as _tempfile
+        _primer_src = os.path.join(
+            _tempfile.gettempdir(), "kgpc_cache_primer.p"
+        )
+        _primer_asm = os.path.join(
+            _tempfile.gettempdir(), "kgpc_cache_primer.s"
+        )
+        with open(_primer_src, "w") as _f:
+            _f.write("program CachePrimer;\nuses SysUtils, Classes;\nbegin\nend.\n")
+        _primer_cmd = [KGPC_PATH, _primer_src, _primer_asm, "--emit-link-args"] + FPC_RTL_FLAGS
+        print(f"--- Launching background AST cache primer ---", file=sys.stderr)
+        sys.stderr.flush()
+        _CACHE_PRIMER_PROC = subprocess.Popen(
+            _primer_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    del _existing_cache_files
 # Test result cache — skip compile/link/run when nothing changed.
 # Cache key = hash of: compiler binary, test .p file, .expected file,
 # flags, runtime library.  Stored as empty files named by the key hash
@@ -1114,43 +1152,29 @@ class ParallelTestRunner:
                     "FPC RTL mode enabled but no runnable tests found. "
                     "Check that KGPC_FPC_RTL=1, FPCSource is present, and test discovery found .expected files."
                 )
-                # Phase 1: Run one warm-up test alone to populate AST + codegen
-                # caches.  This prevents parallel cold-cache contention where
-                # multiple workers redundantly parse system.pp and re-do unit
-                # codegen simultaneously.
-                warmup_test = runnable_tests[0]
-                self.stream.write(
-                    f"[PARALLEL] FPC RTL warm-up: populating caches with {warmup_test.id()}\n"
-                )
-                self.stream.flush()
-                try:
-                    test_case, result_type, err_info, elapsed = _run_single_test_with_timeout(
-                        warmup_test,
-                        getattr(getattr(warmup_test, warmup_test._testMethodName, None), '_timeout', self.timeout),
-                        self.stream,
-                    )
-                    result.add_result(test_case, result_type, err_info, elapsed)
-                    result.testsRun += 1
-                except Exception:
-                    result.errors.append((warmup_test, traceback.format_exc()))
-                    result.testsRun += 1
-
-                # Phase 2: Submit all remaining tests at full parallelism.
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
                 # pp_pas_bootstrap compiles the entire FPC compiler (~150s) and
                 # is structurally the longest test — update this if renamed.
-                remaining = list(runnable_tests[1:])
+                #
+                # No warm-up phase needed: the AST cache uses atomic
+                # write-to-temp-then-rename (PID-unique temp files), so
+                # parallel compiler processes can safely race to populate
+                # the same cache entries without corruption.  The first
+                # writer wins and subsequent processes read the cached
+                # result on the next unit load.  This is faster than
+                # blocking all workers on a sequential warm-up test.
+                reordered = list(runnable_tests)
                 pp_idx = next(
-                    (i for i, t in enumerate(remaining)
+                    (i for i, t in enumerate(reordered)
                      if 'pp_pas_bootstrap' in t._testMethodName),
                     None,
                 )
                 if pp_idx is not None:
-                    remaining.insert(0, remaining.pop(pp_idx))
+                    reordered.insert(0, reordered.pop(pp_idx))
                 self.stream.write(
                     f"[PARALLEL] FPC RTL full parallel: "
-                    f"{len(remaining)} tests with {self.workers} workers\n"
+                    f"{len(reordered)} tests with {self.workers} workers\n"
                 )
                 self.stream.flush()
                 with concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as executor:
@@ -1160,7 +1184,7 @@ class ParallelTestRunner:
                             getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
                             self.stream,
                         ): t
-                        for t in remaining
+                        for t in reordered
                     }
                     for future in concurrent.futures.as_completed(futures):
                         try:
@@ -1281,46 +1305,29 @@ class TAPParallelTestRunner:
                     "FPC RTL mode enabled but no runnable tests found. "
                     "Check that KGPC_FPC_RTL=1, FPCSource is present, and test discovery found .expected files."
                 )
-                # Phase 1: Run one warm-up test alone to populate AST + codegen
-                # caches.  This prevents parallel cold-cache contention where
-                # multiple workers redundantly parse system.pp and re-do unit
-                # codegen simultaneously.
-                warmup_idx, warmup_test = runnable[0]
-                self._emit(f"# FPC RTL warm-up: populating caches with {warmup_test.id()}")
-                try:
-                    completed[warmup_idx] = _run_single_test_with_timeout(
-                        warmup_test,
-                        getattr(getattr(warmup_test, warmup_test._testMethodName, None), '_timeout', self.timeout),
-                    )
-                except Exception:
-                    completed[warmup_idx] = (
-                        warmup_test,
-                        "error",
-                        traceback.format_exc(),
-                        0.0,
-                    )
-                while next_to_emit in completed:
-                    test_obj, result_type, err_info, elapsed = completed[next_to_emit]
-                    self._emit_tap_result(next_to_emit + 1, test_obj, result_type, err_info, result)
-                    del completed[next_to_emit]
-                    next_to_emit += 1
-
-                # Phase 2: Submit all remaining tests at full parallelism.
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
                 # pp_pas_bootstrap compiles the entire FPC compiler (~150s) and
                 # is structurally the longest test — update this if renamed.
-                remaining = list(runnable[1:])
+                #
+                # No warm-up phase needed: the AST cache uses atomic
+                # write-to-temp-then-rename (PID-unique temp files), so
+                # parallel compiler processes can safely race to populate
+                # the same cache entries without corruption.  The first
+                # writer wins and subsequent processes read the cached
+                # result on the next unit load.  This is faster than
+                # blocking all workers on a sequential warm-up test.
+                reordered = list(runnable)
                 pp_idx = next(
-                    (i for i, (_, t) in enumerate(remaining)
+                    (i for i, (_, t) in enumerate(reordered)
                      if 'pp_pas_bootstrap' in t._testMethodName),
                     None,
                 )
                 if pp_idx is not None:
-                    remaining.insert(0, remaining.pop(pp_idx))
+                    reordered.insert(0, reordered.pop(pp_idx))
                 self._emit(
                     f"# FPC RTL full parallel: "
-                    f"{len(remaining)} tests with {effective_workers} workers"
+                    f"{len(reordered)} tests with {effective_workers} workers"
                 )
                 with concurrent.futures.ThreadPoolExecutor(max_workers=effective_workers) as executor:
                     future_to_index = {
@@ -1328,7 +1335,7 @@ class TAPParallelTestRunner:
                             _run_single_test_with_timeout, t,
                             getattr(getattr(t, t._testMethodName, None), '_timeout', self.timeout),
                         ): idx
-                        for idx, t in remaining
+                        for idx, t in reordered
                     }
                     for future in concurrent.futures.as_completed(future_to_index):
                         idx = future_to_index[future]
