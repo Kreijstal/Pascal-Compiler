@@ -1358,7 +1358,10 @@ static int emitted_class_set_add(EmittedClassSet *set, const char *label)
         set->capacity = new_capacity;
     }
 
-    set->labels[set->count++] = label;
+    char *owned = strdup(label);
+    if (owned == NULL)
+        return 1;
+    set->labels[set->count++] = owned;
     return 0;
 }
 
@@ -1367,6 +1370,8 @@ static void emitted_class_set_destroy(EmittedClassSet *set)
     if (set == NULL)
         return;
 
+    for (int i = 0; i < set->count; ++i)
+        free((void *)set->labels[i]);
     free((void *)set->labels);
     set->labels = NULL;
     set->count = 0;
@@ -4756,10 +4761,8 @@ static int codegen_emit_interface_guid(CodeGenContext *ctx,
     if (emitted_class_set_contains(emitted_classes, guid_dedup_buf))
         return 0;
 
-    char *guid_dedup_key = strdup(guid_dedup_buf);
-    if (guid_dedup_key == NULL)
+    if (emitted_class_set_add(emitted_classes, guid_dedup_buf) != 0)
         return 0;
-    emitted_class_set_add(emitted_classes, guid_dedup_key);
 
     int is_win = codegen_target_is_windows();
     fprintf(ctx->output_file, "\n# GUID constant for interface %s%s\n",
@@ -5306,9 +5309,7 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
                         if (emitted_class_set_contains(emitted_classes, stub_dedup)) {
                             /* Already emitted by a previous class — skip. */
                         } else {
-                            char *stub_key = strdup(stub_dedup);
-                            if (stub_key != NULL)
-                                emitted_class_set_add(emitted_classes, stub_key);
+                            emitted_class_set_add(emitted_classes, stub_dedup);
                             /* If the class doesn't provide an implementation
                              * (e.g. TObject-derived class implementing an interface
                              * without inheriting TInterfacedObject), fall back to
@@ -6008,9 +6009,7 @@ static void codegen_emit_old_object_abstract_stubs_from_type_list(
             snprintf(dedup_buf, sizeof(dedup_buf), "__abstract_stub_%s", mangled_id);
             if (emitted_class_set_contains(emitted_classes, dedup_buf))
                 continue;
-            char *dedup_key = strdup(dedup_buf);
-            if (dedup_key != NULL)
-                emitted_class_set_add(emitted_classes, dedup_key);
+            emitted_class_set_add(emitted_classes, dedup_buf);
 
             /* Emit abstract method stub — this is the correct implementation
              * for virtual;abstract methods in old-style objects.  The dedup

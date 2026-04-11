@@ -1768,6 +1768,8 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.function_call_data.placeholder_method_name);
           if (expr->expr_data.function_call_data.call_qualifier != NULL)
               free(expr->expr_data.function_call_data.call_qualifier);
+          if (expr->expr_data.function_call_data.self_class_name != NULL)
+              free(expr->expr_data.function_call_data.self_class_name);
           free(expr->expr_data.function_call_data.cached_owner_class);
           free(expr->expr_data.function_call_data.cached_method_name);
           break;
@@ -2044,6 +2046,13 @@ void destroy_record_type(struct RecordType *record_type)
     record_type->generic_decl = NULL;
     free(record_type->default_indexed_property);
     free(record_type->default_indexed_element_type_id);
+    if (record_type->interface_names != NULL)
+    {
+        for (int i = 0; i < record_type->num_interfaces; ++i)
+            free(record_type->interface_names[i]);
+        free(record_type->interface_names);
+    }
+    free(record_type->guid_string);
     if (record_type->record_properties != NULL)
     {
         ListNode_t *cur = record_type->record_properties;
