@@ -772,7 +772,7 @@ KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
                     strdup(src->info.proc_info.return_type_id) : NULL;
             break;
         case TYPE_KIND_RECORD:
-            clone->info.record_info = clone_record_type(src->info.record_info);
+            clone->info.record_info = src->info.record_info;
             break;
         case TYPE_KIND_ARRAY_OF_CONST:
             clone->info.array_of_const_info.element_size =
