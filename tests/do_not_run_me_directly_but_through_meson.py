@@ -1136,10 +1136,13 @@ class ParallelTestRunner:
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
                 remaining = list(runnable_tests[1:])
-                for i, t in enumerate(remaining):
-                    if 'pp_pas_bootstrap' in t._testMethodName:
-                        remaining.insert(0, remaining.pop(i))
-                        break
+                pp_idx = next(
+                    (i for i, t in enumerate(remaining)
+                     if 'pp_pas_bootstrap' in t._testMethodName),
+                    None,
+                )
+                if pp_idx is not None:
+                    remaining.insert(0, remaining.pop(pp_idx))
                 self.stream.write(
                     f"[PARALLEL] FPC RTL full parallel: "
                     f"{len(remaining)} tests with {self.workers} workers\n"
@@ -1298,10 +1301,13 @@ class TAPParallelTestRunner:
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
                 remaining = list(runnable[1:])
-                for i, (_, t) in enumerate(remaining):
-                    if 'pp_pas_bootstrap' in t._testMethodName:
-                        remaining.insert(0, remaining.pop(i))
-                        break
+                pp_idx = next(
+                    (i for i, (_, t) in enumerate(remaining)
+                     if 'pp_pas_bootstrap' in t._testMethodName),
+                    None,
+                )
+                if pp_idx is not None:
+                    remaining.insert(0, remaining.pop(pp_idx))
                 self._emit(
                     f"# FPC RTL full parallel: "
                     f"{len(remaining)} tests with {effective_workers} workers"
