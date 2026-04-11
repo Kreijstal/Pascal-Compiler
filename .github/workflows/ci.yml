@@ -94,7 +94,15 @@ jobs:
         sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
         pip install meson ninja
 
+    - name: Cache FPC RTL source
+      id: cache-fpcsource
+      uses: actions/cache@v4
+      with:
+        path: FPCSource
+        key: fpcsource-${{ hashFiles('.github/workflows/ci.yml') }}
+
     - name: Clone FPC RTL source
+      if: steps.cache-fpcsource.outputs.cache-hit != 'true'
       run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
 
     - name: Configure FPC RTL build
@@ -132,7 +140,15 @@ jobs:
         sudo apt-get install -y flex bison libfl-dev libunwind-dev libgmp-dev
         pip install meson ninja
 
+    - name: Cache FPC RTL source
+      id: cache-fpcsource-profile
+      uses: actions/cache@v4
+      with:
+        path: FPCSource
+        key: fpcsource-${{ hashFiles('.github/workflows/ci.yml') }}
+
     - name: Clone FPC RTL source
+      if: steps.cache-fpcsource-profile.outputs.cache-hit != 'true'
       run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
 
     - name: Configure build
