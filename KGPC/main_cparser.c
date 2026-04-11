@@ -1935,8 +1935,7 @@ static int batch_mode_main(int argc, char **argv)
     fprintf(stderr, "[batch] Compiled %d files (%d failed)\n", total_count, total_failed);
 
     /* Parent cleanup */
-    if (prelude_tree != NULL)
-        destroy_tree(prelude_tree);
+    destroy_tree(prelude_tree);
     free(prelude_path);
     pascal_frontend_cleanup();
     unit_search_paths_destroy(&g_unit_paths);
@@ -1974,8 +1973,7 @@ static int compile_single_program(
     emit_profile_stage("parse user source", current_time_seconds() - user_profile_start);
     if (!parsed_user || user_tree == NULL)
     {
-        if (user_tree != NULL)
-            destroy_tree(user_tree);
+        destroy_tree(user_tree);
         return 1;
     }
 
@@ -2098,16 +2096,14 @@ static int compile_single_program(
 
     if (saved_preprocessed_source != NULL)
     {
-        if (preprocessed_source != NULL)
-            free(preprocessed_source);
+        free(preprocessed_source);
         preprocessed_source = saved_preprocessed_source;
         preprocessed_length = saved_preprocessed_length;
         saved_preprocessed_source = NULL;
     }
     if (saved_preprocessed_path != NULL)
     {
-        if (preprocessed_path != NULL)
-            free(preprocessed_path);
+        free(preprocessed_path);
         preprocessed_path = saved_preprocessed_path;
         saved_preprocessed_path = NULL;
     }
@@ -2840,8 +2836,7 @@ int main(int argc, char **argv)
         emit_profile_stage(use_stdlib ? "parse stdlib/prelude" : "parse prelude", current_time_seconds() - stdlib_profile_start);
         if (!parsed_stdlib)
         {
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
+            destroy_tree(prelude_tree);
             free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
@@ -2869,10 +2864,8 @@ int main(int argc, char **argv)
     emit_profile_stage("parse user source", current_time_seconds() - user_profile_start);
     if (!parsed_user)
     {
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
-        if (user_tree != NULL)
-            destroy_tree(user_tree);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
         free(prelude_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
@@ -2898,23 +2891,16 @@ int main(int argc, char **argv)
 
     if (!dump_ast_to_requested_path(user_tree))
     {
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
-        if (user_tree != NULL)
-            destroy_tree(user_tree);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
         free(prelude_path);
         clear_dump_ast_path();
-        if (ast_nil != NULL)
-        {
-            free(ast_nil);
-            ast_nil = NULL;
-        }
+        free(ast_nil);
+ast_nil = NULL;
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
-        if (saved_preprocessed_source != NULL)
-            free(saved_preprocessed_source);
-        if (saved_preprocessed_path != NULL)
-            free(saved_preprocessed_path);
+        free(saved_preprocessed_source);
+        free(saved_preprocessed_path);
         return 1;
     }
 
@@ -2924,10 +2910,8 @@ int main(int argc, char **argv)
         if (out == NULL)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
-            if (user_tree != NULL)
-                destroy_tree(user_tree);
+            destroy_tree(prelude_tree);
+            destroy_tree(user_tree);
             free(prelude_path);
             clear_dump_ast_path();
             pascal_frontend_cleanup();
@@ -2937,32 +2921,23 @@ int main(int argc, char **argv)
         fprintf(stderr, "Parse-only mode: skipping semantic analysis and code generation.\n");
         fprintf(out, "; parse-only mode: no code generated\n");
         fclose(out);
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
-        if (user_tree != NULL)
-            destroy_tree(user_tree);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
         free(prelude_path);
-        if (ast_nil != NULL)
-        {
-            free(ast_nil);
-            ast_nil = NULL;
-        }
+        free(ast_nil);
+ast_nil = NULL;
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
-        if (saved_preprocessed_source != NULL)
-            free(saved_preprocessed_source);
-        if (saved_preprocessed_path != NULL)
-            free(saved_preprocessed_path);
+        free(saved_preprocessed_source);
+        free(saved_preprocessed_path);
         return 0;
     }
 
     if (user_tree == NULL || prelude_tree == NULL)
     {
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
-        if (user_tree != NULL)
-            destroy_tree(user_tree);
+        destroy_tree(prelude_tree);
+        destroy_tree(user_tree);
         free(prelude_path);
         clear_dump_ast_path();
         pascal_frontend_cleanup();
@@ -3125,8 +3100,7 @@ int main(int argc, char **argv)
 
         if (saved_preprocessed_source != NULL)
         {
-            if (preprocessed_source != NULL)
-                free(preprocessed_source);
+            free(preprocessed_source);
             preprocessed_source = saved_preprocessed_source;
             preprocessed_length = saved_preprocessed_length;
             saved_preprocessed_source = NULL;
@@ -3134,8 +3108,7 @@ int main(int argc, char **argv)
         }
         if (saved_preprocessed_path != NULL)
         {
-            if (preprocessed_path != NULL)
-                free(preprocessed_path);
+            free(preprocessed_path);
             preprocessed_path = saved_preprocessed_path;
             saved_preprocessed_path = NULL;
         }
@@ -3155,23 +3128,24 @@ int main(int argc, char **argv)
         /* Restore imported declarations from the unit tree back to their
          * unit records so codegen only sees the target unit's own decls. */
         unbuild_combined_program_view(&unit_comp_ctx);
-        compilation_context_destroy(&unit_comp_ctx);
 
         if (sem_result > 0)
         {
             fprintf(stderr, "Semantic check failed for unit.\n");
             DestroySymTab(symtab);
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
+            destroy_tree(prelude_tree);
+            compilation_context_destroy(&unit_comp_ctx);
             destroy_tree(user_tree);
             free(prelude_path);
+            free(ast_nil);
+            ast_nil = NULL;
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
-            if (saved_preprocessed_source != NULL)
-                free(saved_preprocessed_source);
-            if (saved_preprocessed_path != NULL)
-                free(saved_preprocessed_path);
+            unit_registry_reset();
+            free(saved_preprocessed_source);
+            free(saved_preprocessed_path);
+            arena_destroy(arena);
             return 1;
         }
 
@@ -3184,12 +3158,19 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
             DestroySymTab(symtab);
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
+            destroy_tree(prelude_tree);
+            compilation_context_destroy(&unit_comp_ctx);
             destroy_tree(user_tree);
             free(prelude_path);
+            free(ast_nil);
+            ast_nil = NULL;
             clear_dump_ast_path();
+            pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
+            unit_registry_reset();
+            free(saved_preprocessed_source);
+            free(saved_preprocessed_path);
+            arena_destroy(arena);
             return 1;
         }
         ctx.label_counter = 1;
@@ -3215,33 +3196,33 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Code generation failed for unit.\n");
             DestroySymTab(symtab);
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
+            destroy_tree(prelude_tree);
+            compilation_context_destroy(&unit_comp_ctx);
             destroy_tree(user_tree);
             free(prelude_path);
+            free(ast_nil);
+            ast_nil = NULL;
             clear_dump_ast_path();
             pascal_frontend_cleanup();
             unit_search_paths_destroy(&g_unit_paths);
-            if (saved_preprocessed_source != NULL)
-                free(saved_preprocessed_source);
-            if (saved_preprocessed_path != NULL)
-                free(saved_preprocessed_path);
+            unit_registry_reset();
+            free(saved_preprocessed_source);
+            free(saved_preprocessed_path);
+            arena_destroy(arena);
             return 1;
         }
         
         DestroySymTab(symtab);
-        if (prelude_tree != NULL)
-            destroy_tree(prelude_tree);
+        destroy_tree(prelude_tree);
+        compilation_context_destroy(&unit_comp_ctx);
         destroy_tree(user_tree);
         free(prelude_path);
-        if (ast_nil != NULL)
-        {
-            free(ast_nil);
-            ast_nil = NULL;
-        }
+        free(ast_nil);
+        ast_nil = NULL;
         clear_dump_ast_path();
         pascal_frontend_cleanup();
         unit_search_paths_destroy(&g_unit_paths);
+        unit_registry_reset();
         arena_destroy(arena);
         emit_profile_stage("total pipeline", current_time_seconds() - pipeline_total_start);
         return 0;
@@ -3364,8 +3345,7 @@ int main(int argc, char **argv)
 
     if (saved_preprocessed_source != NULL)
     {
-        if (preprocessed_source != NULL)
-            free(preprocessed_source);
+        free(preprocessed_source);
         preprocessed_source = saved_preprocessed_source;
         preprocessed_length = saved_preprocessed_length;
         saved_preprocessed_source = NULL;
@@ -3373,8 +3353,7 @@ int main(int argc, char **argv)
     }
     if (saved_preprocessed_path != NULL)
     {
-        if (preprocessed_path != NULL)
-            free(preprocessed_path);
+        free(preprocessed_path);
         preprocessed_path = saved_preprocessed_path;
         saved_preprocessed_path = NULL;
     }
@@ -3445,8 +3424,7 @@ int main(int argc, char **argv)
         {
             fprintf(stderr, "ERROR: Failed to open output file: %s\n", output_file);
             DestroySymTab(symtab);
-            if (prelude_tree != NULL)
-                destroy_tree(prelude_tree);
+            destroy_tree(prelude_tree);
             compilation_context_destroy(&g_comp_ctx);
             destroy_tree(user_tree);
             clear_dump_ast_path();
@@ -3526,17 +3504,12 @@ int main(int argc, char **argv)
     }
 
     DestroySymTab(symtab);
-    if (prelude_tree != NULL)
-        destroy_tree(prelude_tree);
+    destroy_tree(prelude_tree);
     compilation_context_destroy(&g_comp_ctx);
     destroy_tree(user_tree);
     free(prelude_path);
-
-    if (ast_nil != NULL)
-    {
-        free(ast_nil);
-        ast_nil = NULL;
-    }
+    free(ast_nil);
+    ast_nil = NULL;
 
     if (sem_result > 0)
     {
