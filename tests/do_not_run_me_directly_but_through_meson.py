@@ -1110,7 +1110,10 @@ class ParallelTestRunner:
             class_errors, setup_ok_classes = _prepare_parallel_class_fixtures(tests, self.stream)
             runnable_tests = [t for t in tests if t.__class__ not in class_errors]
             if FPC_RTL_MODE and self.workers > 1:
-                assert runnable_tests, "FPC RTL mode enabled but no runnable tests found"
+                assert runnable_tests, (
+                    "FPC RTL mode enabled but no runnable tests found. "
+                    "Check that KGPC_FPC_RTL=1, FPCSource is present, and test discovery found .expected files."
+                )
                 # Phase 1: Run one warm-up test alone to populate AST + codegen
                 # caches.  This prevents parallel cold-cache contention where
                 # multiple workers redundantly parse system.pp and re-do unit
@@ -1135,6 +1138,8 @@ class ParallelTestRunner:
                 # Phase 2: Submit all remaining tests at full parallelism.
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
+                # pp_pas_bootstrap compiles the entire FPC compiler (~150s) and
+                # is structurally the longest test — update this if renamed.
                 remaining = list(runnable_tests[1:])
                 pp_idx = next(
                     (i for i, t in enumerate(remaining)
@@ -1272,7 +1277,10 @@ class TAPParallelTestRunner:
 
             runnable = [(idx, t) for idx, t in enumerate(tests) if t.__class__ not in class_errors]
             if FPC_RTL_MODE and effective_workers > 1:
-                assert runnable, "FPC RTL mode enabled but no runnable tests found"
+                assert runnable, (
+                    "FPC RTL mode enabled but no runnable tests found. "
+                    "Check that KGPC_FPC_RTL=1, FPCSource is present, and test discovery found .expected files."
+                )
                 # Phase 1: Run one warm-up test alone to populate AST + codegen
                 # caches.  This prevents parallel cold-cache contention where
                 # multiple workers redundantly parse system.pp and re-do unit
@@ -1300,6 +1308,8 @@ class TAPParallelTestRunner:
                 # Phase 2: Submit all remaining tests at full parallelism.
                 # Use longest-job-first scheduling: move pp_pas_bootstrap to
                 # the front so it starts early and overlaps with other tests.
+                # pp_pas_bootstrap compiles the entire FPC compiler (~150s) and
+                # is structurally the longest test — update this if renamed.
                 remaining = list(runnable[1:])
                 pp_idx = next(
                     (i for i, (_, t) in enumerate(remaining)
