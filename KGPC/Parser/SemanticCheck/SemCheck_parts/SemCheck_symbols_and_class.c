@@ -1378,12 +1378,10 @@ void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     {
         if (symtab->current_scope != NULL && symtab->current_scope != symtab->builtin_scope)
         {
-            if (node->type != NULL)
-                kgpc_type_retain(node->type);
+            /* create_hash_node (called by AddIdentToTable) retains the type,
+             * so no extra retain/release pair is needed here. */
             (void)AddIdentToTable(symtab->current_scope->table, qualified_id,
                 NULL, HASHTYPE_TYPE, node->type);
-            if (node->type != NULL)
-                kgpc_type_release(node->type);
             if (FindSymbol(&existing, symtab, qualified_id) != 0 && existing != NULL)
             {
                 existing->defined_in_unit = 1;

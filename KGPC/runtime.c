@@ -234,10 +234,50 @@ int threadingalreadyused_void(void)
     return kgpc_threading_already_used();
 }
 
+#if defined(__GNUC__) || defined(__clang__)
 #define KGPC_ATOMIC_INC_RET(target, val) __sync_add_and_fetch(target, val)
 #define KGPC_ATOMIC_DEC_RET(target, val) __sync_sub_and_fetch(target, val)
 #define KGPC_ATOMIC_EXCHANGE(target, val) __atomic_exchange_n(target, val, __ATOMIC_SEQ_CST)
 #define KGPC_ATOMIC_CMP_EXCHANGE(target, val, comp) __sync_val_compare_and_swap(target, comp, val)
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define KGPC_ATOMIC_INC_RET(target, val) \
+    (_Generic((target), \
+        int32_t *: _InterlockedAdd((volatile long *)(target), (long)(val)), \
+        long *: _InterlockedAdd((volatile long *)(target), (long)(val)), \
+        int64_t *: _InterlockedAdd64((volatile long long *)(target), (long long)(val)), \
+        long long *: _InterlockedAdd64((volatile long long *)(target), (long long)(val)), \
+        uint32_t *: (uint32_t)_InterlockedAdd((volatile long *)(target), (long)(val)), \
+        uint64_t *: (uint64_t)_InterlockedAdd64((volatile long long *)(target), (long long)(val))))
+#define KGPC_ATOMIC_DEC_RET(target, val) \
+    (_Generic((target), \
+        int32_t *: _InterlockedAdd((volatile long *)(target), -(long)(val)), \
+        long *: _InterlockedAdd((volatile long *)(target), -(long)(val)), \
+        int64_t *: _InterlockedAdd64((volatile long long *)(target), -(long long)(val)), \
+        long long *: _InterlockedAdd64((volatile long long *)(target), -(long long)(val)), \
+        uint32_t *: (uint32_t)_InterlockedAdd((volatile long *)(target), -(long)(val)), \
+        uint64_t *: (uint64_t)_InterlockedAdd64((volatile long long *)(target), -(long long)(val))))
+#define KGPC_ATOMIC_EXCHANGE(target, val) \
+    (_Generic((target), \
+        int32_t *: _InterlockedExchange((volatile long *)(target), (long)(val)), \
+        long *: _InterlockedExchange((volatile long *)(target), (long)(val)), \
+        int64_t *: _InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
+        long long *: _InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
+        uint32_t *: (uint32_t)_InterlockedExchange((volatile long *)(target), (long)(val)), \
+        uint64_t *: (uint64_t)_InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
+        void **: (void *)_InterlockedExchangePointer((volatile PVOID *)(target), (PVOID)(val))))
+#define KGPC_ATOMIC_CMP_EXCHANGE(target, val, comp) \
+    (_Generic((target), \
+        int32_t *: _InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
+        long *: _InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
+        int64_t *: _InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
+        long long *: _InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
+        uint32_t *: (uint32_t)_InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
+        uint64_t *: (uint64_t)_InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
+        void **: (void *)_InterlockedCompareExchangePointer((volatile PVOID *)(target), (PVOID)(val), (PVOID)(comp))))
+#else
+#error "Atomic operations require GCC, Clang, or MSVC"
+#endif
 
 int32_t kgpc_interlockedincrement(int32_t *target)
 {
@@ -5174,16 +5214,20 @@ int64_t kgpc_string_pos_ac(const char *substr, unsigned char value)
 
 int64_t kgpc_string_pos_sc(const char *substr, unsigned char value)
 {
+    if (substr == NULL)
+        return 0;
     char hay[1] = { (char)value };
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(hay, 1, substr ? substr + 1 : "", needle_len, 1);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(hay, 1, substr + 1, needle_len, 1);
 }
 
 int64_t kgpc_string_pos_sa(const char *substr, const char *value)
 {
+    if (substr == NULL)
+        return 0;
     size_t hay_len = kgpc_string_known_length(value ? value : "");
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr + 1 : "", needle_len, 1);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(value ? value : "", hay_len, substr + 1, needle_len, 1);
 }
 
 int64_t kgpc_string_pos_as(const char *substr, const char *value)
@@ -5195,9 +5239,11 @@ int64_t kgpc_string_pos_as(const char *substr, const char *value)
 
 int64_t kgpc_string_pos_ss(const char *substr, const char *value)
 {
+    if (substr == NULL)
+        return 0;
     size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr + 1 : "", needle_len, 1);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr + 1, needle_len, 1);
 }
 
 int64_t kgpc_string_pos(const char *substr, const char *value)
@@ -5209,9 +5255,11 @@ int64_t kgpc_string_pos(const char *substr, const char *value)
 
 int64_t kgpc_string_pos_sa_from(const char *substr, const char *value, int64_t start_index)
 {
+    if (substr == NULL)
+        return 0;
     size_t hay_len = kgpc_string_known_length(value ? value : "");
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(value ? value : "", hay_len, substr ? substr + 1 : "", needle_len, start_index);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(value ? value : "", hay_len, substr + 1, needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_as_from(const char *substr, const char *value, int64_t start_index)
@@ -5223,9 +5271,11 @@ int64_t kgpc_string_pos_as_from(const char *substr, const char *value, int64_t s
 
 int64_t kgpc_string_pos_ss_from(const char *substr, const char *value, int64_t start_index)
 {
+    if (substr == NULL)
+        return 0;
     size_t hay_len = value ? (size_t)(unsigned char)value[0] : 0;
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr ? substr + 1 : "", needle_len, start_index);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(value ? value + 1 : "", hay_len, substr + 1, needle_len, start_index);
 }
 
 int64_t kgpc_string_pos_from(const char *substr, const char *value, int64_t start_index)
@@ -5264,9 +5314,11 @@ int64_t kgpc_string_pos_ac_from(const char *substr, unsigned char value, int64_t
 
 int64_t kgpc_string_pos_sc_from(const char *substr, unsigned char value, int64_t start_index)
 {
+    if (substr == NULL)
+        return 0;
     char hay[1] = { (char)value };
-    size_t needle_len = substr ? (size_t)(unsigned char)substr[0] : 0;
-    return kgpc_pos_internal(hay, 1, substr ? substr + 1 : "", needle_len, start_index);
+    size_t needle_len = (size_t)(unsigned char)substr[0];
+    return kgpc_pos_internal(hay, 1, substr + 1, needle_len, start_index);
 }
 
 static int kgpc_is_path_delim_char(char ch)
@@ -5942,8 +5994,12 @@ void kgpc_str_real_fmt(double value, int64_t width, int64_t precision, char **ta
  * ShortString has format: first byte = length, followed by up to 255 characters. */
 static void kgpc_str_to_shortstring_final(char *target, char *result, int64_t max_length)
 {
-    if (target == NULL || result == NULL)
+    if (result == NULL)
         return;
+    if (target == NULL) {
+        kgpc_string_release(result);
+        return;
+    }
     if (max_length < 1) max_length = 1;
     if (max_length > 256) max_length = 256;
     kgpc_string_to_shortstring(target, result, (size_t)max_length);
