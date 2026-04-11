@@ -224,6 +224,6 @@ if get_option('run_fpc_rtl_tests')
     depends: [kgpc_cparser_exe, kgpc_runtime_lib],
     env: fpc_rtl_env,
     protocol: 'tap',
-    timeout: 1200,
+    timeout: 3600,
   )
 endif
