@@ -7791,34 +7791,38 @@ uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint6
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
  * system.pp).  Removed from runtime to avoid duplicate symbol conflicts. */
 
-uint8_t fpc_in_lo_Word(uint16_t value)
+/* lo()/hi() intrinsics.
+   Return int64_t so the full rax register is defined — KGPC codegen reads
+   the whole register and the C ABI does not guarantee zero-extension of
+   narrow return types. */
+int64_t fpc_in_lo_Word(int64_t value)
 {
-    return (uint8_t)value;
+    return (int64_t)(uint8_t)value;
 }
 
-uint8_t fpc_in_hi_Word(uint16_t value)
+int64_t fpc_in_hi_Word(int64_t value)
 {
-    return (uint8_t)(value >> 8);
+    return (int64_t)(uint8_t)((uint16_t)value >> 8);
 }
 
-uint16_t fpc_in_lo_long(int32_t value)
+int64_t fpc_in_lo_long(int64_t value)
 {
-    return (uint16_t)value;
+    return (int64_t)(uint16_t)value;
 }
 
-uint16_t fpc_in_hi_long(int32_t value)
+int64_t fpc_in_hi_long(int64_t value)
 {
-    return (uint16_t)((uint32_t)value >> 16);
+    return (int64_t)(uint16_t)((uint32_t)value >> 16);
 }
 
-uint32_t fpc_in_lo_qword(uint64_t value)
+int64_t fpc_in_lo_qword(uint64_t value)
 {
-    return (uint32_t)value;
+    return (int64_t)(uint32_t)value;
 }
 
-uint32_t fpc_in_hi_qword(uint64_t value)
+int64_t fpc_in_hi_qword(uint64_t value)
 {
-    return (uint32_t)(value >> 32);
+    return (int64_t)(uint32_t)(value >> 32);
 }
 
 /* Set operations for 256-bit sets (set of Char / set of AnsiChar).
@@ -8175,12 +8179,12 @@ int32_t kgpc_sar_longint(int32_t value, int32_t shift) {
     return value >> (shift & 31);
 }
 
-int16_t kgpc_sar_smallint(int16_t value, int32_t shift) {
-    return (int16_t)(((int32_t)value) >> (shift & 15));
+int64_t kgpc_sar_smallint(int64_t value, int64_t shift) {
+    return (int64_t)(int16_t)(((int32_t)(int16_t)value) >> (shift & 15));
 }
 
-int8_t kgpc_sar_shortint(int8_t value, int32_t shift) {
-    return (int8_t)(((int32_t)value) >> (shift & 7));
+int64_t kgpc_sar_shortint(int64_t value, int64_t shift) {
+    return (int64_t)(int8_t)(((int32_t)(int8_t)value) >> (shift & 7));
 }
 
 uint32_t kgpc_rol_dword(uint32_t value, int32_t shift) {
@@ -8203,24 +8207,28 @@ uint64_t kgpc_ror_qword(uint64_t value, int32_t shift) {
     return (value >> shift) | (value << (64 - shift));
 }
 
-uint16_t kgpc_rol_word(uint16_t value, int32_t shift) {
+int64_t kgpc_rol_word(int64_t value, int64_t shift) {
+    uint16_t v = (uint16_t)value;
     shift &= 15;
-    return (uint16_t)((value << shift) | (value >> (16 - shift)));
+    return (int64_t)(uint16_t)((v << shift) | (v >> (16 - shift)));
 }
 
-uint16_t kgpc_ror_word(uint16_t value, int32_t shift) {
+int64_t kgpc_ror_word(int64_t value, int64_t shift) {
+    uint16_t v = (uint16_t)value;
     shift &= 15;
-    return (uint16_t)((value >> shift) | (value << (16 - shift)));
+    return (int64_t)(uint16_t)((v >> shift) | (v << (16 - shift)));
 }
 
-uint8_t kgpc_rol_byte(uint8_t value, int32_t shift) {
+int64_t kgpc_rol_byte(int64_t value, int64_t shift) {
+    uint8_t v = (uint8_t)value;
     shift &= 7;
-    return (uint8_t)((value << shift) | (value >> (8 - shift)));
+    return (int64_t)(uint8_t)((v << shift) | (v >> (8 - shift)));
 }
 
-uint8_t kgpc_ror_byte(uint8_t value, int32_t shift) {
+int64_t kgpc_ror_byte(int64_t value, int64_t shift) {
+    uint8_t v = (uint8_t)value;
     shift &= 7;
-    return (uint8_t)((value >> shift) | (value << (8 - shift)));
+    return (int64_t)(uint8_t)((v >> shift) | (v << (8 - shift)));
 }
 
 int32_t kgpc_compare_mem(const void *p1, const void *p2, int64_t count) {
@@ -8233,12 +8241,12 @@ void kgpc_prefetch(const void *p) {
     /* No-op; just a hint */
 }
 
-uint32_t kgpc_hi_qword(uint64_t value) { return (uint32_t)(value >> 32); }
-uint16_t kgpc_hi_dword(uint32_t value) { return (uint16_t)(value >> 16); }
-uint8_t  kgpc_hi_word(uint16_t value)  { return (uint8_t)(value >> 8); }
-uint32_t kgpc_lo_qword(uint64_t value) { return (uint32_t)(value & 0xFFFFFFFFu); }
-uint16_t kgpc_lo_dword(uint32_t value) { return (uint16_t)(value & 0xFFFF); }
-uint8_t  kgpc_lo_word(uint16_t value)  { return (uint8_t)(value & 0xFF); }
+int64_t kgpc_hi_qword(uint64_t value) { return (int64_t)(uint32_t)(value >> 32); }
+int64_t kgpc_hi_dword(int64_t value) { return (int64_t)(uint16_t)((uint32_t)value >> 16); }
+int64_t kgpc_hi_word(int64_t value)  { return (int64_t)(uint8_t)((uint16_t)value >> 8); }
+int64_t kgpc_lo_qword(uint64_t value) { return (int64_t)(uint32_t)(value & 0xFFFFFFFFu); }
+int64_t kgpc_lo_dword(int64_t value) { return (int64_t)(uint16_t)(value & 0xFFFF); }
+int64_t kgpc_lo_word(int64_t value)  { return (int64_t)(uint8_t)(value & 0xFF); }
 
 void kgpc_runerror(int32_t code) {
     fprintf(stderr, "Runtime error %d\n", code);
