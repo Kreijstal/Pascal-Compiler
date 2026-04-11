@@ -1378,20 +1378,12 @@ void mark_hashnode_unit_info(SymTab_t *symtab, HashNode_t *node,
     {
         if (symtab->current_scope != NULL && symtab->current_scope != symtab->builtin_scope)
         {
-            KgpcType *qualified_type = NULL;
             if (node->type != NULL)
-            {
-                qualified_type = kgpc_type_clone_shallow_owned(node->type);
-                if (qualified_type == NULL)
-                {
-                    free(qualified_id);
-                    return;
-                }
-            }
+                kgpc_type_retain(node->type);
             (void)AddIdentToTable(symtab->current_scope->table, qualified_id,
-                NULL, HASHTYPE_TYPE, qualified_type);
-            if (qualified_type != NULL)
-                kgpc_type_release(qualified_type);
+                NULL, HASHTYPE_TYPE, node->type);
+            if (node->type != NULL)
+                kgpc_type_release(node->type);
             if (FindSymbol(&existing, symtab, qualified_id) != 0 && existing != NULL)
             {
                 existing->defined_in_unit = 1;
