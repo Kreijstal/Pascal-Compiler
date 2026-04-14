@@ -20,6 +20,7 @@
 #ifndef strncasecmp
 #define strncasecmp _strnicmp
 #endif
+#ifndef HAVE_STRNDUP
 static inline char* kgpc_strndup(const char* s, size_t n)
 {
     size_t len = strnlen(s, n);
@@ -31,6 +32,7 @@ static inline char* kgpc_strndup(const char* s, size_t n)
     return buf;
 }
 #define strndup kgpc_strndup
+#endif
 #endif /* _WIN32 */
 
 /**
