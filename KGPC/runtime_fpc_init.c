@@ -28,12 +28,24 @@ int32_t  operatingsystem_parameter_argc = 0;
 void    *operatingsystem_parameter_argv = NULL;
 void    *operatingsystem_parameter_envp = NULL;
 
+/* FPC system startup globals normally provided by the target startup code. */
+uintptr_t __stklen = 8u * 1024u * 1024u;
+void *__stkptr = NULL;
+
 /* Called from kgpc_init_args to populate FPC globals */
 void kgpc_fpc_init_os_params(int argc, char **argv, char **envp)
 {
     operatingsystem_parameter_argc = (int32_t)argc;
     operatingsystem_parameter_argv = (void *)argv;
     operatingsystem_parameter_envp = (void *)envp;
+}
+
+void kgpc_fpc_init_stack_params(void *stack_probe)
+{
+    if (__stkptr == NULL)
+        __stkptr = stack_probe;
+    if (__stklen == 0)
+        __stklen = 8u * 1024u * 1024u;
 }
 
 /* ------------------------------------------------------------------ */

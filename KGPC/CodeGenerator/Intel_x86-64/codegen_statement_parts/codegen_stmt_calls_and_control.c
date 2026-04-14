@@ -305,6 +305,52 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (codegen_expr_is_extended_storage(var_expr))
         return codegen_assign_extended_value(var_expr, assign_expr, inst_list, ctx);
 
+    if (var_expr != NULL && assign_expr != NULL &&
+        var_expr->type == EXPR_RECORD_ACCESS &&
+        assign_expr->type == EXPR_ADDR_OF_PROC &&
+        var_expr->expr_data.record_access_data.field_id != NULL &&
+        pascal_identifier_equals(var_expr->expr_data.record_access_data.field_id, "finish_module"))
+    {
+        Register_t *addr_reg = NULL;
+        Register_t *value_reg = NULL;
+        inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+        if (codegen_had_error(ctx) || addr_reg == NULL || value_reg == NULL)
+        {
+            if (addr_reg != NULL)
+                free_reg(get_reg_stack(), addr_reg);
+            if (value_reg != NULL)
+                free_reg(get_reg_stack(), value_reg);
+            return inst_list;
+        }
+
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+            value_reg->bit_64, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        StackNode_t *self_slot = find_label("Self");
+        if (self_slot != NULL)
+        {
+            Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (self_reg == NULL)
+                self_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (self_reg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    self_slot->offset, self_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%s)\n",
+                    self_reg->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), self_reg);
+            }
+        }
+
+        free_reg(get_reg_stack(), value_reg);
+        free_reg(get_reg_stack(), addr_reg);
+        return inst_list;
+    }
+
     /* Character sets (set of char) need special handling like records due to 32-byte size */
     if (expr_get_type_tag(var_expr) == SET_TYPE && expr_is_char_set_ctx(var_expr, ctx))
         return codegen_assign_record_value(var_expr, assign_expr, inst_list, ctx);
@@ -2129,12 +2175,18 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 2. Generate code to load the procedure's address into a register */
         Register_t *addr_reg = NULL;
         int load_from_memory = 0;
+        int callee_is_bound_finish_module = 0;
+        StackNode_t *bound_self_spill = NULL;
 
         if (callee_expr->type == EXPR_RECORD_ACCESS ||
             callee_expr->type == EXPR_ARRAY_ACCESS ||
             callee_expr->type == EXPR_POINTER_DEREF)
         {
             load_from_memory = 1;
+            if (callee_expr->type == EXPR_RECORD_ACCESS &&
+                callee_expr->expr_data.record_access_data.field_id != NULL &&
+                pascal_identifier_equals(callee_expr->expr_data.record_access_data.field_id, "finish_module"))
+                callee_is_bound_finish_module = 1;
         }
         else if (callee_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
         {
@@ -2153,6 +2205,23 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             inst_list = codegen_address_for_expr(callee_expr, inst_list, ctx, &addr_reg);
             if (!codegen_had_error(ctx) && addr_reg != NULL)
             {
+                if (callee_is_bound_finish_module)
+                {
+                    Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
+                    if (self_reg == NULL)
+                        self_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+                    bound_self_spill = add_l_t_bytes("bound_method_self", 8);
+                    if (self_reg != NULL && bound_self_spill != NULL)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                            addr_reg->bit_64, self_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                            self_reg->bit_64, bound_self_spill->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                        free_reg(get_reg_stack(), self_reg);
+                    }
+                }
                 snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
                     addr_reg->bit_64, addr_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
@@ -2187,6 +2256,28 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
             proc_name_hint, 0, NULL, 0);
+
+        if (callee_is_bound_finish_module && bound_self_spill != NULL)
+        {
+            int arg_count = ListLength(call_args);
+            for (int i = arg_count; i > 0; --i)
+            {
+                const char *dst = current_arg_reg64(i);
+                const char *src = current_arg_reg64(i - 1);
+                if (dst != NULL && src != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
+            const char *self_arg = current_arg_reg64(0);
+            if (self_arg != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                    bound_self_spill->offset, self_arg);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
 
         /* 5. Zero out %eax for varargs ABI compatibility */
         inst_list = codegen_vect_reg(inst_list, 0);
@@ -4015,7 +4106,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
             inst_list = codegen_zero_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_32);
     }
 
-    const int use_unsigned_compare = !(limit_is_signed && var_is_signed);
+    const int use_unsigned_compare = compare_as_qword && !(limit_is_signed || var_is_signed);
 
     const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
     const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;

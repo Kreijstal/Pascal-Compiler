@@ -29,6 +29,41 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 free(type_name);
         }
         cur = type_node->next;
+    } else if (type_node != NULL && type_node->typ == PASCAL_T_NONE) {
+        ast_t *wrapped_type = type_node->child;
+        while (wrapped_type != NULL &&
+               wrapped_type->typ != PASCAL_T_TYPE_SPEC &&
+               wrapped_type->typ != PASCAL_T_ARRAY_TYPE &&
+               wrapped_type->typ != PASCAL_T_RECORD_TYPE &&
+               wrapped_type->typ != PASCAL_T_POINTER_TYPE &&
+               wrapped_type->typ != PASCAL_T_PROCEDURE_TYPE &&
+               wrapped_type->typ != PASCAL_T_FUNCTION_TYPE &&
+               wrapped_type->typ != PASCAL_T_IDENTIFIER) {
+            wrapped_type = wrapped_type->next;
+        }
+        if (wrapped_type != NULL) {
+            if (wrapped_type->typ == PASCAL_T_TYPE_SPEC ||
+                wrapped_type->typ == PASCAL_T_ARRAY_TYPE ||
+                wrapped_type->typ == PASCAL_T_RECORD_TYPE ||
+                wrapped_type->typ == PASCAL_T_POINTER_TYPE ||
+                wrapped_type->typ == PASCAL_T_PROCEDURE_TYPE ||
+                wrapped_type->typ == PASCAL_T_FUNCTION_TYPE) {
+                var_type = convert_type_spec(wrapped_type, &type_id, NULL, &type_info);
+            } else if (wrapped_type->typ == PASCAL_T_IDENTIFIER) {
+                char *type_name = dup_symbol(wrapped_type);
+                if (type_name != NULL) {
+                    var_type = map_type_name(type_name, &type_id);
+                    var_type = apply_shortstring_mode(var_type, type_name);
+                    if (var_type == UNKNOWN_TYPE && type_id == NULL)
+                        type_id = type_name;
+                    else
+                        free(type_name);
+                }
+            }
+            cur = type_node->next;
+        } else {
+            cur = type_node;
+        }
     } else {
         cur = type_node;
     }
@@ -46,6 +81,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
              * since convert_type_spec resets all fields to NULL without freeing */
             destroy_type_info_contents(&type_info);
             var_type = convert_type_spec(search, &type_id, NULL, &type_info);
+            cur = search->next;
         } else if (search != NULL && search->typ == PASCAL_T_IDENTIFIER) {
             char *type_name = dup_symbol(search);
             if (type_name != NULL) {
@@ -57,6 +93,7 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     free(type_name);
                 var_type = mapped;
             }
+            cur = search->next;
         }
     }
 
@@ -233,7 +270,10 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
         }
 
         /* Skip nodes that should not be treated as initializers */
-        if (is_node_to_skip_as_initializer(init_node)) {
+        if (is_node_to_skip_as_initializer(init_node) &&
+            !(init_node->typ == PASCAL_T_IDENTIFIER &&
+              init_node != type_node &&
+              (type_id != NULL || var_type != UNKNOWN_TYPE))) {
             init_node = NULL;
         }
         
@@ -4165,4 +4205,3 @@ void append_type_decls_from_section(ast_t *type_section, ListNode_t **dest,
         type_decl = type_decl->next;
     }
 }
-

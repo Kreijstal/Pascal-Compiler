@@ -1346,7 +1346,120 @@ int semcheck_signterm(int *type_return,
     /* Checking types */
     if (*type_return == UNKNOWN_TYPE)
         return return_val;
-    if (*type_return == POINTER_TYPE || *type_return == RECORD_TYPE)
+    if (*type_return == RECORD_TYPE)
+    {
+        const char *record_type_name = get_expr_type_name(sign_expr, symtab);
+        if (record_type_name != NULL)
+        {
+            const char *op_suffix = "op_sub";
+            size_t name_len = strlen(record_type_name) + strlen(op_suffix) + 3;
+            char *operator_method = (char *)malloc(name_len);
+            if (operator_method != NULL)
+            {
+                snprintf(operator_method, name_len, "%s__%s",
+                    record_type_name, op_suffix);
+
+                HashNode_t *operator_node = NULL;
+                ListNode_t *operator_candidates = FindAllIdents(symtab, operator_method);
+                if (operator_candidates != NULL)
+                {
+                    HashNode_t *best_match = NULL;
+                    int num_best = 0;
+                    ListNode_t *args_given = CreateListNode(sign_expr, LIST_EXPR);
+                    if (args_given != NULL)
+                    {
+                        int resolve_status = semcheck_resolve_overload(
+                            &best_match,
+                            &num_best,
+                            operator_candidates,
+                            args_given,
+                            symtab,
+                            expr,
+                            max_scope_lev,
+                            1);
+                        if (resolve_status == 0 && best_match != NULL &&
+                            num_best == 1)
+                            operator_node = best_match;
+                        DestroyList(args_given);
+                    }
+
+                    if (operator_node == NULL)
+                    {
+                        for (ListNode_t *cur = operator_candidates; cur != NULL;
+                             cur = cur->next)
+                        {
+                            HashNode_t *candidate = (HashNode_t *)cur->cur;
+                            if (candidate == NULL ||
+                                (candidate->hash_type != HASHTYPE_FUNCTION &&
+                                 candidate->hash_type != HASHTYPE_PROCEDURE) ||
+                                candidate->type == NULL)
+                                continue;
+                            ListNode_t *params =
+                                kgpc_type_get_procedure_params(candidate->type);
+                            if (ListLength(params) == 1)
+                            {
+                                operator_node = candidate;
+                                break;
+                            }
+                        }
+                    }
+                    DestroyList(operator_candidates);
+                }
+
+                if (operator_node == NULL)
+                {
+                    size_t exact_len = strlen(operator_method) +
+                        strlen(record_type_name) + 2;
+                    char *operator_exact = (char *)malloc(exact_len);
+                    if (operator_exact != NULL)
+                    {
+                        snprintf(operator_exact, exact_len, "%s_%s",
+                            operator_method, record_type_name);
+                        FindSymbol(&operator_node, symtab, operator_exact);
+                        free(operator_exact);
+                    }
+                }
+
+                if (operator_node != NULL && operator_node->type != NULL &&
+                    kgpc_type_is_procedure(operator_node->type))
+                {
+                    KgpcType *return_type = kgpc_type_get_return_type(operator_node->type);
+                    if (return_type != NULL)
+                    {
+                        struct Expression *saved_arg = sign_expr;
+                        expr->type = EXPR_FUNCTION_CALL;
+                        memset(&expr->expr_data.function_call_data, 0,
+                            sizeof(expr->expr_data.function_call_data));
+                        expr->expr_data.function_call_data.is_operator_call = 1;
+                        expr->expr_data.function_call_data.id = strdup(operator_method);
+                        expr->expr_data.function_call_data.mangled_id =
+                            operator_node->mangled_id != NULL
+                                ? strdup(operator_node->mangled_id)
+                                : strdup(operator_method);
+                        expr->expr_data.function_call_data.args_expr =
+                            CreateListNode(saved_arg, LIST_EXPR);
+                        expr->expr_data.function_call_data.resolved_func = operator_node;
+                        expr->expr_data.function_call_data.call_hash_type =
+                            HASHTYPE_FUNCTION;
+                        expr->expr_data.function_call_data.call_kgpc_type =
+                            operator_node->type;
+                        kgpc_type_retain(operator_node->type);
+                        expr->expr_data.function_call_data.is_call_info_valid = 1;
+
+                        *type_return = semcheck_tag_from_kgpc(return_type);
+                        semcheck_expr_set_resolved_kgpc_type_shared(expr, return_type);
+                        semcheck_set_result_expr_metadata(expr, symtab, return_type);
+
+                        free(operator_method);
+                        return return_val;
+                    }
+                }
+                free(operator_method);
+            }
+        }
+        return return_val;
+    }
+    if (*type_return == POINTER_TYPE)
         return return_val;
     if(!is_type_ir(type_return))
     {

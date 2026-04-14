@@ -2822,11 +2822,11 @@ void init_pascal_unit_parser(combinator_t** p) {
         NULL
     ));
 
-    combinator_t* legacy_initialization_block = optional(map(seq(new_combinator(), PASCAL_T_NONE,
+    combinator_t* legacy_initialization_block = optional(seq(new_combinator(), PASCAL_T_INITIALIZATION_SECTION,
         token(keyword_ci("begin")),
         make_stmt_list_parser(stmt_parser),
         NULL
-    ), discard_ast));
+    ));
 
     combinator_t* unit_semicolon_delim = token(match(";"));
     combinator_t* unit_directives = map(until(unit_semicolon_delim, PASCAL_T_NONE), discard_ast);

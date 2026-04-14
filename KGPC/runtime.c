@@ -3224,6 +3224,7 @@ char *kgpc_alloc_empty_string(void)
 void kgpc_init_widestringmanager(void);
 
 void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+void kgpc_fpc_init_stack_params(void *stack_probe);
 void kgpc_fpc_init_thread_manager(void);
 void kgpc_fpc_init_fpu(void);
 
@@ -3232,6 +3233,7 @@ void kgpc_init_args(int argc, char **argv, char **envp)
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
     kgpc_fpc_init_os_params(argc, argv, envp);
+    kgpc_fpc_init_stack_params(&argc);
     kgpc_fpc_init_thread_manager();
     kgpc_init_widestringmanager();
     kgpc_fpc_init_fpu();

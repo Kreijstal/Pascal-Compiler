@@ -812,6 +812,9 @@ long long codegen_record_field_effective_size(struct Expression *expr, CodeGenCo
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
+        if (field->has_cached_layout && field->cached_size > 0)
+            return field->cached_size;
+
         const char *field_type_id = field->type_id;
         if (field_type_id == NULL && field->type_ref != NULL)
             field_type_id = type_ref_base_name(field->type_ref);
@@ -2433,4 +2436,3 @@ cleanup:
         codegen_end_expression(ctx);
     return inst_list;
 }
-

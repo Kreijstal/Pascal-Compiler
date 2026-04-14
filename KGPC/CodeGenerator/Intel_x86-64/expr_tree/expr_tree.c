@@ -677,6 +677,40 @@ static int codegen_lowhigh_arg_is_type_identifier(struct Expression *expr, CodeG
     return type_node->hash_type == HASHTYPE_TYPE;
 }
 
+static int expr_tree_expr_is_class_reference_value(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->resolved_kgpc_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(expr->resolved_kgpc_type);
+        if (alias != NULL && alias->is_class_reference)
+            return 1;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
+        {
+            struct TypeAlias *alias = hashnode_get_type_alias(node);
+            if (alias != NULL && alias->is_class_reference)
+                return 1;
+            if (node->type != NULL)
+            {
+                alias = kgpc_type_get_type_alias(node->type);
+                if (alias != NULL && alias->is_class_reference)
+                    return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 static ListNode_t *codegen_builtin_length_type_fallback(struct Expression *expr,
     ListNode_t *inst_list, CodeGenContext *ctx, Register_t *target_reg)
 {
@@ -912,6 +946,18 @@ static int leaf_expr_requires_reference_value(struct Expression *expr, CodeGenCo
     if (!is_array_like && expr_type != RECORD_TYPE && expr_type != SET_TYPE)
         return 1;
 
+    return 0;
+}
+
+static int expr_tree_is_dynamic_array_expr(const struct Expression *expr)
+{
+    if (expr == NULL)
+        return 0;
+    if (expr->array_is_dynamic)
+        return 1;
+    if (expr->resolved_kgpc_type != NULL &&
+        kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))
+        return 1;
     return 0;
 }
 
@@ -2879,6 +2925,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             struct RecordType *class_record = NULL;
             int ctor_type_receiver = 0;
             int ctor_runtime_vmt_receiver = 0;
+            StackNode_t *constructor_vmt_slot = NULL;
             struct Expression *constructor_receiver_expr =
                 expr->expr_data.function_call_data.constructor_receiver_expr;
 
@@ -2901,11 +2948,17 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     {
                         class_record = class_type->info.points_to->info.record_info;
                         ctor_type_receiver = (class_record != NULL);
+                        if (ctor_type_receiver &&
+                            expr_tree_expr_is_class_reference_value(class_expr, ctx))
+                            ctor_runtime_vmt_receiver = (constructor_receiver_expr != NULL);
                     }
                     else if (kgpc_type_is_record(class_type))
                     {
                         class_record = class_type->info.record_info;
                         ctor_type_receiver = (class_record != NULL);
+                        if (ctor_type_receiver &&
+                            expr_tree_expr_is_class_reference_value(class_expr, ctx))
+                            ctor_runtime_vmt_receiver = (constructor_receiver_expr != NULL);
                     }
                     else if (kgpc_type_is_pointer(class_type) &&
                              class_type->info.points_to != NULL &&
@@ -2991,9 +3044,48 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 {
                     /* Allocate memory through the runtime helper. */
                     const char *alloc_arg_reg = codegen_target_is_windows() ? "%rcx" : "%rdi";
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
-                        instance_size, alloc_arg_reg);
-                    inst_list = add_inst(inst_list, buffer);
+                    if (ctor_runtime_vmt_receiver && constructor_receiver_expr != NULL)
+                    {
+                        Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                        if (vmt_reg != NULL)
+                        {
+                            expr_node_t *receiver_tree = build_expr_tree(constructor_receiver_expr);
+                            if (receiver_tree != NULL)
+                            {
+                                inst_list = gencode_expr_tree(receiver_tree, inst_list, ctx, vmt_reg);
+                                free_expr_tree(receiver_tree);
+                                constructor_vmt_slot = add_l_t("ctor_vmt");
+                                if (constructor_vmt_slot != NULL)
+                                {
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                                        vmt_reg->bit_64, constructor_vmt_slot->offset);
+                                    inst_list = add_inst(inst_list, buffer);
+                                }
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                                    vmt_reg->bit_64, alloc_arg_reg);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            else
+                            {
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                                    instance_size, alloc_arg_reg);
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            free_reg(get_reg_stack(), vmt_reg);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                                instance_size, alloc_arg_reg);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                    }
+                    else
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t$%lld, %s\n",
+                            instance_size, alloc_arg_reg);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     inst_list = codegen_vect_reg(inst_list, 0);
                     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_allocmem");
                     free_arg_regs();
@@ -3025,16 +3117,37 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                         Register_t *vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
                         if (vmt_reg != NULL)
                         {
-                            expr_node_t *receiver_tree = build_expr_tree(constructor_receiver_expr);
-                            if (receiver_tree != NULL)
+                            if (constructor_vmt_slot != NULL)
                             {
-                                inst_list = gencode_expr_tree(receiver_tree, inst_list, ctx, vmt_reg);
-                                free_expr_tree(receiver_tree);
+                                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
+                                    constructor_vmt_slot->offset, vmt_reg->bit_64);
+                                inst_list = add_inst(inst_list, buffer);
                                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
                                     vmt_reg->bit_64, constructor_instance_reg->bit_64);
                                 inst_list = add_inst(inst_list, buffer);
                             }
                             free_reg(get_reg_stack(), vmt_reg);
+                        }
+                        if (constructor_vmt_slot == NULL)
+                        {
+                            const char *vmt_label = NULL;
+                            if (class_record->type_id != NULL) {
+                                static char vmt_buf[256];
+                                snprintf(vmt_buf, sizeof(vmt_buf), "%s_VMT", class_record->type_id);
+                                vmt_label = vmt_buf;
+                            }
+                            if (vmt_label != NULL) {
+                                Register_t *fallback_vmt_reg = get_free_reg(get_reg_stack(), &inst_list);
+                                if (fallback_vmt_reg != NULL) {
+                                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                                        vmt_label, fallback_vmt_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                                        fallback_vmt_reg->bit_64, constructor_instance_reg->bit_64);
+                                    inst_list = add_inst(inst_list, buffer);
+                                    free_reg(get_reg_stack(), fallback_vmt_reg);
+                                }
+                            }
                         }
                     }
                     else
@@ -3365,6 +3478,25 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             int vmt_index = expr->expr_data.function_call_data.vmt_index;
             int self_arg_index = has_record_return ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
+            int dispatch_self_is_vmt = expr->expr_data.function_call_data.is_class_method_call;
+            if (!dispatch_self_is_vmt &&
+                expr->expr_data.function_call_data.cached_owner_class != NULL &&
+                expr->expr_data.function_call_data.cached_method_name != NULL &&
+                from_cparser_is_method_nonstatic_class_method(
+                    expr->expr_data.function_call_data.cached_owner_class,
+                    expr->expr_data.function_call_data.cached_method_name))
+            {
+                dispatch_self_is_vmt = 1;
+            }
+            if (!dispatch_self_is_vmt &&
+                expr->expr_data.function_call_data.self_class_name != NULL &&
+                expr->expr_data.function_call_data.id != NULL &&
+                from_cparser_is_method_nonstatic_class_method(
+                    expr->expr_data.function_call_data.self_class_name,
+                    expr->expr_data.function_call_data.id))
+            {
+                dispatch_self_is_vmt = 1;
+            }
             /* Self has already been lowered to the correct calling form during
              * argument passing: instance pointer for normal methods, VMT pointer
              * for non-static class methods. Do not dereference again here. */
@@ -3373,7 +3505,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             inst_list = add_inst(inst_list, buffer);
             /* Get VMT pointer (at offset 0 of instance).
              * For class methods, Self IS the VMT, so this reads typeinfo (not VMT). */
-            if (!expr->expr_data.function_call_data.is_class_method_call)
+            if (!dispatch_self_is_vmt)
             {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
                 inst_list = add_inst(inst_list, buffer);
@@ -3574,6 +3706,29 @@ cleanup_constructor:
     else if (expr->type == EXPR_RECORD_ACCESS)
     {
         return codegen_record_access(expr, inst_list, ctx, target_reg);
+    }
+    else if (expr->type == EXPR_TYPECAST &&
+             expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
+             expr->expr_data.typecast_data.expr != NULL &&
+             expr_tree_is_dynamic_array_expr(expr->expr_data.typecast_data.expr) &&
+             codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
+    {
+        /* Dynamic arrays are represented by a descriptor field whose first
+         * word is the data pointer. A pointer typecast needs that stored
+         * data pointer, not the address of the descriptor field. */
+        Register_t *addr_reg = NULL;
+        inst_list = codegen_address_for_expr(expr->expr_data.typecast_data.expr,
+            inst_list, ctx, &addr_reg);
+        if (addr_reg != NULL)
+        {
+            char buffer[64];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                addr_reg->bit_64, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            if (addr_reg != target_reg)
+                free_reg(get_reg_stack(), addr_reg);
+        }
+        return inst_list;
     }
     else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
@@ -3850,7 +4005,10 @@ cleanup_constructor:
         /* Check if this is a string constant reference (but not a procedure address constant) */
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
-            node != NULL && node->hash_type == HASHTYPE_CONST &&
+            node != NULL)
+            node = codegen_prefer_visible_var_over_const(ctx, expr->expr_data.id, node);
+
+        if (node != NULL && node->hash_type == HASHTYPE_CONST &&
             node->const_string_value != NULL &&
             /* Skip if this is a procedure address constant - those use const_string_value
              * to store the procedure name, not an actual string value */
@@ -4755,6 +4913,9 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             node = builtin_node;
                     }
                 }
+                if (found && node != NULL)
+                    node = codegen_prefer_visible_var_over_const(ctx,
+                        expr->expr_data.id, node);
 
                 if (stack_node == NULL &&
                     !(found && node != NULL &&
