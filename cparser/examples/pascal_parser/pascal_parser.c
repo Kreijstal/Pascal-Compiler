@@ -14,6 +14,8 @@
 #ifndef strncasecmp
 #define strncasecmp _strnicmp
 #endif
+#endif
+#ifndef HAVE_STRNDUP
 static char* strndup(const char* s, size_t n)
 {
     size_t len = strlen(s);

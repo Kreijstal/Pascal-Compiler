@@ -11,8 +11,8 @@
 #include <ctype.h>
 #include <stdbool.h>
 
-// Windows compatibility: strndup is not available on Windows
-#ifdef _WIN32
+// Windows compatibility: strndup is not available on some Windows compilers
+#if defined(_WIN32) && !defined(HAVE_STRNDUP)
 static char* strndup(const char* s, size_t n)
 {
     size_t len = strnlen(s, n);

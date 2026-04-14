@@ -13,6 +13,7 @@
 #include "combinator_internals.h"
 
 #ifdef _WIN32
+#ifndef HAVE_STRNDUP
 static char* strndup(const char* s, size_t n)
 {
     size_t len = strnlen(s, n);
@@ -23,6 +24,7 @@ static char* strndup(const char* s, size_t n)
     buf[len] = '\0';
     return buf;
 }
+#endif
 #endif
 
 //=============================================================================
