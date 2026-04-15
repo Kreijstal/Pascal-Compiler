@@ -19,6 +19,7 @@
 #include "ast_cache.h"
 #include "../string_intern.h"
 #include "../compilation_context.h"
+#include "../../common/file_time.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -78,10 +79,11 @@ static bool ast_cache_is_fresh(const char *cache_path, const char *source_path)
      * cannot accidentally reuse stale ASTs. */
     if (g_compiler_mtime_known)
     {
-        if (cache_st.st_mtim.tv_sec < g_compiler_mtime.tv_sec)
+        struct timespec cache_mtime = kgpc_stat_mtime(&cache_st);
+        if (cache_mtime.tv_sec < g_compiler_mtime.tv_sec)
             return false;
-        if (cache_st.st_mtim.tv_sec == g_compiler_mtime.tv_sec &&
-            cache_st.st_mtim.tv_nsec < g_compiler_mtime.tv_nsec)
+        if (cache_mtime.tv_sec == g_compiler_mtime.tv_sec &&
+            cache_mtime.tv_nsec < g_compiler_mtime.tv_nsec)
             return false;
     }
 
@@ -402,7 +404,7 @@ void pascal_frontend_set_ast_cache_dir(const char *dir)
     if (g_ast_cache_dir != NULL)
         free(g_ast_cache_dir);
     g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
-    if (g_ast_cache_dir != NULL && mkdir(g_ast_cache_dir, 0775) != 0)
+    if (g_ast_cache_dir != NULL && kgpc_mkdir(g_ast_cache_dir, 0775) != 0)
     {
         struct stat st;
         if (stat(g_ast_cache_dir, &st) != 0 || !S_ISDIR(st.st_mode))

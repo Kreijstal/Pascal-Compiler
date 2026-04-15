@@ -812,9 +812,6 @@ long long codegen_record_field_effective_size(struct Expression *expr, CodeGenCo
     long long field_size = 0;
     if (field != NULL && !field->is_array)
     {
-        if (field->has_cached_layout && field->cached_size > 0)
-            return field->cached_size;
-
         const char *field_type_id = field->type_id;
         if (field_type_id == NULL && field->type_ref != NULL)
             field_type_id = type_ref_base_name(field->type_ref);
@@ -827,6 +824,9 @@ long long codegen_record_field_effective_size(struct Expression *expr, CodeGenCo
                 pascal_identifier_equals(field_type_id, "Real"))
                 return 8;
         }
+
+        if (field->has_cached_layout && field->cached_size > 0)
+            return field->cached_size;
 
         struct RecordType *nested = field->nested_record;
         if (codegen_sizeof_type_reference(ctx, field->type, field->type_id, nested, &field_size) == 0 &&
@@ -1751,6 +1751,31 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
             }
         }
 
+        const char *builtin_file_ptr = NULL;
+        if (strcasecmp(expr->expr_data.id, "StdErr") == 0 ||
+            strcasecmp(expr->expr_data.id, "ErrOutput") == 0)
+            builtin_file_ptr = "stderr_ptr";
+
+        if (builtin_file_ptr != NULL)
+        {
+            Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+                addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (addr_reg == NULL)
+            {
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate register for file variable address.");
+                goto cleanup;
+            }
+
+            char buffer[96];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
+                builtin_file_ptr, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+
         int scope_depth = 0;
         StackNode_t *var_node = find_label_with_depth(expr->expr_data.id, &scope_depth);
 
@@ -1904,41 +1929,6 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     char buffer[96];
                     snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
                         label, addr_reg->bit_64);
-                    inst_list = add_inst(inst_list, buffer);
-                    *out_reg = addr_reg;
-                    goto cleanup;
-                }
-            }
-
-            if (expr->expr_data.id != NULL)
-            {
-                const char *builtin_file_ptr = NULL;
-                if (pascal_identifier_equals(expr->expr_data.id, "stdin"))
-                    builtin_file_ptr = "stdin_ptr";
-                else if (pascal_identifier_equals(expr->expr_data.id, "stdout"))
-                    builtin_file_ptr = "stdout_ptr";
-                else if (pascal_identifier_equals(expr->expr_data.id, "stderr"))
-                    builtin_file_ptr = "stderr_ptr";
-                else if (pascal_identifier_equals(expr->expr_data.id, "Input"))
-                    builtin_file_ptr = "Input_ptr";
-                else if (pascal_identifier_equals(expr->expr_data.id, "Output"))
-                    builtin_file_ptr = "Output_ptr";
-
-                if (builtin_file_ptr != NULL)
-                {
-                    Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
-                    if (addr_reg == NULL)
-                        addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-                    if (addr_reg == NULL)
-                    {
-                        inst_list = codegen_fail_register(ctx, inst_list, out_reg,
-                            "ERROR: Unable to allocate register for file variable address.");
-                        goto cleanup;
-                    }
-
-                    char buffer[96];
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s(%%rip), %s\n",
-                        builtin_file_ptr, addr_reg->bit_64);
                     inst_list = add_inst(inst_list, buffer);
                     *out_reg = addr_reg;
                     goto cleanup;

@@ -1,6 +1,6 @@
 # FPC Bootstrap Analysis
 
-## Status: 56 RTL units compile (0 errors); pp.pas compiles with 0 errors (down from 1279)
+## Status: FPC RTL test suite passes; `pp.pas` compiles and links as `pp_bootstrap`
 
 ## Prerequisites
 
@@ -183,9 +183,9 @@ ordering issues.
   -I./FPCSource/packages/rtl-objpas/src/inc
 ```
 
-### pp.pas (current bootstrap attempt)
+### pp.pas (direct KGPC invocation)
 ```bash
-./build/KGPC/kgpc FPCSource/compiler/pp.pas --no-stdlib \
+./build-fpc/KGPC/kgpc FPCSource/compiler/pp.pas tests/output/pp_bootstrap.s --no-stdlib \
   -DCPU64 -DCPUX86_64 -Dx86_64 -DFPC -DLINUX -DUNIX -DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED -DFPC_BOOTSTRAP_INDIRECT_ENTRY -Sg \
   -IFPCSource/rtl/objpas \
   -IFPCSource/rtl/objpas/sysutils \
@@ -211,6 +211,35 @@ ordering issues.
   -FuFPCSource/compiler/systems
 ```
 
+Then link the generated assembly with the KGPC runtime:
+```bash
+cc -O2 -no-pie \
+  -o tests/output/pp_bootstrap \
+  tests/output/pp_bootstrap.s \
+  build-fpc/KGPC/libkgpc_runtime.a
+```
+
+The Meson test harness is the preferred way to run the complete bootstrap flow,
+because it also ensures `msgtxt.inc` and `msgidx.inc` exist by compiling and
+running `compiler/utils/msg2inc.pp` when needed:
+```bash
+meson setup build-fpc -Drun_fpc_rtl_tests=true
+ninja -C build-fpc KGPC/kgpc KGPC/libkgpc_runtime.a
+KGPC_FPC_RTL=1 \
+KGPC_FPC_RTL_DIR=FPCSource \
+KGPC_RUNTIME_LIB="$PWD/build-fpc/KGPC/libkgpc_runtime.a" \
+MESON_BUILD_ROOT="$PWD/build-fpc" \
+CC=cc \
+python3 tests/do_not_run_me_directly_but_through_meson.py \
+  TestCompiler.test_fpcrtl_pp_pas_bootstrap
+```
+
+This writes:
+```text
+tests/output/pp_bootstrap.s
+tests/output/pp_bootstrap
+```
+
 Note: `-Dx86_64` is required (FPC's Makefile passes `-dx86_64` for x86_64 targets).
 The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix86_64 -Fusystems`.
 `-DFPC_HAS_TYPE_EXTENDED -DSUPPORT_EXTENDED` are needed so `systemh.inc` defines `TExtended80Rec`
@@ -221,11 +250,31 @@ The x86/x86_64/systems subdirectories match FPC's `-Fux86 -Fix86 -Fux86_64 -Fix8
 (emitted as `.comm` by codegen). Without it, they're declared `external name` and expected to come
 from ASM startup object files (`si_c.inc` via `{$L}`), which KGPC doesn't support.
 
-### Linking status
+### Compile hello world with the generated `pp_bootstrap`
 
-Compilation succeeds (0 errors), but linking fails with **3033 undefined symbols** (#540).
-Most are class method bodies (destructors, constructors, ppuwrite, etc.) that the codegen
-doesn't emit. See #540 for breakdown.
+Pass the FPC RTL unit paths explicitly. Do not rely on guessed search paths.
+```bash
+./tests/output/pp_bootstrap -n \
+  -FuFPCSource/rtl/linux \
+  -FuFPCSource/rtl/unix \
+  -FuFPCSource/rtl/inc \
+  -FuFPCSource/rtl/objpas \
+  -FuFPCSource/rtl/objpas/sysutils \
+  -FuFPCSource/rtl/objpas/classes \
+  tests/test_cases/helloworld.p
+
+./tests/output/helloworld
+```
+
+Expected output:
+```text
+Hello, World!
+```
+
+The generated compiler also supports a quick startup check:
+```bash
+./tests/output/pp_bootstrap -h
+```
 
 ### FPC RTL (56 units)
 

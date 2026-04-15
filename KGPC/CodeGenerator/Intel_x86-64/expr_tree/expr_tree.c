@@ -949,18 +949,6 @@ static int leaf_expr_requires_reference_value(struct Expression *expr, CodeGenCo
     return 0;
 }
 
-static int expr_tree_is_dynamic_array_expr(const struct Expression *expr)
-{
-    if (expr == NULL)
-        return 0;
-    if (expr->array_is_dynamic)
-        return 1;
-    if (expr->resolved_kgpc_type != NULL &&
-        kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))
-        return 1;
-    return 0;
-}
-
 static int expr_effective_storage_type(const struct Expression *expr, CodeGenContext *ctx)
 {
     if (expr != NULL && expr->resolved_kgpc_type != NULL)
@@ -3710,29 +3698,6 @@ cleanup_constructor:
     else if (expr->type == EXPR_TYPECAST &&
              expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
              expr->expr_data.typecast_data.expr != NULL &&
-             expr_tree_is_dynamic_array_expr(expr->expr_data.typecast_data.expr) &&
-             codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
-    {
-        /* Dynamic arrays are represented by a descriptor field whose first
-         * word is the data pointer. A pointer typecast needs that stored
-         * data pointer, not the address of the descriptor field. */
-        Register_t *addr_reg = NULL;
-        inst_list = codegen_address_for_expr(expr->expr_data.typecast_data.expr,
-            inst_list, ctx, &addr_reg);
-        if (addr_reg != NULL)
-        {
-            char buffer[64];
-            snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                addr_reg->bit_64, target_reg->bit_64);
-            inst_list = add_inst(inst_list, buffer);
-            if (addr_reg != target_reg)
-                free_reg(get_reg_stack(), addr_reg);
-        }
-        return inst_list;
-    }
-    else if (expr->type == EXPR_TYPECAST &&
-             expr->expr_data.typecast_data.target_type == POINTER_TYPE &&
-             expr->expr_data.typecast_data.expr != NULL &&
              expr->expr_data.typecast_data.expr->is_array_expr &&
              codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
     {
@@ -5178,6 +5143,22 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                             global_ptr_name = "stdout_ptr";
                         }
                         else if (strcasecmp(var_name, "stderr") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stderr_ptr";
+                        }
+                        else if (strcasecmp(var_name, "StdIn") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdin_ptr";
+                        }
+                        else if (strcasecmp(var_name, "StdOut") == 0)
+                        {
+                            is_builtin_file = 1;
+                            global_ptr_name = "stdout_ptr";
+                        }
+                        else if (strcasecmp(var_name, "StdErr") == 0 ||
+                                 strcasecmp(var_name, "ErrOutput") == 0)
                         {
                             is_builtin_file = 1;
                             global_ptr_name = "stderr_ptr";

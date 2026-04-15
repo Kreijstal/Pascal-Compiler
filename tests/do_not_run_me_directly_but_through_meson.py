@@ -199,18 +199,14 @@ if FPC_RTL_MODE:
     _FPC_RTL_AST_CACHE_DIR = os.path.join(
         os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_ast_cache"
     )
-    # Invalidate cache when the compiler binary has been rebuilt
+    # KGPC validates AST cache entries against the compiler binary mtime.
+    # Keep a sentinel for diagnostics, but do not delete the cache directory:
+    # stale entries are rejected by the compiler and can coexist safely.
     _cache_sentinel = os.path.join(_FPC_RTL_AST_CACHE_DIR, ".compiler_mtime")
     _compiler_mtime = ""
     if os.path.exists(KGPC_PATH):
         st = os.stat(KGPC_PATH)
         _compiler_mtime = f"{st.st_mtime_ns}:{st.st_size}"
-    _old_mtime = ""
-    if os.path.exists(_cache_sentinel):
-        with open(_cache_sentinel) as f:
-            _old_mtime = f.read().strip()
-    if _compiler_mtime != _old_mtime and os.path.isdir(_FPC_RTL_AST_CACHE_DIR):
-        shutil.rmtree(_FPC_RTL_AST_CACHE_DIR, ignore_errors=True)
     os.makedirs(_FPC_RTL_AST_CACHE_DIR, exist_ok=True)
     if _compiler_mtime:
         with open(_cache_sentinel, "w") as f:
@@ -248,17 +244,12 @@ if FPC_RTL_MODE:
         os.environ.get("MESON_BUILD_ROOT", "builddir"), "fpc_rtl_codegen_cache"
     )
     # The compiler includes its own mtime in the cache key, so old entries
-    # are never matched. Clean out the directory on compiler rebuild to
-    # avoid unbounded growth.
+    # are never matched after a rebuild. Do not delete the directory here:
+    # cache invalidation belongs in the key/freshness checks, not in test
+    # harness cleanup.
     _cg_sentinel = os.path.join(
         os.environ.get("MESON_BUILD_ROOT", "builddir"), ".codegen_cache_mtime"
     )
-    _cg_old_mtime = ""
-    if os.path.exists(_cg_sentinel):
-        with open(_cg_sentinel) as f:
-            _cg_old_mtime = f.read().strip()
-    if _compiler_mtime != _cg_old_mtime and os.path.isdir(_FPC_RTL_CODEGEN_CACHE_DIR):
-        shutil.rmtree(_FPC_RTL_CODEGEN_CACHE_DIR, ignore_errors=True)
     os.makedirs(_FPC_RTL_CODEGEN_CACHE_DIR, exist_ok=True)
     if _compiler_mtime:
         with open(_cg_sentinel, "w") as f:
@@ -3470,6 +3461,9 @@ def _discover_and_add_auto_tests():
         def make_test_method(test_base_name):
             def test_method(self):
                 """Auto-discovered test case."""
+                if test_base_name in FPC_RTL_ONLY_TESTS:
+                    self.skipTest("FPC RTL-only regression test")
+
                 # Skip Unix fork-dependent tests on MinGW (which lacks POSIX fork)
                 # Cygwin and MSYS have fork, pure MinGW does not
                 # Skip tests with hardcoded SysV ABI inline asm on Windows
@@ -3492,10 +3486,12 @@ def _discover_and_add_auto_tests():
                 asm_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto.s")
                 executable_file = os.path.join(TEST_OUTPUT_DIR, f"{test_base_name}_auto{EXE_EXT}")
                 expected_output_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.expected")
+                expected_stderr_file = os.path.join(TEST_CASES_DIR, f"{test_base_name}.stderr.expected")
                 input_data_file = os.path.join(INPUT_DATA_DIR, f"{test_base_name}.input")
 
                 # Check test result cache
-                if _test_cache_check(input_file, expected_output_file, []):
+                cache_deps = [expected_stderr_file] if os.path.exists(expected_stderr_file) else []
+                if _test_cache_check(input_file, expected_output_file, cache_deps):
                     return  # cached pass — skip
 
                 compiler_output = None
@@ -3503,6 +3499,7 @@ def _discover_and_add_auto_tests():
                 raw_stdout = None
                 raw_stderr = None
                 expected_output = None
+                expected_stderr = None
                 process_returncode = None
 
                 self.record_failure_context(
@@ -3549,6 +3546,16 @@ def _discover_and_add_auto_tests():
                         text = text.replace("\r\r\n", "\r\n")
                     actual_output = text.replace("\r\n", "\n").replace("\r", "")
 
+                    actual_stderr = None
+                    if os.path.exists(expected_stderr_file):
+                        expected_stderr = read_file_content(expected_stderr_file)
+                        stderr_text = raw_stderr
+                        if stderr_text is None:
+                            stderr_text = ""
+                        while "\r\r\n" in stderr_text:
+                            stderr_text = stderr_text.replace("\r\r\n", "\r\n")
+                        actual_stderr = stderr_text.replace("\r\n", "\n").replace("\r", "")
+
                     self.record_failure_context(
                         base_name=test_base_name,
                         compiler_output=compiler_output,
@@ -3556,12 +3563,15 @@ def _discover_and_add_auto_tests():
                         raw_stdout=raw_stdout,
                         raw_stderr=raw_stderr,
                         expected_output=expected_output,
+                        expected_stderr=expected_stderr,
                         returncode=process_returncode,
                     )
 
                     self.assertEqual(actual_output, expected_output)
+                    if expected_stderr is not None:
+                        self.assertEqual(actual_stderr, expected_stderr)
                     self.assertEqual(process_returncode, 0)
-                    _test_cache_store(input_file, expected_output_file, [])
+                    _test_cache_store(input_file, expected_output_file, cache_deps)
                 except subprocess.TimeoutExpired:
                     self.record_failure_context(
                         base_name=test_base_name,
@@ -3598,6 +3608,11 @@ def _discover_and_add_auto_tests():
 # Tests that use KGPC-only extensions not available in FPC RTL mode.
 KGPC_ONLY_TESTS = {
     'random_real_function',  # Random(Real) overload is a KGPC extension
+}
+
+# Tests that target overloads or units only present in the FPC RTL suite.
+FPC_RTL_ONLY_TESTS = {
+    "fpc_bootstrap_hminus_extractfilepath",
 }
 
 # Tests without explicit FPC RTL/package imports are skipped from the FPC RTL

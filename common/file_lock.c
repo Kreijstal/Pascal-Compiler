@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #ifdef _WIN32
@@ -22,6 +23,7 @@
 
 typedef struct HeldLock {
     char *path;
+    char *lock_path;
     int count;
     struct HeldLock *next;
 } HeldLock;
@@ -48,7 +50,7 @@ static bool is_pid_alive(int pid)
 static bool try_acquire(const char *lock_path)
 {
 #ifdef _WIN32
-    int fd = open(lock_path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+    int fd = open(lock_path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, 0666);
 #else
     int fd = open(lock_path, O_CREAT | O_EXCL | O_RDWR, 0666);
 #endif
@@ -146,16 +148,25 @@ bool file_lock_acquire(const char *path, int timeout_secs)
             wait_ms = 1000;
     }
 
-    free(lock_path);
-
     HeldLock *held = malloc(sizeof(*held));
-    if (held != NULL)
+    if (held == NULL)
     {
-        held->path = strdup(path);
-        held->count = 1;
-        held->next = g_held_locks;
-        g_held_locks = held;
+        unlink(lock_path);
+        free(lock_path);
+        return false;
     }
+    held->path = strdup(path);
+    if (held->path == NULL)
+    {
+        unlink(lock_path);
+        free(lock_path);
+        free(held);
+        return false;
+    }
+    held->lock_path = lock_path;
+    held->count = 1;
+    held->next = g_held_locks;
+    g_held_locks = held;
 
     return true;
 }
@@ -175,14 +186,8 @@ void file_lock_release(const char *path)
             if (held->count > 0)
                 return;
 
-            size_t lock_len = strlen(path) + 8;
-            char *lock_path = malloc(lock_len);
-            if (lock_path != NULL)
-            {
-                snprintf(lock_path, lock_len, "%s.lock", path);
-                unlink(lock_path);
-                free(lock_path);
-            }
+            if (held->lock_path != NULL)
+                unlink(held->lock_path);
 
             if (prev != NULL)
                 prev->next = held->next;
@@ -190,6 +195,7 @@ void file_lock_release(const char *path)
                 g_held_locks = held->next;
 
             free(held->path);
+            free(held->lock_path);
             free(held);
             return;
         }

@@ -2255,21 +2255,10 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 4. Pass arguments as usual */
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, 0, NULL, 0);
+            proc_name_hint, callee_is_bound_finish_module ? 1 : 0, NULL, 0);
 
         if (callee_is_bound_finish_module && bound_self_spill != NULL)
         {
-            int arg_count = ListLength(call_args);
-            for (int i = arg_count; i > 0; --i)
-            {
-                const char *dst = current_arg_reg64(i);
-                const char *src = current_arg_reg64(i - 1);
-                if (dst != NULL && src != NULL)
-                {
-                    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", src, dst);
-                    inst_list = add_inst(inst_list, buffer);
-                }
-            }
             const char *self_arg = current_arg_reg64(0);
             if (self_arg != NULL)
             {
@@ -4106,7 +4095,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
             inst_list = codegen_zero_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_32);
     }
 
-    const int use_unsigned_compare = compare_as_qword && !(limit_is_signed || var_is_signed);
+    const int use_unsigned_compare = !(limit_is_signed || var_is_signed);
 
     const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
     const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;

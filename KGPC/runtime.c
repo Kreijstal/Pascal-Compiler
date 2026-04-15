@@ -464,6 +464,12 @@ static void kgpc_init_stdio(void)
     Output_ptr = &kgpc_stdout_file; /* Output = stdout */
 }
 
+__attribute__((constructor))
+static void kgpc_init_stdio_constructor(void)
+{
+    kgpc_init_stdio();
+}
+
 static void kgpc_textrec_init_defaults(KGPCTextRec *file)
 {
     if (file == NULL)

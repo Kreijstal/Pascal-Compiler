@@ -64,6 +64,7 @@ static int unsetenv(const char *name)
 #include "unit_paths.h"
 #include "arena.h"
 #include "file_lock.h"
+#include "file_time.h"
 #include "identifier_utils.h"
 #include "compilation_context.h"
 
@@ -445,11 +446,12 @@ static char *build_default_ast_cache_dir(const char *argv0)
         memset(&st, 0, sizeof(st));
 
     char signature_input[PATH_MAX + 128];
+    struct timespec compiler_mtime = kgpc_stat_mtime(&st);
     snprintf(signature_input, sizeof(signature_input), "%s|%lld|%lld.%09ld",
              compiler_path,
              (long long)st.st_size,
-             (long long)st.st_mtim.tv_sec,
-             (long)st.st_mtim.tv_nsec);
+             (long long)compiler_mtime.tv_sec,
+             (long)compiler_mtime.tv_nsec);
     uint64_t sig = fnv1a64_bytes((const unsigned char *)signature_input, strlen(signature_input));
 
     size_t needed = strlen(compiler_path) + 1 + strlen("kgpc_ast_cache_") + 16 + 1;
@@ -1954,7 +1956,7 @@ static int batch_mode_main(int argc, char **argv)
 #endif /* !_WIN32 */
 
 static void emit_link_args(void); /* forward declaration */
-static void codegen_cache_check(void);
+static void codegen_cache_check(const char *input_file);
 static void codegen_cache_populate(const char *asm_file);
 static void codegen_cache_clear_transient_flags(void);
 static void codegen_cache_release_lock_if_held(void);
@@ -2166,7 +2168,7 @@ static int compile_single_program(
     if (sem_result <= 0)
     {
         /* Check codegen cache after semcheck (units are fully loaded) */
-        codegen_cache_check();
+        codegen_cache_check(input_file);
 
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
@@ -2260,10 +2262,13 @@ static void hash_string(unsigned long *hash, const char *s)
     *hash = *hash * 33 + '\0';
 }
 
-/* Compute a cache key from flags, loaded unit names, unit source mtimes, and compiler mtime.
- * The key deliberately excludes the input/output file paths (positional args)
- * since the cached unit functions are the same regardless of which program uses them. */
-static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
+/* Compute a cache key from flags, the input source, loaded unit names, unit
+ * source mtimes, and compiler mtime.  Unit code generation is not purely a
+ * function of the unit set in all FPC RTL cases: generic/specialized code and
+ * fallback sections can depend on the program being compiled.  Keep the output
+ * path out of the key, but include the input source identity and mtime so
+ * unrelated programs cannot link each other's cached object. */
+static void codegen_cache_compute_key(const char *input_file, char *key_buf, size_t key_buf_size)
 {
     unsigned long hash = 5381;
 
@@ -2280,6 +2285,19 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
         if (strncmp(arg, "--pp-cache-dir=", 15) == 0)
             continue;
         hash_string(&hash, arg);
+    }
+
+    if (input_file != NULL)
+    {
+        hash_string(&hash, input_file);
+        struct stat st;
+        if (stat(input_file, &st) == 0)
+        {
+            struct timespec mtime = kgpc_stat_mtime(&st);
+            hash = hash * 33 + (unsigned long)st.st_size;
+            hash = hash * 33 + (unsigned long)mtime.tv_sec;
+            hash = hash * 33 + (unsigned long)mtime.tv_nsec;
+        }
     }
 
     /* Hash sorted unit names */
@@ -2328,9 +2346,10 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
                 struct stat st;
                 if (stat(path, &st) == 0)
                 {
+                    struct timespec mtime = kgpc_stat_mtime(&st);
                     hash = hash * 33 + (unsigned long)st.st_size;
-                    hash = hash * 33 + (unsigned long)st.st_mtim.tv_sec;
-                    hash = hash * 33 + (unsigned long)st.st_mtim.tv_nsec;
+                    hash = hash * 33 + (unsigned long)mtime.tv_sec;
+                    hash = hash * 33 + (unsigned long)mtime.tv_nsec;
                 }
             }
         }
@@ -2347,9 +2366,10 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
                 struct stat st;
                 if (stat(ipath, &st) == 0)
                 {
+                    struct timespec mtime = kgpc_stat_mtime(&st);
                     hash = hash * 33 + (unsigned long)st.st_size;
-                    hash = hash * 33 + (unsigned long)st.st_mtim.tv_sec;
-                    hash = hash * 33 + (unsigned long)st.st_mtim.tv_nsec;
+                    hash = hash * 33 + (unsigned long)mtime.tv_sec;
+                    hash = hash * 33 + (unsigned long)mtime.tv_nsec;
                 }
             }
         }
@@ -2365,9 +2385,10 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
             struct stat st;
             if (stat(exe_path, &st) == 0)
             {
+                struct timespec mtime = kgpc_stat_mtime(&st);
                 hash = hash * 33 + (unsigned long)st.st_size;
-                hash = hash * 33 + (unsigned long)st.st_mtim.tv_sec;
-                hash = hash * 33 + (unsigned long)st.st_mtim.tv_nsec;
+                hash = hash * 33 + (unsigned long)mtime.tv_sec;
+                hash = hash * 33 + (unsigned long)mtime.tv_nsec;
             }
         }
     }
@@ -2378,7 +2399,7 @@ static void codegen_cache_compute_key(char *key_buf, size_t key_buf_size)
 /* Check if a codegen cache entry exists for the current unit set.
  * Cache hit: enables skip-unit-codegen + function-sections.
  * Cache miss: enables function-sections + codegen_cache_miss_flag. */
-static void codegen_cache_check(void)
+static void codegen_cache_check(const char *input_file)
 {
     if (g_codegen_cache_dir == NULL)
         return;
@@ -2387,7 +2408,7 @@ static void codegen_cache_check(void)
     g_codegen_cache_forced_skip_unit_codegen = 0;
 
     char key[32];
-    codegen_cache_compute_key(key, sizeof(key));
+    codegen_cache_compute_key(input_file, key, sizeof(key));
     snprintf(g_codegen_cache_obj_path, sizeof(g_codegen_cache_obj_path),
              "%s/%s.o", g_codegen_cache_dir, key);
     g_codegen_cache_asm_path[0] = '\0';
@@ -2786,7 +2807,7 @@ int main(int argc, char **argv)
         {
             struct stat exe_st;
             if (stat(exe_path, &exe_st) == 0)
-                pascal_frontend_set_compiler_mtime(exe_st.st_mtim);
+                pascal_frontend_set_compiler_mtime(kgpc_stat_mtime(&exe_st));
         }
     }
 
@@ -3502,7 +3523,7 @@ int main(int argc, char **argv)
     if (sem_result <= 0)
     {
         /* Check codegen cache after semcheck (units are fully loaded) */
-        codegen_cache_check();
+        codegen_cache_check(input_file);
 
         fprintf(stderr, "Generating code to file: %s\n", output_file);
 
