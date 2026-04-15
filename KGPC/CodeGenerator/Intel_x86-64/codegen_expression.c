@@ -668,11 +668,35 @@ static int codegen_expr_needs_class_method_vmt_self(const struct Expression *exp
     CodeGenContext *ctx)
 {
     struct RecordType *record = NULL;
+    KgpcType *type = NULL;
+    struct TypeAlias *alias = NULL;
 
     if (expr == NULL || ctx == NULL)
         return 0;
     if (codegen_expr_is_type_identifier(expr, ctx))
         return 0;
+    type = expr_get_kgpc_type(expr);
+    alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->is_class_reference)
+        return 0;
+    if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL &&
+        ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+            node != NULL)
+        {
+            alias = hashnode_get_type_alias(node);
+            if (alias != NULL && alias->is_class_reference)
+                return 0;
+            if (node->type != NULL)
+            {
+                alias = kgpc_type_get_type_alias(node->type);
+                if (alias != NULL && alias->is_class_reference)
+                    return 0;
+            }
+        }
+    }
 
     record = codegen_expr_record_type(expr, ctx->symtab);
     return (record != NULL && record_type_is_class(record));
@@ -5685,6 +5709,44 @@ ListNode_t *codegen_addressof_leaf(struct Expression *expr, ListNode_t *inst_lis
 /* Recompute the field offset for a class var access when the CLASSVAR storage
  * only contains class var fields (not the full instance layout).  Returns the
  * class-var-only offset for the field named `field_id`, or -1 if not found. */
+static long long codegen_class_var_field_offset_local(CodeGenContext *ctx,
+    const struct RecordType *record, const char *field_id)
+{
+    long long offset = 0;
+
+    if (record == NULL || field_id == NULL)
+        return -1;
+
+    for (ListNode_t *node = record->fields; node != NULL; node = node->next)
+    {
+        if (node->type != LIST_RECORD_FIELD || node->cur == NULL)
+            continue;
+
+        struct RecordField *field = (struct RecordField *)node->cur;
+        if (field == NULL || field->is_class_var != 1)
+            continue;
+
+        long long field_size = field->has_cached_layout ? field->cached_size : 0;
+        if (field_size <= 0)
+        {
+            if (codegen_sizeof_type(ctx, field->type, field->type_id,
+                    field->nested_record, &field_size, 0) != 0 ||
+                field_size <= 0)
+            {
+                field_size = CODEGEN_POINTER_SIZE_BYTES;
+            }
+        }
+
+        int align = (field_size >= 8) ? 8 : ((field_size >= 4) ? 4 : 1);
+        long long aligned_offset = (offset + align - 1) & ~((long long)align - 1);
+        if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
+            return aligned_offset;
+        offset = aligned_offset + field_size;
+    }
+
+    return -1;
+}
+
 ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *inst_list,
     CodeGenContext *ctx, Register_t **out_reg)
 {
@@ -5695,12 +5757,35 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
     if (record_expr == NULL)
         return inst_list;
 
+    const char *field_id = expr->expr_data.record_access_data.field_id;
+    Register_t *addr_reg = NULL;
+
     /* Check if this is a class field access. Classes are pointers, so we need to load
      * the instance pointer from variable storage for VAR_ID expressions. */
     struct RecordType *record_expr_record = codegen_expr_record_type(record_expr,
         ctx != NULL ? ctx->symtab : NULL);
+    if (record_expr_record == NULL &&
+        record_expr->type == EXPR_VAR_ID &&
+        record_expr->expr_data.id != NULL &&
+        pascal_identifier_equals(record_expr->expr_data.id, "Self") &&
+        ctx->current_subprogram_owner_class != NULL)
+    {
+        record_expr_record = semcheck_lookup_record_type(ctx->symtab,
+            ctx->current_subprogram_owner_class);
+    }
     int is_class_field = (record_expr_record != NULL &&
                           record_type_is_class(record_expr_record));
+    struct RecordField *resolved_field = NULL;
+    if (record_expr_record != NULL && field_id != NULL)
+    {
+        resolved_field = codegen_lookup_record_field(record_expr_record, field_id);
+        if (resolved_field == NULL)
+        {
+            long long ignored_offset = 0;
+            resolve_record_field(ctx->symtab, record_expr_record, field_id,
+                &resolved_field, &ignored_offset, 0, 1);
+        }
+    }
 
     int is_type_ref = 0;
     const char *type_label = NULL;
@@ -5718,8 +5803,67 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
                 type_label = record_expr->expr_data.id;
         }
     }
+
+    int record_expr_is_self = (record_expr->type == EXPR_VAR_ID &&
+        record_expr->expr_data.id != NULL &&
+        pascal_identifier_equals(record_expr->expr_data.id, "Self"));
+    int current_is_class_method = 0;
+    if (ctx->current_subprogram_is_nonstatic_class_method)
+        current_is_class_method = 1;
+    else if (ctx->current_subprogram_owner_class != NULL &&
+             ctx->current_subprogram_method_name != NULL &&
+             from_cparser_is_method_class_method(ctx->current_subprogram_owner_class,
+                 ctx->current_subprogram_method_name) &&
+             !from_cparser_is_method_static(ctx->current_subprogram_owner_class,
+                 ctx->current_subprogram_method_name))
+        current_is_class_method = 1;
+
+    if (is_class_field && resolved_field != NULL &&
+        (resolved_field->is_class_var == 1 ||
+         (record_expr_is_self && current_is_class_method)))
+    {
+        addr_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+            addr_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+        if (addr_reg == NULL)
+        {
+            codegen_report_error(ctx,
+                "ERROR: Unable to allocate register for class var field access.");
+            return inst_list;
+        }
+
+        const char *class_label = type_label;
+        if (class_label == NULL && record_expr_record->type_id != NULL)
+            class_label = record_expr_record->type_id;
+        if (class_label == NULL &&
+            record_expr->type == EXPR_VAR_ID &&
+            record_expr->expr_data.id != NULL &&
+            pascal_identifier_equals(record_expr->expr_data.id, "Self") &&
+            ctx->current_subprogram_owner_class != NULL)
+            class_label = ctx->current_subprogram_owner_class;
+        if (class_label == NULL && record_expr->type == EXPR_VAR_ID)
+            class_label = record_expr->expr_data.id;
+
+        char buffer[128];
+        snprintf(buffer, sizeof(buffer), "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
+            class_label, addr_reg->bit_64);
+        inst_list = add_inst(inst_list, buffer);
+
+        long long class_var_offset =
+            codegen_class_var_field_offset_local(ctx, record_expr_record, field_id);
+        if (class_var_offset < 0)
+            class_var_offset = expr->expr_data.record_access_data.field_offset;
+        if (class_var_offset > 0)
+        {
+            snprintf(buffer, sizeof(buffer), "\taddq\t$%lld, %s\n",
+                class_var_offset, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+
+        *out_reg = addr_reg;
+        return inst_list;
+    }
     
-    Register_t *addr_reg = NULL;
     if (is_type_ref && type_label != NULL)
     {
         addr_reg = get_free_reg(get_reg_stack(), &inst_list);
@@ -7029,6 +7173,13 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 
     if (base_is_array)
     {
+        if (array_stack_node != NULL && array_stack_node->is_array &&
+            array_stack_node->element_size > 0)
+        {
+            *out_size = array_stack_node->element_size;
+            return 1;
+        }
+
         KgpcType *base_type = expr_get_kgpc_type(array_expr);
         if (base_type == NULL && array_expr->type == EXPR_VAR_ID &&
             ctx != NULL && ctx->symtab != NULL && array_expr->expr_data.id != NULL)
@@ -7954,6 +8105,11 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         long long element_size_ll = 1;
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
+    }
+    if (base_is_array && array_stack_node != NULL && array_stack_node->is_array &&
+        array_stack_node->element_size > 0)
+    {
+        first_index_stride = array_stack_node->element_size;
     }
     /* Fix shortstring stride: when the element type is a named shortstring alias
      * (e.g., tasmkeyword = string[10]), the array element type may have been
@@ -9542,6 +9698,33 @@ ListNode_t *codegen_get_nonlocal(ListNode_t *inst_list, char *var_id, int *offse
                             &field_desc, &field_offset, 0, 1) == 0 &&
                         field_desc != NULL)
                     {
+                        if (field_desc->is_class_var == 1 ||
+                            ctx->current_subprogram_is_nonstatic_class_method)
+                        {
+                            const char *class_label =
+                                class_record->type_id != NULL ?
+                                class_record->type_id :
+                                ctx->current_subprogram_owner_class;
+                            long long class_var_offset =
+                                codegen_class_var_field_offset_local(ctx,
+                                    class_record, var_id);
+                            if (class_var_offset < 0)
+                                class_var_offset = field_offset;
+                            *offset = 0;
+                            snprintf(buffer, sizeof(buffer),
+                                "\tleaq\t%s_CLASSVAR(%%rip), %s\n",
+                                class_label, current_non_local_reg64());
+                            inst_list = add_inst(inst_list, buffer);
+                            if (class_var_offset > 0)
+                            {
+                                snprintf(buffer, sizeof(buffer),
+                                    "\taddq\t$%lld, %s\n",
+                                    class_var_offset, current_non_local_reg64());
+                                inst_list = add_inst(inst_list, buffer);
+                            }
+                            return inst_list;
+                        }
+
                         /* Load Self pointer, then add field offset. */
                         *offset = 0;
                         snprintf(buffer, sizeof(buffer),

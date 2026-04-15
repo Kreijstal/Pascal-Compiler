@@ -4015,7 +4015,7 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
             inst_list = codegen_zero_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_32);
     }
 
-    const int use_unsigned_compare = !(limit_is_signed && var_is_signed);
+    const int use_unsigned_compare = !var_is_signed;
 
     const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
     const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;

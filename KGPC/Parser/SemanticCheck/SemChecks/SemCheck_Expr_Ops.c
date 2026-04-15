@@ -2576,6 +2576,27 @@ int semcheck_varid(int *type_return,
 
     scope_return = FindSymbol(&hash_return, symtab, id);
 
+    if (scope_return && hash_return != NULL &&
+        hash_return->hash_type == HASHTYPE_CONST &&
+        hash_return->const_string_value != NULL &&
+        strcmp(hash_return->const_string_value, "error") == 0 &&
+        pascal_identifier_equals(id, "current_procinfo"))
+    {
+        for (int unit_idx = 1; unit_idx < SYMTAB_MAX_UNITS; ++unit_idx)
+        {
+            if (symtab->unit_scopes[unit_idx] == NULL ||
+                symtab->unit_scopes[unit_idx]->table == NULL)
+                continue;
+            HashNode_t *candidate = FindIdentInTableForUnit(
+                symtab->unit_scopes[unit_idx]->table, id, symtab->current_unit_index);
+            if (candidate != NULL && candidate->hash_type == HASHTYPE_VAR)
+            {
+                hash_return = candidate;
+                break;
+            }
+        }
+    }
+
     /* When in assignment context, an enum constant cannot be the target.
      * If FindSymbol returned an enum constant (e.g. from a local enum that
      * shadows a module-level variable with the same name), look for an
