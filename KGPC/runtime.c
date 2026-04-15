@@ -478,7 +478,7 @@ static void kgpc_reinit_stdio(void)
     kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
     kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
     kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
-    
+
     stdin_ptr = &kgpc_stdin_file;
     stdout_ptr = &kgpc_stdout_file;
     stderr_ptr = &kgpc_stderr_file;
