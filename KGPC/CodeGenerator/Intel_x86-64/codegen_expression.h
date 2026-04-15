@@ -13,6 +13,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
     int is_class_method_call_hint);
 ListNode_t *codegen_cleanup_call_stack(ListNode_t *inst_list, CodeGenContext *ctx);
 ListNode_t *codegen_get_nonlocal(ListNode_t *, char *, int *, CodeGenContext *);
+HashNode_t *codegen_prefer_visible_var_over_const(CodeGenContext *ctx,
+    const char *id, HashNode_t *node);
 
 ListNode_t *codegen_simple_relop(struct Expression *, ListNode_t *,
     CodeGenContext *ctx, int *);

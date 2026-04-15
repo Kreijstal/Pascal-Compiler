@@ -3419,9 +3419,12 @@ int kgpc_type_get_array_dimension_info(KgpcType *type, struct SymTab *symtab, Kg
          * an array, use its sizeof rather than drilling to the scalar element type,
          * since array_dimensions only covers this declaration's dimensions. */
         info->element_size = -1;
+        if (alias->array_element_storage_size > 0)
+            info->element_size = alias->array_element_storage_size;
         /* First check the KgpcType's own element_type (most specific — includes
          * size_in_bytes for string[N] types created during AST construction). */
-        if (type->kind == TYPE_KIND_ARRAY && type->info.array_info.element_type != NULL)
+        if (info->element_size <= 0 &&
+            type->kind == TYPE_KIND_ARRAY && type->info.array_info.element_type != NULL)
         {
             long long direct_size = kgpc_type_sizeof(type->info.array_info.element_type);
             if (direct_size > 0)
@@ -3518,18 +3521,14 @@ KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
     KgpcType *pointee = type->info.points_to;
 
     /* Already fully resolved */
-    if (pointee != NULL && pointee->kind == TYPE_KIND_RECORD)
-        return pointee;
-
-    /* Only try to resolve PRIMITIVE placeholders (from forward-declared types) */
-    if (pointee == NULL || pointee->kind != TYPE_KIND_PRIMITIVE ||
-        pointee->info.primitive_type_tag != RECORD_TYPE)
+    if (pointee != NULL &&
+        (pointee->kind == TYPE_KIND_RECORD || pointee->kind == TYPE_KIND_ARRAY))
         return pointee;
 
     if (symtab == NULL)
         return pointee;
 
-    /* Try to find the actual record type using type_alias metadata */
+    /* Try to find the actual pointee type using type_alias metadata */
     const char *target_id = NULL;
 
     /* First try the pointer's own type_alias */
@@ -3542,7 +3541,7 @@ KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
     }
 
     /* Also try the pointee's type_alias */
-    if (target_id == NULL && pointee->type_alias != NULL)
+    if (target_id == NULL && pointee != NULL && pointee->type_alias != NULL)
     {
         if (pointee->type_alias->alias_name != NULL)
             target_id = pointee->type_alias->alias_name;
@@ -3559,8 +3558,8 @@ KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
             HashNode_t *ref_node = kgpc_find_type_node_ref_with_unit_flag(symtab,
                 type->type_alias->pointer_type_ref, 0);
             if (ref_node != NULL && ref_node->type != NULL &&
-                ref_node->type->kind == TYPE_KIND_RECORD &&
-                ref_node->type->info.record_info != NULL)
+                (ref_node->type->kind == TYPE_KIND_RECORD ||
+                 ref_node->type->kind == TYPE_KIND_ARRAY))
             {
                 KgpcType *resolved = ref_node->type;
                 kgpc_type_retain(resolved);
@@ -3574,10 +3573,10 @@ KgpcType* kgpc_type_resolve_pointer_pointee(KgpcType *type, SymTab_t *symtab)
 
     HashNode_t *target_node = kgpc_find_type_node(symtab, target_id);
     if (target_node != NULL && target_node->type != NULL &&
-        target_node->type->kind == TYPE_KIND_RECORD &&
-        target_node->type->info.record_info != NULL)
+        (target_node->type->kind == TYPE_KIND_RECORD ||
+         target_node->type->kind == TYPE_KIND_ARRAY))
     {
-        /* Found the actual record type — patch the pointer's points_to */
+        /* Found the actual pointee type — patch the pointer's points_to */
         KgpcType *resolved = target_node->type;
         kgpc_type_retain(resolved);
         kgpc_type_release(pointee);
@@ -3614,6 +3613,10 @@ long long kgpc_type_get_array_element_size(KgpcType *type)
 {
     if (type == NULL || type->kind != TYPE_KIND_ARRAY)
         return -1;
+
+    struct TypeAlias *alias = kgpc_type_get_type_alias(type);
+    if (alias != NULL && alias->array_element_storage_size > 0)
+        return alias->array_element_storage_size;
     
     KgpcType *element_type = type->info.array_info.element_type;
     if (element_type == NULL)

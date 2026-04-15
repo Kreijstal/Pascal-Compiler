@@ -274,6 +274,7 @@ typedef struct CodeGenContext {
     const char *current_subprogram_owner_class;   /* Innermost owning class name (NULL for non-methods) */
     const char *current_subprogram_owner_class_full; /* Full dotted class path (NULL if non-nested) */
     int current_subprogram_is_nonstatic_class_method; /* 1 if current subprogram is a class function/procedure (Self = VMT ptr) */
+    ListNode_t *current_subprogram_args;
     StackNode_t *current_return_slot;
     KgpcType *current_return_type;
     ListNode_t *static_link_procs;

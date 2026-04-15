@@ -1345,12 +1345,29 @@ static MatchQuality semcheck_classify_match(int actual_tag, KgpcType *actual_kgp
      * overload (assign_t_ss) over the RawByteString overload (assign_t_rbs). */
     if (is_string_type(formal_tag) && is_string_type(actual_tag))
     {
+        const char *formal_alias = (formal_kgpc != NULL && formal_kgpc->type_alias != NULL)
+            ? formal_kgpc->type_alias->alias_name : NULL;
+        StringKind formal_kind = semcheck_string_kind_from_type_id(formal_alias);
+
+        if (actual_tag == SHORTSTRING_TYPE && formal_tag == STRING_TYPE)
+        {
+            MatchQuality q = semcheck_make_quality(MATCH_PROMOTION);
+            if (formal_kind == STRING_KIND_WIDE)
+            {
+                q.kind = MATCH_CONVERSION;
+                q.string_rank = 1;
+            }
+            else if (formal_kind == STRING_KIND_NARROW)
+            {
+                q.exact_type_id = 1;
+            }
+            return q;
+        }
+
         if (actual_tag == STRING_TYPE && formal_tag == STRING_TYPE)
         {
             /* Both are AnsiString-family (STRING_TYPE).  Check alias names:
              * AnsiString → RawByteString is exact, other cross-aliases are promotion. */
-            const char *formal_alias = (formal_kgpc != NULL && formal_kgpc->type_alias != NULL)
-                ? formal_kgpc->type_alias->alias_name : NULL;
             if (formal_alias != NULL &&
                 pascal_identifier_equals(formal_alias, "RawByteString"))
                 return semcheck_make_quality(MATCH_EXACT);
@@ -2587,7 +2604,10 @@ int semcheck_resolve_overload(HashNode_t **best_match_out,
                             : STRING_KIND_UNKNOWN;
                         if (arg_kind == STRING_KIND_UNKNOWN && arg_expr_kgpc != NULL)
                         {
-                            if (semcheck_is_widechar_like_type(arg_expr_kgpc))
+                            if (kgpc_type_is_shortstring(arg_expr_kgpc) ||
+                                arg_expr_tag == SHORTSTRING_TYPE)
+                                arg_kind = STRING_KIND_NARROW;
+                            else if (semcheck_is_widechar_like_type(arg_expr_kgpc))
                                 arg_kind = STRING_KIND_WIDE;
                             else if (kgpc_type_is_char(arg_expr_kgpc))
                                 arg_kind = STRING_KIND_NARROW;

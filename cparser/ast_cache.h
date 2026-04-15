@@ -22,7 +22,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define AST_CACHE_VERSION 1
+#define AST_CACHE_VERSION 2
 
 /* Save a parsed AST tree and its preprocessed source buffer to a binary cache file.
  * Returns true on success. */

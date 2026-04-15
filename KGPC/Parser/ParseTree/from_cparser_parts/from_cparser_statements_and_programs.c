@@ -2837,7 +2837,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                     }
                     ast_t *node_cursor = unwrap_pascal_node(definition);
                     if (node_cursor != NULL) {
-                        if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
+                    if (kgpc_getenv("KGPC_DEBUG_GENERIC_METHODS") != NULL) {
                             fprintf(stderr, "[KGPC] implementation section node typ=%d\n", node_cursor->typ);
                         }
                         switch (node_cursor->typ) {
@@ -2857,6 +2857,17 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                             break;
                         case PASCAL_T_VAR_SECTION:
                             list_builder_extend(&implementation_var_builder, convert_var_section(node_cursor));
+                            break;
+                        case PASCAL_T_INITIALIZATION_SECTION:
+                            initialization_node = node_cursor;
+                            break;
+                        case PASCAL_T_FINALIZATION_SECTION:
+                            finalization_node = node_cursor;
+                            break;
+                        case PASCAL_T_BEGIN_BLOCK:
+                        case PASCAL_T_MAIN_BLOCK:
+                            if (initialization == NULL)
+                                initialization = convert_block(node_cursor);
                             break;
                         case PASCAL_T_PROCEDURE_DECL: {
                             Tree_t *proc = convert_procedure(node_cursor);

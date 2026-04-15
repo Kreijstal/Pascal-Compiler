@@ -10,6 +10,7 @@ cparser_core_sources = [
   'cparser/combinators.c',
   'cparser/ast_cache.c',
   'common/arena.c',
+  'common/file_lock.c',
 ]
 
 pascal_parser_sources = [
