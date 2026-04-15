@@ -428,6 +428,7 @@ def _store_failure_artifacts(
     raw_stdout=None,
     raw_stderr=None,
     expected_output=None,
+    expected_stderr=None,
     returncode=None,
     exception_text=None,
 ):
@@ -456,6 +457,7 @@ def _store_failure_artifacts(
     _write_artifact_text(dest, "raw-stderr.txt", raw_stderr)
     _write_artifact_text(dest, "normalized-output.txt", normalized_output)
     _write_artifact_text(dest, "expected-output.txt", expected_output)
+    _write_artifact_text(dest, "expected-stderr.txt", expected_stderr)
     if exception_text:
         _write_artifact_text(dest, "exception.txt", exception_text)
 
