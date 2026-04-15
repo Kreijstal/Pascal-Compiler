@@ -7173,13 +7173,6 @@ static int codegen_get_indexable_element_size(struct Expression *array_expr,
 
     if (base_is_array)
     {
-        if (array_stack_node != NULL && array_stack_node->is_array &&
-            array_stack_node->element_size > 0)
-        {
-            *out_size = array_stack_node->element_size;
-            return 1;
-        }
-
         KgpcType *base_type = expr_get_kgpc_type(array_expr);
         if (base_type == NULL && array_expr->type == EXPR_VAR_ID &&
             ctx != NULL && ctx->symtab != NULL && array_expr->expr_data.id != NULL)
@@ -8105,11 +8098,6 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         long long element_size_ll = 1;
         if (codegen_get_indexable_element_size(array_expr, ctx, &element_size_ll))
             first_index_stride = element_size_ll;
-    }
-    if (base_is_array && array_stack_node != NULL && array_stack_node->is_array &&
-        array_stack_node->element_size > 0)
-    {
-        first_index_stride = array_stack_node->element_size;
     }
     /* Fix shortstring stride: when the element type is a named shortstring alias
      * (e.g., tasmkeyword = string[10]), the array element type may have been

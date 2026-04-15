@@ -1890,18 +1890,6 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                     }
 
                     char label[20];
-                    if (expr->expr_data.id != NULL &&
-                        strcmp(str_const_node->const_string_value, "error") == 0 &&
-                        pascal_identifier_equals(expr->expr_data.id, "current_procinfo"))
-                    {
-                        char buffer[96];
-                        snprintf(buffer, sizeof(buffer), "\tleaq\tcurrent_procinfo(%%rip), %s\n",
-                            addr_reg->bit_64);
-                        inst_list = add_inst(inst_list, buffer);
-                        *out_reg = addr_reg;
-                        goto cleanup;
-                    }
-
                     snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
                     char add_rodata[1024];
                     const char *readonly_section = codegen_readonly_section_directive();

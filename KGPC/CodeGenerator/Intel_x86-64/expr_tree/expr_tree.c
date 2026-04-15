@@ -31,57 +31,6 @@
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 
-static int codegen_symbol_is_private_foreign(CodeGenContext *ctx, HashNode_t *node)
-{
-    if (ctx == NULL || ctx->symtab == NULL || node == NULL)
-        return 0;
-
-    return node->defined_in_unit && !node->unit_is_public &&
-        node->source_unit_index != ctx->symtab->current_unit_index;
-}
-
-static HashNode_t *codegen_prefer_visible_symbol(CodeGenContext *ctx,
-    const char *id, HashNode_t *node)
-{
-    if (ctx == NULL || ctx->symtab == NULL || id == NULL)
-        return node;
-
-    if (node != NULL &&
-        !codegen_symbol_is_private_foreign(ctx, node) &&
-        !(node->hash_type == HASHTYPE_CONST || node->is_constant))
-        return node;
-
-    ListNode_t *matches = FindAllIdents(ctx->symtab, id);
-    HashNode_t *best = NULL;
-    for (ListNode_t *cur = matches; cur != NULL; cur = cur->next)
-    {
-        HashNode_t *candidate = (HashNode_t *)cur->cur;
-        if (candidate == NULL ||
-            codegen_symbol_is_private_foreign(ctx, candidate))
-            continue;
-
-        if (best == NULL)
-        {
-            best = candidate;
-            continue;
-        }
-
-        int best_is_const = (best->hash_type == HASHTYPE_CONST || best->is_constant);
-        int candidate_is_const =
-            (candidate->hash_type == HASHTYPE_CONST || candidate->is_constant);
-        if (best_is_const && !candidate_is_const)
-            best = candidate;
-    }
-    if (matches != NULL)
-        DestroyList(matches);
-
-    if (best != NULL)
-        return best;
-    if (node != NULL && !codegen_symbol_is_private_foreign(ctx, node))
-        return node;
-    return NULL;
-}
-
 static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
 {
@@ -4747,25 +4696,6 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                     node = codegen_find_owner_unit_symbol(ctx, expr->expr_data.id);
                     found = (node != NULL);
                 }
-                if (found && node != NULL && ctx != NULL && ctx->symtab != NULL &&
-                    (node->hash_type == HASHTYPE_CONST || node->is_constant) &&
-                    node->const_string_value != NULL &&
-                    strcmp(node->const_string_value, "error") == 0)
-                {
-                    node = codegen_prefer_visible_symbol(ctx, expr->expr_data.id, node);
-                    found = (node != NULL);
-                }
-                if (found && node != NULL &&
-                    (node->hash_type == HASHTYPE_CONST || node->is_constant) &&
-                    node->const_string_value != NULL &&
-                    strcmp(node->const_string_value, "error") == 0 &&
-                    expr->expr_data.id != NULL &&
-                    pascal_identifier_equals(expr->expr_data.id, "current_procinfo"))
-                {
-                    snprintf(buffer, buf_len, "current_procinfo(%%rip)");
-                    if (out_kind) *out_kind = OPKIND_LABEL;
-                    break;
-                }
                 /* If FindSymbol returned a callable/type-like symbol but there is a
                  * constant with the same name in the active/user scopes (or builtin
                  * scope), prefer the constant. This keeps enum literals and user
@@ -4837,16 +4767,8 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 if (found && node != NULL &&
                     (node->hash_type == HASHTYPE_CONST || node->is_constant))
                 {
-                    if (node->const_string_value != NULL &&
-                        strcmp(node->const_string_value, "error") == 0 &&
-                        expr->expr_data.id != NULL &&
-                        pascal_identifier_equals(expr->expr_data.id, "current_procinfo"))
-                    {
-                        snprintf(buffer, buf_len, "current_procinfo(%%rip)");
-                        if (out_kind) *out_kind = OPKIND_LABEL;
-                    }
                     /* Check if this is a procedure address constant */
-                    else if (node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE &&
+                    if (node->type != NULL && node->type->kind == TYPE_KIND_PROCEDURE &&
                         node->const_string_value != NULL)
                     {
                         /* Procedure address constant - load address of the referenced procedure.
