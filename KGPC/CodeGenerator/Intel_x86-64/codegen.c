@@ -7938,6 +7938,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    ListNode_t *prev_sub_args = ctx->current_subprogram_args;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
@@ -7976,6 +7977,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_is_nonstatic_class_method =
         (proc->owner_class != NULL && proc->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(proc->owner_class, proc->method_name));
+    ctx->current_subprogram_args = proc->args_var;
     ctx->current_return_slot = NULL;
     ctx->current_return_type = NULL;
     EnterScope(symtab, 0);
@@ -8010,7 +8012,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
      * even if they don't themselves capture any outer scope state. Class methods still
      * use the implicit `self` parameter instead. Top-level procedures do not receive
      * a static link. */
-    int will_need_static_link = (!is_class_method && lexical_depth > 1);
+    int will_need_static_link = (!is_class_method && is_nested_function);
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
@@ -8026,16 +8028,6 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
          * This ensures it doesn't overlap with argument storage */
         static_link = add_l_x("__static_link__", 8);
         codegen_register_static_link_proc(ctx, sub_id, lexical_depth);
-    }
-    
-    if (static_link != NULL)
-    {
-        char buffer[64];
-        /* Static link always comes in the first argument register (platform-dependent) */
-        const char *link_reg = current_arg_reg64(0);
-        assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", link_reg, static_link->offset);
-        inst_list = add_inst(inst_list, buffer);
     }
     
     codegen_function_locals(proc->declarations, ctx, symtab);
@@ -8174,6 +8166,20 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         }
     }
     
+    if (static_link != NULL)
+    {
+        char buffer[64];
+        const char *link_reg = current_arg_reg64(0);
+        ListNode_t *static_link_inst = NULL;
+        assert(link_reg != NULL && "current_arg_reg64(0) should never return NULL");
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            link_reg, static_link->offset);
+        add_inst_invalidate_cache();
+        static_link_inst = add_inst(static_link_inst, buffer);
+        add_inst_invalidate_cache();
+        inst_list = ConcatList(static_link_inst, inst_list);
+    }
+
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, proc->const_declarations);
     codegen_function_header_ex_alias_vis(sub_id, ctx, proc->nostackframe, proc->cname_override, proc->defined_in_unit);
@@ -8194,6 +8200,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_subprogram_args = prev_sub_args;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;
@@ -8251,6 +8258,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     const char *prev_sub_owner_class = ctx->current_subprogram_owner_class;
     const char *prev_sub_owner_class_full = ctx->current_subprogram_owner_class_full;
     int prev_is_nonstatic_class_method = ctx->current_subprogram_is_nonstatic_class_method;
+    ListNode_t *prev_sub_args = ctx->current_subprogram_args;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
@@ -8289,6 +8297,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_is_nonstatic_class_method =
         (func->owner_class != NULL && func->method_name != NULL &&
          from_cparser_is_method_nonstatic_class_method(func->owner_class, func->method_name));
+    ctx->current_subprogram_args = func->args_var;
     ctx->current_return_slot = NULL;
     ctx->current_return_type = NULL;
     EnterScope(symtab, 0);
@@ -8703,7 +8712,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         ctx->current_return_type = codegen_canonical_shortstring_type();
 
     /* Only nested functions receive static links (excluding class methods). */
-    int will_need_static_link = (!is_class_method && lexical_depth > 1);
+    int will_need_static_link = (!is_class_method && is_nested_function);
     
     /* Calculate argument start index:
      * - If function returns record: use index 1 (record pointer in first arg)
@@ -8725,17 +8734,6 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         /* Reserve space for static link after arguments */
         static_link = add_l_x("__static_link__", 8);
         codegen_register_static_link_proc(ctx, sub_id, lexical_depth);
-    }
-    
-    if (static_link != NULL)
-    {
-        char link_buffer[64];
-        /* Static link comes in the register right after the record return pointer (if any) */
-        const char *link_reg = current_arg_reg64(has_record_return ? 1 : 0);
-        assert(link_reg != NULL && "current_arg_reg64() should never return NULL for valid indices");
-        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
-            link_reg, static_link->offset);
-        inst_list = add_inst(inst_list, link_buffer);
     }
     
     int return_size = DOUBLEWORD;
@@ -9112,6 +9110,20 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
         inst_list = add_inst(inst_list, buffer);
     }
 
+    if (static_link != NULL)
+    {
+        char link_buffer[64];
+        const char *link_reg = current_arg_reg64(has_record_return ? 1 : 0);
+        ListNode_t *static_link_inst = NULL;
+        assert(link_reg != NULL && "current_arg_reg64() should never return NULL for valid indices");
+        snprintf(link_buffer, sizeof(link_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            link_reg, static_link->offset);
+        add_inst_invalidate_cache();
+        static_link_inst = add_inst(static_link_inst, link_buffer);
+        add_inst_invalidate_cache();
+        inst_list = ConcatList(static_link_inst, inst_list);
+    }
+
     codegen_emit_local_const_equivs(ctx, symtab);
     codegen_emit_const_decl_equivs_from_list(ctx, func->const_declarations);
     codegen_function_header_ex_alias_vis(sub_id, ctx, func->nostackframe, func->cname_override, func->defined_in_unit);
@@ -9132,6 +9144,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_owner_class = prev_sub_owner_class;
     ctx->current_subprogram_owner_class_full = prev_sub_owner_class_full;
     ctx->current_subprogram_is_nonstatic_class_method = prev_is_nonstatic_class_method;
+    ctx->current_subprogram_args = prev_sub_args;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
     ctx->current_subprogram_lexical_depth = prev_depth;

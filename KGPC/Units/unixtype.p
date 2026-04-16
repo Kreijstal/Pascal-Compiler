@@ -29,8 +29,8 @@ type
 
 function fputime(path: PAnsiChar; times: PUTimBuf): cint; external;
 function fpopendir(path: PAnsiChar): pdir; external;
-function fpclosedir(var d: TDir): cint; external;
-function fpreaddir(var d: TDir): pdirent; external;
+function fpclosedir(dirp: pdir): cint; external;
+function fpreaddir(dirp: pdir): pdirent; external;
 function fpreadlink(path: PAnsiChar): String; external;
 function utimensat(dirfd: cint; path: PAnsiChar; var times: TTimespecArr; flags: cint): cint; external;
 function fpfutimens(fd: cint; var times: TTimespecArr): cint; external;

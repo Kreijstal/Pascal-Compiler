@@ -287,6 +287,27 @@ static void semcheck_compute_array_linearization(SymTab_t *symtab,
         if (FindSymbol(&node, symtab, array_expr->expr_data.id) != 0 && node != NULL)
             array_type = node->type;
     }
+    else if (array_type == NULL && array_expr->type == EXPR_POINTER_DEREF &&
+        array_expr->expr_data.pointer_deref_data.pointer_expr != NULL)
+    {
+        struct Expression *pointer_expr =
+            array_expr->expr_data.pointer_deref_data.pointer_expr;
+        KgpcType *pointer_type = pointer_expr->resolved_kgpc_type;
+        if (pointer_type == NULL && pointer_expr->type == EXPR_VAR_ID &&
+            pointer_expr->expr_data.id != NULL && symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, symtab, pointer_expr->expr_data.id) != 0 &&
+                node != NULL)
+                pointer_type = node->type;
+        }
+        if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+        {
+            KgpcType *pointee = kgpc_type_resolve_pointer_pointee(pointer_type, symtab);
+            if (pointee != NULL && kgpc_type_is_array(pointee))
+                array_type = pointee;
+        }
+    }
 
     if (array_type == NULL || !kgpc_type_is_array(array_type))
         return;

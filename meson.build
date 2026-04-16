@@ -1,10 +1,16 @@
 project('kgpc-project', 'c')
 
+cc = meson.get_compiler('c')
+if cc.has_function('strndup', prefix: '#include <string.h>')
+  add_project_arguments('-DHAVE_STRNDUP', language: 'c')
+endif
+
 cparser_core_sources = [
   'cparser/parser.c',
   'cparser/combinators.c',
   'cparser/ast_cache.c',
   'common/arena.c',
+  'common/file_lock.c',
 ]
 
 pascal_parser_sources = [

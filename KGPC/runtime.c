@@ -464,6 +464,34 @@ static void kgpc_init_stdio(void)
     Output_ptr = &kgpc_stdout_file; /* Output = stdout */
 }
 
+/* Re-initialize stdio FILE* pointers unconditionally.
+ * On some platforms (e.g. MSYS/Cygwin with -static linking), the
+ * __attribute__((constructor)) may fire before the C library has fully
+ * set up stdin/stdout/stderr, causing stale FILE* values in the
+ * KGPCTextRec records.  This function refreshes them and is called from
+ * kgpc_init_args() (i.e. from main()) where stdio is guaranteed valid. */
+static void kgpc_reinit_stdio(void)
+{
+    kgpc_stdin_file.handle = fileno(stdin);
+    kgpc_stdout_file.handle = fileno(stdout);
+    kgpc_stderr_file.handle = fileno(stderr);
+    kgpc_stdin_file.private_data = (int64_t)(uintptr_t)stdin;
+    kgpc_stdout_file.private_data = (int64_t)(uintptr_t)stdout;
+    kgpc_stderr_file.private_data = (int64_t)(uintptr_t)stderr;
+
+    stdin_ptr = &kgpc_stdin_file;
+    stdout_ptr = &kgpc_stdout_file;
+    stderr_ptr = &kgpc_stderr_file;
+    Input_ptr = &kgpc_stdin_file;
+    Output_ptr = &kgpc_stdout_file;
+}
+
+__attribute__((constructor))
+static void kgpc_init_stdio_constructor(void)
+{
+    kgpc_init_stdio();
+}
+
 static void kgpc_textrec_init_defaults(KGPCTextRec *file)
 {
     if (file == NULL)
@@ -3224,6 +3252,7 @@ char *kgpc_alloc_empty_string(void)
 void kgpc_init_widestringmanager(void);
 
 void kgpc_fpc_init_os_params(int argc, char **argv, char **envp);
+void kgpc_fpc_init_stack_params(void *stack_probe);
 void kgpc_fpc_init_thread_manager(void);
 void kgpc_fpc_init_fpu(void);
 
@@ -3231,7 +3260,16 @@ void kgpc_init_args(int argc, char **argv, char **envp)
 {
     kgpc_argc = (argc < 0) ? 0 : argc;
     kgpc_argv = argv;
+    /* Ensure stdio pointers (stdin_ptr, stdout_ptr, stderr_ptr) are
+     * initialized before any Pascal code runs.  The __attribute__((constructor))
+     * in kgpc_init_stdio_constructor normally handles this, but on some
+     * platforms (e.g. MSYS/Cygwin with -static linking) the constructor may
+     * execute before the C library's stdio is fully set up, leaving
+     * stderr_ptr pointing to an invalid FILE*.  Re-init unconditionally
+     * from main() where stdio is guaranteed valid. */
+    kgpc_reinit_stdio();
     kgpc_fpc_init_os_params(argc, argv, envp);
+    kgpc_fpc_init_stack_params(&argc);
     kgpc_fpc_init_thread_manager();
     kgpc_init_widestringmanager();
     kgpc_fpc_init_fpu();

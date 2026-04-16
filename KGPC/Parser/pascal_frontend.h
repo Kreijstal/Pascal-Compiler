@@ -24,7 +24,7 @@ void pascal_frontend_set_ast_cache_dir(const char *dir);
 
 /* Set the compiler binary's modification time so cached ASTs older than
  * the binary are invalidated automatically. */
-void pascal_frontend_set_compiler_mtime(time_t mtime);
+void pascal_frontend_set_compiler_mtime(struct timespec mtime);
 
 /* Get the list of user-defined include paths for unit search */
 const char * const *pascal_frontend_get_include_paths(int *count);

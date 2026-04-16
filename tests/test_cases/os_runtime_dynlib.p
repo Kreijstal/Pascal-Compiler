@@ -15,7 +15,7 @@ program OsRuntimeDynlib;
   uses SysUtils, DynLibs, BaseUnix, ctypes;
   {$endif}
 {$else}
-uses SysUtils;
+uses SysUtils, DynLibs;
 {$endif}
 
 const
@@ -61,13 +61,8 @@ begin
 end;
 
 var
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
     Handle: TLibHandle;
     ProcPtr: Pointer;
-{$else}
-    Handle: NativeUInt;
-    ProcPtr: NativeUInt;
-{$endif}
     DynLibOK: boolean;
 begin
 {$ifdef MSWINDOWS}
@@ -75,9 +70,9 @@ begin
 {$else}
     {$if defined(FPC) and not defined(KGPC_COMPILER)}
     Handle := TLibHandle(LoadUnixLibrary());
-    {$else}
-    Handle := LoadUnixLibrary();
-    {$endif}
+{$else}
+    Handle := TLibHandle(LoadUnixLibrary());
+{$endif}
 {$endif}
     DynLibOK := False;
     if Handle <> 0 then
@@ -87,11 +82,7 @@ begin
 {$else}
         ProcPtr := GetProcedureAddress(Handle, 'strlen');
 {$endif}
-{$if defined(FPC) and not defined(KGPC_COMPILER)}
         DynLibOK := (ProcPtr <> nil) and FreeLibrary(Handle);
-{$else}
-        DynLibOK := (ProcPtr <> 0) and FreeLibrary(Handle);
-{$endif}
     end;
     WriteLn('DynLib=', BoolStr(DynLibOK));
 end.

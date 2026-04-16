@@ -19,6 +19,7 @@
 #include "ast_cache.h"
 #include "../string_intern.h"
 #include "../compilation_context.h"
+#include "../../common/file_time.h"
 
 /* Global storage for user-defined preprocessor configuration */
 #define MAX_USER_INCLUDE_PATHS 64
@@ -38,7 +39,8 @@ static bool g_ast_cache_reads_enabled = true;
 
 /* Modification time of the compiler binary. When set, cached ASTs older
  * than the binary are considered stale and re-parsed. */
-static time_t g_compiler_mtime = 0;
+static struct timespec g_compiler_mtime = { 0, 0 };
+static bool g_compiler_mtime_known = false;
 
 /* Flag set when {$MODE objfpc} is detected in the current parse.
  * Used to automatically inject ObjPas unit dependency. */
@@ -72,9 +74,18 @@ static bool ast_cache_is_fresh(const char *cache_path, const char *source_path)
     if (cache_st.st_mtime < source_st.st_mtime)
         return false;
 
-    /* Cache must be newer than the compiler binary (if known) */
-    if (g_compiler_mtime > 0 && cache_st.st_mtime < g_compiler_mtime)
-        return false;
+    /* Cache must be newer than the compiler binary (if known). Use
+     * nanosecond precision so rebuilds and cache writes in the same second
+     * cannot accidentally reuse stale ASTs. */
+    if (g_compiler_mtime_known)
+    {
+        struct timespec cache_mtime = kgpc_stat_mtime(&cache_st);
+        if (cache_mtime.tv_sec < g_compiler_mtime.tv_sec)
+            return false;
+        if (cache_mtime.tv_sec == g_compiler_mtime.tv_sec &&
+            cache_mtime.tv_nsec < g_compiler_mtime.tv_nsec)
+            return false;
+    }
 
     return true;
 }
@@ -393,11 +404,23 @@ void pascal_frontend_set_ast_cache_dir(const char *dir)
     if (g_ast_cache_dir != NULL)
         free(g_ast_cache_dir);
     g_ast_cache_dir = (dir != NULL) ? strdup(dir) : NULL;
+    if (g_ast_cache_dir != NULL && kgpc_mkdir(g_ast_cache_dir, 0775) != 0)
+    {
+        struct stat st;
+        if (stat(g_ast_cache_dir, &st) != 0 || !S_ISDIR(st.st_mode))
+        {
+            fprintf(stderr, "Warning: AST cache directory '%s' is not usable; disabling AST cache.\n",
+                g_ast_cache_dir);
+            free(g_ast_cache_dir);
+            g_ast_cache_dir = NULL;
+        }
+    }
 }
 
-void pascal_frontend_set_compiler_mtime(time_t mtime)
+void pascal_frontend_set_compiler_mtime(struct timespec mtime)
 {
     g_compiler_mtime = mtime;
+    g_compiler_mtime_known = true;
 }
 
 const char * const *pascal_frontend_get_include_paths(int *count)
@@ -872,6 +895,15 @@ static char *compute_ast_cache_path(const char *source_path)
         if (g_user_defines[i] != NULL)
             hash = fnv1a64_bytes((const unsigned char *)g_user_defines[i],
                                  strlen(g_user_defines[i])) ^ hash;
+    }
+    if (g_compiler_mtime_known)
+    {
+        char compiler_stamp[64];
+        snprintf(compiler_stamp, sizeof(compiler_stamp), "%lld.%09ld",
+                 (long long)g_compiler_mtime.tv_sec,
+                 (long)g_compiler_mtime.tv_nsec);
+        hash = fnv1a64_bytes((const unsigned char *)compiler_stamp,
+                             strlen(compiler_stamp)) ^ hash;
     }
     /* <dir>/<16-hex>.ast_cache\0 */
     size_t total = dir_len + 1 + 16 + 10 + 1;
