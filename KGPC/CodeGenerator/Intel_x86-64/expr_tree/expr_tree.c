@@ -2058,6 +2058,45 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
     return 0;
 }
 
+/* Context-aware version: also checks the symbol table for variables whose
+ * expression type tag is STRING_TYPE but whose symtab entry is actually a
+ * ShortString (happens under {$H-} mode). */
+static int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr_is_shortstring_storage(expr))
+        return 1;
+    /* Symtab lookup for EXPR_VAR_ID with STRING_TYPE tag that is actually ShortString */
+    if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
+            node != NULL && node->type != NULL)
+        {
+            if (kgpc_type_is_shortstring(node->type))
+                return 1;
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->is_shortstring)
+                return 1;
+            if (kgpc_type_is_array(node->type))
+            {
+                KgpcType *elem = kgpc_type_get_array_element_type(node->type);
+                if (elem != NULL &&
+                    elem->kind == TYPE_KIND_PRIMITIVE &&
+                    elem->info.primitive_type_tag == CHAR_TYPE)
+                {
+                    int start = 0;
+                    int end = -1;
+                    if (kgpc_type_get_array_bounds(node->type, &start, &end) == 0 &&
+                        start == 0 && end >= 0 && end <= 255)
+                        return 1;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static int expr_is_char_array_expr(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -2150,7 +2189,7 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
     if (node == NULL || node->expr == NULL || ctx == NULL || value_reg == NULL)
         return inst_list;
 
-    if (!expr_is_shortstring_storage(node->expr))
+    if (!expr_is_shortstring_storage_ctx(node->expr, ctx))
         return inst_list;
 
     const char *arg_reg64 = current_arg_reg64(0);
@@ -4317,6 +4356,18 @@ cleanup_constructor:
                     is_shortstring = 1;
                 }
             }
+            /* Also check the symbol table for {$H-} string locals */
+            if (!is_shortstring && symbol_node != NULL && symbol_node->type != NULL)
+            {
+                if (kgpc_type_is_shortstring(symbol_node->type))
+                    is_shortstring = 1;
+                else
+                {
+                    struct TypeAlias *alias = kgpc_type_get_type_alias(symbol_node->type);
+                    if (alias != NULL && alias->is_shortstring)
+                        is_shortstring = 1;
+                }
+            }
 
             int should_deref = 0;
             if (!is_array_like && !is_shortstring &&
@@ -4398,7 +4449,7 @@ cleanup_constructor:
             return inst_list;
         }
 
-        int is_shortstring = expr_is_shortstring_storage(expr);
+        int is_shortstring = expr_is_shortstring_storage_ctx(expr, ctx);
         if (is_shortstring || expr_is_char_array_expr(expr))
         {
             if (buf_leaf[0] != '$')
@@ -5973,10 +6024,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
             }
 
             {
-                int left_is_shortstring = (left_expr != NULL && expr_is_shortstring_storage(left_expr) &&
-                    !expr_has_type_tag(left_expr, STRING_TYPE));
-                int right_is_shortstring = (right_expr != NULL && expr_is_shortstring_storage(right_expr) &&
-                    !expr_has_type_tag(right_expr, STRING_TYPE));
+                /* Use ctx-aware detection: under {$H-}, local vars declared as
+                 * 'string' have STRING_TYPE tag but are actually ShortStrings
+                 * in the symbol table. */
+                int left_is_shortstring = (left_expr != NULL &&
+                    expr_is_shortstring_storage_ctx(left_expr, ctx));
+                int right_is_shortstring = (right_expr != NULL &&
+                    expr_is_shortstring_storage_ctx(right_expr, ctx));
                 int left_is_char_array = (left_expr != NULL && expr_is_char_array_expr(left_expr) &&
                     !left_is_shortstring);
                 int right_is_char_array = (right_expr != NULL && expr_is_char_array_expr(right_expr) &&

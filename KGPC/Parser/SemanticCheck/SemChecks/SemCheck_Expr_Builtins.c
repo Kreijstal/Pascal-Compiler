@@ -367,6 +367,30 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
     return 0;
 }
 
+/* Context-aware version: also checks the symbol table for variables whose
+ * expression type is STRING_TYPE but whose symtab entry is actually a
+ * ShortString (happens under {$H-} mode). */
+static int semcheck_expr_is_shortstring_ctx(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (semcheck_expr_is_shortstring(expr))
+        return 1;
+    if (expr != NULL && expr->type == EXPR_VAR_ID && symtab != NULL &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 &&
+            node != NULL && node->type != NULL)
+        {
+            if (kgpc_type_is_shortstring(node->type))
+                return 1;
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->is_shortstring)
+                return 1;
+        }
+    }
+    return 0;
+}
+
 static int semcheck_type_is_ordinal(const KgpcType *type, int type_tag)
 {
     struct TypeAlias *alias = NULL;
@@ -693,7 +717,7 @@ int semcheck_builtin_length(int *type_return, SymTab_t *symtab,
             is_dynamic_array = 1;
     }
     int is_static_array = (arg_expr != NULL && arg_expr->is_array_expr && !arg_expr->array_is_dynamic);
-    int is_shortstring = semcheck_expr_is_shortstring(arg_expr);
+    int is_shortstring = semcheck_expr_is_shortstring_ctx(arg_expr, symtab);
 
     /* For static arrays, convert Length() to a compile-time constant */
     if (error_count == 0 && is_static_array && !is_shortstring)
@@ -820,7 +844,7 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     error_count += semcheck_expr_with_type(&source_kgpc_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
 
     /* Check for ShortString (array[0..N] of char) like Length does */
-    int is_shortstring = semcheck_expr_is_shortstring(source_expr);
+    int is_shortstring = semcheck_expr_is_shortstring_ctx(source_expr, symtab);
     int is_wide_string = (source_kgpc_type != NULL && kgpc_type_is_wide_string(source_kgpc_type));
 
     /* Also accept dynamic arrays for Copy */
@@ -955,7 +979,7 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && arg_type != NULL &&
             !kgpc_type_is_string(arg_type) && !kgpc_type_is_char(arg_type) &&
-            !semcheck_expr_is_shortstring(arg))
+            !semcheck_expr_is_shortstring_ctx(arg, symtab))
         {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
             error_count++;
