@@ -2165,6 +2165,8 @@ ListNode_t *convert_param(ast_t *param_node) {
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+        /* Under {$H-}, 'string' parameters should be ShortString. */
+        var_type = apply_shortstring_mode(var_type, type_id);
         /* Check for default value node after type spec.
          * Some parser shapes wrap optional/default nodes so `type_node->next`
          * may be NULL even when a default exists. */

@@ -3172,7 +3172,7 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             }
             free(type_name);
             free(preserved_type_id);
-            return type;
+            return type_tag;
         }
         
         free(type_name);
