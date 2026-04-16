@@ -577,6 +577,30 @@ static int semcheck_expr_is_shortstring(const struct Expression *expr)
     return 0;
 }
 
+/* Context-aware version: also checks the symbol table for variables whose
+ * expression type is STRING_TYPE but whose symtab entry is actually a
+ * ShortString (happens under {$H-} mode). */
+static int semcheck_expr_is_shortstring_ctx(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (semcheck_expr_is_shortstring(expr))
+        return 1;
+    if (expr != NULL && expr->type == EXPR_VAR_ID && symtab != NULL &&
+        expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, symtab, expr->expr_data.id) != 0 &&
+            node != NULL && node->type != NULL)
+        {
+            if (kgpc_type_is_shortstring(node->type))
+                return 1;
+            struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
+            if (alias != NULL && alias->is_shortstring)
+                return 1;
+        }
+    }
+    return 0;
+}
+
 static const char *semcheck_record_type_id_from_kgpc(KgpcType *type)
 {
     if (type == NULL)
@@ -2126,7 +2150,7 @@ static int semcheck_builtin_setlength(SymTab_t *symtab, struct Statement *stmt, 
 
     int target_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&target_type, symtab, array_expr, max_scope_lev, MUTATE);
-    int target_is_shortstring = semcheck_expr_is_shortstring(array_expr);
+    int target_is_shortstring = semcheck_expr_is_shortstring_ctx(array_expr, symtab);
     int target_is_wide_string = 0;
 
     int target_is_string = (target_type == STRING_TYPE);
@@ -2270,7 +2294,7 @@ static int semcheck_builtin_setstring(SymTab_t *symtab, struct Statement *stmt, 
     /* First argument must be a string variable (output parameter) */
     int string_type = UNKNOWN_TYPE;
     return_val += semcheck_stmt_expr_tag(&string_type, symtab, string_expr, max_scope_lev, MUTATE);
-    int target_is_shortstring = semcheck_expr_is_shortstring(string_expr);
+    int target_is_shortstring = semcheck_expr_is_shortstring_ctx(string_expr, symtab);
     if (string_type != STRING_TYPE && string_type != SHORTSTRING_TYPE && string_type != UNKNOWN_TYPE && !target_is_shortstring)
     {
         semcheck_error_with_context_at(stmt->line_num, stmt->col_num, stmt->source_index, "Error on line %d, SetString first argument must be a string variable.\n", stmt->line_num);
@@ -2511,7 +2535,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
 
     int source_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&source_type, symtab, source_expr, max_scope_lev, NO_MUTATE);
-    int source_is_shortstring = semcheck_expr_is_shortstring(source_expr);
+    int source_is_shortstring = semcheck_expr_is_shortstring_ctx(source_expr, symtab);
     /* Also accept dynamic arrays (e.g. TCharArray for TStringBuilder) */
     int source_is_array = (source_expr != NULL && source_expr->resolved_kgpc_type != NULL &&
         source_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
@@ -2526,7 +2550,7 @@ static int semcheck_builtin_insert(SymTab_t *symtab, struct Statement *stmt, int
 
     int target_type = UNKNOWN_TYPE;
     error_count += semcheck_stmt_expr_tag(&target_type, symtab, target_expr, max_scope_lev, MUTATE);
-    int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
+    int target_is_shortstring = semcheck_expr_is_shortstring_ctx(target_expr, symtab);
     int target_is_array = (target_expr != NULL && target_expr->resolved_kgpc_type != NULL &&
         target_expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY);
     if (target_type != STRING_TYPE && target_type != SHORTSTRING_TYPE &&
@@ -2593,7 +2617,7 @@ static int semcheck_builtin_delete(SymTab_t *symtab, struct Statement *stmt, int
     if (!is_valid_target && target_expr->resolved_kgpc_type != NULL &&
         kgpc_type_is_dynamic_array(target_expr->resolved_kgpc_type))
         is_valid_target = 1;
-    int target_is_shortstring = semcheck_expr_is_shortstring(target_expr);
+    int target_is_shortstring = semcheck_expr_is_shortstring_ctx(target_expr, symtab);
     
     if (!is_valid_target)
     {
