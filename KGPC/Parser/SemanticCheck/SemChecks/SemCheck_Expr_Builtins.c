@@ -850,7 +850,10 @@ int semcheck_builtin_copy(int *type_return, SymTab_t *symtab,
     /* Also accept dynamic arrays for Copy */
     int is_array = (source_kgpc_type != NULL && source_kgpc_type->kind == TYPE_KIND_ARRAY);
 
-    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array)
+    /* FPC accepts PChar/PAnsiChar as Copy source (auto-converts to string) */
+    int is_char_pointer = semcheck_expr_is_char_pointer(source_expr);
+
+    if (error_count == 0 && !kgpc_type_is_string(source_kgpc_type) && !is_shortstring && !is_array && !is_char_pointer)
     {
         semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Copy expects its first argument to be a string.\n", expr->line_num);
         error_count++;
@@ -979,7 +982,8 @@ int semcheck_builtin_concat(int *type_return, SymTab_t *symtab,
         error_count += semcheck_expr_with_type(&arg_type, symtab, arg, max_scope_lev, NO_MUTATE);
         if (error_count == 0 && arg_type != NULL &&
             !kgpc_type_is_string(arg_type) && !kgpc_type_is_char(arg_type) &&
-            !semcheck_expr_is_shortstring_ctx(arg, symtab))
+            !semcheck_expr_is_shortstring_ctx(arg, symtab) &&
+            !semcheck_expr_is_char_pointer(arg))
         {
             semcheck_error_with_context_at(expr->line_num, expr->col_num, expr->source_index, "Error on line %d, Concat arguments must be string or char.\n", expr->line_num);
             error_count++;
