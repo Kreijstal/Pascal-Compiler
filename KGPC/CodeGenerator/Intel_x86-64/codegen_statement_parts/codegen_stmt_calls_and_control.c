@@ -428,6 +428,69 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Fall through to EXPR_RECORD_ACCESS handler which uses char_array copy */
     }
 
+    /* ShortString record field receiving a char literal or char-typed value.
+     * codegen_expr_with_result returns the char's integer ordinal in a register,
+     * which the EXPR_RECORD_ACCESS handler below would store verbatim —
+     * overwriting the length byte at offset 0.  Instead, promote the char to a
+     * one-character heap string and use kgpc_string_to_shortstring so that the
+     * length byte and character data are written at the correct offsets. */
+    if ((expr_get_type_tag(var_expr) == SHORTSTRING_TYPE ||
+         codegen_expr_is_shortstring_array(var_expr)) &&
+        !expr_is_dynamic_array(var_expr) &&
+        assign_expr != NULL &&
+        assign_expr->type != EXPR_FUNCTION_CALL &&
+        var_expr->type == EXPR_RECORD_ACCESS)
+    {
+        int rhs_tag = expr_get_type_tag(assign_expr);
+        int rhs_is_char = (rhs_tag == CHAR_TYPE ||
+                           (is_integer_type(rhs_tag) && assign_expr->type == EXPR_INUM));
+        int rhs_is_string_like = (rhs_tag == STRING_TYPE ||
+                                  rhs_tag == SHORTSTRING_TYPE ||
+                                  assign_expr->type == EXPR_STRING);
+        if (rhs_is_char || rhs_is_string_like)
+        {
+            Register_t *addr_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL)
+            {
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                return inst_list;
+            }
+            int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+            if (array_size <= 1)
+            {
+                long long direct_size = expr_effective_size_bytes(var_expr);
+                if (direct_size > 1 && direct_size <= INT_MAX)
+                    array_size = (int)direct_size;
+                else
+                    array_size = 256;
+            }
+            Register_t *value_reg = NULL;
+            inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || value_reg == NULL)
+            {
+                free_reg(get_reg_stack(), addr_reg);
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+            if (rhs_is_char)
+            {
+                /* Promote char ordinal in register to a heap string,
+                 * then copy into ShortString via kgpc_string_to_shortstring. */
+                inst_list = codegen_promote_char_reg_to_string(inst_list, value_reg);
+            }
+            if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+                inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);
+            else
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reg, value_reg, array_size);
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
+    }
+
     if (var_expr->type == EXPR_VAR_ID)
     {
         if (expr_is_dynamic_array(var_expr))
