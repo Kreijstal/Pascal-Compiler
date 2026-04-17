@@ -1202,7 +1202,8 @@ static int semcheck_decl_only_should_skip_typed_const_initializer(const struct S
 
     struct Expression *init_expr = initializer->stmt_data.var_assign_data.expr;
     return (init_expr->type == EXPR_ARRAY_LITERAL ||
-            init_expr->type == EXPR_RECORD_CONSTRUCTOR);
+            init_expr->type == EXPR_RECORD_CONSTRUCTOR ||
+            init_expr->type == EXPR_SET);
 }
 
 /* During decls-only unit loading we need imported typed const symbols and their
