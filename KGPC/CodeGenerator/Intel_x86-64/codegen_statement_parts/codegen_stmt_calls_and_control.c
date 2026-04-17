@@ -220,6 +220,17 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         /* Static array assignment (including record fields) */
         return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
     }
+    /* EXPR_ARRAY_LITERAL is created with array_is_dynamic=1 by default,
+     * so expr_is_static_array_like returns 0 for it.  When the destination
+     * is a known static array (e.g. var of a named array type), we must
+     * still route through codegen_assign_static_array to perform a memcpy
+     * of the literal data instead of storing a dangling stack-descriptor
+     * pointer into the variable. */
+    if (dest_is_static_array && assign_expr != NULL &&
+        assign_expr->type == EXPR_ARRAY_LITERAL)
+    {
+        return codegen_assign_static_array(var_expr, assign_expr, inst_list, ctx);
+    }
     else if (var_expr->type == EXPR_RECORD_ACCESS)
     {
         struct RecordField *field = codegen_lookup_record_field(var_expr);
