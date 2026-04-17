@@ -9,8 +9,8 @@ on:
 env:
   # Pin FPCSource to a known-good commit to avoid upstream breakage.
   # Update this SHA when you want to pull in newer FPC changes.
-  # Last verified: 2026-04-13 (before e7dbd2ae85 which changed const→var pbestrealtype)
-  FPCSOURCE_COMMIT: 440696f33fb839fc172adbeb8b3a02d408f88d06
+  # Last verified: 2026-04-17 (supports const→var pbestrealtype, pointer-typed var initializers)
+  FPCSOURCE_COMMIT: 812f8fb69cb7088bd33f5387da74a80b5cf1d464
 
 jobs:
   build-and-test:
