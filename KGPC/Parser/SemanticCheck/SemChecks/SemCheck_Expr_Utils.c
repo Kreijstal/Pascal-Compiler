@@ -580,6 +580,22 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
         return;
     }
 
+    /* When multiple overloads share the same external C symbol name
+     * (e.g., FpReaddir(var dirp: Dir) and FpReaddir(dirp: pdir) both map to
+     * "readdir"), the sync must not override the call_kgpc_type that was
+     * already set by overload resolution.  Overload resolution picks the
+     * overload whose parameter list matches the call-site arguments; replacing
+     * it with a different overload loses var-parameter metadata and causes the
+     * codegen to emit record-by-value copies instead of pass-by-reference. */
+    KgpcType *existing_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (existing_type != NULL && existing_type->kind == TYPE_KIND_PROCEDURE &&
+        exact_target->type != existing_type)
+    {
+        /* Both resolve to the same external symbol but have different parameter
+         * signatures — preserve the overload-resolved type. */
+        return;
+    }
+
     semcheck_set_function_call_target(expr, exact_target);
 }
 
