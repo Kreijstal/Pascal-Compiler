@@ -442,10 +442,18 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         var_expr->type == EXPR_RECORD_ACCESS)
     {
         int rhs_tag = expr_get_type_tag(assign_expr);
-        int rhs_is_char = (rhs_tag == CHAR_TYPE ||
+        /* expr_get_type_tag returns CHAR_TYPE for string[N] where N < 255
+         * because those are internally array[0..N] of char and the
+         * shortstring heuristic only fires for upper==255.  Guard against
+         * misidentifying a shortstring variable/parameter as a bare char. */
+        int rhs_is_shortstring = codegen_expr_is_shortstring_rhs(assign_expr, ctx) ||
+                                 codegen_expr_is_shortstring_array(assign_expr);
+        int rhs_is_char = !rhs_is_shortstring &&
+                          (rhs_tag == CHAR_TYPE ||
                            (is_integer_type(rhs_tag) && assign_expr->type == EXPR_INUM));
         int rhs_is_string_like = (rhs_tag == STRING_TYPE ||
                                   rhs_tag == SHORTSTRING_TYPE ||
+                                  rhs_is_shortstring ||
                                   assign_expr->type == EXPR_STRING);
         if (rhs_is_char || rhs_is_string_like)
         {
