@@ -2065,6 +2065,10 @@ static int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGe
 {
     if (expr_is_shortstring_storage(expr))
         return 1;
+
+    if (ctx != NULL && codegen_expr_is_shortstring_value_ctx(expr, ctx))
+        return 1;
+
     /* Symtab lookup for EXPR_VAR_ID with STRING_TYPE tag that is actually ShortString */
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.id != NULL)
