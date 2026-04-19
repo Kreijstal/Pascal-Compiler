@@ -1141,9 +1141,10 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
      * (e.g. maxExitCode = 255 in sysunixh.inc, heap constants in heap.inc). */
     struct { const char *name; const char *value; } const_symbols[] = {
         { "maxExitCode", "255" },
-        /* Heap constants from FPC RTL heap.inc — must match the actual
-         * const declarations in the FPC source.  These are used by {$IF}
-         * expression evaluation in the preprocessor. */
+        /* Heap constants from FPCSource/rtl/inc/heap.inc — must match the
+         * actual const declarations there.  These are used by {$IF}
+         * expression evaluation in the preprocessor.  Keep in sync with
+         * the corresponding block in preprocess_main.c. */
         { "FixedArenaOffsetShift", "5" },
         { "VarSizeQuant", "32" },
         { "FirstVarRangeP2", "10" },
