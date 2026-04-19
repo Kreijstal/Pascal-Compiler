@@ -3308,7 +3308,7 @@ static bool parse_simple_expression(const char **cursor,
 }
 
 // Term = Factor { MulOp Factor }
-// MulOp = *, /, DIV, MOD, AND
+// MulOp = *, /, DIV, MOD, SHL, SHR, AND
 // Note: AND uses short-circuit evaluation for boolean contexts
 static bool parse_term(const char **cursor,
                        int64_t *value,
@@ -3324,7 +3324,7 @@ static bool parse_term(const char **cursor,
             ++(*cursor);
         }
 
-        enum { OP_NONE, OP_MUL, OP_DIV, OP_INTDIV, OP_MOD, OP_AND } op = OP_NONE;
+        enum { OP_NONE, OP_MUL, OP_DIV, OP_INTDIV, OP_MOD, OP_AND, OP_SHL, OP_SHR } op = OP_NONE;
 
         if (**cursor == '*') {
             op = OP_MUL;
@@ -3338,6 +3338,12 @@ static bool parse_term(const char **cursor,
             *cursor += 3;
         } else if (ascii_strncasecmp(*cursor, "MOD", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
             op = OP_MOD;
+            *cursor += 3;
+        } else if (ascii_strncasecmp(*cursor, "SHL", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_SHL;
+            *cursor += 3;
+        } else if (ascii_strncasecmp(*cursor, "SHR", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
+            op = OP_SHR;
             *cursor += 3;
         } else if (ascii_strncasecmp(*cursor, "AND", 3) == 0 && !isalnum((unsigned char)(*cursor)[3]) && (*cursor)[3] != '_') {
             op = OP_AND;
@@ -3372,6 +3378,8 @@ static bool parse_term(const char **cursor,
                 if (rhs == 0) return set_error(error_message, "division by zero");
                 *value %= rhs;
                 break;
+            case OP_SHL: *value <<= rhs; break;
+            case OP_SHR: *value = (int64_t)((uint64_t)*value >> rhs); break;
             case OP_AND: *value = (*value & rhs); break;
             default: break;
         }

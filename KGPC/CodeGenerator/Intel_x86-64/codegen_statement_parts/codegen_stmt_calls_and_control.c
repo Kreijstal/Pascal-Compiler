@@ -4690,6 +4690,18 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, 
     int has_type_check = 0;
     if (effective_type != NULL)
     {
+        /* Resolve the canonical (declaration-case) name for the exception type.
+         * Pascal is case-insensitive, so the source might say "exception" while
+         * the class was declared as "Exception". Assembly labels are case-sensitive,
+         * so we must use the declaration name to match the _TYPEINFO label. */
+        const char *canonical_type = effective_type;
+        HashNode_t *type_sym = NULL;
+        if (symtab != NULL && FindSymbol(&type_sym, symtab, effective_type) != 0 &&
+            type_sym != NULL && type_sym->id != NULL)
+        {
+            canonical_type = type_sym->id;
+        }
+
         gen_label(skip_label, sizeof(skip_label), ctx);
         has_type_check = 1;
 
@@ -4708,13 +4720,13 @@ ListNode_t *codegen_on_exception(struct Statement *stmt, ListNode_t *inst_list, 
         if (codegen_target_is_windows())
         {
             inst_list = add_inst(inst_list, "\tmovq\t%rax, %rcx\n");
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rdx\n", effective_type);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rdx\n", canonical_type);
             inst_list = add_inst(inst_list, buffer);
         }
         else
         {
             inst_list = add_inst(inst_list, "\tmovq\t%rax, %rdi\n");
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rsi\n", effective_type);
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s_TYPEINFO(%%rip), %%rsi\n", canonical_type);
             inst_list = add_inst(inst_list, buffer);
         }
         inst_list = codegen_vect_reg(inst_list, 0);
