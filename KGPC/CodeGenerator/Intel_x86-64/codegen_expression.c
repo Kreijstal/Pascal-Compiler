@@ -41,6 +41,9 @@
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
+static int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
+static int codegen_get_char_array_length(const struct Expression *expr, CodeGenContext *ctx,
+    long long *out_len);
 #define CODEGEN_POINTER_SIZE_BYTES 8
 #define CODEGEN_SIZEOF_RECURSION_LIMIT 32
 
@@ -1063,6 +1066,16 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
 
     if (codegen_expr_is_shortstring_value(expr))
         return 1;
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS)
+    {
+        long long char_len = 0;
+        if (codegen_get_char_array_length(expr, ctx, &char_len) &&
+            char_len > 1 && char_len <= 256)
+            return 1;
+    }
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS &&
+        codegen_array_access_targets_shortstring(expr, ctx))
+        return 1;
     if (expr_is_current_result && ctx != NULL)
     {
         KgpcType *ret_type = ctx->current_return_type;
@@ -1328,6 +1341,12 @@ static int codegen_array_access_targets_shortstring(const struct Expression *exp
         return 0;
     if (codegen_expr_is_shortstring_value(expr))
         return 1;
+    if (codegen_expr_is_char_array_like(expr))
+    {
+        long long size = expr_effective_size_bytes(expr);
+        if (size > 1 && size <= 256)
+            return 1;
+    }
 
     struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
     if (base_expr == NULL)
@@ -4986,8 +5005,31 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
                 KgpcArrayDimensionInfo info;
                 int dimension_status = kgpc_type_get_array_dimension_info(points_to,
                     ctx != NULL ? ctx->symtab : NULL, &info);
-                assert(dimension_status == 0 && info.total_size > 0);
-                *size_out = info.total_size;
+                assert(dimension_status == 0 && info.dim_count > 0);
+
+                long long element_size = info.element_size;
+                KgpcType *element_type = kgpc_type_get_array_element_type(points_to);
+                if (element_type != NULL && element_type->kind == TYPE_KIND_RECORD)
+                {
+                    assert(element_type->info.record_info != NULL);
+                    assert(codegen_sizeof_record(ctx, element_type->info.record_info,
+                        &element_size, 0) == 0 && element_size > 0);
+                }
+                else if (element_size <= 0 && element_type != NULL)
+                {
+                    element_size = kgpc_type_sizeof(element_type);
+                }
+                assert(element_size > 0);
+
+                long long total_size = element_size;
+                for (int i = info.dim_count - 1; i >= 0; i--)
+                {
+                    assert(info.dim_sizes[i] > 0);
+                    assert(total_size <= LLONG_MAX / info.dim_sizes[i]);
+                    total_size *= info.dim_sizes[i];
+                }
+                assert(total_size > 0);
+                *size_out = total_size;
                 return 0;
             }
             long long pointee_size = kgpc_type_sizeof(points_to);
@@ -9115,6 +9157,28 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
         left_is_shortstring || left_is_char_array));
     int right_is_string = (right_expr != NULL && (expr_has_type_tag(right_expr, STRING_TYPE) ||
         right_is_shortstring || right_is_char_array));
+    if (left_is_char_array && left_expr != NULL && left_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        long long char_len = 0;
+        if (codegen_get_char_array_length(left_expr, ctx, &char_len) &&
+            char_len > 1 && char_len <= 256)
+        {
+            left_is_shortstring = 1;
+            left_is_char_array = 0;
+            left_is_string = 1;
+        }
+    }
+    if (right_is_char_array && right_expr != NULL && right_expr->type == EXPR_ARRAY_ACCESS)
+    {
+        long long char_len = 0;
+        if (codegen_get_char_array_length(right_expr, ctx, &char_len) &&
+            char_len > 1 && char_len <= 256)
+        {
+            right_is_shortstring = 1;
+            right_is_char_array = 0;
+            right_is_string = 1;
+        }
+    }
     int left_is_char_ptr = expr_is_char_pointer(left_expr);
     int right_is_char_ptr = expr_is_char_pointer(right_expr);
 

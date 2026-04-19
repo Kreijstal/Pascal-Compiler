@@ -739,7 +739,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
         int array_lower = 0;
         int array_upper = -1;
         int array_is_shortstring = 0;
-        if (codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring) &&
+        if (assign_expr != NULL &&
+            assign_expr->type != EXPR_ARRAY_LITERAL &&
+            codegen_get_char_array_bounds(var_expr, ctx, &array_lower, &array_upper, &array_is_shortstring) &&
             (codegen_expr_is_shortstring_value_local(assign_expr) ||
              expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE))
         {
@@ -1380,6 +1382,25 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                 array_size = 256;
             inst_list = codegen_call_string_to_shortstring(inst_list, ctx, addr_reload, value_reg, array_size);
         }
+        else if ((var_type == SHORTSTRING_TYPE || expr_has_type_tag(var_expr, SHORTSTRING_TYPE) ||
+                  targets_shortstring || record_targets_shortstring) &&
+                 expr_get_type_tag(assign_expr) == CHAR_TYPE)
+        {
+            const char *value_reg8 = register_name8(value_reg);
+            if (value_reg8 == NULL)
+            {
+                codegen_report_error(ctx,
+                    "ERROR: Unable to select 8-bit register for shortstring char assignment.");
+            }
+            else
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovb\t$1, (%s)\n", addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovb\t%s, 1(%s)\n",
+                    value_reg8, addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+            }
+        }
         else if (use_qword)
         {
             int value_is_qword = expr_uses_qword_kgpctype(assign_expr);
@@ -1554,9 +1575,12 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             fprintf(stderr, "[codegen] RECORD char_array_check: field=%s found=%d lower=%d upper=%d is_short=%d\n",
                 fid ? fid : "<null>", rec_field_is_char_array, rec_arr_lower, rec_arr_upper, rec_arr_is_short);
         }
-        if (rec_field_is_char_array && (expr_get_type_tag(assign_expr) == STRING_TYPE ||
-            expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
-            codegen_expr_is_shortstring_value_local(assign_expr)))
+        if (rec_field_is_char_array &&
+            assign_expr != NULL &&
+            assign_expr->type != EXPR_ARRAY_LITERAL &&
+            (expr_get_type_tag(assign_expr) == STRING_TYPE ||
+             expr_get_type_tag(assign_expr) == SHORTSTRING_TYPE ||
+             codegen_expr_is_shortstring_value_local(assign_expr)))
         {
             int arr_size = rec_arr_upper - rec_arr_lower + 1;
             if (arr_size < 0) arr_size = 0;

@@ -3279,6 +3279,31 @@ static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long
     if (*token == '\0')
         return -1;
 
+    if (token[0] == '\'' && token[1] != '\0' && token[2] == '\'' && token[3] == '\0')
+    {
+        *out_value = (unsigned char)token[1];
+        return 0;
+    }
+    if (token[0] == '#' && token[1] != '\0')
+    {
+        char *endptr = NULL;
+        errno = 0;
+        long long char_code = strtoll(token + 1, &endptr, 10);
+        if (endptr != token + 1 && *endptr == '\0' &&
+            errno != ERANGE && char_code >= 0 && char_code <= UCHAR_MAX)
+        {
+            *out_value = char_code;
+            return 0;
+        }
+    }
+
+    int expr_value = 0;
+    if (kgpc_resolve_array_bound_expr(symtab, token, &expr_value) == 0)
+    {
+        *out_value = expr_value;
+        return 0;
+    }
+
     char *endptr = NULL;
     errno = 0;
     long long val = strtoll(token, &endptr, 10);
@@ -3307,6 +3332,13 @@ static int kgpc_parse_array_bound(struct SymTab *symtab, const char *token, long
             (node->hash_type == HASHTYPE_CONST || node->is_typed_const))
         {
             *out_value = node->const_int_value;
+            free(trimmed);
+            return 0;
+        }
+        if (trimmed[0] != '\0' && trimmed[1] == '\0' &&
+            isprint((unsigned char)trimmed[0]))
+        {
+            *out_value = (unsigned char)trimmed[0];
             free(trimmed);
             return 0;
         }
