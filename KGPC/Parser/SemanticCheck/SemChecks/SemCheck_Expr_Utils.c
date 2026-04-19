@@ -510,6 +510,8 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
     HashNode_t *exact_target = NULL;
     ListNode_t *candidates = NULL;
     int best_unit_index = INT_MAX;
+    int matching_candidate_count = 0;
+    int has_same_unit_overloads = 0;
 
     if (expr == NULL || expr->type != EXPR_FUNCTION_CALL || symtab == NULL ||
         expr->expr_data.function_call_data.mangled_id == NULL)
@@ -519,6 +521,7 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
 
     if (expr->expr_data.function_call_data.id != NULL)
     {
+        int first_matching_unit_index = -1;
         candidates = FindAllIdents(symtab, expr->expr_data.function_call_data.id);
         for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
         {
@@ -555,6 +558,19 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
                     ->tree_data.subprogram_data.source_unit_index;
             }
 
+            matching_candidate_count++;
+            if (matching_candidate_count == 1)
+            {
+                first_matching_unit_index = candidate_unit_index;
+            }
+            else if (candidate_unit_index == first_matching_unit_index)
+            {
+                /* Multiple overloads from the same unit share this external
+                 * symbol (e.g., FpReaddir var vs pdir overloads in the same
+                 * include file). */
+                has_same_unit_overloads = 1;
+            }
+
             if (exact_target == NULL || candidate_unit_index < best_unit_index)
             {
                 exact_target = candidate;
@@ -578,6 +594,31 @@ void semcheck_sync_function_call_target_to_mangled(struct Expression *expr,
         expr->expr_data.function_call_data.call_hash_type == exact_target->hash_type)
     {
         return;
+    }
+
+    /* When multiple overloads within the same unit share the same external C
+     * symbol name (e.g., FpReaddir(var dirp: Dir) and FpReaddir(dirp: pdir)
+     * both map to "readdir"), the sync must not override the call_kgpc_type
+     * that was already set by overload resolution.  Overload resolution picks
+     * the overload whose parameter list matches the call-site arguments;
+     * replacing it with a different overload loses var-parameter metadata and
+     * causes the codegen to emit record-by-value copies instead of
+     * pass-by-reference.
+     *
+     * This guard only activates when the same-unit overload pattern is
+     * detected; cross-unit re-exports (e.g., sysutils and dynlibs both
+     * defining GetProcedureAddress) must still be synced normally. */
+    if (has_same_unit_overloads)
+    {
+        KgpcType *existing_type = expr->expr_data.function_call_data.call_kgpc_type;
+        if (existing_type != NULL && existing_type->kind == TYPE_KIND_PROCEDURE &&
+            exact_target->type != existing_type)
+        {
+            /* Same-unit overloads map to the same external symbol but have
+             * different parameter signatures — preserve the overload-resolved
+             * type. */
+            return;
+        }
     }
 
     semcheck_set_function_call_target(expr, exact_target);

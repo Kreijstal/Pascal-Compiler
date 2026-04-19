@@ -1116,16 +1116,11 @@ static int codegen_current_param_is_ansistring(const struct Expression *expr,
     {
         return 0;
     }
-    if (ctx->current_subprogram_mangled == NULL ||
-        !(strcmp(ctx->current_subprogram_mangled,
-              "tdirectiveitem__create_p_u_tfphashobjectlist_s_u") == 0 ||
-          strcmp(ctx->current_subprogram_mangled,
-              "tdirectiveitem__createcond_p_u_tfphashobjectlist_s_u") == 0) ||
-        !pascal_identifier_equals(expr->expr_data.id, "n"))
-    {
-        return 0;
-    }
 
+    /* Search the enclosing subprogram's formal parameters for one matching
+     * the argument expression by name, then check if it has an AnsiString
+     * (or compatible) type.  This generalises across all functions instead
+     * of being hardcoded to specific method names. */
     for (ListNode_t *cur = ctx->current_subprogram_args; cur != NULL; cur = cur->next)
     {
         Tree_t *decl = (Tree_t *)cur->cur;

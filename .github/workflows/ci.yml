@@ -6,6 +6,12 @@ on:
   push:
     branches: [ "master" ]
 
+env:
+  # Pin FPCSource to a known-good commit to avoid upstream breakage.
+  # Update this SHA when you want to pull in newer FPC changes.
+  # Last verified: 2026-04-17 (supports const→var pbestrealtype, pointer-typed var initializers)
+  FPCSOURCE_COMMIT: 812f8fb69cb7088bd33f5387da74a80b5cf1d464
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
@@ -99,11 +105,14 @@ jobs:
       uses: actions/cache@v5
       with:
         path: FPCSource
-        key: fpcsource-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: fpcsource-${{ env.FPCSOURCE_COMMIT }}
 
     - name: Clone FPC RTL source
       if: steps.cache-fpcsource.outputs.cache-hit != 'true'
-      run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
+      run: |
+        git clone --filter=blob:none --no-checkout https://github.com/fpc/FPCSource.git FPCSource
+        cd FPCSource
+        git checkout ${{ env.FPCSOURCE_COMMIT }}
 
     - name: Configure FPC RTL build
       run: meson setup build-fpc --buildtype=debugoptimized -Dwith_gmp=enabled -Drun_fpc_rtl_tests=true
@@ -145,11 +154,14 @@ jobs:
       uses: actions/cache@v5
       with:
         path: FPCSource
-        key: fpcsource-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: fpcsource-${{ env.FPCSOURCE_COMMIT }}
 
     - name: Clone FPC RTL source
       if: steps.cache-fpcsource-profile.outputs.cache-hit != 'true'
-      run: git clone --depth 1 https://github.com/fpc/FPCSource.git FPCSource
+      run: |
+        git clone --filter=blob:none --no-checkout https://github.com/fpc/FPCSource.git FPCSource
+        cd FPCSource
+        git checkout ${{ env.FPCSOURCE_COMMIT }}
 
     - name: Configure build
       run: meson setup builddir --buildtype=debugoptimized -Dwith_gmp=enabled

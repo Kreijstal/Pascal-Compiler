@@ -2994,8 +2994,11 @@ next_identifier:
                         }
 
                     int expr_tag = expr_type != NULL ? semcheck_tag_from_kgpc(expr_type) : UNKNOWN_TYPE;
+                    /* When the initializer is an address-of expression and the
+                     * declared type is a pointer or procedure, adopt the declared
+                     * type for the expression.  This applies to both typed constants
+                     * (const x: ^T = @y) and initialized variables (var x: ^T = @y). */
                     if (expr_tag == UNKNOWN_TYPE &&
-                        tree->tree_data.var_decl_data.is_typed_const &&
                         init_expr != NULL &&
                         init_expr->type == EXPR_ADDR &&
                         var_node != NULL &&

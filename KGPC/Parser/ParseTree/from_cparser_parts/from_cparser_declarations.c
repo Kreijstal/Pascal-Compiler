@@ -282,15 +282,46 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
             init_node->typ != PASCAL_T_EXTERNAL_NAME && 
             init_node->typ != PASCAL_T_EXTERNAL_NAME_EXPR &&
             init_node->typ != PASCAL_T_PUBLIC_NAME) {
-            struct Expression *init_expr = convert_expression(init_node);
-            if (init_expr != NULL) {
-                if (ids != NULL && ids->next == NULL) {
-                    inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
-                    char *var_name = (char *)ids->cur;
-                    struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
-                    initializer_stmt = mk_varassign(decl_node->line, decl_node->col, lhs, init_expr);
-                } else {
-                    destroy_expr(init_expr);
+            /* For named array types with tuple initializers, decompose into
+             * element-by-element assignments.  This mirrors the Path 1 logic
+             * for inline array types.  codegen_materialize_array_literal does
+             * not handle complex element types (records, sets) because it
+             * stores register-sized values, not full struct copies.  By
+             * decomposing here, each arr[i] := record_constructor goes through
+             * the correct codegen_assign_record_value path. */
+            if (init_node->typ == PASCAL_T_TUPLE &&
+                !tuple_is_record_constructor(init_node) &&
+                ids != NULL && ids->next == NULL) {
+                char *var_name = (char *)ids->cur;
+                ListBuilder stmt_builder;
+                list_builder_init(&stmt_builder);
+                int index = 0;
+                for (ast_t *elem = init_node->child; elem != NULL; elem = elem->next) {
+                    struct Expression *elem_expr = convert_expression(elem);
+                    if (elem_expr != NULL) {
+                        struct Expression *index_expr = mk_inum(decl_node->line, index);
+                        struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
+                        struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
+                        struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
+                        list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
+                    }
+                    index++;
+                }
+                ListNode_t *stmt_list = list_builder_finish(&stmt_builder);
+                if (stmt_list != NULL) {
+                    initializer_stmt = mk_compoundstatement(decl_node->line, stmt_list);
+                }
+            } else {
+                struct Expression *init_expr = convert_expression(init_node);
+                if (init_expr != NULL) {
+                    if (ids != NULL && ids->next == NULL) {
+                        inferred = (var_type == UNKNOWN_TYPE && type_id == NULL) ? 1 : 0;
+                        char *var_name = (char *)ids->cur;
+                        struct Expression *lhs = mk_varid(decl_node->line, strdup(var_name));
+                        initializer_stmt = mk_varassign(decl_node->line, decl_node->col, lhs, init_expr);
+                    } else {
+                        destroy_expr(init_expr);
+                    }
                 }
             }
         }
