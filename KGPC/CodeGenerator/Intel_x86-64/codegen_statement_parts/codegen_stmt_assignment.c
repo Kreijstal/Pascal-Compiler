@@ -1137,6 +1137,11 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
     int src_is_char_array = codegen_get_char_array_bounds(src_expr, ctx,
         &src_lower, &src_upper, &src_is_shortstring);
     int src_is_shortstring_value = codegen_expr_is_shortstring_value_local(src_expr);
+    if (src_expr->type == EXPR_ARRAY_LITERAL)
+    {
+        src_is_shortstring = 0;
+        src_is_shortstring_value = 0;
+    }
     int dest_is_shortstring_value = codegen_expr_is_shortstring_value_local(dest_expr);
 
     if ((dest_is_shortstring || dest_is_shortstring_value) &&

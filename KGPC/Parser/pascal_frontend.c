@@ -1114,7 +1114,13 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
         // so define FPUSOFT to prevent FPC RTL from using them in const initializers.
         "FPUSOFT",
         "FPC_WIDESTRING_EQUAL_UNICODESTRING",
-        "FPC_ANSI_TEXTFILEREC"
+        "FPC_ANSI_TEXTFILEREC",
+        // Use the legacy (oldheap.inc) heap manager instead of the new heap.inc.
+        // The new heap.inc uses complex pointer arithmetic with inline casts
+        // (e.g. pCommonHeader(p - CommonHeaderSize)^.h, int32(h) - FixedFlag)
+        // that our codegen doesn't yet handle correctly, causing heap corruption
+        // and SIGSEGV in SysMemSize during finalization.
+        "LEGACYHEAP"
     };
     for (size_t i = 0; i < sizeof(default_symbols) / sizeof(default_symbols[0]); ++i)
     {
@@ -1135,12 +1141,27 @@ bool pascal_parse_source(const char *path, bool convert_to_tree, Tree_t **out_tr
      * (e.g. maxExitCode = 255 in sysunixh.inc, heap constants in heap.inc). */
     struct { const char *name; const char *value; } const_symbols[] = {
         { "maxExitCode", "255" },
-        { "SizeIndexBits", "64" }, { "FixedBitPos", "64" },
-        { "VarSizeQuant", "8" }, { "FirstVarStepP2", "3" },
-        { "MaxVarHeaderAndPayload", "255" }, { "MaxFixedHeaderAndPayload", "255" },
-        { "VarSizesCount", "32" },
-        { "MinSearchableVarHeaderAndPayload", "16" }, { "MinFixedHeaderAndPayload", "16" },
-        { "CommonHeaderSize", "8" },
+        /* Heap constants from FPCSource/rtl/inc/heap.inc — must match the
+         * actual const declarations there.  These are used by {$IF}
+         * expression evaluation in the preprocessor.  Keep in sync with
+         * the corresponding block in preprocess_main.c. */
+        { "FixedArenaOffsetShift", "5" },
+        { "VarSizeQuant", "32" },
+        { "FirstVarRangeP2", "10" },
+        { "FirstVarStepP2", "5" },
+        { "VarSizeClassesCount", "10" },
+        { "MaxFixedHeaderAndPayload", "544" },
+        { "MaxVarHeaderAndPayload", "1048096" },
+        { "CommonHeaderSize", "4" },
+        { "MinFixedHeaderAndPayload", "16" },
+        { "MinSearchableVarHeaderAndPayload", "576" },
+        { "FixedSizesCount", "16" },
+        { "SizeIndexBits", "4" },
+        { "SizeIndexMask", "15" },
+        { "FixedBitPos", "4" },
+        { "VarSizesPerClass", "32" },
+        { "VarSizesCount", "320" },
+        { "L0BinSize", "32" },
     };
     for (size_t i = 0; i < sizeof(const_symbols) / sizeof(const_symbols[0]); ++i)
     {

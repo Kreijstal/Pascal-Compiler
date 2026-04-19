@@ -7,6 +7,8 @@
     Separated from SemCheck_expr.c for modularity.
 */
 
+#include <assert.h>
+
 #include "SemCheck_Expr_Internal.h"
 
 static long long semcheck_builtin_sizeof_type_id_local(const char *type_id)
@@ -3692,7 +3694,17 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
                      * been overridden to the effective width for the active mode. */
                     if (node->type != NULL)
                     {
-                        long long direct_size = kgpc_type_sizeof(node->type);
+                        long long direct_size = -1;
+                        if (kgpc_type_is_array(node->type))
+                        {
+                            KgpcArrayDimensionInfo info;
+                            int dimension_status = kgpc_type_get_array_dimension_info(
+                                node->type, symtab, &info);
+                            assert(dimension_status == 0 && info.total_size >= 0);
+                            direct_size = info.total_size;
+                        }
+                        if (direct_size < 0)
+                            direct_size = kgpc_type_sizeof(node->type);
                         if (direct_size >= 0)
                         {
                             computed_size = direct_size;

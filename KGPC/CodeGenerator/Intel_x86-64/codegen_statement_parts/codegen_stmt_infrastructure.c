@@ -2279,6 +2279,31 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                 if (field_access->is_array_expr &&
                     field->value->type == EXPR_ARRAY_LITERAL)
                 {
+                    /* Determine whether each element of this array is itself
+                     * a composite type (shortstring / nested array / record)
+                     * or just a primitive scalar (Char, Integer, ...).  Only
+                     * propagate the parent array's is_array_expr metadata to
+                     * element-access expressions when the element IS an array,
+                     * so that shortstring detection can use the bounds info.
+                     * For primitive elements, setting is_array_expr on the
+                     * element access would falsely make it look like the
+                     * element is a whole char-array / shortstring. */
+                    int element_is_composite = 0;
+                    if (actual_field != NULL && actual_field->is_array &&
+                        (actual_field->array_element_type == SHORTSTRING_TYPE ||
+                         actual_field->array_element_type == STRING_TYPE ||
+                         actual_field->array_element_type == RECORD_TYPE))
+                    {
+                        element_is_composite = 1;
+                    }
+                    else if (actual_field != NULL && actual_field->array_element_kgpc_type != NULL &&
+                        (kgpc_type_is_array(actual_field->array_element_kgpc_type) ||
+                         kgpc_type_is_shortstring(actual_field->array_element_kgpc_type) ||
+                         kgpc_type_is_record(actual_field->array_element_kgpc_type)))
+                    {
+                        element_is_composite = 1;
+                    }
+
                     ListNode_t *element_node = field->value->expr_data.array_literal_data.elements;
                     int index = field_access->array_lower_bound;
                     while (element_node != NULL && index <= field_access->array_upper_bound)
@@ -2289,15 +2314,22 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
                             field_access, index_expr);
                         if (array_access == NULL)
                             goto cleanup;
-                        array_access->is_array_expr = 1;
-                        array_access->array_lower_bound = field_access->array_lower_bound;
-                        array_access->array_upper_bound = field_access->array_upper_bound;
-                        array_access->array_is_dynamic = field_access->array_is_dynamic;
-                        array_access->array_element_type = field_access->array_element_type;
+                        /* Only propagate is_array_expr to element access when the
+                         * element is itself an array/shortstring.  For primitive
+                         * elements (Char, Integer, etc.), do NOT set is_array_expr
+                         * as that would confuse shortstring detection. */
+                        if (element_is_composite)
+                        {
+                            array_access->is_array_expr = 1;
+                            array_access->array_lower_bound = field_access->array_lower_bound;
+                            array_access->array_upper_bound = field_access->array_upper_bound;
+                            array_access->array_is_dynamic = field_access->array_is_dynamic;
+                            array_access->array_element_type = field_access->array_element_type;
+                            if (field_access->array_element_type_id != NULL)
+                                array_access->array_element_type_id = strdup(field_access->array_element_type_id);
+                            array_access->array_element_record_type = field_access->array_element_record_type;
+                        }
                         array_access->array_element_size = field_access->array_element_size;
-                        if (field_access->array_element_type_id != NULL)
-                            array_access->array_element_type_id = strdup(field_access->array_element_type_id);
-                        array_access->array_element_record_type = field_access->array_element_record_type;
 
                         struct Statement *assign_stmt = mk_varassign(expr->line_num, expr->col_num,
                             array_access, element_expr);

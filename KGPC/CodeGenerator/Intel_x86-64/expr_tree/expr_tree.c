@@ -31,6 +31,10 @@
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
 
+int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
+static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGenContext *ctx,
+    long long *out_len);
+
 static ListNode_t *codegen_spill_call_arg_regs_expr(ListNode_t *inst_list,
     int *int_offsets, int *xmm_offsets)
 {
@@ -2024,12 +2028,24 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
         if (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
             (alias != NULL && alias->is_shortstring))
             return 1;
+        if (kgpc_type_is_array(expr->resolved_kgpc_type))
+        {
+            KgpcType *elem = kgpc_type_get_array_element_type(expr->resolved_kgpc_type);
+            int start = 0;
+            int end = -1;
+            if (elem != NULL &&
+                elem->kind == TYPE_KIND_PRIMITIVE &&
+                elem->info.primitive_type_tag == CHAR_TYPE &&
+                kgpc_type_get_array_bounds(expr->resolved_kgpc_type, &start, &end) == 0 &&
+                start == 0 && end >= 0 && end <= 255)
+                return 1;
+        }
     }
     if (expr->is_array_expr && expr->array_element_type == CHAR_TYPE)
     {
         int lower = expr_get_array_lower_bound(expr);
         int upper = expr_get_array_upper_bound(expr);
-        if (lower == 0 && upper == 255)
+        if (lower == 0 && upper >= 0 && upper <= 255)
             return 1;
     }
     if (expr->type == EXPR_POINTER_DEREF)
@@ -2050,7 +2066,8 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
                     points_to->info.array_info.element_type->kind == TYPE_KIND_PRIMITIVE &&
                     points_to->info.array_info.element_type->info.primitive_type_tag == CHAR_TYPE &&
                     points_to->info.array_info.start_index == 0 &&
-                    points_to->info.array_info.end_index == 255)
+                    points_to->info.array_info.end_index >= 0 &&
+                    points_to->info.array_info.end_index <= 255)
                     return 1;
             }
         }
@@ -2065,6 +2082,62 @@ static int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGe
 {
     if (expr_is_shortstring_storage(expr))
         return 1;
+
+    if (ctx != NULL && codegen_expr_is_shortstring_value_ctx(expr, ctx))
+        return 1;
+
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS &&
+        codegen_array_access_targets_shortstring(expr, ctx))
+        return 1;
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS)
+    {
+        long long char_len = 0;
+        if (expr_get_char_array_length_expr(expr, ctx, &char_len) &&
+            char_len > 1 && char_len <= 256)
+            return 1;
+    }
+
+    if (expr != NULL && expr->type == EXPR_ARRAY_ACCESS && ctx != NULL)
+    {
+        struct Expression *base_expr = expr->expr_data.array_access_data.array_expr;
+        KgpcType *base_type = NULL;
+        if (base_expr != NULL)
+            base_type = expr_get_kgpc_type(base_expr);
+        if (base_type == NULL && base_expr != NULL &&
+            base_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, base_expr->expr_data.id) != 0 &&
+                node != NULL)
+            {
+                base_type = node->type;
+            }
+        }
+        if (base_type != NULL && kgpc_type_is_array(base_type))
+        {
+            KgpcType *elem_type = kgpc_type_get_array_element_type(base_type);
+            if (elem_type != NULL)
+            {
+                struct TypeAlias *alias = kgpc_type_get_type_alias(elem_type);
+                if (kgpc_type_is_shortstring(elem_type) ||
+                    (alias != NULL && alias->is_shortstring))
+                    return 1;
+                if (kgpc_type_is_array(elem_type))
+                {
+                    KgpcType *inner = kgpc_type_get_array_element_type(elem_type);
+                    int start = 0;
+                    int end = -1;
+                    if (inner != NULL &&
+                        inner->kind == TYPE_KIND_PRIMITIVE &&
+                        inner->info.primitive_type_tag == CHAR_TYPE &&
+                        kgpc_type_get_array_bounds(elem_type, &start, &end) == 0 &&
+                        start == 0 && end >= 0 && end <= 255)
+                        return 1;
+                }
+            }
+        }
+    }
+
     /* Symtab lookup for EXPR_VAR_ID with STRING_TYPE tag that is actually ShortString */
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL &&
         expr->expr_data.id != NULL)
@@ -2327,7 +2400,7 @@ static ListNode_t *promote_char_reg_operand_to_string(ListNode_t *inst_list,
     inst_list = add_inst(inst_list, buffer);
     inst_list = codegen_vect_reg(inst_list, 0);
     inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_char_to_string");
-    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, reg_operand);
+    snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
     free_arg_regs();
     return inst_list;
@@ -2348,10 +2421,11 @@ static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
         /* Operand is already in a register — use existing path. */
         StackNode_t *other_save = NULL;
         if (other_reg != NULL)
-            inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+            inst_list = spill_reg64_operand(inst_list, other_reg->bit_64, &other_save,
                 "relop_charpromo_save");
         inst_list = promote_char_reg_operand_to_string(inst_list, *operand_ptr, *reg_ptr);
-        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        inst_list = restore_spilled_reg64_operand(inst_list, other_reg != NULL ? other_reg->bit_64 : NULL,
+            other_save);
         return inst_list;
     }
 
@@ -2360,13 +2434,14 @@ static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
 
     StackNode_t *other_save = NULL;
     if (other_reg != NULL)
-        inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+        inst_list = spill_reg64_operand(inst_list, other_reg->bit_64, &other_save,
             "relop_charpromo_imm_save");
 
     const char *arg_reg32 = current_arg_reg32(0);
     if (arg_reg32 == NULL)
     {
-        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        inst_list = restore_spilled_reg64_operand(inst_list, other_reg != NULL ? other_reg->bit_64 : NULL,
+            other_save);
         return inst_list;
     }
 
@@ -2387,7 +2462,8 @@ static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
     *reg_ptr = result_reg;
     *kind_ptr = OPKIND_REGISTER;
 
-    inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+    inst_list = restore_spilled_reg64_operand(inst_list, other_reg != NULL ? other_reg->bit_64 : NULL,
+        other_save);
     return inst_list;
 }
 
@@ -6040,6 +6116,28 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     left_is_shortstring || left_is_char_array));
                 int right_is_string = (right_expr != NULL && (expr_has_type_tag(right_expr, STRING_TYPE) ||
                     right_is_shortstring || right_is_char_array));
+                if (left_is_char_array && left_expr != NULL && left_expr->type == EXPR_ARRAY_ACCESS)
+                {
+                    long long char_len = 0;
+                    if (expr_get_char_array_length_expr(left_expr, ctx, &char_len) &&
+                        char_len > 1 && char_len <= 256)
+                    {
+                        left_is_shortstring = 1;
+                        left_is_char_array = 0;
+                        left_is_string = 1;
+                    }
+                }
+                if (right_is_char_array && right_expr != NULL && right_expr->type == EXPR_ARRAY_ACCESS)
+                {
+                    long long char_len = 0;
+                    if (expr_get_char_array_length_expr(right_expr, ctx, &char_len) &&
+                        char_len > 1 && char_len <= 256)
+                    {
+                        right_is_shortstring = 1;
+                        right_is_char_array = 0;
+                        right_is_string = 1;
+                    }
+                }
 
                 if ((left_is_char_array || right_is_char_array) && (left_is_string || right_is_string))
                 {
@@ -6195,22 +6293,26 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     StackNode_t *spill_other = NULL;
                     if (left_is_shortstring && right_needs_spill)
                     {
-                        inst_list = spill_reg64_operand(inst_list, right, &spill_other,
+                        inst_list = spill_reg64_operand(inst_list,
+                            right_reg != NULL ? right_reg->bit_64 : right, &spill_other,
                             "relop_rhs_preserve");
                     }
                     if (left_is_shortstring)
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, left, left_reg);
-                    inst_list = restore_spilled_reg64_operand(inst_list, right, spill_other);
+                    inst_list = restore_spilled_reg64_operand(inst_list,
+                        right_reg != NULL ? right_reg->bit_64 : right, spill_other);
 
                     spill_other = NULL;
                     if (right_is_shortstring && left_needs_spill)
                     {
-                        inst_list = spill_reg64_operand(inst_list, left, &spill_other,
+                        inst_list = spill_reg64_operand(inst_list,
+                            left_reg != NULL ? left_reg->bit_64 : left, &spill_other,
                             "relop_lhs_preserve");
                     }
                     if (right_is_shortstring)
                         inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
-                    inst_list = restore_spilled_reg64_operand(inst_list, left, spill_other);
+                    inst_list = restore_spilled_reg64_operand(inst_list,
+                        left_reg != NULL ? left_reg->bit_64 : left, spill_other);
 
                     /* Promote char-typed operands to string pointers before
                      * kgpc_string_compare.  Detect chars by expression type
