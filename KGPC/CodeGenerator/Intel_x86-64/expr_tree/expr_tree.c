@@ -2075,6 +2075,15 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
     return 0;
 }
 
+static int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr_is_shortstring_storage(expr))
+        return 1;
+    if (ctx != NULL && codegen_expr_is_shortstring_value_ctx(expr, ctx))
+        return 1;
+    return 0;
+}
+
 static int expr_is_char_array_expr(const struct Expression *expr)
 {
     if (expr == NULL)
@@ -2167,7 +2176,7 @@ static ListNode_t *promote_shortstring_operand_to_string(expr_node_t *node, List
     if (node == NULL || node->expr == NULL || ctx == NULL || value_reg == NULL)
         return inst_list;
 
-    if (!expr_is_shortstring_storage(node->expr))
+    if (!expr_is_shortstring_storage_ctx(node->expr, ctx))
         return inst_list;
 
     const char *arg_reg64 = current_arg_reg64(0);

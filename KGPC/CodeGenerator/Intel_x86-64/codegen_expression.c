@@ -4516,6 +4516,17 @@ static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     /* PREFERRED PATH: Try using KgpcType directly if available */
     if (node->type != NULL)
     {
+        if (kgpc_type_is_array(node->type))
+        {
+            KgpcArrayDimensionInfo info;
+            if (kgpc_type_get_array_dimension_info(node->type,
+                    ctx != NULL ? ctx->symtab : NULL, &info) == 0 &&
+                info.total_size >= 0)
+            {
+                *size_out = info.total_size;
+                return 0;
+            }
+        }
         long long size = kgpc_type_sizeof(node->type);
         if (size > 0)
         {
@@ -4793,6 +4804,17 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
+            if (kgpc_type_is_array(points_to))
+            {
+                KgpcArrayDimensionInfo info;
+                if (kgpc_type_get_array_dimension_info(points_to,
+                        ctx != NULL ? ctx->symtab : NULL, &info) == 0 &&
+                    info.total_size > 0)
+                {
+                    *size_out = info.total_size;
+                    return 0;
+                }
+            }
             long long pointee_size = kgpc_type_sizeof(points_to);
             if (pointee_size > 0)
             {
