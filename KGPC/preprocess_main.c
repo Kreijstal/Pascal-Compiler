@@ -245,6 +245,13 @@ int main(int argc, char **argv)
     
     /* System constants */
     pascal_preprocessor_define_const(preprocessor, "maxExitCode", "255");
+    
+    /* Use the legacy (oldheap.inc) heap manager instead of the new heap.inc.
+     * The new heap.inc uses complex pointer arithmetic with inline casts
+     * (e.g. pCommonHeader(p - CommonHeaderSize)^.h, int32(h) - FixedFlag)
+     * that our codegen doesn't yet handle correctly, causing heap corruption
+     * and SIGSEGV in SysMemSize during finalization. */
+    pascal_preprocessor_define(preprocessor, "LEGACYHEAP");
 #endif
 
 #if defined(__x86_64__)
