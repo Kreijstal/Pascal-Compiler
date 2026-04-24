@@ -84,6 +84,84 @@ extern const char *kgpc_getenv(const char *name);
 #define kgpc_getpid() getpid()
 #endif
 
+static void trim_duplicate_program_suffix(const char *output_file)
+{
+    if (output_file == NULL)
+        return;
+
+    FILE *fp = fopen(output_file, "rb");
+    if (fp == NULL)
+        return;
+
+    if (fseek(fp, 0, SEEK_END) != 0)
+    {
+        fclose(fp);
+        return;
+    }
+
+    long size = ftell(fp);
+    if (size <= 0)
+    {
+        fclose(fp);
+        return;
+    }
+
+    if (fseek(fp, 0, SEEK_SET) != 0)
+    {
+        fclose(fp);
+        return;
+    }
+
+    char *buf = (char *)malloc((size_t)size + 1);
+    if (buf == NULL)
+    {
+        fclose(fp);
+        return;
+    }
+
+    size_t got = fread(buf, 1, (size_t)size, fp);
+    fclose(fp);
+    if (got != (size_t)size)
+    {
+        free(buf);
+        return;
+    }
+    buf[size] = '\0';
+
+    const char *initfinal = "\nINITFINAL:\n";
+    const char *footer = "\t.section\t.note.GNU-stack,\"\",@progbits\n";
+
+    char *first_init = strstr(buf, initfinal);
+    if (first_init == NULL)
+    {
+        free(buf);
+        return;
+    }
+
+    char *second_init = strstr(first_init + strlen(initfinal), initfinal);
+    if (second_init == NULL)
+    {
+        free(buf);
+        return;
+    }
+
+    char *first_footer = strstr(first_init, footer);
+    if (first_footer == NULL)
+    {
+        free(buf);
+        return;
+    }
+
+    size_t keep_len = (size_t)(first_footer - buf) + strlen(footer);
+    FILE *out = fopen(output_file, "wb");
+    if (out != NULL)
+    {
+        fwrite(buf, 1, keep_len, out);
+        fclose(out);
+    }
+    free(buf);
+}
+
 extern ast_t *ast_nil;
 
 /* Legacy globals referenced in other components */
@@ -2220,6 +2298,8 @@ static int compile_single_program(
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
+        if (!codegen_failed)
+            trim_duplicate_program_suffix(output_file);
         if (ctx.cache_output != NULL)
             fclose(ctx.cache_output);
         if (codegen_failed && !codegen_cache_miss_flag())
@@ -3587,6 +3667,8 @@ int main(int argc, char **argv)
         emit_profile_stage("program: code generation", current_time_seconds() - codegen_profile_start);
         int codegen_failed = codegen_had_error(&ctx);
         fclose(ctx.output_file);
+        if (!codegen_failed)
+            trim_duplicate_program_suffix(output_file);
         if (ctx.cache_output != NULL)
             fclose(ctx.cache_output);
         if (codegen_failed && !codegen_cache_miss_flag())

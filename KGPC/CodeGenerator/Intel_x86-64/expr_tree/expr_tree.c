@@ -110,6 +110,108 @@ static int expr_tree_tag_from_kgpc(const KgpcType *type)
     return UNKNOWN_TYPE;
 }
 
+static int expr_tree_symbol_matches_expr_type(const HashNode_t *node,
+    const struct Expression *expr)
+{
+    if (node == NULL || expr == NULL)
+        return 1;
+
+    KgpcType *expr_type = expr->resolved_kgpc_type;
+    KgpcType *node_type = node->type;
+    int expr_tag = UNKNOWN_TYPE;
+    int node_tag = UNKNOWN_TYPE;
+
+    if (expr_type != NULL && node_type != NULL)
+    {
+        if (kgpc_type_is_pointer(expr_type))
+            return kgpc_type_is_pointer(node_type);
+        if (kgpc_type_is_record(expr_type))
+            return kgpc_type_is_record(node_type) || kgpc_type_is_pointer(node_type);
+        if (kgpc_type_is_procedure(expr_type))
+            return kgpc_type_is_procedure(node_type);
+        if (kgpc_type_is_array(expr_type))
+            return kgpc_type_is_array(node_type);
+
+        expr_tag = expr_tree_tag_from_kgpc(expr_type);
+        node_tag = expr_tree_tag_from_kgpc(node_type);
+    }
+    else
+    {
+        expr_tag = expr_get_type_tag(expr);
+        if (node_type != NULL)
+            node_tag = expr_tree_tag_from_kgpc(node_type);
+    }
+
+    if (expr_tag == UNKNOWN_TYPE || node_tag == UNKNOWN_TYPE)
+        return 1;
+
+    return expr_tag == node_tag;
+}
+
+static int expr_tree_symbol_preference_score(const HashNode_t *node,
+    const struct Expression *expr, const CodeGenContext *ctx)
+{
+    if (node == NULL)
+        return INT_MIN;
+    if (!expr_tree_symbol_matches_expr_type(node, expr))
+        return INT_MIN / 2;
+
+    int score = 0;
+    switch (node->hash_type)
+    {
+        case HASHTYPE_VAR:
+        case HASHTYPE_ARRAY:
+            score = 400;
+            break;
+        case HASHTYPE_CONST:
+            score = 300;
+            break;
+        case HASHTYPE_FUNCTION:
+        case HASHTYPE_PROCEDURE:
+            score = 200;
+            break;
+        case HASHTYPE_TYPE:
+            score = 100;
+            break;
+        default:
+            score = 0;
+            break;
+    }
+
+    if (ctx != NULL && ctx->symtab != NULL &&
+        node->source_unit_index == ctx->symtab->current_unit_index)
+        score += 25;
+
+    return score;
+}
+
+static HashNode_t *expr_tree_find_preferred_symbol(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || ctx->symtab == NULL || expr == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return NULL;
+
+    HashNode_t *best = NULL;
+    int best_score = INT_MIN;
+
+    ListNode_t *candidates = FindAllIdents(ctx->symtab, expr->expr_data.id);
+    for (ListNode_t *cur = candidates; cur != NULL; cur = cur->next)
+    {
+        HashNode_t *candidate = (HashNode_t *)cur->cur;
+        int score = expr_tree_symbol_preference_score(candidate, expr, ctx);
+        if (score > best_score)
+        {
+            best = candidate;
+            best_score = score;
+        }
+    }
+    if (candidates != NULL)
+        DestroyList(candidates);
+
+    return best;
+}
+
 static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *type_id,
     char *buffer, size_t size)
 {
@@ -120,6 +222,57 @@ static void codegen_typeinfo_label_for_type_id(SymTab_t *symtab, const char *typ
 #include "../../../Parser/SemanticCheck/SymTab/SymTab.h"
 #include "../../../Parser/SemanticCheck/NameMangling.h"
 #include "../codegen_statement.h"
+
+static int expr_tree_type_is_class_vmt_value(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (type->type_alias != NULL && type->type_alias->is_class_reference)
+        return 1;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL)
+    {
+        if (type->info.points_to->type_alias != NULL &&
+            type->info.points_to->type_alias->is_class_reference)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int expr_tree_first_arg_is_class_vmt_value(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_FUNCTION_CALL ||
+        expr->expr_data.function_call_data.args_expr == NULL ||
+        expr->expr_data.function_call_data.args_expr->cur == NULL)
+    {
+        return 0;
+    }
+
+    struct Expression *self_expr =
+        (struct Expression *)expr->expr_data.function_call_data.args_expr->cur;
+    if (self_expr == NULL)
+        return 0;
+
+    if (expr_tree_type_is_class_vmt_value(self_expr->resolved_kgpc_type))
+        return 1;
+
+    if (self_expr->type == EXPR_VAR_ID && self_expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, self_expr->expr_data.id) != 0 &&
+            node != NULL && expr_tree_type_is_class_vmt_value(node->type))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
 
 
 /* Cached getenv() — defined in SemCheck.c */
@@ -831,6 +984,90 @@ static char *escape_string_for_assembly(const char *input)
     *dest = '\0';
 
     return escaped;
+}
+
+static int expr_tree_should_emit_shortstring_literal(const struct Expression *expr,
+    const HashNode_t *node)
+{
+    if (expr != NULL)
+    {
+        if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
+            return 1;
+        if (expr->resolved_kgpc_type != NULL && kgpc_type_is_shortstring(expr->resolved_kgpc_type))
+            return 1;
+        if (expr->resolved_kgpc_type != NULL &&
+            expr->resolved_kgpc_type->type_alias != NULL &&
+            expr->resolved_kgpc_type->type_alias->is_shortstring)
+        {
+            return 1;
+        }
+    }
+
+    if (node != NULL && node->type != NULL)
+    {
+        if (kgpc_type_is_shortstring(node->type))
+            return 1;
+        if (node->type->type_alias != NULL && node->type->type_alias->is_shortstring)
+            return 1;
+    }
+
+    return 0;
+}
+
+static ListNode_t *expr_tree_emit_string_literal_address(ListNode_t *inst_list,
+    CodeGenContext *ctx, Register_t *target_reg, const char *value, int emit_shortstring)
+{
+    if (ctx == NULL || target_reg == NULL || value == NULL)
+        return inst_list;
+
+    char label[20];
+    snprintf(label, sizeof(label), ".LC%d", ctx->write_label_counter++);
+
+    char add_rodata[1536];
+    const char *readonly_section = codegen_readonly_section_directive();
+    char *escaped_string = escape_string_for_assembly(value);
+
+    if (emit_shortstring)
+    {
+        unsigned int short_len = (unsigned int)strlen(value);
+        if (short_len > 255)
+            short_len = 255;
+
+        if (escaped_string != NULL)
+        {
+            snprintf(add_rodata, sizeof(add_rodata),
+                "%s\n%s:\n\t.byte %u\n\t.ascii \"%s\"\n\t.byte 0\n%s\n",
+                readonly_section, label, short_len, escaped_string,
+                codegen_text_section_resume());
+            free(escaped_string);
+        }
+        else
+        {
+            snprintf(add_rodata, sizeof(add_rodata),
+                "%s\n%s:\n\t.byte %u\n\t.ascii \"%s\"\n\t.byte 0\n%s\n",
+                readonly_section, label, short_len, value,
+                codegen_text_section_resume());
+        }
+    }
+    else
+    {
+        if (escaped_string != NULL)
+        {
+            snprintf(add_rodata, sizeof(add_rodata), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, escaped_string, codegen_text_section_resume());
+            free(escaped_string);
+        }
+        else
+        {
+            snprintf(add_rodata, sizeof(add_rodata), "%s\n%s:\n\t.string \"%s\"\n%s\n",
+                readonly_section, label, value, codegen_text_section_resume());
+        }
+    }
+
+    inst_list = add_inst(inst_list, add_rodata);
+    char buffer[128];
+    snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
+    return add_inst(inst_list, buffer);
 }
 
 static inline const char *select_register_name_tag(const Register_t *reg, int type_tag)
@@ -2453,7 +2690,11 @@ static ListNode_t *promote_char_operand_to_string_ex(ListNode_t *inst_list,
     free_arg_regs();
 
     Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
-    assert(result_reg != NULL);
+    if (result_reg == NULL)
+    {
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+        return inst_list;
+    }
 
     snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n", RETURN_REG_64, result_reg->bit_64);
     inst_list = add_inst(inst_list, buffer);
@@ -3600,6 +3841,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             {
                 dispatch_self_is_vmt = 1;
             }
+            int self_is_vmt = (!expr->expr_data.function_call_data.is_constructor_call) &&
+                expr_tree_first_arg_is_class_vmt_value(expr, ctx);
+            dispatch_self_is_vmt = dispatch_self_is_vmt || self_is_vmt;
             /* Self has already been lowered to the correct calling form during
              * argument passing: instance pointer for normal methods, VMT pointer
              * for non-static class methods. Do not dereference again here. */
@@ -4083,11 +4327,9 @@ cleanup_constructor:
     else if (expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
         /* Check if this is a string constant reference (but not a procedure address constant) */
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
-            node != NULL)
+        HashNode_t *node = expr_tree_find_preferred_symbol(ctx, expr);
+        if (node != NULL)
             node = codegen_prefer_visible_var_over_const(ctx, expr->expr_data.id, node);
-
         if (node != NULL && node->hash_type == HASHTYPE_CONST &&
             node->const_string_value != NULL &&
             /* Skip if this is a procedure address constant - those use const_string_value
@@ -4108,29 +4350,9 @@ cleanup_constructor:
                 return add_inst(inst_list, buffer);
             }
             /* String constant - treat it like a string literal */
-            char label[20];
-            snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
-            char add_rodata[1024];
-            const char *readonly_section = codegen_readonly_section_directive();
-            
-            /* Escape the string for assembly */
-            char *escaped_string = escape_string_for_assembly(node->const_string_value);
-            if (escaped_string != NULL)
-            {
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                    readonly_section, label, escaped_string, codegen_text_section_resume());
-                free(escaped_string);
-            }
-            else
-            {
-                /* Fallback: use original string if escaping fails */
-                snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                    readonly_section, label, node->const_string_value, codegen_text_section_resume());
-            }
-
-            inst_list = add_inst(inst_list, add_rodata);
-            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-            return add_inst(inst_list, buffer);
+            return expr_tree_emit_string_literal_address(inst_list, ctx, target_reg,
+                node->const_string_value,
+                expr_tree_should_emit_shortstring_literal(expr, node));
         }
     }
     else if (expr->type == EXPR_SET)
@@ -4163,39 +4385,9 @@ cleanup_constructor:
             return add_inst(inst_list, buffer);
         }
 
-        char label[20];
-        snprintf(label, 20, ".LC%d", ctx->write_label_counter++);
-        char add_rodata[1024];
-        const char *readonly_section = codegen_readonly_section_directive();
-        
-        /* Escape the string for assembly */
-        char *escaped_string = escape_string_for_assembly(expr->expr_data.string);
-        if (escaped_string != NULL)
-        {
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                readonly_section, label, escaped_string, codegen_text_section_resume());
-            free(escaped_string);
-        }
-        else
-        {
-            /* Fallback: use original string if escaping fails */
-            snprintf(add_rodata, 1024, "%s\n%s:\n\t.string \"%s\"\n%s\n",
-                readonly_section, label, expr->expr_data.string, codegen_text_section_resume());
-        }
-        
-        inst_list = add_inst(inst_list, add_rodata);
-        int buf_len = snprintf(NULL, 0, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-        if (buf_len > 0)
-        {
-            char *tmp_buf = (char *)malloc((size_t)buf_len + 1);
-            if (tmp_buf != NULL)
-            {
-                snprintf(tmp_buf, (size_t)buf_len + 1, "\tleaq\t%s(%%rip), %s\n", label, target_reg->bit_64);
-                inst_list = add_inst(inst_list, tmp_buf);
-                free(tmp_buf);
-            }
-        }
-        return inst_list;
+        return expr_tree_emit_string_literal_address(inst_list, ctx, target_reg,
+            expr->expr_data.string,
+            expr_tree_should_emit_shortstring_literal(expr, NULL));
     }
     else if (expr->type == EXPR_TYPEINFO)
     {
@@ -4937,14 +5129,37 @@ ListNode_t *gencode_leaf_var(struct Expression *expr, ListNode_t *inst_list,
                 }
 
                 /* First check if this is a constant - constants don't need non-local access */
-                HashNode_t *node = NULL;
-                int found = (ctx != NULL && ctx->symtab != NULL &&
-                    FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 &&
-                    node != NULL);
+                HashNode_t *node = expr_tree_find_preferred_symbol(ctx, expr);
+                int found = (node != NULL);
                 if (!found && ctx != NULL)
                 {
                     node = codegen_find_owner_unit_symbol(ctx, expr->expr_data.id);
                     found = (node != NULL);
+                }
+                if (found && node != NULL &&
+                    (node->hash_type == HASHTYPE_CONST || node->is_constant) &&
+                    ctx != NULL && ctx->symtab != NULL)
+                {
+                    ListNode_t *all = FindAllIdents(ctx->symtab, expr->expr_data.id);
+                    for (ListNode_t *cur = all; cur != NULL; cur = cur->next)
+                    {
+                        HashNode_t *alt = (HashNode_t *)cur->cur;
+                        if (alt == NULL || alt == node)
+                            continue;
+                        if (!(alt->hash_type == HASHTYPE_VAR ||
+                              alt->hash_type == HASHTYPE_ARRAY ||
+                              alt->hash_type == HASHTYPE_FUNCTION_RETURN))
+                        {
+                            continue;
+                        }
+                        if (!expr_tree_symbol_matches_expr_type(alt, expr))
+                            continue;
+                        node = alt;
+                        found = 1;
+                        break;
+                    }
+                    if (all != NULL)
+                        DestroyList(all);
                 }
                 /* If FindSymbol returned a callable/type-like symbol but there is a
                  * constant with the same name in the active/user scopes (or builtin
@@ -6049,7 +6264,7 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                         /* Free the incorrectly-loaded value register */
                         if (right_reg != NULL)
                         {
-                            free_reg(get_reg_stack(), right_reg);
+                            free_reg(get_reg_stack(), (Register_t *)right_reg);
                             right_reg = NULL;
                         }
 

@@ -76,9 +76,9 @@ StackNode_t *add_dynamic_array(char *label, int element_size, int lower_bound,
     int use_static_storage, const char *static_label);
 StackNode_t *add_static_var(char *label, int size, const char *static_label);
 StackNode_t *find_in_temp(char *);
-StackNode_t *find_label(char *);
+StackNode_t *find_label(const char *);
 /* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
-StackNode_t *find_label_with_depth(char *label, int *depth);
+StackNode_t *find_label_with_depth(const char *label, int *depth);
 RegStack_t *get_reg_stack();
 void reset_reg_stack(void);
 void free_stackmng();
@@ -200,9 +200,9 @@ typedef struct StackScope
 } StackScope_t;
 
 StackScope_t *init_stackscope();
-StackNode_t *stackscope_find_t(StackScope_t *, char *);
-StackNode_t *stackscope_find_x(StackScope_t *, char *);
-StackNode_t *stackscope_find_z(StackScope_t *, char *);
+StackNode_t *stackscope_find_t(StackScope_t *, const char *);
+StackNode_t *stackscope_find_x(StackScope_t *, const char *);
+StackNode_t *stackscope_find_z(StackScope_t *, const char *);
 StackScope_t *free_stackscope(StackScope_t *);
 void free_all_stackscopes(StackScope_t *);
 void free_stackscope_list(ListNode_t *);

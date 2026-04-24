@@ -586,14 +586,14 @@ StackNode_t *find_in_temp(char *label)
 }
 
 /* TODO: Does not find variables outside the current scope */
-StackNode_t *find_label(char *label)
+StackNode_t *find_label(const char *label)
 {
     int depth = 0;
     return find_label_with_depth(label, &depth);
 }
 
 /* Returns the scope depth (0 = current scope, 1 = parent, etc.) */
-StackNode_t *find_label_with_depth(char *label, int *depth)
+StackNode_t *find_label_with_depth(const char *label, int *depth)
 {
     assert(global_stackmng != NULL);
     assert(global_stackmng->cur_scope != NULL);
@@ -1321,7 +1321,7 @@ StackScope_t *init_stackscope()
     return new_scope;
 }
 
-StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
+StackNode_t *stackscope_find_t(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
@@ -1344,7 +1344,7 @@ StackNode_t *stackscope_find_t(StackScope_t *cur_scope, char *label)
     return NULL;
 }
 
-StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
+StackNode_t *stackscope_find_x(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;
@@ -1374,7 +1374,7 @@ StackNode_t *stackscope_find_x(StackScope_t *cur_scope, char *label)
     return alias_match;
 }
 
-StackNode_t *stackscope_find_z(StackScope_t *cur_scope, char *label)
+StackNode_t *stackscope_find_z(StackScope_t *cur_scope, const char *label)
 {
     ListNode_t *cur_li;
     StackNode_t *cur_node;

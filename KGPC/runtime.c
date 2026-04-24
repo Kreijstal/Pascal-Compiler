@@ -9,6 +9,8 @@
 #include <math.h>
 #include <errno.h>
 #include <setjmp.h>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "runtime_internal.h"
 #include <sys/stat.h>
@@ -69,6 +71,21 @@ static int kgpc_env_flag(const char *name);
 char *kgpc_float_to_string(double value, int precision);
 static char *kgpc_apply_field_width(char *value, int64_t width);
 uint16_t *kgpc_unicodestring_from_string(const char *value);
+typedef struct KgpcGuardedAlloc
+{
+    void *user_ptr;
+    void *raw_ptr;
+    size_t size;
+    size_t mapping_size;
+    struct KgpcGuardedAlloc *next;
+} KgpcGuardedAlloc;
+
+static KgpcGuardedAlloc *kgpc_guarded_allocs = NULL;
+static int kgpc_guard_new_checked = 0;
+static int kgpc_guard_new_enabled = 0;
+
+static int kgpc_guard_new_is_enabled(void);
+static void kgpc_guard_validate_all(const char *site);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -2791,7 +2808,49 @@ void kgpc_new(void **target, size_t size)
     if (target == NULL)
         return;
 
-    void *memory = calloc(1, size);
+    kgpc_guard_validate_all("kgpc_new:before");
+
+    void *memory = NULL;
+    if (kgpc_guard_new_is_enabled())
+    {
+        long page_size_long = sysconf(_SC_PAGESIZE);
+        size_t page_size = (page_size_long > 0) ? (size_t)page_size_long : 4096u;
+        size_t rounded = ((size + page_size - 1) / page_size) * page_size;
+        size_t total = rounded + page_size;
+        unsigned char *raw = mmap(NULL, total, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (raw == MAP_FAILED)
+        {
+            fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes.\n", size);
+            exit(EXIT_FAILURE);
+        }
+        if (mprotect(raw + rounded, page_size, PROT_NONE) != 0)
+        {
+            fprintf(stderr, "KGPC runtime: failed to protect guard page.\n");
+            exit(EXIT_FAILURE);
+        }
+        unsigned char *user = raw + rounded - size;
+        memset(user, 0, size);
+
+        KgpcGuardedAlloc *meta = (KgpcGuardedAlloc *)malloc(sizeof(*meta));
+        if (meta == NULL)
+        {
+            fprintf(stderr, "KGPC runtime: failed to allocate guard metadata.\n");
+            exit(EXIT_FAILURE);
+        }
+        meta->user_ptr = user;
+        meta->raw_ptr = raw;
+        meta->size = size;
+        meta->mapping_size = total;
+        meta->next = kgpc_guarded_allocs;
+        kgpc_guarded_allocs = meta;
+        memory = user;
+    }
+    else
+    {
+        memory = calloc(1, size);
+    }
+
     if (memory == NULL)
     {
         fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes.\n", size);
@@ -2799,6 +2858,7 @@ void kgpc_new(void **target, size_t size)
     }
 
     *target = memory;
+    kgpc_guard_validate_all("kgpc_new:after");
 }
 
 void kgpc_dispose(void **target)
@@ -2808,6 +2868,25 @@ void kgpc_dispose(void **target)
 
     if (*target != NULL)
     {
+        kgpc_guard_validate_all("kgpc_dispose:before");
+        if (kgpc_guard_new_is_enabled())
+        {
+            KgpcGuardedAlloc **link = &kgpc_guarded_allocs;
+            while (*link != NULL)
+            {
+                if ((*link)->user_ptr == *target)
+                {
+                    KgpcGuardedAlloc *found = *link;
+                    *link = found->next;
+                    munmap(found->raw_ptr, found->mapping_size);
+                    free(found);
+                    *target = NULL;
+                    kgpc_guard_validate_all("kgpc_dispose:after");
+                    return;
+                }
+                link = &(*link)->next;
+            }
+        }
         free(*target);
         *target = NULL;
     }
@@ -2824,6 +2903,23 @@ void Initialize(void *value)
 }
 
 static void *kgpc_memory_manager_allocmem(uintptr_t size);
+
+static int kgpc_guard_new_is_enabled(void)
+{
+    if (!kgpc_guard_new_checked)
+    {
+        kgpc_guard_new_enabled = (getenv("KGPC_GUARD_NEW") != NULL);
+        kgpc_guard_new_checked = 1;
+    }
+    return kgpc_guard_new_enabled;
+}
+
+static void kgpc_guard_validate_all(const char *site)
+{
+    (void)site;
+    if (!kgpc_guard_new_is_enabled())
+        return;
+}
 
 /* Generic default constructor for classes without explicit constructors */
 /* Initialize interface vtable pointer slots in a class instance.
@@ -3071,13 +3167,26 @@ static KgpcStringHeader *kgpc_string_header(const char *value)
     return (KgpcStringHeader *)((char *)value - (int64_t)sizeof(KgpcStringHeader));
 }
 
+static int kgpc_string_try_known_length(const char *value, size_t *out_length)
+{
+    if (value == NULL || out_length == NULL)
+        return 0;
+    if (!kgpc_string_is_managed(value))
+        return 0;
+
+    KgpcStringHeader hdr;
+    memcpy(&hdr, value - (ptrdiff_t)sizeof(hdr), sizeof(hdr));
+    *out_length = (size_t)hdr.length;
+    return 1;
+}
+
 static size_t kgpc_string_known_length(const char *value)
 {
     if (value == NULL)
         return 0;
-    KgpcStringHeader *hdr = kgpc_string_header(value);
-    if (hdr != NULL)
-        return (size_t)hdr->length;
+    size_t managed_len = 0;
+    if (kgpc_string_try_known_length(value, &managed_len))
+        return managed_len;
     return strlen(value);
 }
 
@@ -3902,6 +4011,14 @@ void kgpc_shortstring_to_shortstring(char *dest, size_t dest_size, const char *s
         return;
 
     unsigned char src_len = (unsigned char)src[0];
+    if (src_len > 0 && memchr(src + 1, '\0', src_len) != NULL)
+    {
+        /* Some bootstrap call paths still hand us a C string/AnsiString payload
+         * even though the formal parameter is lowered as ShortString. Detect that
+         * representation conservatively and convert from the C string form. */
+        kgpc_string_to_shortstring(dest, src, dest_size);
+        return;
+    }
     size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
     size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
 

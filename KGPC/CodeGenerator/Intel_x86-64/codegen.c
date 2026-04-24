@@ -1695,14 +1695,14 @@ static const char *codegen_resolve_record_type_name(HashNode_t *node, SymTab_t *
 }
 
 /**
- * For static class methods, register the class variables with the stack manager
+ * For class methods, register the class variables with the stack manager
  * so they can be found during code generation via find_label_with_depth.
  * 
  * This function extracts the class name from the mangled method name (ClassName__MethodName),
  * looks up the class type in the symbol table, and registers each class var field
  * with the stack manager using add_static_var.
  */
-static void codegen_add_class_vars_for_static_method(const char *owner_class,
+static void codegen_add_class_vars_for_method(const char *owner_class,
     const char *method_name_arg, SymTab_t *symtab, CodeGenContext *ctx)
 {
     if (owner_class == NULL || symtab == NULL)
@@ -1716,7 +1716,9 @@ static void codegen_add_class_vars_for_static_method(const char *owner_class,
         return;
 
     int is_static_check = from_cparser_is_method_static(class_name, method_name_arg);
-    if (!is_static_check)
+    int is_nonstatic_class_method =
+        from_cparser_is_method_nonstatic_class_method(class_name, method_name_arg);
+    if (!is_static_check && !is_nonstatic_class_method)
     {
         free(class_name);
         return;
@@ -8002,9 +8004,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int is_class_method = (proc->owner_class != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
-    /* For static class methods, register class vars with the stack manager */
+    /* For class methods, register class vars with the stack manager */
     if (is_class_method)
-        codegen_add_class_vars_for_static_method(ctx->current_subprogram_owner_class,
+        codegen_add_class_vars_for_method(ctx->current_subprogram_owner_class,
             ctx->current_subprogram_method_name, symtab, ctx);
 
     /* Process arguments first to allocate their stack space */
@@ -8322,9 +8324,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     int is_class_method = (func->owner_class != NULL && !is_nested_function);
     StackNode_t *static_link = NULL;
 
-    /* For static class methods, register class vars with the stack manager */
+    /* For class methods, register class vars with the stack manager */
     if (is_class_method)
-        codegen_add_class_vars_for_static_method(ctx->current_subprogram_owner_class,
+        codegen_add_class_vars_for_method(ctx->current_subprogram_owner_class,
             ctx->current_subprogram_method_name, symtab, ctx);
 
     HashNode_t *func_node = NULL;

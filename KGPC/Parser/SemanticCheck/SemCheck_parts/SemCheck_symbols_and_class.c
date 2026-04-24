@@ -287,9 +287,12 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         return;
     }
 
-    /* Only add class fields for static methods. Non-static methods
-     * access fields via Self which is handled differently. */
+    /* Class vars need to be available in both static methods and non-static
+     * class methods/class procedures. In the latter case, Self is a VMT
+     * pointer, not CLASSVAR storage, so falling back to Self.field is wrong. */
     int is_static = from_cparser_is_method_static(class_name, method_name);
+    int is_nonstatic_class_method =
+        from_cparser_is_method_nonstatic_class_method(class_name, method_name);
 
     /* Look up the class type */
     HashNode_t *class_node = NULL;
@@ -335,11 +338,11 @@ static void add_class_vars_to_method_scope_impl(SymTab_t *symtab,
         }
     }
 
-    /* For class types (not objects), non-static methods access fields via Self.
-     * For object types, class vars and consts are NOT accessible via Self,
-     * so we must always push them into scope. */
+    /* For object types, class vars/consts are not accessible via Self.
+     * For class types, class vars are also not stored in the instance/VMT
+     * directly; expose them in scope for static methods and class methods. */
     int is_object_type = !record_type_is_class(record_info) && !record_info->is_type_helper;
-    if (!is_static && !is_object_type)
+    if (!is_static && !is_nonstatic_class_method && !is_object_type)
     {
         free(class_name);
         return;

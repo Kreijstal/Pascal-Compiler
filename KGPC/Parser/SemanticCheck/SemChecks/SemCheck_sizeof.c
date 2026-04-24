@@ -122,6 +122,29 @@ static long long fpc_default_set_storage_size_for_high(long long high)
     return (high + 7) / 8;
 }
 
+static int sizeof_from_array_type_kgpc(SymTab_t *symtab, KgpcType *type, long long *size_out)
+{
+    if (symtab == NULL || type == NULL || size_out == NULL || !kgpc_type_is_array(type))
+        return 1;
+
+    KgpcArrayDimensionInfo info;
+    if (kgpc_type_get_array_dimension_info(type, symtab, &info) == 0 &&
+        info.total_size > 0)
+    {
+        *size_out = info.total_size;
+        return 0;
+    }
+
+    long long size = kgpc_type_sizeof(type);
+    if (size >= 0)
+    {
+        *size_out = size;
+        return 0;
+    }
+
+    return 1;
+}
+
 static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
     int depth, int line_num)
 {
@@ -269,7 +292,16 @@ int sizeof_from_type_ref(SymTab_t *symtab, int type_tag,
         HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_id);
         if (type_node != NULL && type_node->type != NULL)
         {
-            long long size = kgpc_type_sizeof(type_node->type);
+            long long size = -1;
+            if (kgpc_type_is_array(type_node->type) &&
+                sizeof_from_array_type_kgpc(symtab, type_node->type, &size) == 0 &&
+                size >= 0)
+            {
+                *size_out = size;
+                return 0;
+            }
+
+            size = kgpc_type_sizeof(type_node->type);
             if (size > 0)
             {
                 *size_out = size;
@@ -964,6 +996,18 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
             return 0;
         }
 
+        if (alias->alias_name != NULL)
+        {
+            HashNode_t *alias_node = semcheck_find_preferred_type_node(symtab, alias->alias_name);
+            if (alias_node != NULL && alias_node->type != NULL &&
+                kgpc_type_is_array(alias_node->type) &&
+                sizeof_from_array_type_kgpc(symtab, alias_node->type, size_out) == 0 &&
+                *size_out >= 0)
+            {
+                return 0;
+            }
+        }
+
         long long element_size = 0;
         if (sizeof_from_type_ref(symtab, alias->array_element_type,
                 alias->array_element_type_id, &element_size, depth + 1, line_num) != 0)
@@ -1176,7 +1220,15 @@ int sizeof_from_hashnode(SymTab_t *symtab, HashNode_t *node,
     /* PREFERRED PATH: Try using KgpcType directly if available */
     if (node->type != NULL)
     {
-        long long size = kgpc_type_sizeof(node->type);
+        long long size = -1;
+        if (kgpc_type_is_array(node->type) &&
+            sizeof_from_array_type_kgpc(symtab, node->type, &size) == 0)
+        {
+            *size_out = size;
+            return 0;
+        }
+
+        size = kgpc_type_sizeof(node->type);
         if (size > 0)
         {
             *size_out = size;

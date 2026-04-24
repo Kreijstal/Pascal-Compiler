@@ -996,23 +996,6 @@ static void const_int_ht_grow(void) {
     g_const_int_ht.capacity = new_cap;
 }
 
-static void const_int_ht_destroy(void) {
-    if (g_const_int_ht.buckets == NULL) return;
-    for (size_t i = 0; i < g_const_int_ht.capacity; i++) {
-        ConstIntEntry *e = g_const_int_ht.buckets[i];
-        while (e != NULL) {
-            ConstIntEntry *next = e->next;
-            free(e->name);
-            free(e);
-            e = next;
-        }
-    }
-    free(g_const_int_ht.buckets);
-    g_const_int_ht.buckets = NULL;
-    g_const_int_ht.capacity = 0;
-    g_const_int_ht.size = 0;
-}
-
 /* ---- Const-decl AST index: name → value AST node ----
  * Built when const sections are registered, enables O(1) lookup of const
  * declaration value nodes instead of recursive AST walking. */
@@ -2323,4 +2306,3 @@ void get_class_methods(const char *class_name, ListNode_t **methods_out, int *co
     *methods_out = head;
     *count_out = count;
 }
-

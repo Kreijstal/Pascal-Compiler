@@ -1,5 +1,130 @@
 #include "../codegen_stmt_internal.h"
 
+static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr == NULL || symtab == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return NULL;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL)
+        return NULL;
+
+    return node->type;
+}
+
+static int codegen_expr_is_unsigned_with_symtab(const struct Expression *expr, SymTab_t *symtab)
+{
+    KgpcType *type = codegen_expr_lookup_symtab_type(expr, symtab);
+    if (type != NULL)
+    {
+        if (type->type_alias != NULL && type->type_alias->range_known)
+            return (type->type_alias->range_start >= 0);
+
+        switch (codegen_tag_from_kgpc(type))
+        {
+            case BYTE_TYPE:
+            case WORD_TYPE:
+            case LONGWORD_TYPE:
+            case QWORD_TYPE:
+            case CHAR_TYPE:
+            case BOOL:
+                return 1;
+            default:
+                break;
+        }
+    }
+
+    switch (expr_get_type_tag(expr))
+    {
+        case BYTE_TYPE:
+        case WORD_TYPE:
+        case LONGWORD_TYPE:
+        case QWORD_TYPE:
+        case CHAR_TYPE:
+        case BOOL:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static int codegen_expr_is_signed_with_symtab(const struct Expression *expr, SymTab_t *symtab)
+{
+    return !codegen_expr_is_unsigned_with_symtab(expr, symtab);
+}
+
+static int codegen_expr_uses_qword_with_symtab(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr_uses_qword_kgpctype(expr))
+        return 1;
+
+    KgpcType *type = codegen_expr_lookup_symtab_type(expr, symtab);
+    return (type != NULL) ? kgpc_type_uses_qword(type) : 0;
+}
+
+static int codegen_stmt_expr_is_type_identifier(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) == 0 || node == NULL)
+        return 0;
+
+    return node->hash_type == HASHTYPE_TYPE;
+}
+
+static int codegen_stmt_type_is_class_vmt_value(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (type->type_alias != NULL && type->type_alias->is_class_reference)
+        return 1;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL)
+    {
+        if (type->info.points_to->type_alias != NULL &&
+            type->info.points_to->type_alias->is_class_reference)
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+static int codegen_stmt_first_arg_is_class_vmt_value(const ListNode_t *args_expr,
+    CodeGenContext *ctx)
+{
+    if (args_expr == NULL || args_expr->cur == NULL || ctx == NULL || ctx->symtab == NULL)
+        return 0;
+
+    const struct Expression *self_expr = (const struct Expression *)args_expr->cur;
+    if (self_expr == NULL)
+        return 0;
+
+    if (codegen_stmt_expr_is_type_identifier(self_expr, ctx))
+        return 1;
+
+    if (codegen_stmt_type_is_class_vmt_value(self_expr->resolved_kgpc_type))
+        return 1;
+
+    if (self_expr->type == EXPR_VAR_ID && self_expr->expr_data.id != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, self_expr->expr_data.id) != 0 &&
+            node != NULL && codegen_stmt_type_is_class_vmt_value(node->type))
+        {
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 ListNode_t *codegen_compound_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
     #ifdef DEBUG_CODEGEN
@@ -2556,9 +2681,12 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             int vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
             int self_arg_index = should_pass_static_link ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
+            int self_is_vmt =
+                (!stmt->stmt_data.procedure_call_data.is_constructor_call) &&
+                codegen_stmt_first_arg_is_class_vmt_value(args_expr, ctx);
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
-            if (!stmt->stmt_data.procedure_call_data.is_class_method_call)
+            if (!self_is_vmt)
             {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t(%%r11), %%r11\n");
                 inst_list = add_inst(inst_list, buffer);
@@ -4115,7 +4243,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
     limit_temp = codegen_alloc_temp_slot("for_to_temp");
 
     const int limit_is_qword = expr_uses_qword_kgpctype(expr);
-    const int limit_is_signed = codegen_expr_is_signed(expr);
     if (limit_is_qword)
         snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n", limit_reg->bit_64, limit_temp->offset);
     else
@@ -4183,15 +4310,16 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
         snprintf(buffer, sizeof(buffer), "\tmovl\t-%d(%%rbp), %s\n", limit_temp->offset, limit_reg->bit_32);
     inst_list = add_inst(inst_list, buffer);
 
-    const int var_is_qword = expr_uses_qword_kgpctype(for_var);
-    const int var_is_signed = codegen_expr_is_signed(for_var);
+    const int var_is_qword = codegen_expr_uses_qword_with_symtab(for_var, symtab);
+    const int var_is_signed = codegen_expr_is_signed_with_symtab(for_var, symtab);
+    const int use_unsigned_compare = codegen_expr_is_unsigned_with_symtab(for_var, symtab);
     const int compare_as_qword = var_is_qword || limit_is_qword;
     if (compare_as_qword && !limit_is_qword)
     {
-        if (limit_is_signed)
+        if (var_is_signed)
             inst_list = codegen_sign_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_64);
         else
-            inst_list = codegen_zero_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_32);
+            inst_list = codegen_zero_extend32_to64(inst_list, limit_reg->bit_32, limit_reg->bit_64);
     }
     if (compare_as_qword && !var_is_qword)
     {
@@ -4200,8 +4328,6 @@ ListNode_t *codegen_for(struct Statement *stmt, ListNode_t *inst_list, CodeGenCo
         else
             inst_list = codegen_zero_extend32_to64(inst_list, loop_value_reg->bit_32, loop_value_reg->bit_32);
     }
-
-    const int use_unsigned_compare = !(limit_is_signed || var_is_signed);
 
     const char *cmp_instr = compare_as_qword ? "cmpq" : "cmpl";
     const char *limit_cmp_reg = compare_as_qword ? limit_reg->bit_64 : limit_reg->bit_32;
