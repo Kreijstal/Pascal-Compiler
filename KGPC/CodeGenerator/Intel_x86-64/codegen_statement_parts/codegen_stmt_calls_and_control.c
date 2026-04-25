@@ -2004,6 +2004,71 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
         }
 
+        /* `pansistring^ := shortstring_value` — the LHS deref points to a
+         * heap-managed AnsiString slot (8-byte char* pointer); the RHS is a
+         * ShortString buffer (e.g. SRET-returned by upper_ss).  Without an
+         * explicit conversion the generic pointer assignment below would
+         * route through `kgpc_string_assign`, which interprets the
+         * shortstring buffer as an AnsiString (treating the leading length
+         * byte as a payload character) and copies via strdup.  Compute the
+         * destination address first and spill it to a stack temp so the
+         * subsequent SRET evaluation can freely use registers without
+         * losing the destination, then reload and call the shortstring-aware
+         * helper that strips the length byte. */
+        {
+            int var_type_string = expr_get_type_tag(var_expr);
+            if (var_type_string == STRING_TYPE &&
+                !codegen_expr_is_shortstring_array(var_expr) &&
+                codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+            {
+                Register_t *dest_addr = NULL;
+                inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &dest_addr);
+                if (codegen_had_error(ctx) || dest_addr == NULL)
+                {
+                    if (dest_addr != NULL)
+                        free_reg(get_reg_stack(), dest_addr);
+                    return inst_list;
+                }
+
+                /* Spill dest_addr so it survives the RHS evaluation, which
+                 * may make function calls and consume all caller-saved /
+                 * callee-saved registers in this allocator. */
+                StackNode_t *dest_addr_temp = add_l_t("ptr_short_assign_dest");
+                snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n",
+                    dest_addr->bit_64, dest_addr_temp->offset);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), dest_addr);
+
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    if (value_reg != NULL)
+                        free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
+
+                Register_t *dest_addr_reload = get_free_reg(get_reg_stack(), &inst_list);
+                if (dest_addr_reload == NULL)
+                    dest_addr_reload = get_reg_with_spill(get_reg_stack(), &inst_list);
+                if (dest_addr_reload == NULL)
+                {
+                    free_reg(get_reg_stack(), value_reg);
+                    return codegen_fail_register(ctx, inst_list, NULL,
+                        "ERROR: Unable to allocate register for pointer-deref shortstring assign.");
+                }
+                snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n",
+                    dest_addr_temp->offset, dest_addr_reload->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+
+                inst_list = codegen_call_string_assign_func(inst_list, ctx,
+                    dest_addr_reload, value_reg, "kgpc_string_assign_from_shortstring");
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), dest_addr_reload);
+                return inst_list;
+            }
+        }
+
         expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
