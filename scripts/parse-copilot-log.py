@@ -118,32 +118,6 @@ def _collect_text(lines: list[Line], i: int) -> tuple[str, int]:
     return "\n".join(parts), i - start
 
 
-def _build_args(lines: list[Line], i: int) -> tuple[ArgsNode, int]:
-    """Parse 4-space indented key: value lines."""
-    args = ArgsNode()
-    pairs: list[tuple[str, str]] = []
-    key: str | None = None
-    val: list[str] = []
-
-    while i < len(lines):
-        ln = lines[i]
-        if ln.indent < 4:
-            break
-        m = re.match(r'^(\w[\w_]*?)\s*:\s*(.*)', ln.text)
-        if m and ln.indent == 4:
-            if key:
-                pairs.append((key, "\n".join(val).strip()))
-            key, val = m.group(1), [m.group(2).strip()] if m.group(2).strip() else []
-        elif key and ln.indent >= 4:
-            if ln.text.strip():
-                val.append(ln.text.strip())
-        i += 1
-    if key:
-        pairs.append((key, "\n".join(val).strip()))
-    args.pairs = pairs
-    return args, i - start   # but wait, we haven't updated i — let me fix
-
-
 def build_args(lines: list[Line], i: int) -> tuple[ArgsNode, int]:
     """Parse 4-space indented key: value pairs starting at line i.
     Returns (ArgsNode, lines_consumed_from_i)."""
@@ -276,6 +250,21 @@ def parse(lines: list[Line]) -> RootNode:
                 if body:
                     parts.append(body)
                 i += 1
+
+            if i < len(lines) and lines[i].indent == 0 and lines[i].text == "function:":
+                tool_start = i
+                tool, consumed = _build_tool(lines, i)
+                tool.start_line = tool_start
+                root.children.append(AgentNode(
+                    thinking=ThinkingNode(
+                        text="\n".join(parts).strip(),
+                        start_line=start, end_line=i),
+                    tool_calls=[tool],
+                    start_line=start, end_line=i + consumed,
+                ))
+                i += consumed
+                continue
+
             root.children.append(AgentNode(
                 thinking=ThinkingNode(
                     text="\n".join(parts).strip(),

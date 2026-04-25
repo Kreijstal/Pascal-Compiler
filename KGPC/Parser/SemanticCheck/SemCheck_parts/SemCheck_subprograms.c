@@ -1592,8 +1592,6 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
                         {
                             if (owns)
                                 destroy_kgpc_type(resolved);
-                            else
-                                kgpc_type_release(resolved);
                             resolved = create_primitive_type(SHORTSTRING_TYPE);
                             owns = 1;
                         }

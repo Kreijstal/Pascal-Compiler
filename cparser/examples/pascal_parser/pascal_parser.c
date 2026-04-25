@@ -18,8 +18,9 @@
 #if defined(_WIN32) && !defined(HAVE_STRNDUP)
 static char* strndup(const char* s, size_t n)
 {
-    size_t len = strlen(s);
-    if (n < len) len = n;
+    size_t len = 0;
+    while (len < n && s[len] != '\0')
+        len++;
     char* result = (char*)malloc(len + 1);
     if (result) { memcpy(result, s, len); result[len] = '\0'; }
     return result;

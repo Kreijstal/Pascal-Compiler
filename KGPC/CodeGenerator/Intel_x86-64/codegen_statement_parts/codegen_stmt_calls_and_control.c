@@ -2034,7 +2034,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  * may make function calls and consume all caller-saved /
                  * callee-saved registers in this allocator. */
                 StackNode_t *dest_addr_temp = add_l_t("ptr_short_assign_dest");
-                snprintf(buffer, 50, "\tmovq\t%s, -%d(%%rbp)\n",
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
                     dest_addr->bit_64, dest_addr_temp->offset);
                 inst_list = add_inst(inst_list, buffer);
                 free_reg(get_reg_stack(), dest_addr);
@@ -2057,7 +2057,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     return codegen_fail_register(ctx, inst_list, NULL,
                         "ERROR: Unable to allocate register for pointer-deref shortstring assign.");
                 }
-                snprintf(buffer, 50, "\tmovq\t-%d(%%rbp), %s\n",
+                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
                     dest_addr_temp->offset, dest_addr_reload->bit_64);
                 inst_list = add_inst(inst_list, buffer);
 
