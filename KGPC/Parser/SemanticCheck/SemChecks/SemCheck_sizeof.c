@@ -139,7 +139,7 @@ static int sizeof_from_array_type_kgpc(SymTab_t *symtab, KgpcType *type, long lo
 
     KgpcArrayDimensionInfo info;
     if (kgpc_type_get_array_dimension_info(type, symtab, &info) == 0 &&
-        info.total_size > 0)
+        info.total_size >= 0)
     {
         *size_out = info.total_size;
         return 0;

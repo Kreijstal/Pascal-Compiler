@@ -49,42 +49,45 @@ static bool is_pid_alive(int pid)
 
 static bool try_acquire(const char *lock_path)
 {
+    for (;;)
+    {
 #ifdef _WIN32
-    int fd = open(lock_path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, 0666);
+        int fd = open(lock_path, _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, 0666);
 #else
-    int fd = open(lock_path, O_CREAT | O_EXCL | O_RDWR, 0666);
+        int fd = open(lock_path, O_CREAT | O_EXCL | O_RDWR, 0666);
 #endif
-    if (fd >= 0)
-    {
-        char pid_buf[32];
-        int len = snprintf(pid_buf, sizeof(pid_buf), "%d\n", (int)getpid());
-        if (write(fd, pid_buf, (size_t)len) != len)
+        if (fd >= 0)
         {
-            close(fd);
-            unlink(lock_path);
-            return false;
-        }
-        close(fd);
-        return true;
-    }
-
-    if (errno == EEXIST)
-    {
-        FILE *f = fopen(lock_path, "r");
-        if (f != NULL)
-        {
-            int pid = 0;
-            int parsed = fscanf(f, "%d", &pid);
-            fclose(f);
-            if ((parsed == 1 && !is_pid_alive(pid)) || parsed != 1)
+            char pid_buf[32];
+            int len = snprintf(pid_buf, sizeof(pid_buf), "%d\n", (int)getpid());
+            if (write(fd, pid_buf, (size_t)len) != len)
             {
+                close(fd);
                 unlink(lock_path);
-                return try_acquire(lock_path);
+                return false;
+            }
+            close(fd);
+            return true;
+        }
+
+        if (errno == EEXIST)
+        {
+            FILE *f = fopen(lock_path, "r");
+            if (f != NULL)
+            {
+                int pid = 0;
+                int parsed = fscanf(f, "%d", &pid);
+                fclose(f);
+                if ((parsed == 1 && !is_pid_alive(pid)) || parsed != 1)
+                {
+                    unlink(lock_path);
+                    continue;
+                }
             }
         }
-    }
 
-    return false;
+        return false;
+    }
 }
 
 bool file_lock_acquire(const char *path, int timeout_secs)

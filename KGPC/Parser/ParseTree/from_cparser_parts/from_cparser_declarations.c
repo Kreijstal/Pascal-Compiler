@@ -158,23 +158,29 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                     /* Create multiple assignment statements for array elements */
                     ListBuilder stmt_builder;
                     list_builder_init(&stmt_builder);
+                    int conversion_failed = 0;
                     
                     int index = type_info.start;
                     for (ast_t *elem = init_node->child; elem != NULL; elem = elem->next) {
                         struct Expression *elem_expr = convert_expression(elem);
-                        if (elem_expr != NULL) {
-                            struct Expression *index_expr = mk_inum(decl_node->line, index);
-                            struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
-                            struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
-                            struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
-                            list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
+                        if (elem_expr == NULL) {
+                            conversion_failed = 1;
+                            break;
                         }
+                        struct Expression *index_expr = mk_inum(decl_node->line, index);
+                        struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
+                        struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
+                        struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
+                        list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
                         index++;
                     }
                     
                     /* Create compound statement from all assignments */
                     ListNode_t *stmt_list = list_builder_finish(&stmt_builder);
-                    if (stmt_list != NULL) {
+                    if (conversion_failed) {
+                        if (stmt_list != NULL)
+                            DestroyList(stmt_list);
+                    } else if (stmt_list != NULL) {
                         initializer_stmt = mk_compoundstatement(decl_node->line, stmt_list);
                     }
                 } else {
@@ -295,20 +301,26 @@ static Tree_t *convert_var_decl(ast_t *decl_node) {
                 char *var_name = (char *)ids->cur;
                 ListBuilder stmt_builder;
                 list_builder_init(&stmt_builder);
+                int conversion_failed = 0;
                 int index = 0;
                 for (ast_t *elem = init_node->child; elem != NULL; elem = elem->next) {
                     struct Expression *elem_expr = convert_expression(elem);
-                    if (elem_expr != NULL) {
-                        struct Expression *index_expr = mk_inum(decl_node->line, index);
-                        struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
-                        struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
-                        struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
-                        list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
+                    if (elem_expr == NULL) {
+                        conversion_failed = 1;
+                        break;
                     }
+                    struct Expression *index_expr = mk_inum(decl_node->line, index);
+                    struct Expression *base_expr = mk_varid(decl_node->line, strdup(var_name));
+                    struct Expression *array_access = mk_arrayaccess(decl_node->line, base_expr, index_expr);
+                    struct Statement *assign_stmt = mk_varassign(decl_node->line, decl_node->col, array_access, elem_expr);
+                    list_builder_append(&stmt_builder, assign_stmt, LIST_STMT);
                     index++;
                 }
                 ListNode_t *stmt_list = list_builder_finish(&stmt_builder);
-                if (stmt_list != NULL) {
+                if (conversion_failed) {
+                    if (stmt_list != NULL)
+                        DestroyList(stmt_list);
+                } else if (stmt_list != NULL) {
                     initializer_stmt = mk_compoundstatement(decl_node->line, stmt_list);
                 }
             } else {

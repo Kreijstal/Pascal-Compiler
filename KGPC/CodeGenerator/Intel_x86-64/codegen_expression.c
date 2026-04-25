@@ -407,7 +407,7 @@ HashNode_t *codegen_prefer_visible_var_over_const(CodeGenContext *ctx,
         else if (cand->source_unit_index == 0)
             priority = 2;
         else if (cand->source_unit_index > 0 &&
-                 node->source_unit_index != caller_unit)
+                 cand->source_unit_index != caller_unit)
             priority = 1;
 
         if (priority > best_priority)
@@ -4650,7 +4650,7 @@ static int codegen_sizeof_array_type_kgpc(CodeGenContext *ctx, KgpcType *type,
     {
         KgpcArrayDimensionInfo info;
         if (kgpc_type_get_array_dimension_info(type, ctx->symtab, &info) == 0 &&
-            info.total_size > 0)
+            info.total_size >= 0)
         {
             *size_out = info.total_size;
             return 0;

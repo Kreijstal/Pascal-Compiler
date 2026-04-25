@@ -257,68 +257,64 @@ int threadingalreadyused_void(void)
 }
 
 #if defined(__GNUC__) || defined(__clang__)
-#define KGPC_ATOMIC_INC_RET(target, val) __sync_add_and_fetch(target, val)
-#define KGPC_ATOMIC_DEC_RET(target, val) __sync_sub_and_fetch(target, val)
-#define KGPC_ATOMIC_EXCHANGE(target, val) __atomic_exchange_n(target, val, __ATOMIC_SEQ_CST)
-#define KGPC_ATOMIC_CMP_EXCHANGE(target, val, comp) __sync_val_compare_and_swap(target, comp, val)
+static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) { return __sync_add_and_fetch(target, value); }
+static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) { return (uint32_t)__sync_add_and_fetch(target, value); }
+static long kgpc_atomic_add_long(long *target, long value) { return __sync_add_and_fetch(target, value); }
+static long long kgpc_atomic_add_i64(long long *target, long long value) { return __sync_add_and_fetch(target, value); }
+static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) { return (uint64_t)__sync_add_and_fetch(target, value); }
+static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) { return (uint32_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static long kgpc_atomic_exchange_long(long *target, long value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static long long kgpc_atomic_exchange_i64(long long *target, long long value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) { return (uint64_t)__atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static void *kgpc_atomic_exchange_ptr(void **target, void *value) { return __atomic_exchange_n(target, value, __ATOMIC_SEQ_CST); }
+static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value, int32_t comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
+static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value, uint32_t comparand) { return (uint32_t)__sync_val_compare_and_swap(target, comparand, value); }
+static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
+static long long kgpc_atomic_cmp_exchange_i64(long long *target, long long value, long long comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
+static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value, uint64_t comparand) { return (uint64_t)__sync_val_compare_and_swap(target, comparand, value); }
+static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value, void *comparand) { return __sync_val_compare_and_swap(target, comparand, value); }
 #elif defined(_MSC_VER)
 #include <intrin.h>
-#define KGPC_ATOMIC_INC_RET(target, val) \
-    (_Generic((target), \
-        int32_t *: _InterlockedAdd((volatile long *)(target), (long)(val)), \
-        long *: _InterlockedAdd((volatile long *)(target), (long)(val)), \
-        int64_t *: _InterlockedAdd64((volatile long long *)(target), (long long)(val)), \
-        long long *: _InterlockedAdd64((volatile long long *)(target), (long long)(val)), \
-        uint32_t *: (uint32_t)_InterlockedAdd((volatile long *)(target), (long)(val)), \
-        uint64_t *: (uint64_t)_InterlockedAdd64((volatile long long *)(target), (long long)(val))))
-#define KGPC_ATOMIC_DEC_RET(target, val) \
-    (_Generic((target), \
-        int32_t *: _InterlockedAdd((volatile long *)(target), -(long)(val)), \
-        long *: _InterlockedAdd((volatile long *)(target), -(long)(val)), \
-        int64_t *: _InterlockedAdd64((volatile long long *)(target), -(long long)(val)), \
-        long long *: _InterlockedAdd64((volatile long long *)(target), -(long long)(val)), \
-        uint32_t *: (uint32_t)_InterlockedAdd((volatile long *)(target), -(long)(val)), \
-        uint64_t *: (uint64_t)_InterlockedAdd64((volatile long long *)(target), -(long long)(val))))
-#define KGPC_ATOMIC_EXCHANGE(target, val) \
-    (_Generic((target), \
-        int32_t *: _InterlockedExchange((volatile long *)(target), (long)(val)), \
-        long *: _InterlockedExchange((volatile long *)(target), (long)(val)), \
-        int64_t *: _InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
-        long long *: _InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
-        uint32_t *: (uint32_t)_InterlockedExchange((volatile long *)(target), (long)(val)), \
-        uint64_t *: (uint64_t)_InterlockedExchange64((volatile long long *)(target), (long long)(val)), \
-        void **: (void *)_InterlockedExchangePointer((volatile PVOID *)(target), (PVOID)(val))))
-#define KGPC_ATOMIC_CMP_EXCHANGE(target, val, comp) \
-    (_Generic((target), \
-        int32_t *: _InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
-        long *: _InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
-        int64_t *: _InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
-        long long *: _InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
-        uint32_t *: (uint32_t)_InterlockedCompareExchange((volatile long *)(target), (long)(val), (long)(comp)), \
-        uint64_t *: (uint64_t)_InterlockedCompareExchange64((volatile long long *)(target), (long long)(val), (long long)(comp)), \
-        void **: (void *)_InterlockedCompareExchangePointer((volatile PVOID *)(target), (PVOID)(val), (PVOID)(comp))))
+static int32_t kgpc_atomic_add_i32(int32_t *target, int32_t value) { return (int32_t)_InterlockedAdd((volatile long *)target, (long)value); }
+static uint32_t kgpc_atomic_add_u32(uint32_t *target, uint32_t value) { return (uint32_t)_InterlockedAdd((volatile long *)target, (long)value); }
+static long kgpc_atomic_add_long(long *target, long value) { return _InterlockedAdd((volatile long *)target, value); }
+static long long kgpc_atomic_add_i64(long long *target, long long value) { return (long long)_InterlockedAdd64((volatile __int64 *)target, (__int64)value); }
+static uint64_t kgpc_atomic_add_u64(uint64_t *target, uint64_t value) { return (uint64_t)_InterlockedAdd64((volatile __int64 *)target, (__int64)value); }
+static int32_t kgpc_atomic_exchange_i32(int32_t *target, int32_t value) { return (int32_t)_InterlockedExchange((volatile long *)target, (long)value); }
+static uint32_t kgpc_atomic_exchange_u32(uint32_t *target, uint32_t value) { return (uint32_t)_InterlockedExchange((volatile long *)target, (long)value); }
+static long kgpc_atomic_exchange_long(long *target, long value) { return _InterlockedExchange((volatile long *)target, value); }
+static long long kgpc_atomic_exchange_i64(long long *target, long long value) { return (long long)_InterlockedExchange64((volatile __int64 *)target, (__int64)value); }
+static uint64_t kgpc_atomic_exchange_u64(uint64_t *target, uint64_t value) { return (uint64_t)_InterlockedExchange64((volatile __int64 *)target, (__int64)value); }
+static void *kgpc_atomic_exchange_ptr(void **target, void *value) { return _InterlockedExchangePointer((void *volatile *)target, value); }
+static int32_t kgpc_atomic_cmp_exchange_i32(int32_t *target, int32_t value, int32_t comparand) { return (int32_t)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
+static uint32_t kgpc_atomic_cmp_exchange_u32(uint32_t *target, uint32_t value, uint32_t comparand) { return (uint32_t)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
+static int kgpc_atomic_cmp_exchange_int(int *target, int value, int comparand) { return (int)_InterlockedCompareExchange((volatile long *)target, (long)value, (long)comparand); }
+static long long kgpc_atomic_cmp_exchange_i64(long long *target, long long value, long long comparand) { return (long long)_InterlockedCompareExchange64((volatile __int64 *)target, (__int64)value, (__int64)comparand); }
+static uint64_t kgpc_atomic_cmp_exchange_u64(uint64_t *target, uint64_t value, uint64_t comparand) { return (uint64_t)_InterlockedCompareExchange64((volatile __int64 *)target, (__int64)value, (__int64)comparand); }
+static void *kgpc_atomic_cmp_exchange_ptr(void **target, void *value, void *comparand) { return _InterlockedCompareExchangePointer((void *volatile *)target, value, comparand); }
 #else
 #error "Atomic operations require GCC, Clang, or MSVC"
 #endif
 
 int32_t kgpc_interlockedincrement(int32_t *target)
 {
-    return (int32_t)KGPC_ATOMIC_INC_RET(target, 1);
+    return kgpc_atomic_add_i32(target, 1);
 }
 
 int32_t kgpc_interlockeddecrement(int32_t *target)
 {
-    return (int32_t)KGPC_ATOMIC_DEC_RET(target, 1);
+    return kgpc_atomic_add_i32(target, -1);
 }
 
 int64_t kgpc_interlockedincrement64(int64_t *target)
 {
-    return (int64_t)KGPC_ATOMIC_INC_RET(target, 1);
+    return (int64_t)kgpc_atomic_add_i64((long long *)target, 1);
 }
 
 int64_t kgpc_interlockeddecrement64(int64_t *target)
 {
-    return (int64_t)KGPC_ATOMIC_DEC_RET(target, 1);
+    return (int64_t)kgpc_atomic_add_i64((long long *)target, -1);
 }
 
 void kgpc_interlocked_exchange_add_i32(int32_t *target, int32_t value, int32_t *result)
@@ -2819,7 +2815,17 @@ void kgpc_new(void **target, size_t size)
     if (kgpc_guard_new_is_enabled())
     {
         size_t page_size = kgpc_guard_page_size();
+        if (size > SIZE_MAX - (page_size - 1))
+        {
+            fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
+            exit(EXIT_FAILURE);
+        }
         size_t rounded = ((size + page_size - 1) / page_size) * page_size;
+        if (rounded > SIZE_MAX - page_size)
+        {
+            fprintf(stderr, "KGPC runtime: requested allocation is too large.\n");
+            exit(EXIT_FAILURE);
+        }
         size_t total = rounded + page_size;
         unsigned char *raw = kgpc_guard_reserve(total, rounded, page_size);
         unsigned char *user = raw + rounded - size;
@@ -2913,18 +2919,12 @@ static size_t kgpc_guard_page_size(void)
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
     if (system_info.dwPageSize == 0)
-    {
-        fprintf(stderr, "KGPC runtime: Windows reported an invalid page size.\n");
-        exit(EXIT_FAILURE);
-    }
+        return 4096u;
     return (size_t)system_info.dwPageSize;
 #else
     long page_size_long = sysconf(_SC_PAGESIZE);
     if (page_size_long <= 0)
-    {
-        fprintf(stderr, "KGPC runtime: sysconf(_SC_PAGESIZE) failed.\n");
-        exit(EXIT_FAILURE);
-    }
+        return 4096u;
     return (size_t)page_size_long;
 #endif
 }
@@ -8033,46 +8033,50 @@ void *kgpc_get_frame_p(void *frame)
 
 /* FPC atomic intrinsics — these are [internproc] builtins in FPC that have
  * no Pascal body.  KGPC emits calls to the mangled names below. */
-long atomicincrement_i_i(long *target, long value) { return (long)KGPC_ATOMIC_INC_RET(target, value); }
-uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value) { return (uint32_t)KGPC_ATOMIC_INC_RET(target, value); }
+long atomicincrement_i_i(long *target, long value) { return kgpc_atomic_add_long(target, value); }
+uint32_t atomicincrement_u32_u32(uint32_t *target, uint32_t value) { return kgpc_atomic_add_u32(target, value); }
 
 /* [internproc] AtomicIncrement(var Target): 1-param overload, increments by 1 */
-long atomicincrement_i(long *target) { return (long)KGPC_ATOMIC_INC_RET(target, 1); }
-uint32_t atomicincrement_u32(uint32_t *target) { return (uint32_t)KGPC_ATOMIC_INC_RET(target, 1); }
+long atomicincrement_i(long *target) { return kgpc_atomic_add_long(target, 1); }
+uint32_t atomicincrement_u32(uint32_t *target) { return kgpc_atomic_add_u32(target, 1); }
 
 /* LongInt (32-bit signed) overloads for compiler intrinsics. */
-int32_t atomicincrement_li(int32_t *target) { return (int32_t)KGPC_ATOMIC_INC_RET(target, 1); }
-int32_t atomicincrement_li_li(int32_t *target, int32_t value) { return (int32_t)KGPC_ATOMIC_INC_RET(target, value); }
+int32_t atomicincrement_li(int32_t *target) { return kgpc_atomic_add_i32(target, 1); }
+int32_t atomicincrement_li_li(int32_t *target, int32_t value) { return kgpc_atomic_add_i32(target, value); }
 
-long atomicdecrement_i(long *target) { return (long)KGPC_ATOMIC_DEC_RET(target, 1); }
-uint32_t atomicdecrement_u32(uint32_t *target) { return (uint32_t)KGPC_ATOMIC_DEC_RET(target, 1); }
-int32_t atomicdecrement_li(int32_t *target) { return (int32_t)KGPC_ATOMIC_DEC_RET(target, 1); }
-int32_t atomicdecrement_li_li(int32_t *target, int32_t value) { return (int32_t)KGPC_ATOMIC_DEC_RET(target, value); }
+long atomicdecrement_i(long *target) { return kgpc_atomic_add_long(target, -1); }
+uint32_t atomicdecrement_u32(uint32_t *target) { return kgpc_atomic_add_u32(target, (uint32_t)-1); }
+int32_t atomicdecrement_li(int32_t *target) { return kgpc_atomic_add_i32(target, -1); }
+int32_t atomicdecrement_li_li(int32_t *target, int32_t value) { return kgpc_atomic_add_i32(target, -value); }
 
-int32_t atomicexchange_li_li(int32_t *target, int32_t new_val) { return (int32_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
-int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand) { return (int32_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
-void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand) { return (void *)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
-void *atomicexchange_p_p(void **target, void *new_val) { return (void *)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+int32_t atomicexchange_li_li(int32_t *target, int32_t new_val) { return kgpc_atomic_exchange_i32(target, new_val); }
+int32_t atomiccmpexchange_li_li_li(int32_t *target, int32_t new_val, int32_t comparand) { return kgpc_atomic_cmp_exchange_i32(target, new_val, comparand); }
+void *atomiccmpexchange_p_p_p(void **target, void *new_val, void *comparand) {
+    return kgpc_atomic_cmp_exchange_ptr(target, new_val, comparand);
+}
+void *atomicexchange_p_p(void **target, void *new_val) {
+    return kgpc_atomic_exchange_ptr(target, new_val);
+}
 
 /* [internproc] AtomicExchange for integer types */
-long atomicexchange_i_i(long *target, long new_val) { return (long)KGPC_ATOMIC_EXCHANGE(target, new_val); }
-uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val) { return (uint32_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+long atomicexchange_i_i(long *target, long new_val) { return kgpc_atomic_exchange_long(target, new_val); }
+uint32_t atomicexchange_u32_u32(uint32_t *target, uint32_t new_val) { return kgpc_atomic_exchange_u32(target, new_val); }
 
 /* Int64 overloads of atomic intrinsics */
-long long atomicincrement_i64(long long *target) { return (long long)KGPC_ATOMIC_INC_RET(target, 1); }
-uint64_t atomicincrement_u64(uint64_t *target) { return (uint64_t)KGPC_ATOMIC_INC_RET(target, 1); }
-long long atomicincrement_i64_i64(long long *target, long long value) { return (long long)KGPC_ATOMIC_INC_RET(target, value); }
-uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value) { return (uint64_t)KGPC_ATOMIC_INC_RET(target, value); }
+long long atomicincrement_i64(long long *target) { return kgpc_atomic_add_i64(target, 1); }
+uint64_t atomicincrement_u64(uint64_t *target) { return kgpc_atomic_add_u64(target, 1); }
+long long atomicincrement_i64_i64(long long *target, long long value) { return kgpc_atomic_add_i64(target, value); }
+uint64_t atomicincrement_u64_u64(uint64_t *target, uint64_t value) { return kgpc_atomic_add_u64(target, value); }
 
-long long atomicdecrement_i64(long long *target) { return (long long)KGPC_ATOMIC_DEC_RET(target, 1); }
-uint64_t atomicdecrement_u64(uint64_t *target) { return (uint64_t)KGPC_ATOMIC_DEC_RET(target, 1); }
+long long atomicdecrement_i64(long long *target) { return kgpc_atomic_add_i64(target, -1); }
+uint64_t atomicdecrement_u64(uint64_t *target) { return kgpc_atomic_add_u64(target, (uint64_t)-1); }
 
-long long atomicexchange_i64_i64(long long *target, long long new_val) { return (long long)KGPC_ATOMIC_EXCHANGE(target, new_val); }
-uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val) { return (uint64_t)KGPC_ATOMIC_EXCHANGE(target, new_val); }
+long long atomicexchange_i64_i64(long long *target, long long new_val) { return kgpc_atomic_exchange_i64(target, new_val); }
+uint64_t atomicexchange_u64_u64(uint64_t *target, uint64_t new_val) { return kgpc_atomic_exchange_u64(target, new_val); }
 
-long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand) { return (long long)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
-uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand) { return (uint32_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
-uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand) { return (uint64_t)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+long long atomiccmpexchange_i64_i64_i64(long long *target, long long new_val, long long comparand) { return kgpc_atomic_cmp_exchange_i64(target, new_val, comparand); }
+uint32_t atomiccmpexchange_u32_u32_u32(uint32_t *target, uint32_t new_val, uint32_t comparand) { return kgpc_atomic_cmp_exchange_u32(target, new_val, comparand); }
+uint64_t atomiccmpexchange_u64_u64_u64(uint64_t *target, uint64_t new_val, uint64_t comparand) { return kgpc_atomic_cmp_exchange_u64(target, new_val, comparand); }
 
 /* FPC_INTERLOCKEDEXCHANGEADD / FPC_INTERLOCKEDCOMPAREEXCHANGE64:
  * Now provided by the compiler-emitted FPC Pascal code (via [Public,Alias] in
@@ -8158,7 +8162,7 @@ void _haltproc(int exitcode)
 
 /* atomiccmpexchange_i_i_i: [internproc] AtomicCmpExchange intrinsic.
    No Pascal body exists — this is a compiler intrinsic. */
-int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand) { return (int)KGPC_ATOMIC_CMP_EXCHANGE(target, new_val, comparand); }
+int atomiccmpexchange_i_i_i(int *target, int new_val, int comparand) { return kgpc_atomic_cmp_exchange_int(target, new_val, comparand); }
 
 /* =====================================================================
  * TUnicodeStringManager (widestringmanager) initialization.

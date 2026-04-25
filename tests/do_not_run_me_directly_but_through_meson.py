@@ -3582,6 +3582,7 @@ def _discover_and_add_auto_tests():
                         raw_stdout=raw_stdout,
                         raw_stderr=raw_stderr,
                         expected_output=expected_output,
+                        expected_stderr=expected_stderr,
                         returncode=process_returncode,
                         exception_text=traceback.format_exc(),
                     )
@@ -3594,6 +3595,7 @@ def _discover_and_add_auto_tests():
                         raw_stdout=raw_stdout,
                         raw_stderr=raw_stderr,
                         expected_output=expected_output,
+                        expected_stderr=expected_stderr,
                         returncode=process_returncode,
                     )
                     raise

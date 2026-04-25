@@ -2492,12 +2492,14 @@ static bool eval_const_term(PascalPreprocessor *pp, const char **cursor, const c
             *cursor += 3;
             int64_t right;
             if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            if (right < 0 || right >= 64) return false;
             *value <<= right;
         } else if (*cursor + 3 <= end && ascii_strncasecmp(*cursor, "SHR", 3) == 0 &&
                    (*cursor + 3 >= end || !isalnum((unsigned char)(*cursor)[3]))) {
             *cursor += 3;
             int64_t right;
             if (!eval_const_factor(pp, cursor, end, &right, depth)) return false;
+            if (right < 0 || right >= 64) return false;
             *value >>= right;
         } else {
             break;
@@ -3378,8 +3380,16 @@ static bool parse_term(const char **cursor,
                 if (rhs == 0) return set_error(error_message, "division by zero");
                 *value %= rhs;
                 break;
-            case OP_SHL: *value <<= rhs; break;
-            case OP_SHR: *value = (int64_t)((uint64_t)*value >> rhs); break;
+            case OP_SHL:
+                if (rhs < 0 || rhs >= 64)
+                    return set_error(error_message, "invalid shift count");
+                *value <<= rhs;
+                break;
+            case OP_SHR:
+                if (rhs < 0 || rhs >= 64)
+                    return set_error(error_message, "invalid shift count");
+                *value = (int64_t)((uint64_t)*value >> rhs);
+                break;
             case OP_AND: *value = (*value & rhs); break;
             default: break;
         }
