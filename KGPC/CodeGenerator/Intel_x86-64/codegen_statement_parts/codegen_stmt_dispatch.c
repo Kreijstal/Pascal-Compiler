@@ -1076,9 +1076,55 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 if (return_var != NULL)
                 {
                     char buffer[128];
-                    
+
+                    /* Check if this function returns a record/ShortString via SRET.
+                     * The caller passed a destination buffer pointer in the first
+                     * arg-reg slot; codegen_function spilled it to
+                     * current_record_return_slot.  EXIT must memcpy the local
+                     * Result (return_var) into that buffer, otherwise the early
+                     * exit returns 8 stale bytes in %rax instead of populating
+                     * the caller's buffer. */
+                    if (ctx != NULL && ctx->current_record_return_slot != NULL &&
+                        ctx->current_record_return_size > 0)
+                    {
+                        long long record_size = ctx->current_record_return_size;
+                        StackNode_t *dest_slot = ctx->current_record_return_slot;
+                        if (codegen_target_is_windows())
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\tmovq\t-%d(%%rbp), %%rcx\n", dest_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer),
+                                "\tleaq\t-%d(%%rbp), %%rdx\n", return_var->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer),
+                                "\tmovq\t$%lld, %%r8\n", record_size);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        else
+                        {
+                            snprintf(buffer, sizeof(buffer),
+                                "\tmovq\t-%d(%%rbp), %%rdi\n", dest_slot->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer),
+                                "\tleaq\t-%d(%%rbp), %%rsi\n", return_var->offset);
+                            inst_list = add_inst(inst_list, buffer);
+                            snprintf(buffer, sizeof(buffer),
+                                "\tmovq\t$%lld, %%rdx\n", record_size);
+                            inst_list = add_inst(inst_list, buffer);
+                        }
+                        inst_list = codegen_vect_reg(inst_list, 0);
+                        inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                        free_arg_regs();
+                        /* Mirror the regular epilogue: leave the SRET pointer in
+                         * %rax so callers that read the return value (instead of
+                         * the buffer directly) still get the correct address. */
+                        snprintf(buffer, sizeof(buffer),
+                            "\tmovq\t-%d(%%rbp), %%rax\n", dest_slot->offset);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
                     /* Check if this function returns a dynamic array */
-                    if (ctx != NULL && ctx->returns_dynamic_array)
+                    else if (ctx != NULL && ctx->returns_dynamic_array)
                     {
                         /* For dynamic arrays, call kgpc_dynarray_clone_descriptor
                          * to return a cloned descriptor, not the local one */

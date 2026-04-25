@@ -513,14 +513,16 @@ int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
             if (set_element->lower == NULL ||
                 evaluate_const_expr(symtab, set_element->lower, &lower) != 0)
             {
-                fprintf(stderr, "Error: set element is not a constant expression.\n");
+                if (!g_semcheck_decl_only_mode)
+                    fprintf(stderr, "Error: set element is not a constant expression.\n");
                 return 1;
             }
             if (set_element->upper != NULL)
             {
                 if (evaluate_const_expr(symtab, set_element->upper, &upper) != 0)
                 {
-                    fprintf(stderr, "Error: set element upper bound is not a constant expression.\n");
+                    if (!g_semcheck_decl_only_mode)
+                        fprintf(stderr, "Error: set element upper bound is not a constant expression.\n");
                     return 1;
                 }
             }
@@ -543,7 +545,8 @@ int evaluate_set_const_bytes(SymTab_t *symtab, struct Expression *expr,
 
             if (upper < 0 || upper > 255 || lower < 0)
             {
-                fprintf(stderr, "Error: set literal value %lld out of supported range 0..255.\n", upper);
+                if (!g_semcheck_decl_only_mode)
+                    fprintf(stderr, "Error: set literal value %lld out of supported range 0..255.\n", upper);
                 return 1;
             }
 
@@ -1056,7 +1059,7 @@ static int const_fold_real_expr_mode(SymTab_t *symtab, struct Expression *expr, 
                 *out_value = (double)node->const_int_value;
                 return 0;
             }
-            if (emit_diagnostics)
+            if (emit_diagnostics && !g_semcheck_decl_only_mode)
                 fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
             return 1;
         }
@@ -1823,7 +1826,7 @@ static int const_fold_int_expr_mode(SymTab_t *symtab, struct Expression *expr, l
                 *out_value = node->const_int_value;
                 return 0;
             }
-            if (emit_diagnostics)
+            if (emit_diagnostics && !g_semcheck_decl_only_mode)
                 fprintf(stderr, "Error: constant %s is undefined or not a const.\n", expr->expr_data.id);
             return 1;
         }
@@ -2990,7 +2993,7 @@ low_cleanup:
             break;
     }
 
-    if (emit_diagnostics)
+    if (emit_diagnostics && !g_semcheck_decl_only_mode)
         fprintf(stderr, "Error: unsupported const expression.\n");
     return 1;
 }

@@ -634,6 +634,15 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
 
     return_val = 0;
 
+    /* Suppress speculative-eval diagnostics from const expressions that
+     * reference enum literals in units whose own decls-only pass has not
+     * yet run. Depth-first unit loading means when a parent unit uses a
+     * child unit's enums inside a typed const, the child's enums are only
+     * predeclared after the parent's decls-only pass completes. Final
+     * merged semcheck_program will re-evaluate with a complete table. */
+    int saved_decl_only_mode = g_semcheck_decl_only_mode;
+    g_semcheck_decl_only_mode = 1;
+
     EnterScope(symtab, 0);
 
     semcheck_unit_names_reset();
@@ -785,6 +794,7 @@ int semcheck_unit_decls_only(SymTab_t *symtab, Tree_t *tree)
     }
 
     semcheck_unit_names_reset();
+    g_semcheck_decl_only_mode = saved_decl_only_mode;
     return return_val;
 }
 
@@ -1820,8 +1830,13 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                 }
                 else if (tree->tree_data.var_decl_data.inline_record_type != NULL)
                 {
-                    /* Handle inline record type declarations */
-                    var_kgpc_type = create_record_type(clone_record_type(tree->tree_data.var_decl_data.inline_record_type));
+                    /* Handle inline record type declarations.
+                     * Reuse the inline record directly (do NOT clone) so that
+                     * record_size caching below updates the same RecordType
+                     * the codegen walks via the var_decl's inline_record_type
+                     * / cached_kgpc_type. */
+                    var_kgpc_type = create_record_type(
+                        tree->tree_data.var_decl_data.inline_record_type);
                 }
                 else
                 {
@@ -1964,17 +1979,6 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                         }
                     }
                     
-                    if (var_kgpc_type != NULL)
-                    {
-                        if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL)
-                        {
-                            destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
-                            tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
-                        }
-                        kgpc_type_retain(var_kgpc_type);
-                        tree->tree_data.var_decl_data.cached_kgpc_type = var_kgpc_type;
-                    }
-
                     /* Add metadata from resolved_type if present */
                     if (var_kgpc_type != NULL && resolved_type != NULL)
                     {
@@ -1996,6 +2000,27 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     {
                         kgpc_type_set_type_alias(var_kgpc_type,
                             tree->tree_data.var_decl_data.inline_type_alias);
+                    }
+                }
+
+                /* Store the resolved KgpcType on the var decl for codegen.
+                 * This runs for every branch above (resolved_type, pre-cached,
+                 * inline_record, inline_alias, fallback) so record-typed
+                 * locals keep correct size info through to codegen.
+                 * Skip the borrowed case where cached_kgpc_type already
+                 * holds the same type (no need to rewrite). */
+                if (var_kgpc_type != NULL && !var_kgpc_borrowed)
+                {
+                    if (tree->tree_data.var_decl_data.cached_kgpc_type != NULL &&
+                        tree->tree_data.var_decl_data.cached_kgpc_type != var_kgpc_type)
+                    {
+                        destroy_kgpc_type(tree->tree_data.var_decl_data.cached_kgpc_type);
+                        tree->tree_data.var_decl_data.cached_kgpc_type = NULL;
+                    }
+                    if (tree->tree_data.var_decl_data.cached_kgpc_type == NULL)
+                    {
+                        kgpc_type_retain(var_kgpc_type);
+                        tree->tree_data.var_decl_data.cached_kgpc_type = var_kgpc_type;
                     }
                 }
                 

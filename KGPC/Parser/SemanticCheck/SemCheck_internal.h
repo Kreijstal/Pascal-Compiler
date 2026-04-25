@@ -73,6 +73,7 @@ extern int g_semcheck_error_suppress_source_index;
 extern int g_semcheck_imported_decl_unit_index;
 extern size_t g_semcheck_source_length;
 extern int g_semcheck_warning_count;
+extern int g_semcheck_decl_only_mode;
 extern char *g_semcheck_source_path;
 extern char *g_semcheck_source_buffer;
 extern const char *g_semcheck_error_unit_name;

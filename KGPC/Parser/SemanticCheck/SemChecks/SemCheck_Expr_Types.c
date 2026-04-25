@@ -6630,6 +6630,24 @@ int semcheck_addressof(int *type_return,
             if (proc_symbol != NULL &&
                 (proc_symbol->hash_type == HASHTYPE_PROCEDURE || proc_symbol->hash_type == HASHTYPE_FUNCTION))
             {
+                /* If this resolves to a class method via implicit Self,
+                 * synthesise a `Self` reference as the receiver so codegen
+                 * can build a TMethod descriptor.  Static class methods
+                 * have no Self and thus no receiver.  */
+                int is_implicit_method = (proc_symbol == implicit_method) ||
+                    (proc_symbol->owner_class != NULL &&
+                     proc_symbol->method_name != NULL);
+                struct Expression *receiver_expr_local = NULL;
+                if (is_implicit_method)
+                {
+                    HashNode_t *self_node = NULL;
+                    if (FindSymbol(&self_node, symtab, "Self") != 0 &&
+                        self_node != NULL)
+                    {
+                        receiver_expr_local = mk_varid(0, strdup("Self"));
+                    }
+                }
+
                 expr->expr_data.addr_data.expr = NULL;
                 destroy_expr(inner);
                 expr->type = EXPR_ADDR_OF_PROC;
@@ -6637,6 +6655,7 @@ int semcheck_addressof(int *type_return,
                     semcheck_dup_proc_target_symbol(symtab, proc_symbol);
                 expr->expr_data.addr_of_proc_data.proc_id = proc_symbol->id ? strdup(proc_symbol->id) : NULL;
                 expr->expr_data.addr_of_proc_data.source_unit_index = proc_symbol->source_unit_index;
+                expr->expr_data.addr_of_proc_data.receiver_expr = receiver_expr_local;
                 /* Resolve the type NOW while the symbol is still alive,
                  * instead of relying on procedure_symbol later. */
                 if (proc_symbol->type != NULL && proc_symbol->type->kind == TYPE_KIND_PROCEDURE)
@@ -6734,6 +6753,13 @@ int semcheck_addressof(int *type_return,
                     (method_node->hash_type == HASHTYPE_FUNCTION ||
                      method_node->hash_type == HASHTYPE_PROCEDURE))
                 {
+                    /* Save the receiver expression before destroying the
+                     * inner record-access node — it carries the Self
+                     * pointer needed for TMethod construction. */
+                    struct Expression *saved_receiver =
+                        inner->expr_data.record_access_data.record_expr;
+                    inner->expr_data.record_access_data.record_expr = NULL;
+
                     expr->expr_data.addr_data.expr = NULL;
                     destroy_expr(inner);
                     expr->type = EXPR_ADDR_OF_PROC;
@@ -6742,6 +6768,7 @@ int semcheck_addressof(int *type_return,
                     expr->expr_data.addr_of_proc_data.proc_id =
                         method_node->id ? strdup(method_node->id) : NULL;
                     expr->expr_data.addr_of_proc_data.source_unit_index = method_node->source_unit_index;
+                    expr->expr_data.addr_of_proc_data.receiver_expr = saved_receiver;
                     if (method_node->type != NULL && method_node->type->kind == TYPE_KIND_PROCEDURE)
                     {
                         kgpc_type_retain(method_node->type);

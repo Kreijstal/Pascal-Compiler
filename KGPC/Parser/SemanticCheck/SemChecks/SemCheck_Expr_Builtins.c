@@ -3491,6 +3491,65 @@ int semcheck_builtin_sizeof(int *type_return, SymTab_t *symtab,
         }
         if (size_computed)
             goto sizeof_success;
+
+        /* Special case: SizeOf(open-array-parameter) or SizeOf(dynamic-array-var)
+         * cannot be folded to a compile-time constant — the actual byte size
+         * depends on Length(arr) at runtime.  Per FPC semantics:
+         *   SizeOf(arr) = Length(arr) * SizeOf(ElementType)
+         * Transform the expression into Length(arg) * elem_size and let
+         * normal expression semcheck handle the rest. */
+        {
+            HashNode_t *dyn_node = NULL;
+            if (FindSymbol(&dyn_node, symtab, arg_id) != 0 &&
+                dyn_node != NULL && dyn_node->type != NULL &&
+                kgpc_type_is_dynamic_array(dyn_node->type) &&
+                (dyn_node->hash_type == HASHTYPE_VAR ||
+                 dyn_node->hash_type == HASHTYPE_ARRAY ||
+                 dyn_node->hash_type == HASHTYPE_FUNCTION_RETURN))
+            {
+                long long elem_size = kgpc_type_get_array_element_size(dyn_node->type);
+                if (elem_size <= 0)
+                    elem_size = 1;
+
+                /* Build Length(arg) call.  Reuse the original arg expression
+                 * by detaching the list node holding it from the SizeOf
+                 * args list (rather than freeing the entry). */
+                ListNode_t *length_arg_node = expr->expr_data.function_call_data.args_expr;
+                expr->expr_data.function_call_data.args_expr = NULL;
+                length_arg_node->next = NULL;
+                struct Expression *length_call = mk_functioncall(expr->line_num,
+                    strdup("Length"),
+                    length_arg_node);
+
+                /* Replace the SizeOf node in-place with Length(arg)*elem_size. */
+                struct Expression *size_const = mk_inum(expr->line_num, elem_size);
+                if (expr->expr_data.function_call_data.id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.id);
+                    expr->expr_data.function_call_data.id = NULL;
+                }
+                if (expr->expr_data.function_call_data.mangled_id != NULL)
+                {
+                    free(expr->expr_data.function_call_data.mangled_id);
+                    expr->expr_data.function_call_data.mangled_id = NULL;
+                }
+                semcheck_reset_function_call_cache(expr);
+
+                expr->type = EXPR_MULOP;
+                expr->expr_data.mulop_data.mulop_type = STAR;
+                expr->expr_data.mulop_data.left_term = length_call;
+                expr->expr_data.mulop_data.right_factor = size_const;
+
+                /* Re-run semcheck on the transformed expression. */
+                KgpcType *new_type = NULL;
+                int rc = semcheck_expr(symtab, expr, max_scope_lev, NO_MUTATE, &new_type);
+                if (rc == 0)
+                    *type_return = LONGINT_TYPE;
+                else
+                    *type_return = UNKNOWN_TYPE;
+                return rc;
+            }
+        }
         HashNode_t *node = NULL;
         int found = FindSymbol(&node, symtab, arg_id);
         HashNode_t *preferred_type_node = NULL;
@@ -4315,14 +4374,46 @@ int semcheck_builtin_new_func(int *type_return, SymTab_t *symtab,
         }
     }
 
-    /* Check second argument (constructor call) if present */
+    /* Check second argument (constructor call) if present.
+     *
+     * In Turbo-Pascal-style `New(PObj, Constructor(args))` the second argument
+     * is a method call against the type pointed to by the first arg.  Looking
+     * up the constructor in current scope would fail (it's a method, not a
+     * top-level function), so we skip the function-name resolution here and
+     * only type-check the constructor's argument expressions.  Codegen later
+     * builds a synthetic `New(P)` + `P^.Constructor(args)` pair via
+     * `transform_two_arg_new_dispose`, which resolves the constructor as a
+     * proper method call against the record type. */
     if (arg_count == 2 && args->next != NULL)
     {
         struct Expression *ctor_arg = (struct Expression *)args->next->cur;
         if (ctor_arg != NULL)
         {
-            KgpcType *ctor_type = NULL;
-            error_count += semcheck_expr_with_type(&ctor_type, symtab, ctor_arg, max_scope_lev, NO_MUTATE);
+            if (ctor_arg->type == EXPR_FUNCTION_CALL)
+            {
+                /* Only type-check the constructor's argument expressions, not
+                 * the constructor identifier itself.  The identifier is a
+                 * method name that depends on the record type pointed to by
+                 * the first argument, which only the statement-form lowering
+                 * has the context to resolve. */
+                ListNode_t *ctor_args =
+                    ctor_arg->expr_data.function_call_data.args_expr;
+                for (ListNode_t *cn = ctor_args; cn != NULL; cn = cn->next)
+                {
+                    struct Expression *cae = (struct Expression *)cn->cur;
+                    if (cae == NULL)
+                        continue;
+                    KgpcType *cae_type = NULL;
+                    error_count += semcheck_expr_with_type(&cae_type, symtab,
+                        cae, max_scope_lev, NO_MUTATE);
+                }
+            }
+            else
+            {
+                KgpcType *ctor_type = NULL;
+                error_count += semcheck_expr_with_type(&ctor_type, symtab,
+                    ctor_arg, max_scope_lev, NO_MUTATE);
+            }
         }
     }
 

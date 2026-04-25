@@ -48,6 +48,14 @@ const char *kgpc_getenv(const char *name) {
 static ListNode_t *g_semcheck_unit_names = NULL;
 int g_semcheck_current_unit_index = 0;
 int g_semcheck_imported_decl_unit_index = 0;
+/* Set to 1 while we are inside a decls-only pre-pass during unit loading.
+ * In this mode, const expression evaluation is speculative: cross-unit enum
+ * references may be unresolved because the defining unit's own decls-only
+ * pass has not yet run (depth-first dep loading runs deps' bodies before the
+ * parent unit's own decls). Errors from these speculative evaluations are
+ * suppressed; the final merged semcheck re-runs evaluation with a fully
+ * populated symbol table. */
+int g_semcheck_decl_only_mode = 0;
 
 /* Track which units have been fully semchecked via semcheck_unit().
  * Declarations from these units are skipped in semcheck_program(). */

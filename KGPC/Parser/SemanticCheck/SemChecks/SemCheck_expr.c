@@ -618,6 +618,17 @@ struct Expression *clone_expression(const struct Expression *expr)
                 destroy_expr(clone);
                 return NULL;
             }
+            /* Deep-clone the receiver expression for method pointers. */
+            if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+            {
+                clone->expr_data.addr_of_proc_data.receiver_expr =
+                    clone_expression(expr->expr_data.addr_of_proc_data.receiver_expr);
+                if (clone->expr_data.addr_of_proc_data.receiver_expr == NULL)
+                {
+                    destroy_expr(clone);
+                    return NULL;
+                }
+            }
             break;
 
         case EXPR_ANONYMOUS_FUNCTION:

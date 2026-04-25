@@ -3062,9 +3062,10 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
     }
 
     // 3.5 Optional "of object" or "is nested" for method pointer / nested types
+    int has_of_object = 0;
     {
         combinator_t* of_object = optional(multi(new_combinator(), PASCAL_T_NONE,
-            seq(new_combinator(), PASCAL_T_NONE,
+            seq(new_combinator(), PASCAL_T_OF_OBJECT,
                 token(keyword_ci("of")),
                 token(keyword_ci("object")),
                 NULL
@@ -3078,6 +3079,10 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
         ));
         ParseResult of_object_res = parse(in, of_object);
         if (of_object_res.is_success && of_object_res.value.ast != ast_nil) {
+            /* Detect "of object" by checking for the OF_OBJECT seq marker. */
+            ast_t *m = of_object_res.value.ast;
+            if (m != NULL && m->typ == PASCAL_T_OF_OBJECT)
+                has_of_object = 1;
             free_ast(of_object_res.value.ast);
         } else if (!of_object_res.is_success) {
             discard_failure(of_object_res);
@@ -3165,13 +3170,29 @@ static ParseResult subroutine_type_fn(input_t* in, void* args, char* parser_name
     ast_t* type_ast = new_ast();
     type_ast->typ = pargs->tag;
     type_ast->child = params_ast;
-    
+
     if (params_ast != NULL) {
         params_ast->next = return_ast;
     } else {
         type_ast->child = return_ast;
     }
-    
+
+    /* Append an OF_OBJECT marker child if the type was declared
+     * with "of object" — used downstream to size the type as a
+     * 16-byte TMethod {code; data} method pointer. */
+    if (has_of_object) {
+        ast_t* marker = new_ast();
+        marker->typ = PASCAL_T_OF_OBJECT;
+        set_ast_position(marker, in);
+        if (type_ast->child == NULL) {
+            type_ast->child = marker;
+        } else {
+            ast_t *tail = type_ast->child;
+            while (tail->next != NULL) tail = tail->next;
+            tail->next = marker;
+        }
+    }
+
     set_ast_position(type_ast, in);
     return make_success(type_ast);
 }

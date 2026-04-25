@@ -3954,26 +3954,34 @@ void kgpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
         memset(dest + copy_len, 0, dest_size - copy_len);
 }
 
-/* Copy string to ShortString (Pascal string with length byte at index 0) */
+/* Copy string to ShortString (Pascal string with length byte at index 0).
+ *
+ * Matches FPC's `fpc_AnsiStr_To_ShortStr` semantics: writes the length byte
+ * at offset 0 and copies up to `min(src_len, dest_size - 1, 255)` chars at
+ * offset 1..length.  Bytes past `length` in the destination are left
+ * untouched — ShortStrings are length-prefixed, so trailing bytes are
+ * irrelevant to readers.  Padding with zeros is unsafe when the caller
+ * passes a buffer dynamically sized to `length(src) + 1` (e.g. via
+ * `getmem(result, length(s) + 1); result^ := s`) and over-reports
+ * `dest_size` (the conservative 256 fallback in the codegen).  Skipping
+ * the padding keeps that idiomatic FPC pattern correct without losing
+ * correctness for fixed-size ShortString buffers. */
 void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
 {
     if (dest == NULL || src == NULL || dest_size < 2)
         return;
-    
+
     size_t src_len = kgpc_string_known_length(src);
     /* ShortString max capacity is 255 chars (indices 1..255) */
     size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
     size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
-    
+
     /* Set length byte at index 0 */
     dest[0] = (char)copy_len;
-    
+
     /* Copy characters starting at index 1 */
-    memcpy(dest + 1, src, copy_len);
-    
-    /* Pad remaining space with zeros */
-    if (copy_len + 1 < dest_size)
-        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+    if (copy_len > 0)
+        memcpy(dest + 1, src, copy_len);
 }
 
 void kgpc_char_array_to_shortstring(char *dest, const char *src, size_t src_len, size_t dest_size)

@@ -520,6 +520,9 @@ const char* pascal_tag_to_string(tag_t tag) {
         case PASCAL_T_FINALIZATION_SECTION: return "FINALIZATION_SECTION";
         // Field width specifier
         case PASCAL_T_FIELD_WIDTH: return "FIELD_WIDTH";
+        case PASCAL_T_INTERFACE_GUID: return "INTERFACE_GUID";
+        case PASCAL_T_DEFAULT_PROPERTY: return "DEFAULT_PROPERTY";
+        case PASCAL_T_OF_OBJECT: return "OF_OBJECT";
         default:
             fprintf(stderr, "FATAL: Unknown Pascal AST node type: %d in %s at %s:%d\n", tag, __func__, __FILE__, __LINE__);
             abort();

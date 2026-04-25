@@ -663,6 +663,10 @@ struct Expression
             char *proc_mangled_id;  /* Owned copy, survives scope cleanup */
             char *proc_id;          /* Owned copy, survives scope cleanup */
             int source_unit_index;  /* Unit where the symbol was resolved */
+            /* Receiver expression for method pointers (TMethod construction).
+             * For "@obj.Method" this holds the expression evaluating to obj
+             * (the Self pointer). NULL for non-method @proc references. */
+            struct Expression *receiver_expr;
         } addr_of_proc_data;
 
         /* Anonymous function/procedure */

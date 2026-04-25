@@ -4745,6 +4745,22 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         return 1;
     }
 
+    /* For procedure types, we must check if the named type alias is
+     * "procedure of object" (TMethod) — those are 16-byte aggregates,
+     * while plain procedure pointers are 8 bytes.  Look up the type_id
+     * before falling back to the generic 8-byte sizing. */
+    if (type_tag == PROCEDURE && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *type_node = NULL;
+        if (FindSymbol(&type_node, ctx->symtab, type_id) != 0 &&
+            type_node != NULL && type_node->type != NULL &&
+            kgpc_type_is_method_pointer(type_node->type))
+        {
+            *size_out = 16;
+            return 0;
+        }
+    }
+
     if (type_tag != UNKNOWN_TYPE)
     {
         long long base = codegen_sizeof_type_tag(type_tag);
@@ -4797,7 +4813,9 @@ static int codegen_sizeof_record_members(CodeGenContext *ctx, ListNode_t *member
             {
                 if (field->array_is_open || field->array_end < field->array_start)
                 {
-                    field_size = CODEGEN_POINTER_SIZE_BYTES;
+                    /* Dynamic arrays are 16-byte descriptors:
+                     * { void *data; int64_t length }. */
+                    field_size = 16;
                 }
                 else
                 {
@@ -8732,6 +8750,19 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         first_index_stride = 26 * 4;
         first_lower_bound = 1;
     }
+
+    /* Fix shortstring stride: if the array's alias has recorded the element
+     * storage size (for string[N] elements, captured at SemCheck time), prefer
+     * that — it's authoritative and bypasses the 256-default fallback. */
+    if (first_index_stride == 256 && array_type != NULL)
+    {
+        struct TypeAlias *arr_alias = kgpc_type_get_type_alias(array_type);
+        if (arr_alias != NULL && arr_alias->array_element_storage_size > 0 &&
+            arr_alias->array_element_storage_size < 256)
+        {
+            first_index_stride = arr_alias->array_element_storage_size;
+        }
+    }
     /* Fix shortstring stride: when the element type is a named shortstring alias
      * (e.g., tasmkeyword = string[10]), the array element type may have been
      * resolved to a generic ShortString primitive (256 bytes) instead of the
@@ -10881,11 +10912,15 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
         const char *call_mangled = NULL;
         if (call_expr != NULL && call_expr->type == EXPR_FUNCTION_CALL)
             call_mangled = call_expr->expr_data.function_call_data.mangled_id;
-        if (arg_num == 0 &&
-            ((call_mangled != NULL &&
-              strcmp(call_mangled, "tscannerfile__create_p_s_b") == 0) ||
-             (procedure_name != NULL &&
-              strcmp(procedure_name, "tscannerfile__create_p_s_b") == 0)))
+        /* Structural ShortString promotion for class-method params:
+         * when the formal's cached_kgpc_type isn't ShortString-aware but
+         * the parameter declaration's type tag IS SHORTSTRING_TYPE (e.g.
+         * `s: string` under {$H-} which the parser already mapped to
+         * SHORTSTRING_TYPE), force expected_type = SHORTSTRING_TYPE so
+         * downstream argument adaptation uses ShortString semantics. */
+        if (expected_type == UNKNOWN_TYPE && formal_arg_decl != NULL &&
+            formal_arg_decl->type == TREE_VAR_DECL &&
+            formal_arg_decl->tree_data.var_decl_data.type == SHORTSTRING_TYPE)
         {
             expected_type = SHORTSTRING_TYPE;
         }
@@ -11654,12 +11689,37 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                  * parameter, convert via kgpc_shortstring_to_string.  Without this, the
                  * raw ShortString buffer address (length-byte + data) is passed and the
                  * callee interprets the length byte as the first character of an AnsiString. */
+                int formal_wants_ansistring = 0;
+                if (expected_type == STRING_TYPE)
+                    formal_wants_ansistring = 1;
+                else if (expected_type == UNKNOWN_TYPE &&
+                    formal_arg_decl != NULL &&
+                    formal_arg_decl->type == TREE_VAR_DECL &&
+                    formal_arg_decl->tree_data.var_decl_data.type == STRING_TYPE)
+                    formal_wants_ansistring = 1;
+                /* For calls through procedural type variables (function pointers),
+                 * expected_type may remain UNKNOWN_TYPE because codegen_param_expected_type
+                 * returns UNKNOWN when the formal has no shortstring marker.  Detect
+                 * the AnsiString-family case from the formal's type_id. */
+                if (!formal_wants_ansistring && formal_arg_decl != NULL &&
+                    formal_arg_decl->type == TREE_VAR_DECL &&
+                    formal_decl_expects_string(formal_arg_decl))
+                {
+                    int formal_is_shortstring = 0;
+                    KgpcType *cached = formal_arg_decl->tree_data.var_decl_data.cached_kgpc_type;
+                    if (cached != NULL && kgpc_type_is_shortstring(cached))
+                        formal_is_shortstring = 1;
+                    if (formal_arg_decl->tree_data.var_decl_data.type == SHORTSTRING_TYPE)
+                        formal_is_shortstring = 1;
+                    const char *formal_type_id = formal_arg_decl->tree_data.var_decl_data.type_id;
+                    if (formal_type_id != NULL &&
+                        pascal_identifier_equals(formal_type_id, "ShortString"))
+                        formal_is_shortstring = 1;
+                    if (!formal_is_shortstring)
+                        formal_wants_ansistring = 1;
+                }
                 if (is_array_arg && !is_var_param && !is_array_param &&
-                    (expected_type == STRING_TYPE ||
-                     (expected_type == UNKNOWN_TYPE &&
-                      formal_arg_decl != NULL &&
-                      formal_arg_decl->type == TREE_VAR_DECL &&
-                      formal_arg_decl->tree_data.var_decl_data.type == STRING_TYPE)) &&
+                    formal_wants_ansistring &&
                     (!expr_has_type_tag(arg_expr, STRING_TYPE) ||
                      expr_has_type_tag(arg_expr, SHORTSTRING_TYPE)) &&
                     !codegen_current_param_is_ansistring(arg_expr, ctx) &&
@@ -11906,6 +11966,146 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else if (arg_infos != NULL)
                 {
                     arginfo_assign_register(&arg_infos[arg_num], addr_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+            }
+            else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
+                     kgpc_type_is_method_pointer(expr_get_kgpc_type(arg_expr)) &&
+                     call_mangled != NULL &&
+                     strcmp(call_mangled, "kgpc_assigned") == 0)
+            {
+                /* Assigned(method_ptr) must inspect only the code field
+                 * (offset 0) of the TMethod aggregate.  Loading the entire
+                 * 16-byte record into a stack temp and passing its address
+                 * would always test non-null.  Take the address of the
+                 * method pointer (or evaluate it into a register), load
+                 * the code-field via [reg], and pass that as the scalar
+                 * argument to kgpc_assigned. */
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                char load_buf[128];
+                snprintf(load_buf, sizeof(load_buf),
+                    "\tmovq\t(%s), %s\n", src_reg->bit_64, src_reg->bit_64);
+                inst_list = add_inst(inst_list, load_buf);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(load_buf, sizeof(load_buf), "\tmovq\t%s, -%d(%%rbp)\n",
+                        src_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, load_buf);
+                    free_reg(get_reg_stack(), src_reg);
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], src_reg, arg_expr);
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+            }
+            else if (arg_expr != NULL && expr_get_kgpc_type(arg_expr) != NULL &&
+                     kgpc_type_is_method_pointer(expr_get_kgpc_type(arg_expr)))
+            {
+                /* Method pointers (TMethod) are 16-byte aggregates passed
+                 * like records: copy 16 bytes into a stack temp and pass
+                 * the address.  Reuses the record-arg machinery below by
+                 * faking record_size = 16. */
+                long long record_size = 16;
+                StackNode_t *temp_slot = codegen_alloc_record_temp(record_size);
+                if (temp_slot == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Failed to allocate temporary storage for method-pointer argument.");
+                    return inst_list;
+                }
+
+                Register_t *src_reg = NULL;
+                if (codegen_expr_is_addressable(arg_expr))
+                {
+                    inst_list = codegen_address_for_expr(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+                else
+                {
+                    inst_list = codegen_expr_with_result(arg_expr, inst_list, ctx, &src_reg);
+                    if (codegen_had_error(ctx) || src_reg == NULL)
+                        return inst_list;
+                }
+
+                /* Copy 16 bytes via kgpc_move into the temp slot. */
+                char copy_buffer[128];
+                if (codegen_target_is_windows())
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rdx\n",
+                        src_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer),
+                        "\tleaq\t-%d(%%rbp), %%rcx\n", temp_slot->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer),
+                        "\tmovq\t$%lld, %%r8\n", record_size);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                }
+                else
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, %%rsi\n",
+                        src_reg->bit_64);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer),
+                        "\tleaq\t-%d(%%rbp), %%rdi\n", temp_slot->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    snprintf(copy_buffer, sizeof(copy_buffer),
+                        "\tmovq\t$%lld, %%rdx\n", record_size);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                }
+                inst_list = codegen_vect_reg(inst_list, 0);
+                inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_move");
+                free_arg_regs();
+                free_reg(get_reg_stack(), src_reg);
+
+                /* Pass the address of the temp as the argument. */
+                Register_t *result_reg = get_free_reg(get_reg_stack(), &inst_list);
+                if (result_reg == NULL)
+                {
+                    codegen_report_error(ctx,
+                        "ERROR: Unable to allocate register for method-pointer argument.");
+                    return inst_list;
+                }
+                snprintf(copy_buffer, sizeof(copy_buffer),
+                    "\tleaq\t-%d(%%rbp), %s\n",
+                    temp_slot->offset, result_reg->bit_64);
+                inst_list = add_inst(inst_list, copy_buffer);
+
+                StackNode_t *arg_spill = add_l_t("arg_eval");
+                if (arg_spill != NULL && arg_infos != NULL)
+                {
+                    snprintf(copy_buffer, sizeof(copy_buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                        result_reg->bit_64, arg_spill->offset);
+                    inst_list = add_inst(inst_list, copy_buffer);
+                    free_reg(get_reg_stack(), result_reg);
+                    arg_infos[arg_num].reg = NULL;
+                    arg_infos[arg_num].spill = arg_spill;
+                    arg_infos[arg_num].expr = arg_expr;
+                    arg_infos[arg_num].is_pointer_like = 1;
+                }
+                else if (arg_infos != NULL)
+                {
+                    arginfo_assign_register(&arg_infos[arg_num], result_reg, arg_expr);
                     arg_infos[arg_num].is_pointer_like = 1;
                 }
             }

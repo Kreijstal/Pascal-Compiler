@@ -441,50 +441,85 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     if (codegen_expr_is_extended_storage(var_expr))
         return codegen_assign_extended_value(var_expr, assign_expr, inst_list, ctx);
 
+    /* Method-pointer (TMethod) assignment: when the LHS is a 16-byte
+     * method-pointer storage location (record field of "procedure of object"
+     * type, or a local variable of TMethod type), and the RHS is @x.Method,
+     * copy the full 16 bytes ({code @0; data @8}) from the RHS temporary
+     * into the LHS storage.
+     *
+     * The RHS path (EXPR_ADDR_OF_PROC with receiver_expr) already builds a
+     * 16-byte TMethod temp on the stack and returns its ADDRESS in
+     * value_reg.  We copy 16 bytes via two movq instructions. */
     if (var_expr != NULL && assign_expr != NULL &&
-        var_expr->type == EXPR_RECORD_ACCESS &&
-        assign_expr->type == EXPR_ADDR_OF_PROC &&
-        var_expr->expr_data.record_access_data.field_id != NULL &&
-        pascal_identifier_equals(var_expr->expr_data.record_access_data.field_id, "finish_module"))
+        assign_expr->type == EXPR_ADDR_OF_PROC)
     {
-        Register_t *addr_reg = NULL;
-        Register_t *value_reg = NULL;
-        inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
-        inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
-        if (codegen_had_error(ctx) || addr_reg == NULL || value_reg == NULL)
+        int lhs_is_tmethod_storage = 0;
+        if (var_expr->type == EXPR_RECORD_ACCESS)
         {
-            if (addr_reg != NULL)
-                free_reg(get_reg_stack(), addr_reg);
-            if (value_reg != NULL)
-                free_reg(get_reg_stack(), value_reg);
-            return inst_list;
-        }
-
-        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
-            value_reg->bit_64, addr_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-
-        StackNode_t *self_slot = find_label("Self");
-        if (self_slot != NULL)
-        {
-            Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
-            if (self_reg == NULL)
-                self_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-            if (self_reg != NULL)
+            struct RecordField *field = codegen_lookup_record_field(var_expr);
+            if (field != NULL && field->proc_type != NULL &&
+                kgpc_type_is_method_pointer(field->proc_type))
+                lhs_is_tmethod_storage = 1;
+            if (!lhs_is_tmethod_storage && field != NULL &&
+                field->type == PROCEDURE && field->type_id != NULL &&
+                ctx != NULL && ctx->symtab != NULL)
             {
-                snprintf(buffer, sizeof(buffer), "\tmovq\t-%d(%%rbp), %s\n",
-                    self_slot->offset, self_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%s)\n",
-                    self_reg->bit_64, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
-                free_reg(get_reg_stack(), self_reg);
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, ctx->symtab, field->type_id) != 0 &&
+                    type_node != NULL && type_node->type != NULL &&
+                    kgpc_type_is_method_pointer(type_node->type))
+                    lhs_is_tmethod_storage = 1;
             }
         }
+        else if (var_expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
+        {
+            HashNode_t *node = NULL;
+            if (FindSymbol(&node, ctx->symtab, var_expr->expr_data.id) != 0 &&
+                node != NULL && node->type != NULL &&
+                kgpc_type_is_method_pointer(node->type))
+                lhs_is_tmethod_storage = 1;
+        }
 
-        free_reg(get_reg_stack(), value_reg);
-        free_reg(get_reg_stack(), addr_reg);
-        return inst_list;
+        if (lhs_is_tmethod_storage &&
+            assign_expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+        {
+            Register_t *addr_reg = NULL;
+            Register_t *value_reg = NULL;
+            inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &addr_reg);
+            /* The RHS evaluates to the address of the 16-byte TMethod temp. */
+            inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+            if (codegen_had_error(ctx) || addr_reg == NULL || value_reg == NULL)
+            {
+                if (addr_reg != NULL)
+                    free_reg(get_reg_stack(), addr_reg);
+                if (value_reg != NULL)
+                    free_reg(get_reg_stack(), value_reg);
+                return inst_list;
+            }
+            /* Copy 16 bytes: tmp[0]=code, tmp[8]=data. */
+            Register_t *scratch = get_free_reg(get_reg_stack(), &inst_list);
+            if (scratch == NULL)
+                scratch = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (scratch != NULL)
+            {
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                    value_reg->bit_64, scratch->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, (%s)\n",
+                    scratch->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
+                    value_reg->bit_64, scratch->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, 8(%s)\n",
+                    scratch->bit_64, addr_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                free_reg(get_reg_stack(), scratch);
+            }
+            free_reg(get_reg_stack(), value_reg);
+            free_reg(get_reg_stack(), addr_reg);
+            return inst_list;
+        }
     }
 
     /* Character sets (set of char) need special handling like records due to 32-byte size */
@@ -1925,6 +1960,50 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             return inst_list;
         }
 
+        /* `pshortstring^ := ansistring/string-literal/string-expr` — the LHS
+         * deref points to a ShortString buffer (256 bytes max with length
+         * byte at offset 0); the RHS is a heap AnsiString or string literal.
+         * Without explicit conversion the qword-store fallback below would
+         * copy only the AnsiString pointer (8 bytes) into the buffer,
+         * leaving garbage at the length byte.  Emit a proper
+         * kgpc_string_to_shortstring call that writes length + payload. */
+        if (codegen_expr_is_shortstring_array(var_expr) &&
+            !codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+        {
+            int rhs_tag = expr_get_type_tag(assign_expr);
+            int rhs_is_string_like = (rhs_tag == STRING_TYPE ||
+                                      (assign_expr != NULL &&
+                                       assign_expr->type == EXPR_STRING));
+            if (rhs_is_string_like)
+            {
+                Register_t *dest_addr = NULL;
+                inst_list = codegen_address_for_expr(var_expr, inst_list, ctx, &dest_addr);
+                if (codegen_had_error(ctx) || dest_addr == NULL)
+                {
+                    if (dest_addr != NULL)
+                        free_reg(get_reg_stack(), dest_addr);
+                    return inst_list;
+                }
+                Register_t *value_reg = NULL;
+                inst_list = codegen_expr_with_result(assign_expr, inst_list, ctx, &value_reg);
+                if (codegen_had_error(ctx) || value_reg == NULL)
+                {
+                    free_reg(get_reg_stack(), dest_addr);
+                    if (value_reg != NULL)
+                        free_reg(get_reg_stack(), value_reg);
+                    return inst_list;
+                }
+                int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
+                if (array_size <= 1)
+                    array_size = 256;
+                inst_list = codegen_call_string_to_shortstring(inst_list, ctx,
+                    dest_addr, value_reg, array_size);
+                free_reg(get_reg_stack(), value_reg);
+                free_reg(get_reg_stack(), dest_addr);
+                return inst_list;
+            }
+        }
+
         expr_node_t *pointer_tree = build_expr_tree(pointer_expr);
         Register_t *addr_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (addr_reg == NULL)
@@ -2406,18 +2485,30 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         /* 2. Generate code to load the procedure's address into a register */
         Register_t *addr_reg = NULL;
         int load_from_memory = 0;
-        int callee_is_bound_finish_module = 0;
+        /* If the callee variable holds a TMethod (procedure of object),
+         * load the Self pointer from offset 8 of the descriptor and pass
+         * it via the first argument register after argument evaluation. */
+        int callee_is_method_pointer = 0;
         StackNode_t *bound_self_spill = NULL;
+
+        /* Detect TMethod: the callee's resolved KgpcType points to a
+         * TYPE_KIND_PROCEDURE with is_method_pointer == 1.  This handles
+         * both `var p: procedure of object;  p(x)` and
+         * `obj.callback(x)` where callback is a method-pointer field. */
+        if (callee_expr->resolved_kgpc_type != NULL)
+        {
+            KgpcType *cet = callee_expr->resolved_kgpc_type;
+            if (cet->kind == TYPE_KIND_POINTER && cet->info.points_to != NULL)
+                cet = cet->info.points_to;
+            if (kgpc_type_is_method_pointer(cet))
+                callee_is_method_pointer = 1;
+        }
 
         if (callee_expr->type == EXPR_RECORD_ACCESS ||
             callee_expr->type == EXPR_ARRAY_ACCESS ||
             callee_expr->type == EXPR_POINTER_DEREF)
         {
             load_from_memory = 1;
-            if (callee_expr->type == EXPR_RECORD_ACCESS &&
-                callee_expr->expr_data.record_access_data.field_id != NULL &&
-                pascal_identifier_equals(callee_expr->expr_data.record_access_data.field_id, "finish_module"))
-                callee_is_bound_finish_module = 1;
         }
         else if (callee_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
         {
@@ -2428,6 +2519,17 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                  callee_node->hash_type == HASHTYPE_FUNCTION_RETURN))
             {
                 load_from_memory = 1;
+                /* For variables, the type lookup above may have missed the
+                 * method-pointer flag (e.g., when the resolved_kgpc_type is
+                 * NULL).  Cross-check the symbol's stored type. */
+                if (!callee_is_method_pointer && callee_node->type != NULL)
+                {
+                    KgpcType *t = callee_node->type;
+                    if (t->kind == TYPE_KIND_POINTER && t->info.points_to != NULL)
+                        t = t->info.points_to;
+                    if (kgpc_type_is_method_pointer(t))
+                        callee_is_method_pointer = 1;
+                }
             }
         }
 
@@ -2436,12 +2538,37 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             inst_list = codegen_address_for_expr(callee_expr, inst_list, ctx, &addr_reg);
             if (!codegen_had_error(ctx) && addr_reg != NULL)
             {
-                if (callee_is_bound_finish_module)
+                if (callee_is_method_pointer)
                 {
+                    /* TMethod is a 16-byte aggregate { code @0; data @8 }.
+                     * Storage forms:
+                     *  - Local var / record field: the 16 bytes live inline at
+                     *    addr_reg, so addr_reg already points at the descriptor.
+                     *  - Var (by-reference) parameter or function return slot:
+                     *    addr_reg points at a pointer to the descriptor; we must
+                     *    dereference once first. */
+                    int callee_storage_is_descriptor_ptr = 0;
+                    if (callee_expr->type == EXPR_VAR_ID && ctx->symtab != NULL)
+                    {
+                        HashNode_t *cnode = NULL;
+                        if (FindSymbol(&cnode, ctx->symtab,
+                                callee_expr->expr_data.id) != 0 && cnode != NULL &&
+                            cnode->is_var_parameter)
+                            callee_storage_is_descriptor_ptr = 1;
+                    }
+
+                    if (callee_storage_is_descriptor_ptr)
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                    }
+
+                    /* Now addr_reg points at the descriptor: code @0, data @8. */
                     Register_t *self_reg = get_free_reg(get_reg_stack(), &inst_list);
                     if (self_reg == NULL)
                         self_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
-                    bound_self_spill = add_l_t_bytes("bound_method_self", 8);
+                    bound_self_spill = add_l_t_bytes("tmethod_self", 8);
                     if (self_reg != NULL && bound_self_spill != NULL)
                     {
                         snprintf(buffer, sizeof(buffer), "\tmovq\t8(%s), %s\n",
@@ -2452,10 +2579,17 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
                         inst_list = add_inst(inst_list, buffer);
                         free_reg(get_reg_stack(), self_reg);
                     }
+                    /* Load code pointer into addr_reg for the indirect call. */
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
                 }
-                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                    addr_reg->bit_64, addr_reg->bit_64);
-                inst_list = add_inst(inst_list, buffer);
+                else
+                {
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                        addr_reg->bit_64, addr_reg->bit_64);
+                    inst_list = add_inst(inst_list, buffer);
+                }
             }
         }
         else
@@ -2483,12 +2617,13 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         free_reg(get_reg_stack(), addr_reg);
         addr_reg = NULL;
         
-        /* 4. Pass arguments as usual */
+        /* 4. Pass arguments as usual.  For method pointers, reserve the
+         * first argument register for Self by passing has_self=1. */
         const char *proc_name_hint = (unmangled_name != NULL) ? unmangled_name : proc_name;
         inst_list = codegen_pass_arguments(call_args, inst_list, ctx, call_kgpc_type,
-            proc_name_hint, callee_is_bound_finish_module ? 1 : 0, NULL, 0);
+            proc_name_hint, callee_is_method_pointer ? 1 : 0, NULL, 0);
 
-        if (callee_is_bound_finish_module && bound_self_spill != NULL)
+        if (callee_is_method_pointer && bound_self_spill != NULL)
         {
             const char *self_arg = current_arg_reg64(0);
             if (self_arg != NULL)

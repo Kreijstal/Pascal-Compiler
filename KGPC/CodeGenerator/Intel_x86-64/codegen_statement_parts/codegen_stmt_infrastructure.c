@@ -2429,8 +2429,72 @@ ListNode_t *codegen_address_for_expr(struct Expression *expr, ListNode_t *inst_l
           expr->resolved_kgpc_type->kind == TYPE_KIND_ARRAY &&
           !kgpc_type_is_dynamic_array(expr->resolved_kgpc_type))))
     {
-        /* Record-valued function calls evaluate to a temporary addressable object
-         * (sret/hidden pointer), which callers may pass by reference. */
+        /* Record-valued function calls fall into two cases:
+         *
+         *   - SRET return (record size > 8 bytes): callee writes into the
+         *     hidden first-arg buffer; rax holds that buffer address.
+         *     codegen_evaluate_expr returns the address directly.
+         *
+         *   - Value return (record size <= 8 bytes): callee returns the
+         *     packed record bytes in rax.  rax holds the *value*, not an
+         *     address.  Field-access through (%rax) would dereference the
+         *     packed value as a pointer.  Spill rax to a stack temp and
+         *     return the temp's address.
+         *
+         * Constructor calls also return by-value-in-rax (the new instance
+         * pointer), but there's nothing to spill — that pointer IS the
+         * address callers want.  So skip the spill step for constructors. */
+        long long record_size = -1;
+        int is_value_return_record = 0;
+        if (expr_has_type_tag(expr, RECORD_TYPE) &&
+            !expr->expr_data.function_call_data.is_constructor_call)
+        {
+            struct KgpcType *kt = expr_get_kgpc_type(expr);
+            if (kt != NULL && kgpc_type_is_record(kt))
+            {
+                struct RecordType *rec = kgpc_type_get_record(kt);
+                if (rec != NULL &&
+                    codegen_sizeof_record_type(ctx, rec, &record_size) == 0 &&
+                    record_size > 0 && record_size <= 8)
+                {
+                    is_value_return_record = 1;
+                }
+            }
+        }
+
+        if (is_value_return_record)
+        {
+            Register_t *value_reg = NULL;
+            inst_list = codegen_evaluate_expr(expr, inst_list, ctx, &value_reg);
+            if (value_reg == NULL)
+                goto cleanup;
+
+            /* Allocate temp slot, store value, return address. */
+            int slot_size = (int)((record_size + 7) & ~7LL);
+            if (slot_size <= 0)
+                slot_size = 8;
+            StackNode_t *temp_slot = add_l_t_bytes("rec_byval_tmp", slot_size);
+            if (temp_slot == NULL)
+            {
+                free_reg(get_reg_stack(), value_reg);
+                inst_list = codegen_fail_register(ctx, inst_list, out_reg,
+                    "ERROR: Unable to allocate temp slot for record-by-value result.");
+                goto cleanup;
+            }
+
+            char buffer[96];
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                value_reg->bit_64, temp_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+
+            Register_t *addr_reg = value_reg;
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                temp_slot->offset, addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            *out_reg = addr_reg;
+            goto cleanup;
+        }
+
         inst_list = codegen_evaluate_expr(expr, inst_list, ctx, out_reg);
         goto cleanup;
     }

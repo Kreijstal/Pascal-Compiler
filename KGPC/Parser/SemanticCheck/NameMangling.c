@@ -531,6 +531,21 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
             {
                 record_type_id = decl_tree->tree_data.var_decl_data.inline_record_type->type_id;
             }
+            /* Honour the parser's {$H-} remap.  When the parser converted
+             * `s: string` to SHORTSTRING_TYPE on the var_decl (because
+             * {$H-} was active or the type was textually `ShortString`),
+             * MapBuiltinTypeNameToVarType("string") still returns
+             * HASHVAR_PCHAR (AnsiString).  The type tag on the decl is the
+             * authoritative signal — prefer SHORTSTRING when set. */
+            if (decl_tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE &&
+                (resolved_type == HASHVAR_PCHAR ||
+                 resolved_type == HASHVAR_RAWBYTESTRING ||
+                 resolved_type == HASHVAR_UNICODESTRING ||
+                 resolved_type == HASHVAR_UNTYPED))
+            {
+                resolved_type = HASHVAR_SHORTSTRING;
+                record_type_id = NULL;
+            }
             if (resolved_type == HASHVAR_REAL &&
                 mangle_kgpc_type_is_extended_real(
                     decl_tree->tree_data.var_decl_data.cached_kgpc_type))

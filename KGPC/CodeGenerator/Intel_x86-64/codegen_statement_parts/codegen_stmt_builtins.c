@@ -691,23 +691,12 @@ ListNode_t *codegen_builtin_setstring(struct Statement *stmt, ListNode_t *inst_l
         return inst_list;
     }
 
-    /* If buffer is a typecast of a dynamic array to a pointer (e.g. PUnicodeChar(Chars)),
-     * load the data pointer from the dynarray descriptor. */
-    int buffer_needs_dynarray_data = 0;
-    if (buffer_expr != NULL && buffer_expr->type == EXPR_TYPECAST &&
-        buffer_expr->expr_data.typecast_data.expr != NULL)
-    {
-        struct Expression *inner = buffer_expr->expr_data.typecast_data.expr;
-        KgpcType *inner_type = expr_get_kgpc_type(inner);
-        if (inner_type != NULL && kgpc_type_is_dynamic_array(inner_type))
-            buffer_needs_dynarray_data = 1;
-    }
-    if (buffer_needs_dynarray_data)
-    {
-        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
-                 buffer_reg->bit_64, buffer_reg->bit_64);
-        inst_list = add_inst(inst_list, buffer);
-    }
+    /* For PUnicodeChar(Chars) where Chars is a dynamic array, the
+     * Model A descriptor layout puts `data` at offset 0 of the variable's
+     * storage. The expression-tree TYPECAST leaf path in gencode_case0
+     * already loads `descriptor.data` for that POINTER cast, and a regular
+     * 8-byte load of a dynarray variable also yields `data` (offset 0).
+     * No extra dereference is required here. */
 
     /* Spill buffer_reg */
     StackNode_t *buffer_slot = codegen_alloc_temp_slot("setstring_buf");

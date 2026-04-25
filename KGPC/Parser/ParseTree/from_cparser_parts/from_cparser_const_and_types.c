@@ -3483,6 +3483,16 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
             DestroyList(params);
             if (return_type_id != NULL)
                 proc_type->info.proc_info.return_type_id = return_type_id;
+            /* Detect "of object" marker — scan all children of the
+             * PROCEDURE_TYPE / FUNCTION_TYPE AST node for the OF_OBJECT
+             * marker emitted by the parser.  When present, this is a
+             * method pointer (TMethod = {code, data} = 16 bytes). */
+            for (ast_t *c = spec_node->child; c != NULL; c = c->next) {
+                if (c->typ == PASCAL_T_OF_OBJECT) {
+                    proc_type->info.proc_info.is_method_pointer = 1;
+                    break;
+                }
+            }
         } else {
             destroy_list(params);
             if (return_type_id != NULL)
