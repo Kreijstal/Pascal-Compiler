@@ -258,6 +258,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast_detached(method->method_impl_ast) : NULL;
     clone->source_offset = method->source_offset;
+    clone->default_shortstring = method->default_shortstring;
     clone->owns_ast = 1; /* Deep clone owns its own AST copies */
 
     return clone;
@@ -291,6 +292,7 @@ struct MethodTemplate *clone_method_template_detached(const struct MethodTemplat
     clone->directives_ast = method->directives_ast;
     clone->method_impl_ast = method->method_impl_ast;
     clone->source_offset = method->source_offset;
+    clone->default_shortstring = method->default_shortstring;
     clone->owns_ast = 0; /* Shallow clone shares AST pointers with the original */
 
     return clone;
