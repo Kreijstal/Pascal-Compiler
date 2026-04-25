@@ -55,6 +55,25 @@ KgpcType *semcheck_expr_effective_kgpc_type(SymTab_t *symtab,
     struct Expression *expr, int *owned_out);
 int semcheck_class_type_ids_compatible(SymTab_t *symtab,
     const char *formal_id, const char *actual_id);
+struct RecordType *semcheck_lookup_parent_record(SymTab_t *symtab,
+    struct RecordType *record_info);
+static inline int semcheck_method_is_declared_constructor(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name)
+{
+    if (symtab == NULL || record_info == NULL || method_name == NULL)
+        return 0;
+
+    for (struct RecordType *search = record_info; search != NULL;
+         search = semcheck_lookup_parent_record(symtab, search))
+    {
+        struct MethodTemplate *tmpl =
+            from_cparser_get_method_template(search, method_name);
+        if (tmpl != NULL)
+            return tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR;
+    }
+
+    return 0;
+}
 
 /*===========================================================================
  * Type Definitions (internal)
