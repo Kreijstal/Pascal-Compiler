@@ -825,6 +825,11 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         if (alias->kgpc_type->type_alias == NULL && alias->alias_name != NULL) {
             kgpc_type_set_type_alias(alias->kgpc_type, alias);
         }
+        /* Retain so the caller owns one reference, matching the ownership
+         * contract of the other branches that return freshly-created types.
+         * Otherwise the caller's destroy_kgpc_type would release a borrowed
+         * reference and trigger a use-after-free once the alias is released. */
+        kgpc_type_retain(alias->kgpc_type);
         return alias->kgpc_type;
     }
     
