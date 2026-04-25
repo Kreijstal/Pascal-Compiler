@@ -1271,7 +1271,8 @@ void destroy_list(ListNode_t *list)
 
 void destroy_tree(Tree_t *tree)
 {
-    assert(tree != NULL);
+    if (tree == NULL)
+        return;
     switch(tree->type)
     {
         case TREE_PROGRAM_TYPE:
