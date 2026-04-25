@@ -8199,6 +8199,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     int base_is_array = codegen_resolve_is_array(array_expr, ctx, &array_stack_node);
     int base_is_string = (is_string_type(expr_get_type_tag(array_expr)) && !base_is_array);
     int base_is_pointer = (expr_has_type_tag(array_expr, POINTER_TYPE) && !base_is_array);
+    int use_return_shortstring_builder =
+        codegen_should_use_return_shortstring_builder(ctx, array_expr);
     struct RecordField *record_field = NULL;
     KgpcType *record_field_type = NULL;
     int record_field_lower_known = 0;
@@ -8564,6 +8566,13 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
      * address via leaq, not a movq which would load the first 8 bytes
      * of string data as if it were a pointer. */
     int base_is_inline_shortstring = 0;
+    if (use_return_shortstring_builder)
+    {
+        base_is_string = 1;
+        base_is_pointer = 0;
+        inst_list = codegen_ensure_return_shortstring_builder(inst_list, ctx, 0);
+        base_is_inline_shortstring = 1;
+    }
     if (base_is_string)
     {
         if (codegen_expr_is_shortstring_value_ctx(array_expr, ctx))
@@ -8582,11 +8591,32 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     }
     else
     {
-        inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &base_reg);
-        if (codegen_had_error(ctx) || base_reg == NULL)
+        if (use_return_shortstring_builder &&
+            ctx != NULL && ctx->current_return_shortstring_slot != NULL)
         {
-            free_reg(get_reg_stack(), index_reg);
-            return inst_list;
+            char buffer[128];
+            base_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (base_reg == NULL)
+                base_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
+            if (base_reg == NULL)
+            {
+                free_reg(get_reg_stack(), index_reg);
+                codegen_report_error(ctx,
+                    "ERROR: Unable to allocate register for return shortstring builder.");
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                ctx->current_return_shortstring_slot->offset, base_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &base_reg);
+            if (codegen_had_error(ctx) || base_reg == NULL)
+            {
+                free_reg(get_reg_stack(), index_reg);
+                return inst_list;
+            }
         }
     }
 

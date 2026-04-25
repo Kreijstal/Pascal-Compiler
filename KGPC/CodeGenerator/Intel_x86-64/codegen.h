@@ -294,6 +294,14 @@ typedef struct CodeGenContext {
     StackNode_t *current_record_return_slot;
     long long current_record_return_size;
 
+    /* Some routines build a `string` return value through ShortString-style
+     * indexing (Result[1] := ..., Result[0] := length).  Route those indexed
+     * writes through a dedicated local ShortString buffer and convert it back
+     * to the real AnsiString return slot before exiting. */
+    StackNode_t *current_return_shortstring_slot;
+    int current_return_shortstring_capacity;
+    int current_return_shortstring_dirty;
+
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
     int static_link_reg_level;
@@ -355,6 +363,12 @@ void codegen_inst_list(ListNode_t *, CodeGenContext *ctx);
 void codegen_report_error(CodeGenContext *ctx, const char *fmt, ...);
 void codegen_report_warning(const CodeGenContext *ctx, const char *fmt, ...);
 int codegen_had_error(const CodeGenContext *ctx);
+int codegen_should_use_return_shortstring_builder(CodeGenContext *ctx,
+    const struct Expression *expr);
+ListNode_t *codegen_ensure_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx, int mark_dirty);
+ListNode_t *codegen_flush_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx);
 
 /* Convert a KgpcType to a legacy type tag.
  * This provides a centralized mapping from the new type system to the legacy tags

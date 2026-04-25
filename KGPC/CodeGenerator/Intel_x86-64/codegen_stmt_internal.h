@@ -111,6 +111,12 @@ int codegen_current_loop_finally_depth(const CodeGenContext *ctx);
 int codegen_dynamic_array_element_size(CodeGenContext *ctx, StackNode_t *array_node,
     struct Expression *array_expr);
 int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_t *symtab);
+int codegen_should_use_return_shortstring_builder(CodeGenContext *ctx,
+    const struct Expression *expr);
+ListNode_t *codegen_ensure_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx, int mark_dirty);
+ListNode_t *codegen_flush_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx);
 int codegen_has_finally(const CodeGenContext *ctx);
 void codegen_pop_except(CodeGenContext *ctx);
 void codegen_pop_finally(CodeGenContext *ctx);

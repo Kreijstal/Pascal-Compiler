@@ -890,6 +890,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                     "kgpc_string_assign_from_unicodestring");
             else
                 inst_list = codegen_call_string_assign(inst_list, ctx, addr_reg, value_reg);
+            if (codegen_should_use_return_shortstring_builder(ctx, var_expr))
+                ctx->current_return_shortstring_dirty = 0;
             free_reg(get_reg_stack(), value_reg);
             free_reg(get_reg_stack(), addr_reg);
             return inst_list;
@@ -1427,6 +1429,9 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
+        int assigns_return_shortstring_builder =
+            codegen_should_use_return_shortstring_builder(ctx,
+                var_expr->expr_data.array_access_data.array_expr);
         Register_t *addr_reg = NULL;
         inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -1635,6 +1640,8 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             }
         }
 
+        if (assigns_return_shortstring_builder)
+            ctx->current_return_shortstring_dirty = 1;
         free_reg(get_reg_stack(), value_reg);
         free_reg(get_reg_stack(), addr_reload);
         return inst_list;

@@ -7945,6 +7945,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
     long long prev_record_return_size = ctx->current_record_return_size;
+    StackNode_t *prev_return_shortstring_slot = ctx->current_return_shortstring_slot;
+    int prev_return_shortstring_capacity = ctx->current_return_shortstring_capacity;
+    int prev_return_shortstring_dirty = ctx->current_return_shortstring_dirty;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -7986,6 +7989,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_type = NULL;
     ctx->current_record_return_slot = NULL;
     ctx->current_record_return_size = 0;
+    ctx->current_return_shortstring_slot = NULL;
+    ctx->current_return_shortstring_capacity = 0;
+    ctx->current_return_shortstring_dirty = 0;
+    ctx->current_return_shortstring_slot = NULL;
+    ctx->current_return_shortstring_capacity = 0;
+    ctx->current_return_shortstring_dirty = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
@@ -8211,6 +8220,9 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;
     ctx->current_record_return_size = prev_record_return_size;
+    ctx->current_return_shortstring_slot = prev_return_shortstring_slot;
+    ctx->current_return_shortstring_capacity = prev_return_shortstring_capacity;
+    ctx->current_return_shortstring_dirty = prev_return_shortstring_dirty;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -8271,6 +8283,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     KgpcType *prev_return_type = ctx->current_return_type;
     StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
     long long prev_record_return_size = ctx->current_record_return_size;
+    StackNode_t *prev_return_shortstring_slot = ctx->current_return_shortstring_slot;
+    int prev_return_shortstring_capacity = ctx->current_return_shortstring_capacity;
+    int prev_return_shortstring_dirty = ctx->current_return_shortstring_dirty;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -9004,6 +9019,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     else if (has_record_return && return_dest_slot != NULL && record_return_size > 0)
     {
+        inst_list = codegen_flush_return_shortstring_builder(inst_list, ctx);
         Register_t *dest_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (dest_reg == NULL)
             dest_reg = get_reg_with_spill(get_reg_stack(), &inst_list);
@@ -9074,6 +9090,7 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     }
     else
     {
+        inst_list = codegen_flush_return_shortstring_builder(inst_list, ctx);
         /* Determine if return type is Real (floating-point) */
         int is_real_return = 0;
         if (func_node != NULL && func_node->type != NULL &&
@@ -9172,6 +9189,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_type = prev_return_type;
     ctx->current_record_return_slot = prev_record_return_slot;
     ctx->current_record_return_size = prev_record_return_size;
+    ctx->current_return_shortstring_slot = prev_return_shortstring_slot;
+    ctx->current_return_shortstring_capacity = prev_return_shortstring_capacity;
+    ctx->current_return_shortstring_dirty = prev_return_shortstring_dirty;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;

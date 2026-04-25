@@ -366,6 +366,88 @@ int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_
     return 0;
 }
 
+int codegen_should_use_return_shortstring_builder(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_VAR_ID)
+        return 0;
+    if (!codegen_is_current_return_var_id(expr, ctx))
+        return 0;
+    if (ctx->current_return_slot == NULL || ctx->current_return_type == NULL)
+        return 0;
+    if (!kgpc_type_is_string(ctx->current_return_type) ||
+        kgpc_type_is_shortstring(ctx->current_return_type) ||
+        kgpc_type_is_wide_string(ctx->current_return_type))
+        return 0;
+    return 1;
+}
+
+ListNode_t *codegen_ensure_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx, int mark_dirty)
+{
+    if (ctx == NULL || ctx->current_return_slot == NULL ||
+        ctx->current_return_type == NULL ||
+        !kgpc_type_is_string(ctx->current_return_type) ||
+        kgpc_type_is_shortstring(ctx->current_return_type) ||
+        kgpc_type_is_wide_string(ctx->current_return_type))
+    {
+        return inst_list;
+    }
+
+    if (ctx->current_return_shortstring_slot == NULL)
+    {
+        ctx->current_return_shortstring_slot =
+            add_l_t_bytes("__return_shortstring_builder", 256);
+        ctx->current_return_shortstring_capacity = 256;
+        ctx->current_return_shortstring_dirty = 0;
+    }
+
+    if (ctx->current_return_shortstring_slot == NULL)
+        return inst_list;
+
+    if (mark_dirty)
+        ctx->current_return_shortstring_dirty = 1;
+
+    return inst_list;
+}
+
+ListNode_t *codegen_flush_return_shortstring_builder(ListNode_t *inst_list,
+    CodeGenContext *ctx)
+{
+    if (ctx == NULL || ctx->current_return_shortstring_slot == NULL ||
+        !ctx->current_return_shortstring_dirty ||
+        ctx->current_return_slot == NULL)
+    {
+        return inst_list;
+    }
+
+    char buffer[128];
+    if (codegen_target_is_windows())
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rcx\n",
+            ctx->current_return_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdx\n",
+            ctx->current_return_shortstring_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    else
+    {
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rdi\n",
+            ctx->current_return_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+        snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %%rsi\n",
+            ctx->current_return_shortstring_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    inst_list = codegen_vect_reg(inst_list, 0);
+    inst_list = codegen_call_with_shadow_space(inst_list,
+        "kgpc_string_assign_from_shortstring");
+    free_arg_regs();
+    ctx->current_return_shortstring_dirty = 0;
+    return inst_list;
+}
+
 void codegen_get_current_return_slot_info(CodeGenContext *ctx,
     int *out_is_real, int *out_size)
 {
@@ -1076,6 +1158,7 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
                 if (return_var != NULL)
                 {
                     char buffer[128];
+                    inst_list = codegen_flush_return_shortstring_builder(inst_list, ctx);
 
                     /* Check if this function returns a record/ShortString via SRET.
                      * The caller passed a destination buffer pointer in the first
@@ -1240,4 +1323,3 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #endif
     return inst_list;
 }
-

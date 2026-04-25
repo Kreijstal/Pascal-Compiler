@@ -637,6 +637,12 @@ int codegen_get_char_array_bounds(const struct Expression *expr, CodeGenContext 
         codegen_is_current_return_var_id(expr, ctx))
     {
         int short_capacity = codegen_get_current_return_shortstring_capacity(ctx, ctx->symtab);
+        if (short_capacity <= 1 &&
+            codegen_should_use_return_shortstring_builder(ctx, expr))
+        {
+            short_capacity = (ctx->current_return_shortstring_capacity > 1) ?
+                ctx->current_return_shortstring_capacity : 256;
+        }
         if (short_capacity > 1)
         {
             lower = 0;
@@ -852,6 +858,12 @@ int codegen_get_shortstring_capacity(const struct Expression *expr, CodeGenConte
         codegen_is_current_return_var_id(expr, ctx))
     {
         int short_capacity = codegen_get_current_return_shortstring_capacity(ctx, ctx->symtab);
+        if (short_capacity <= 0 &&
+            codegen_should_use_return_shortstring_builder(ctx, expr))
+        {
+            short_capacity = (ctx->current_return_shortstring_capacity > 1) ?
+                ctx->current_return_shortstring_capacity : 256;
+        }
         if (short_capacity > 0)
             return short_capacity;
     }
