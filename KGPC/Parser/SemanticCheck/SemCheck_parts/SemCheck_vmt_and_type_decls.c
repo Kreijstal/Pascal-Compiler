@@ -1568,7 +1568,19 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
 
                                     ListNode_t *params = NULL;
                                     if (tmpl->params_ast != NULL)
+                                    {
+                                        /* Restore parse-time {$H-} state captured on the
+                                         * template, so convert_param's apply_shortstring_mode
+                                         * sees the mode that was active when this method
+                                         * was originally declared.  Without this, semcheck
+                                         * runs with whatever the LAST-parsed file left
+                                         * behind and produces var_decl.type=STRING_TYPE
+                                         * for `string` params even when {$H-} was on. */
+                                        bool saved_ss = pascal_frontend_default_shortstring();
+                                        pascal_frontend_set_default_shortstring(tmpl->default_shortstring != 0);
                                         params = from_cparser_convert_params_ast(tmpl->params_ast);
+                                        pascal_frontend_set_default_shortstring(saved_ss);
+                                    }
                                     if (!tmpl->is_static &&
                                         tmpl->kind != METHOD_TEMPLATE_OPERATOR)
                                     {

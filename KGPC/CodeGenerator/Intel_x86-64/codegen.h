@@ -284,6 +284,16 @@ typedef struct CodeGenContext {
     int returns_dynamic_array;
     int dynamic_array_descriptor_size;
 
+    /* Record/ShortString return via SRET (caller-allocated buffer pointer).
+     * When current_record_return_slot is non-NULL the function uses SRET:
+     * the caller's destination buffer pointer is saved at
+     * `current_record_return_slot->offset` from %rbp.  EXIT must memcpy the
+     * local Result (current_return_slot) to that buffer instead of loading
+     * the first qword into %rax.  current_record_return_size is the number
+     * of bytes to copy (matches the size emitted by the regular epilogue). */
+    StackNode_t *current_record_return_slot;
+    long long current_record_return_size;
+
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
     int static_link_reg_level;

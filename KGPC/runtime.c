@@ -9,7 +9,9 @@
 #include <math.h>
 #include <errno.h>
 #include <setjmp.h>
+#ifndef _WIN32
 #include <sys/mman.h>
+#endif
 #include <unistd.h>
 
 #include "runtime_internal.h"
@@ -86,6 +88,9 @@ static int kgpc_guard_new_enabled = 0;
 
 static int kgpc_guard_new_is_enabled(void);
 static void kgpc_guard_validate_all(const char *site);
+static size_t kgpc_guard_page_size(void);
+static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded, size_t page_size);
+static void kgpc_guard_release(void *raw_ptr, size_t mapping_size);
 
 #ifdef _WIN32
 #include <windows.h>
@@ -2813,22 +2818,10 @@ void kgpc_new(void **target, size_t size)
     void *memory = NULL;
     if (kgpc_guard_new_is_enabled())
     {
-        long page_size_long = sysconf(_SC_PAGESIZE);
-        size_t page_size = (page_size_long > 0) ? (size_t)page_size_long : 4096u;
+        size_t page_size = kgpc_guard_page_size();
         size_t rounded = ((size + page_size - 1) / page_size) * page_size;
         size_t total = rounded + page_size;
-        unsigned char *raw = mmap(NULL, total, PROT_READ | PROT_WRITE,
-            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-        if (raw == MAP_FAILED)
-        {
-            fprintf(stderr, "KGPC runtime: failed to allocate %zu bytes.\n", size);
-            exit(EXIT_FAILURE);
-        }
-        if (mprotect(raw + rounded, page_size, PROT_NONE) != 0)
-        {
-            fprintf(stderr, "KGPC runtime: failed to protect guard page.\n");
-            exit(EXIT_FAILURE);
-        }
+        unsigned char *raw = kgpc_guard_reserve(total, rounded, page_size);
         unsigned char *user = raw + rounded - size;
         memset(user, 0, size);
 
@@ -2878,7 +2871,7 @@ void kgpc_dispose(void **target)
                 {
                     KgpcGuardedAlloc *found = *link;
                     *link = found->next;
-                    munmap(found->raw_ptr, found->mapping_size);
+                    kgpc_guard_release(found->raw_ptr, found->mapping_size);
                     free(found);
                     *target = NULL;
                     kgpc_guard_validate_all("kgpc_dispose:after");
@@ -2912,6 +2905,81 @@ static int kgpc_guard_new_is_enabled(void)
         kgpc_guard_new_checked = 1;
     }
     return kgpc_guard_new_enabled;
+}
+
+static size_t kgpc_guard_page_size(void)
+{
+#ifdef _WIN32
+    SYSTEM_INFO system_info;
+    GetSystemInfo(&system_info);
+    if (system_info.dwPageSize == 0)
+    {
+        fprintf(stderr, "KGPC runtime: Windows reported an invalid page size.\n");
+        exit(EXIT_FAILURE);
+    }
+    return (size_t)system_info.dwPageSize;
+#else
+    long page_size_long = sysconf(_SC_PAGESIZE);
+    if (page_size_long <= 0)
+    {
+        fprintf(stderr, "KGPC runtime: sysconf(_SC_PAGESIZE) failed.\n");
+        exit(EXIT_FAILURE);
+    }
+    return (size_t)page_size_long;
+#endif
+}
+
+static unsigned char *kgpc_guard_reserve(size_t total, size_t rounded, size_t page_size)
+{
+#ifdef _WIN32
+    unsigned char *raw = (unsigned char *)VirtualAlloc(NULL, total,
+        MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if (raw == NULL)
+    {
+        fprintf(stderr, "KGPC runtime: VirtualAlloc failed for %zu bytes.\n", total);
+        exit(EXIT_FAILURE);
+    }
+
+    DWORD old_protect = 0;
+    if (!VirtualProtect(raw + rounded, page_size, PAGE_NOACCESS, &old_protect))
+    {
+        fprintf(stderr, "KGPC runtime: VirtualProtect failed for guard page.\n");
+        exit(EXIT_FAILURE);
+    }
+    return raw;
+#else
+    unsigned char *raw = mmap(NULL, total, PROT_READ | PROT_WRITE,
+        MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (raw == MAP_FAILED)
+    {
+        fprintf(stderr, "KGPC runtime: mmap failed for %zu bytes.\n", total);
+        exit(EXIT_FAILURE);
+    }
+    if (mprotect(raw + rounded, page_size, PROT_NONE) != 0)
+    {
+        fprintf(stderr, "KGPC runtime: mprotect failed for guard page.\n");
+        exit(EXIT_FAILURE);
+    }
+    return raw;
+#endif
+}
+
+static void kgpc_guard_release(void *raw_ptr, size_t mapping_size)
+{
+#ifdef _WIN32
+    (void)mapping_size;
+    if (!VirtualFree(raw_ptr, 0, MEM_RELEASE))
+    {
+        fprintf(stderr, "KGPC runtime: VirtualFree failed for guarded allocation.\n");
+        exit(EXIT_FAILURE);
+    }
+#else
+    if (munmap(raw_ptr, mapping_size) != 0)
+    {
+        fprintf(stderr, "KGPC runtime: munmap failed for guarded allocation.\n");
+        exit(EXIT_FAILURE);
+    }
+#endif
 }
 
 static void kgpc_guard_validate_all(const char *site)
@@ -3954,26 +4022,34 @@ void kgpc_string_to_char_array(char *dest, const char *src, size_t dest_size)
         memset(dest + copy_len, 0, dest_size - copy_len);
 }
 
-/* Copy string to ShortString (Pascal string with length byte at index 0) */
+/* Copy string to ShortString (Pascal string with length byte at index 0).
+ *
+ * Matches FPC's `fpc_AnsiStr_To_ShortStr` semantics: writes the length byte
+ * at offset 0 and copies up to `min(src_len, dest_size - 1, 255)` chars at
+ * offset 1..length.  Bytes past `length` in the destination are left
+ * untouched — ShortStrings are length-prefixed, so trailing bytes are
+ * irrelevant to readers.  Padding with zeros is unsafe when the caller
+ * passes a buffer dynamically sized to `length(src) + 1` (e.g. via
+ * `getmem(result, length(s) + 1); result^ := s`) and over-reports
+ * `dest_size` (the conservative 256 fallback in the codegen).  Skipping
+ * the padding keeps that idiomatic FPC pattern correct without losing
+ * correctness for fixed-size ShortString buffers. */
 void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
 {
     if (dest == NULL || src == NULL || dest_size < 2)
         return;
-    
+
     size_t src_len = kgpc_string_known_length(src);
     /* ShortString max capacity is 255 chars (indices 1..255) */
     size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
     size_t copy_len = (src_len < max_chars) ? src_len : max_chars;
-    
+
     /* Set length byte at index 0 */
     dest[0] = (char)copy_len;
-    
+
     /* Copy characters starting at index 1 */
-    memcpy(dest + 1, src, copy_len);
-    
-    /* Pad remaining space with zeros */
-    if (copy_len + 1 < dest_size)
-        memset(dest + 1 + copy_len, 0, dest_size - 1 - copy_len);
+    if (copy_len > 0)
+        memcpy(dest + 1, src, copy_len);
 }
 
 void kgpc_char_array_to_shortstring(char *dest, const char *src, size_t src_len, size_t dest_size)

@@ -127,6 +127,16 @@ static int sizeof_from_array_type_kgpc(SymTab_t *symtab, KgpcType *type, long lo
     if (symtab == NULL || type == NULL || size_out == NULL || !kgpc_type_is_array(type))
         return 1;
 
+    /* Dynamic arrays are 16-byte descriptors, not the data area.
+     * Bypass the dim-info path which would multiply element_size by
+     * effective dim count and yield a wrong answer (e.g., 1 byte for
+     * "array of byte"). */
+    if (kgpc_type_is_dynamic_array(type))
+    {
+        *size_out = 16;
+        return 0;
+    }
+
     KgpcArrayDimensionInfo info;
     if (kgpc_type_get_array_dimension_info(type, symtab, &info) == 0 &&
         info.total_size > 0)
@@ -992,7 +1002,10 @@ int sizeof_from_alias(SymTab_t *symtab, struct TypeAlias *alias,
     {
         if (alias->is_open_array || alias->array_end < alias->array_start)
         {
-            *size_out = POINTER_SIZE_BYTES;
+            /* Dynamic arrays are 16-byte descriptors:
+             * { void *data; int64_t length }.  Open-array parameters
+             * use the same descriptor representation. */
+            *size_out = POINTER_SIZE_BYTES * 2;
             return 0;
         }
 

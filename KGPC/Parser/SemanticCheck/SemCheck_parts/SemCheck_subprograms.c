@@ -1554,16 +1554,53 @@ int semcheck_subprograms(SymTab_t *symtab, ListNode_t *subprograms, int max_scop
         while (param_cur != NULL)
         {
             Tree_t *param = (Tree_t *)param_cur->cur;
-            if (param != NULL && param->type == TREE_VAR_DECL &&
-                param->tree_data.var_decl_data.cached_kgpc_type == NULL)
+            if (param != NULL && param->type == TREE_VAR_DECL)
             {
-                int owns = 0;
-                KgpcType *resolved = resolve_type_from_vardecl(param, symtab, &owns);
-                if (resolved != NULL)
+                /* Honour the parser's {$H-} remap when the param's tree node
+                 * type is SHORTSTRING_TYPE but the cached_kgpc_type is the
+                 * generic STRING (AnsiString) builtin — replace with a real
+                 * ShortString primitive so codegen treats it correctly.
+                 * This catches both the predeclare path (cached set) and
+                 * the resolve-now path (cached null). */
+                if (param->tree_data.var_decl_data.type == SHORTSTRING_TYPE &&
+                    param->tree_data.var_decl_data.cached_kgpc_type != NULL &&
+                    kgpc_type_is_string(param->tree_data.var_decl_data.cached_kgpc_type) &&
+                    !kgpc_type_is_shortstring(param->tree_data.var_decl_data.cached_kgpc_type))
                 {
-                    if (!owns)
-                        kgpc_type_retain(resolved);
-                    param->tree_data.var_decl_data.cached_kgpc_type = resolved;
+                    destroy_kgpc_type(param->tree_data.var_decl_data.cached_kgpc_type);
+                    param->tree_data.var_decl_data.cached_kgpc_type =
+                        create_primitive_type(SHORTSTRING_TYPE);
+                }
+                else if (param->tree_data.var_decl_data.cached_kgpc_type == NULL)
+                {
+                    int owns = 0;
+                    KgpcType *resolved = resolve_type_from_vardecl(param, symtab, &owns);
+                    if (resolved != NULL)
+                    {
+                        /* Honour the parser's {$H-} remap: when a parameter is
+                         * declared with bare type "string" and the parser has
+                         * already resolved it to SHORTSTRING_TYPE, install a
+                         * ShortString KgpcType instead of the generic String
+                         * builtin that resolve_type_from_vardecl would return.
+                         * Without this, later codegen paths (e.g.
+                         * codegen_current_param_is_ansistring) see AnsiString
+                         * semantics for the param while the value passed at the
+                         * call site is actually a ShortString buffer. */
+                        if (param->tree_data.var_decl_data.type == SHORTSTRING_TYPE &&
+                            kgpc_type_is_string(resolved) &&
+                            !kgpc_type_is_shortstring(resolved))
+                        {
+                            if (owns)
+                                destroy_kgpc_type(resolved);
+                            else
+                                kgpc_type_release(resolved);
+                            resolved = create_primitive_type(SHORTSTRING_TYPE);
+                            owns = 1;
+                        }
+                        if (!owns)
+                            kgpc_type_retain(resolved);
+                        param->tree_data.var_decl_data.cached_kgpc_type = resolved;
+                    }
                 }
             }
             param_cur = param_cur->next;

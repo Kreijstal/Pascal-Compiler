@@ -686,6 +686,7 @@ KgpcType* create_procedure_type(ListNode_t *params, KgpcType *return_type) {
         kgpc_type_retain(return_type);
     type->info.proc_info.definition = NULL;
     type->info.proc_info.return_type_id = NULL;
+    type->info.proc_info.is_method_pointer = 0;
     type->ref_count = 1;
     
     #ifdef DEBUG_KGPC_TYPE_CREATION
@@ -770,6 +771,7 @@ KgpcType* kgpc_type_clone_shallow_owned(const KgpcType *src)
             clone->info.proc_info.return_type_id =
                 src->info.proc_info.return_type_id != NULL ?
                     strdup(src->info.proc_info.return_type_id) : NULL;
+            clone->info.proc_info.is_method_pointer = src->info.proc_info.is_method_pointer;
             break;
         case TYPE_KIND_RECORD:
             clone->info.record_info = src->info.record_info;
@@ -823,6 +825,11 @@ KgpcType* create_kgpc_type_from_type_alias(struct TypeAlias *alias, struct SymTa
         if (alias->kgpc_type->type_alias == NULL && alias->alias_name != NULL) {
             kgpc_type_set_type_alias(alias->kgpc_type, alias);
         }
+        /* Retain so the caller owns one reference, matching the ownership
+         * contract of the other branches that return freshly-created types.
+         * Otherwise the caller's destroy_kgpc_type would release a borrowed
+         * reference and trigger a use-after-free once the alias is released. */
+        kgpc_type_retain(alias->kgpc_type);
         return alias->kgpc_type;
     }
     
@@ -1426,8 +1433,25 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
         KgpcType *elem_type = NULL;
         int elem_type_borrowed = 0;
 
+        /* For SHORTSTRING_TYPE element (string[N]), use the preserved
+         * element_kgpc_type from the AST — it carries the specific size
+         * (N+1 bytes). Without this, create_primitive_type(SHORTSTRING_TYPE)
+         * produces a bare type with no alias and the array stride defaults
+         * to 256. Build a fresh primitive with the captured storage size so
+         * we don't alias the tree's shared pointer. */
+        if (elem_type_tag == SHORTSTRING_TYPE &&
+            var_decl->tree_data.arr_decl_data.element_kgpc_type != NULL)
+        {
+            long long ek_size = kgpc_type_sizeof(
+                var_decl->tree_data.arr_decl_data.element_kgpc_type);
+            if (ek_size > 0 && ek_size <= INT_MAX)
+            {
+                elem_type = create_primitive_type_with_size(SHORTSTRING_TYPE,
+                                                            (int)ek_size);
+            }
+        }
         /* Resolve element type */
-        if (elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
+        if (elem_type == NULL && elem_type_tag != UNKNOWN_TYPE && elem_type_tag != -1)
         {
             elem_type = create_primitive_type(elem_type_tag);
         }
@@ -1454,7 +1478,7 @@ KgpcType *resolve_type_from_vardecl(Tree_t *var_decl, struct SymTab *symtab, int
                 *owns_type = 1;
             return create_array_type(elem_type, start, end);
         }
-        
+
         return NULL;
     }
     
@@ -3090,8 +3114,13 @@ long long kgpc_type_sizeof(KgpcType *type)
         }
         
         case TYPE_KIND_PROCEDURE:
-            return 8; /* Procedure pointers are 8 bytes */
-        
+            /* Method pointers ("procedure of object") are 16-byte TMethod
+             * { code: pointer; data: pointer; }.  Plain procedure pointers
+             * are 8 bytes. */
+            if (type->info.proc_info.is_method_pointer)
+                return 16;
+            return 8;
+
         default:
             return -1;
     }
@@ -3127,6 +3156,18 @@ int kgpc_type_is_record(const KgpcType *type)
 int kgpc_type_is_procedure(const KgpcType *type)
 {
     return (type != NULL && type->kind == TYPE_KIND_PROCEDURE);
+}
+
+int kgpc_type_is_method_pointer(const KgpcType *type)
+{
+    return (type != NULL && type->kind == TYPE_KIND_PROCEDURE &&
+            type->info.proc_info.is_method_pointer);
+}
+
+void kgpc_type_set_method_pointer(KgpcType *type, int is_method_ptr)
+{
+    if (type != NULL && type->kind == TYPE_KIND_PROCEDURE)
+        type->info.proc_info.is_method_pointer = is_method_ptr ? 1 : 0;
 }
 
 int kgpc_type_is_char(const KgpcType *type)

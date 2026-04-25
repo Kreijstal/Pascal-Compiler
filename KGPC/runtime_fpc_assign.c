@@ -208,11 +208,11 @@ __attribute__((unused)) static void assign_t_c(void *textrec, char c)
 /* ------------------------------------------------------------------ */
 /* assign_f_s: Assign(var f: File; const s: string)                    */
 /* Single implementation for both standard and FPC RTL mode.           */
-/* Calls kgpc_tfile_assign (KGPC proper init), then copies filename    */
-/* to FPC's expected offset 52 for FPC RTL compatibility.              */
+/* Forwards to kgpc_tfile_assign which writes the path into the        */
+/* FileRec.name field at offset 112 — the same offset FPC's            */
+/* x86_64 FileRec uses (Handle:4 + Mode:4 + RecSize:8 + _private:64    */
+/* + UserData:32 = 112).                                                */
 /* ------------------------------------------------------------------ */
-
-#define FR_NAME_FPC 52   /* AnsiChar name used by FPC RTL's do_open_u_pc_li_b */
 
 void kgpc_assign_f_s(void *filerec, const char *path)
 {
@@ -220,16 +220,6 @@ void kgpc_assign_f_s(void *filerec, const char *path)
         return;
 
     kgpc_tfile_assign(filerec, path);
-
-    /* Also copy filename to offset 52 where FPC RTL code reads it */
-    if (path != NULL) {
-        char *fr = (char *)filerec;
-        size_t len = strlen(path);
-        if (len > 255)
-            len = 255;
-        memcpy(fr + FR_NAME_FPC, path, len);
-        fr[FR_NAME_FPC + len] = '\0';
-    }
 }
 
 __attribute__((unused)) static void assign_f_s(void *filerec, const char *path) { kgpc_assign_f_s(filerec, path); }

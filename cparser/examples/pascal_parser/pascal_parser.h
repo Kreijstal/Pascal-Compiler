@@ -186,7 +186,10 @@ typedef enum {
     // Interface GUID attribute: ['{...}'] or [SGUIDConst]
     PASCAL_T_INTERFACE_GUID,
     // Default property marker (trailing "default;" on indexed property)
-    PASCAL_T_DEFAULT_PROPERTY
+    PASCAL_T_DEFAULT_PROPERTY,
+    // Marker for "of object" on procedure/function types — denotes a
+    // method pointer (TMethod = {code: pointer; data: pointer}, 16 bytes).
+    PASCAL_T_OF_OBJECT
 } pascal_tag_t;
 
 // --- Function Declarations ---

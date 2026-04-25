@@ -14,6 +14,8 @@
 #include <string.h>
 #include <assert.h>
 
+extern const char *kgpc_getenv(const char *name);
+
 
 /* Cached getenv() — defined in SemCheck.c */
 extern const char *kgpc_getenv(const char *name);
@@ -256,6 +258,7 @@ static struct MethodTemplate *clone_method_template(const struct MethodTemplate 
     clone->directives_ast = NULL;
     clone->method_impl_ast = method->method_impl_ast != NULL ? copy_ast_detached(method->method_impl_ast) : NULL;
     clone->source_offset = method->source_offset;
+    clone->default_shortstring = method->default_shortstring;
     clone->owns_ast = 1; /* Deep clone owns its own AST copies */
 
     return clone;
@@ -289,6 +292,7 @@ struct MethodTemplate *clone_method_template_detached(const struct MethodTemplat
     clone->directives_ast = method->directives_ast;
     clone->method_impl_ast = method->method_impl_ast;
     clone->source_offset = method->source_offset;
+    clone->default_shortstring = method->default_shortstring;
     clone->owns_ast = 0; /* Shallow clone shares AST pointers with the original */
 
     return clone;
@@ -1661,6 +1665,16 @@ void destroy_stmt(struct Statement *stmt)
 void destroy_expr(struct Expression *expr)
 {
     assert(expr != NULL);
+    if (getenv("KGPC_DEBUG_EXPR_FREE") != NULL && expr->resolved_kgpc_type != NULL) {
+        KgpcType *t = expr->resolved_kgpc_type;
+        const char *id = NULL;
+        if (expr->type == EXPR_VAR_ID)
+            id = expr->expr_data.id;
+        else if (expr->type == EXPR_FUNCTION_CALL)
+            id = expr->expr_data.function_call_data.id;
+        fprintf(stderr, "[destroy_expr_pre] type=%p kind=%d ref=%d expr_type=%d line=%d src=%d id=%s\n",
+            (void*)t, t->kind, t->ref_count, expr->type, expr->line_num, expr->source_index, id ? id : "");
+    }
     if (expr->field_width != NULL)
     {
         destroy_expr(expr->field_width);
@@ -1925,6 +1939,8 @@ void destroy_expr(struct Expression *expr)
               free(expr->expr_data.addr_of_proc_data.proc_mangled_id);
           if (expr->expr_data.addr_of_proc_data.proc_id != NULL)
               free(expr->expr_data.addr_of_proc_data.proc_id);
+          if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+              destroy_expr(expr->expr_data.addr_of_proc_data.receiver_expr);
           break;
 
         case EXPR_ANONYMOUS_FUNCTION:
@@ -3313,8 +3329,10 @@ struct Expression *mk_functioncall(int line_num, char *id, ListNode_t *args)
     new_expr->expr_data.function_call_data.is_inherited_call = 0;
     new_expr->expr_data.function_call_data.is_bare_inherited = 0;
     new_expr->expr_data.function_call_data.is_operator_call = 0;
+    new_expr->expr_data.function_call_data.is_constructor_call = 0;
     new_expr->expr_data.function_call_data.cached_owner_class = NULL;
     new_expr->expr_data.function_call_data.cached_method_name = NULL;
+    new_expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
 
     return new_expr;
 }

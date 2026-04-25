@@ -7943,6 +7943,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
+    StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
+    long long prev_record_return_size = ctx->current_record_return_size;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -7982,6 +7984,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_args = proc->args_var;
     ctx->current_return_slot = NULL;
     ctx->current_return_type = NULL;
+    ctx->current_record_return_slot = NULL;
+    ctx->current_record_return_size = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
@@ -8205,6 +8209,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_args = prev_sub_args;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
+    ctx->current_record_return_slot = prev_record_return_slot;
+    ctx->current_record_return_size = prev_record_return_size;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -8263,6 +8269,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ListNode_t *prev_sub_args = ctx->current_subprogram_args;
     StackNode_t *prev_return_slot = ctx->current_return_slot;
     KgpcType *prev_return_type = ctx->current_return_type;
+    StackNode_t *prev_record_return_slot = ctx->current_record_return_slot;
+    long long prev_record_return_size = ctx->current_record_return_size;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -8302,6 +8310,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_args = func->args_var;
     ctx->current_return_slot = NULL;
     ctx->current_return_type = NULL;
+    ctx->current_record_return_slot = NULL;
+    ctx->current_record_return_size = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, func->source_unit_index);
     codegen_register_local_types(func->type_declarations, symtab);
@@ -8821,6 +8831,17 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (has_record_return)
         return_dest_slot = add_l_x("__record_return_dest__", (int)sizeof(void *));
 
+    /* Make the SRET destination slot visible to EXIT statements so they
+     * memcpy the local Result into the caller's buffer instead of loading
+     * a single qword.  Without this, an early `Exit` from a ShortString- or
+     * record-returning function leaves the caller's buffer untouched and
+     * returns 8 stale bytes in %rax. */
+    if (has_record_return && return_dest_slot != NULL)
+    {
+        ctx->current_record_return_slot = return_dest_slot;
+        ctx->current_record_return_size = record_return_size;
+    }
+
     if (has_record_return && return_dest_slot != NULL)
     {
         const char *ret_reg = current_arg_reg64(0);
@@ -9149,6 +9170,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_subprogram_args = prev_sub_args;
     ctx->current_return_slot = prev_return_slot;
     ctx->current_return_type = prev_return_type;
+    ctx->current_record_return_slot = prev_record_return_slot;
+    ctx->current_record_return_size = prev_record_return_size;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -9776,6 +9799,11 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         {
                             has_record_or_dynarray = 1;
                         }
+                        /* Method-pointer (TMethod) parameters are 16-byte
+                         * aggregates passed by reference; they take the same
+                         * inline-copy path. */
+                        if (kgpc_type_is_method_pointer(param_type))
+                            has_record_or_dynarray = 1;
                     }
                     /* Value ShortString parameters call kgpc_shortstring_to_shortstring
                      * at entry, which clobbers subsequent parameter registers.
@@ -10038,7 +10066,29 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         }
                     }
 
-                    if (record_type_info != NULL || is_dynarray_param || is_char_set_param)
+                    /* Method-pointer (TMethod) params are 16-byte aggregates,
+                     * passed by reference like records.  The callee copies the
+                     * 16 bytes from the source pointer into an inline local
+                     * slot, so subsequent uses of the param see the inline
+                     * descriptor exactly like a local variable. */
+                    int is_method_ptr_param = 0;
+                    long long method_ptr_size = 0;
+                    if (!symbol_is_var_param)
+                    {
+                        KgpcType *param_type = NULL;
+                        if (resolved_type_node != NULL)
+                            param_type = resolved_type_node->type;
+                        else if (cached_arg_type != NULL)
+                            param_type = cached_arg_type;
+                        if (kgpc_type_is_method_pointer(param_type))
+                        {
+                            is_method_ptr_param = 1;
+                            method_ptr_size = 16;
+                        }
+                    }
+
+                    if (record_type_info != NULL || is_dynarray_param ||
+                        is_char_set_param || is_method_ptr_param)
                     {
                         long long record_size = 0;
                         if (is_dynarray_param)
@@ -10048,6 +10098,10 @@ ListNode_t *codegen_subprogram_arguments(ListNode_t *args, ListNode_t *inst_list
                         else if (is_char_set_param)
                         {
                             record_size = char_set_size;
+                        }
+                        else if (is_method_ptr_param)
+                        {
+                            record_size = method_ptr_size;
                         }
                         else if (codegen_sizeof_type_reference(ctx, RECORD_TYPE, NULL,
                                 record_type_info, &record_size) != 0 || record_size < 0)

@@ -12,6 +12,7 @@
 #include "SymTab/SymTab.h"
 #include "../ParseTree/KgpcType.h"
 #include "../ParseTree/ident_ref.h"
+#include "../pascal_frontend.h"
 
 
 /* Cached getenv() — defined in SemCheck.c */
@@ -530,6 +531,48 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                 decl_tree->tree_data.var_decl_data.inline_record_type->type_id != NULL)
             {
                 record_type_id = decl_tree->tree_data.var_decl_data.inline_record_type->type_id;
+            }
+            /* Honour the parser's {$H-} remap.  When the parser converted
+             * `s: string` to SHORTSTRING_TYPE on the var_decl (because
+             * {$H-} was active or the type was textually `ShortString`),
+             * MapBuiltinTypeNameToVarType("string") still returns
+             * HASHVAR_PCHAR (AnsiString).  The type tag on the decl is the
+             * authoritative signal — prefer SHORTSTRING when set.
+             *
+             * Forward (interface) declarations of class methods can reach
+             * this path with var_decl.type == STRING_TYPE because the
+             * parser path that builds them (convert_param_list ->
+             * convert_type_spec) does not invoke apply_shortstring_mode.
+             * The implementation's args_var, in contrast, IS remapped to
+             * SHORTSTRING_TYPE via other paths.  When the call-resolution
+             * path re-mangles from the candidate's proc_info.params
+             * (typically the interface's params), it gets the un-remapped
+             * STRING_TYPE form — disagreeing with the def-side label
+             * which uses the impl's args_var.  Resolve the asymmetry by
+             * consulting the live symbol table: if the user's "string"
+             * type-id resolves to a ShortString-aware KgpcType, treat it
+             * as ShortString here too. */
+            int parser_marked_shortstring =
+                (decl_tree->tree_data.var_decl_data.type == SHORTSTRING_TYPE);
+            if (!parser_marked_shortstring &&
+                decl_tree->tree_data.var_decl_data.type == STRING_TYPE &&
+                decl_tree->tree_data.var_decl_data.type_id != NULL &&
+                strcasecmp(decl_tree->tree_data.var_decl_data.type_id, "string") == 0 &&
+                pascal_frontend_default_shortstring())
+            {
+                /* Belt-and-braces: even if the upstream parameter-build
+                 * paths missed the {$H-} remap, honour the currently-
+                 * active mode here too. */
+                parser_marked_shortstring = 1;
+            }
+            if (parser_marked_shortstring &&
+                (resolved_type == HASHVAR_PCHAR ||
+                 resolved_type == HASHVAR_RAWBYTESTRING ||
+                 resolved_type == HASHVAR_UNICODESTRING ||
+                 resolved_type == HASHVAR_UNTYPED))
+            {
+                resolved_type = HASHVAR_SHORTSTRING;
+                record_type_id = NULL;
             }
             if (resolved_type == HASHVAR_REAL &&
                 mangle_kgpc_type_is_extended_real(

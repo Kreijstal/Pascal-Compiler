@@ -4061,15 +4061,36 @@ cleanup_constructor:
              codegen_expr_is_addressable(expr->expr_data.typecast_data.expr))
     {
         /* Array-to-pointer typecast (e.g. PByte(top^.data)):
-         * compute the ADDRESS of the array, not its value. */
+         * for static arrays, compute the ADDRESS of the array (its
+         * first element).  For dynamic arrays, the variable storage
+         * is a 16-byte descriptor { data, length } — taking its
+         * address yields the descriptor base, but the desired
+         * pointer value is descriptor.data which is the first 8
+         * bytes; load it. */
+        struct Expression *src_expr = expr->expr_data.typecast_data.expr;
+        int is_dynarray_src = src_expr->array_is_dynamic;
+        if (!is_dynarray_src)
+        {
+            KgpcType *src_type = src_expr->resolved_kgpc_type;
+            if (src_type != NULL && kgpc_type_is_dynamic_array(src_type))
+                is_dynarray_src = 1;
+        }
         Register_t *addr_reg = NULL;
-        inst_list = codegen_address_for_expr(expr->expr_data.typecast_data.expr,
-            inst_list, ctx, &addr_reg);
+        inst_list = codegen_address_for_expr(src_expr, inst_list, ctx, &addr_reg);
         if (addr_reg != NULL)
         {
-            if (addr_reg != target_reg)
+            char buffer[64];
+            if (is_dynarray_src)
             {
-                char buffer[64];
+                /* descriptor.data is at offset 0; load via target. */
+                snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                    addr_reg->bit_64, target_reg->bit_64);
+                inst_list = add_inst(inst_list, buffer);
+                if (addr_reg != target_reg)
+                    free_reg(get_reg_stack(), addr_reg);
+            }
+            else if (addr_reg != target_reg)
+            {
                 snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %s\n",
                     addr_reg->bit_64, target_reg->bit_64);
                 inst_list = add_inst(inst_list, buffer);
@@ -4264,6 +4285,64 @@ cleanup_constructor:
                     proc_label = def_mangled;
                 }
             }
+        }
+        /* If a receiver expression is attached, this is a method pointer
+         * (@obj.Method): build a TMethod = { code: pointer; data: pointer }
+         * 16-byte struct on the stack, write code at offset 0, Self at
+         * offset 8, then return the ADDRESS of the struct in target_reg.
+         * The callee passes the struct pointer like any other 16-byte
+         * record argument. */
+        if (expr->expr_data.addr_of_proc_data.receiver_expr != NULL)
+        {
+            StackNode_t *tm_slot = add_l_t_bytes("__tmethod_temp", 16);
+            if (tm_slot == NULL)
+            {
+                if (collision_label != NULL) free(collision_label);
+                if (resolved_label != NULL) free(resolved_label);
+                return inst_list;
+            }
+            /* Step 1: load the code address into a scratch reg, then
+             * store at offset 0 of the temp. */
+            Register_t *code_reg = get_free_reg(get_reg_stack(), &inst_list);
+            if (code_reg == NULL)
+            {
+                if (collision_label != NULL) free(collision_label);
+                if (resolved_label != NULL) free(resolved_label);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n",
+                proc_label, code_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                code_reg->bit_64, tm_slot->offset);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), code_reg);
+
+            /* Step 2: evaluate the receiver expression to get Self pointer,
+             * then store at offset 8 of the temp. */
+            Register_t *self_reg = NULL;
+            inst_list = codegen_expr_with_result(
+                expr->expr_data.addr_of_proc_data.receiver_expr,
+                inst_list, ctx, &self_reg);
+            if (self_reg == NULL)
+            {
+                if (collision_label != NULL) free(collision_label);
+                if (resolved_label != NULL) free(resolved_label);
+                return inst_list;
+            }
+            snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+                self_reg->bit_64, tm_slot->offset - 8);
+            inst_list = add_inst(inst_list, buffer);
+            free_reg(get_reg_stack(), self_reg);
+
+            /* Step 3: load the address of the temp into target_reg. */
+            snprintf(buffer, sizeof(buffer), "\tleaq\t-%d(%%rbp), %s\n",
+                tm_slot->offset, target_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+
+            if (collision_label != NULL) free(collision_label);
+            if (resolved_label != NULL) free(resolved_label);
+            return inst_list;
         }
         /* Use leaq (Load Effective Address) with RIP-relative addressing to get the address of the procedure's label */
         snprintf(buffer, sizeof(buffer), "\tleaq\t%s(%%rip), %s\n", proc_label, target_reg->bit_64);

@@ -47,12 +47,17 @@ typedef struct {
     // This reuses the existing, well-understood structure for parameter declarations.
     ListNode_t *params;
     int owns_params;
-    
+
     // For functions, this points to the return type.
     // For procedures, this is NULL.
     KgpcType *return_type;
     struct Tree *definition;  /* AST node for procedure/function (if available) */
     char *return_type_id;     /* Cached identifier used for return type lookup */
+    /* 1 if this procedure type was declared with "of object" — i.e. it is
+     * a method pointer (TMethod = { code: pointer; data: pointer; }, 16 bytes
+     * on 64-bit).  When set, sizeof returns 16 and the indirect-call site
+     * loads Self from the data slot before calling code. */
+    int is_method_pointer;
 } ProcedureTypeInfo;
 
 // For TYPE_KIND_ARRAY
@@ -169,6 +174,12 @@ int kgpc_type_is_record(const KgpcType *type);
 
 /* Check if a type is a procedure type. */
 int kgpc_type_is_procedure(const KgpcType *type);
+
+/* Check if a procedure type is a method pointer ("of object"). */
+int kgpc_type_is_method_pointer(const KgpcType *type);
+
+/* Mark a procedure type as a method pointer. */
+void kgpc_type_set_method_pointer(KgpcType *type, int is_method_ptr);
 
 /* Get array bounds. Returns 0 on success, -1 if not an array.
  * start_out and end_out may be NULL if not needed. */

@@ -827,6 +827,7 @@ struct MethodTemplate *create_method_template(ast_t *method_decl_node)
     annotate_method_template(template, template->method_ast);
     template->method_impl_ast = NULL;
     template->source_offset = g_source_offset;
+    template->default_shortstring = pascal_frontend_default_shortstring() ? 1 : 0;
     template->owns_ast = 1; /* Template owns its detached AST copy */
     return template;
 }
@@ -2165,6 +2166,14 @@ ListNode_t *convert_param(ast_t *param_node) {
     {
         /* ARCHITECTURAL FIX: Pass TypeInfo to preserve array information */
         var_type = convert_type_spec(type_node, &type_id, NULL, &type_info);
+        /* Honour the parser's {$H-} remap for parameter types.  Without
+         * this, interface-section forward decls of class methods come
+         * out with STRING_TYPE on `string` while the implementation's
+         * params (built via a separate path) get SHORTSTRING_TYPE,
+         * causing MangleFunctionName to disagree with itself when called
+         * on the same logical method's two parameter lists. */
+        if (type_id != NULL)
+            var_type = apply_shortstring_mode(var_type, type_id);
         /* Check for default value node after type spec.
          * Some parser shapes wrap optional/default nodes so `type_node->next`
          * may be NULL even when a default exists. */
@@ -2371,7 +2380,23 @@ KgpcType *from_cparser_method_template_to_proctype(struct MethodTemplate *method
     }
 
     if (method_template->params_ast != NULL) {
+        /* Restore the {$H-} state that was active when this template was
+         * captured at parse time, so that convert_param's
+         * apply_shortstring_mode call sees the correct mode.  Without
+         * this, semcheck-time conversion of an interface forward decl
+         * runs with whatever shortstring flag the LAST-parsed file left
+         * behind, producing var_decl.type = STRING_TYPE for `string`
+         * params even though parse-time {$H-} demanded SHORTSTRING_TYPE.
+         * The implementation's args_var, built in a different path,
+         * already has SHORTSTRING_TYPE — and the resulting asymmetry
+         * causes MangleFunctionName to emit two different mangled names
+         * for the same logical method depending on which params list it
+         * is fed, which in turn breaks linker resolution of method
+         * calls. */
+        bool saved_shortstring = pascal_frontend_default_shortstring();
+        pascal_frontend_set_default_shortstring(method_template->default_shortstring != 0);
         ListNode_t *extra_params = from_cparser_convert_params_ast(method_template->params_ast);
+        pascal_frontend_set_default_shortstring(saved_shortstring);
         if (extra_params != NULL)
             list_builder_extend(&params_builder, extra_params);
     }
