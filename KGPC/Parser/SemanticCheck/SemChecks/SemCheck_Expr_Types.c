@@ -200,24 +200,6 @@ static KgpcType *semcheck_create_value_kgpc_type_from_node_local(HashNode_t *typ
     return node_type;
 }
 
-static int semcheck_expr_types_method_is_declared_constructor(SymTab_t *symtab,
-    struct RecordType *record_info, const char *method_name)
-{
-    if (symtab == NULL || record_info == NULL || method_name == NULL)
-        return 0;
-
-    for (struct RecordType *search = record_info; search != NULL;
-         search = semcheck_lookup_parent_record(symtab, search))
-    {
-        struct MethodTemplate *tmpl =
-            from_cparser_get_method_template(search, method_name);
-        if (tmpl != NULL)
-            return tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR;
-    }
-
-    return 0;
-}
-
 static int semcheck_type_alias_has_enum_literal(const struct TypeAlias *alias,
     const char *field_id)
 {
@@ -4061,7 +4043,7 @@ SKIP_SELF_FIELD_REWRITE:
                         record_type_is_class(record_info) &&
                         !record_info->is_type_helper &&
                         method_name != NULL &&
-                        semcheck_expr_types_method_is_declared_constructor(symtab, record_info, method_name));
+                        semcheck_method_is_declared_constructor(symtab, record_info, method_name));
                     /* Re-run semantic checking as a function call */
                     semcheck_expr_set_resolved_type(expr, UNKNOWN_TYPE);
                     int funccall_result = semcheck_funccall(type_return, symtab, expr, max_scope_lev, mutating);

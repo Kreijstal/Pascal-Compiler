@@ -5401,6 +5401,8 @@ int semcheck_funccall(int *type_return,
                 int is_nonstatic_class_method =
                     (!is_static_method &&
                      from_cparser_is_method_class_method(method_owner->type_id, id));
+                int method_is_declared_constructor =
+                    semcheck_method_is_declared_constructor(symtab, method_owner, id);
                 if (is_nonstatic_class_method)
                 {
                     expr->expr_data.function_call_data.is_class_method_call = 1;
@@ -5408,7 +5410,7 @@ int semcheck_funccall(int *type_return,
                         expr->expr_data.function_call_data.self_class_name =
                             strdup(method_owner->type_id);
                 }
-                else
+                else if (is_static_method || method_is_declared_constructor)
                 {
                     if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
                     {
@@ -5430,7 +5432,7 @@ int semcheck_funccall(int *type_return,
                      * they don't pass Self - it's implicitly created.
                      * Static factory methods (class function Create: T; static;) do NOT have Self.
                      * We use EXPR_NIL as the placeholder - codegen will allocate memory. */
-                    if (!is_static_method) {
+                    if (method_is_declared_constructor) {
                         struct Expression *self_placeholder = (struct Expression *)calloc(1, sizeof(struct Expression));
                         if (self_placeholder != NULL) {
                             /* Use nil as the placeholder - codegen will handle actual allocation */
@@ -5450,6 +5452,11 @@ int semcheck_funccall(int *type_return,
                             }
                         }
                     }
+                }
+                else if (expr->expr_data.function_call_data.constructor_receiver_expr != NULL)
+                {
+                    destroy_expr(expr->expr_data.function_call_data.constructor_receiver_expr);
+                    expr->expr_data.function_call_data.constructor_receiver_expr = NULL;
                 }
                 
                 /* Update the function call id to the mangled name */
@@ -5480,25 +5487,8 @@ int semcheck_funccall(int *type_return,
                 /* Verify the method was actually declared as a constructor
                  * (using the 'constructor' keyword), not just a function whose
                  * name happens to start with "Create" (e.g. CreateDriver). */
-                int method_is_declared_constructor = 0;
-                if (strncasecmp(method_name, "Create", 6) == 0 && record_info != NULL)
-                {
-                    /* Walk up the class hierarchy looking for a template
-                     * that classifies this method as a constructor. */
-                    struct RecordType *search = record_info;
-                    while (search != NULL)
-                    {
-                        struct MethodTemplate *tmpl =
-                            from_cparser_get_method_template(search, method_name);
-                        if (tmpl != NULL)
-                        {
-                            if (tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR)
-                                method_is_declared_constructor = 1;
-                            break; /* found a template — use its classification */
-                        }
-                        search = semcheck_lookup_parent_record(symtab, search);
-                    }
-                }
+                method_is_declared_constructor =
+                    semcheck_method_is_declared_constructor(symtab, record_info, method_name);
                 if (method_is_declared_constructor && owner_type != NULL) {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                         fprintf(stderr, "[SemCheck] semcheck_funccall: Setting up return type for constructor %s\n", method_name);
