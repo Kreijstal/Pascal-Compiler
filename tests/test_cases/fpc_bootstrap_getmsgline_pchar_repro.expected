@@ -1,0 +1,3 @@
+**2XLO_Define order of library linking
+**2XLL_Link using ld.lld GNU compatible LLVM linker
+**2Xm_Generate link map
