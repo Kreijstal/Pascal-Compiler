@@ -375,6 +375,8 @@ int codegen_should_use_return_shortstring_builder(CodeGenContext *ctx,
         return 0;
     if (ctx->current_return_slot == NULL || ctx->current_return_type == NULL)
         return 0;
+    if (!ctx->current_return_shortstring_builder_enabled)
+        return 0;
     if (!kgpc_type_is_string(ctx->current_return_type) ||
         kgpc_type_is_shortstring(ctx->current_return_type) ||
         kgpc_type_is_wide_string(ctx->current_return_type))

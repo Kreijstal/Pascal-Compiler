@@ -38,6 +38,13 @@
 static int codegen_return_storage_size(KgpcType *return_type);
 static int codegen_return_type_id_storage_size(const char *return_type_id);
 static int codegen_float_native_distance(Tree_t *sub);
+static int codegen_result_id_matches_ctx(const struct Expression *expr, const CodeGenContext *ctx);
+static int codegen_expr_uses_result_length_byte(const struct Expression *expr,
+    const CodeGenContext *ctx);
+static int codegen_stmt_uses_result_length_byte(const struct Statement *stmt,
+    const CodeGenContext *ctx);
+static int codegen_stmt_list_uses_result_length_byte(ListNode_t *list,
+    const CodeGenContext *ctx);
 static int codegen_list_contains_string(ListNode_t *list, const char *value);
 struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 const char *codegen_find_class_method_impl_id(SymTab_t *symtab,
@@ -7658,6 +7665,156 @@ static int codegen_float_native_distance(Tree_t *sub)
     return dist < 0 ? -dist : dist;
 }
 
+static int codegen_result_id_matches_ctx(const struct Expression *expr, const CodeGenContext *ctx)
+{
+    if (expr == NULL || ctx == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+    if (pascal_identifier_equals(expr->expr_data.id, "Result"))
+        return 1;
+    if (ctx->current_subprogram_id != NULL &&
+        pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_id))
+        return 1;
+    if (ctx->current_subprogram_method_name != NULL &&
+        pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_method_name))
+        return 1;
+    if (ctx->current_subprogram_result_name != NULL &&
+        pascal_identifier_equals(expr->expr_data.id, ctx->current_subprogram_result_name))
+        return 1;
+    return 0;
+}
+
+static int codegen_expr_uses_result_length_byte(const struct Expression *expr,
+    const CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->type == EXPR_ARRAY_ACCESS)
+    {
+        const struct Expression *base = expr->expr_data.array_access_data.array_expr;
+        const struct Expression *index = expr->expr_data.array_access_data.index_expr;
+        if (codegen_result_id_matches_ctx(base, ctx) &&
+            index != NULL && index->type == EXPR_INUM && index->expr_data.i_num == 0)
+            return 1;
+        if (codegen_expr_uses_result_length_byte(base, ctx) ||
+            codegen_expr_uses_result_length_byte(index, ctx))
+            return 1;
+    }
+
+    switch (expr->type)
+    {
+        case EXPR_RELOP:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.relop_data.left, ctx) ||
+                   codegen_expr_uses_result_length_byte(expr->expr_data.relop_data.right, ctx);
+        case EXPR_SIGN_TERM:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.sign_term, ctx);
+        case EXPR_ADDOP:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.addop_data.left_expr, ctx) ||
+                   codegen_expr_uses_result_length_byte(expr->expr_data.addop_data.right_term, ctx);
+        case EXPR_MULOP:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.mulop_data.left_term, ctx) ||
+                   codegen_expr_uses_result_length_byte(expr->expr_data.mulop_data.right_factor, ctx);
+        case EXPR_RECORD_ACCESS:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.record_access_data.record_expr, ctx);
+        case EXPR_POINTER_DEREF:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.pointer_deref_data.pointer_expr, ctx);
+        case EXPR_ADDR:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.addr_data.expr, ctx);
+        case EXPR_TYPECAST:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.typecast_data.expr, ctx);
+        case EXPR_IS:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.is_data.expr, ctx);
+        case EXPR_AS:
+            return codegen_expr_uses_result_length_byte(expr->expr_data.as_data.expr, ctx);
+        default:
+            return 0;
+    }
+}
+
+static int codegen_stmt_list_uses_result_length_byte(ListNode_t *list,
+    const CodeGenContext *ctx)
+{
+    for (ListNode_t *cur = list; cur != NULL; cur = cur->next)
+    {
+        if (codegen_stmt_uses_result_length_byte((const struct Statement *)cur->cur, ctx))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_stmt_uses_result_length_byte(const struct Statement *stmt,
+    const CodeGenContext *ctx)
+{
+    if (stmt == NULL)
+        return 0;
+
+    switch (stmt->type)
+    {
+        case STMT_VAR_ASSIGN:
+            return codegen_expr_uses_result_length_byte(
+                stmt->stmt_data.var_assign_data.var, ctx);
+        case STMT_EXPR:
+            return 0;
+        case STMT_COMPOUND_STATEMENT:
+            return codegen_stmt_list_uses_result_length_byte(
+                stmt->stmt_data.compound_statement, ctx);
+        case STMT_LABEL:
+            return codegen_stmt_uses_result_length_byte(
+                stmt->stmt_data.label_data.stmt, ctx);
+        case STMT_IF_THEN:
+            return codegen_stmt_uses_result_length_byte(
+                       stmt->stmt_data.if_then_data.if_stmt, ctx) ||
+                   codegen_stmt_uses_result_length_byte(
+                       stmt->stmt_data.if_then_data.else_stmt, ctx);
+        case STMT_WHILE:
+            return codegen_stmt_uses_result_length_byte(
+                stmt->stmt_data.while_data.while_stmt, ctx);
+        case STMT_REPEAT:
+            return codegen_stmt_list_uses_result_length_byte(
+                stmt->stmt_data.repeat_data.body_list, ctx);
+        case STMT_FOR:
+        case STMT_FOR_VAR:
+        case STMT_FOR_ASSIGN_VAR:
+            return codegen_stmt_uses_result_length_byte(
+                       stmt->stmt_data.for_data.do_for, ctx) ||
+                   ((stmt->stmt_data.for_data.for_assign_type == STMT_VAR_ASSIGN)
+                        ? codegen_stmt_uses_result_length_byte(
+                              stmt->stmt_data.for_data.for_assign_data.var_assign, ctx)
+                        : codegen_expr_uses_result_length_byte(
+                              stmt->stmt_data.for_data.for_assign_data.var, ctx));
+        case STMT_FOR_IN:
+            return codegen_stmt_uses_result_length_byte(
+                       stmt->stmt_data.for_in_data.do_stmt, ctx);
+        case STMT_CASE:
+            return codegen_stmt_uses_result_length_byte(
+                stmt->stmt_data.case_data.else_stmt, ctx);
+        case STMT_WITH:
+            return codegen_stmt_uses_result_length_byte(
+                stmt->stmt_data.with_data.body_stmt, ctx);
+        case STMT_TRY_FINALLY:
+            return codegen_stmt_list_uses_result_length_byte(
+                       stmt->stmt_data.try_finally_data.try_statements, ctx) ||
+                   codegen_stmt_list_uses_result_length_byte(
+                       stmt->stmt_data.try_finally_data.finally_statements, ctx);
+        case STMT_TRY_EXCEPT:
+            return codegen_stmt_list_uses_result_length_byte(
+                       stmt->stmt_data.try_except_data.try_statements, ctx) ||
+                   codegen_stmt_list_uses_result_length_byte(
+                       stmt->stmt_data.try_except_data.except_statements, ctx);
+        case STMT_ON_EXCEPTION:
+            return codegen_stmt_uses_result_length_byte(
+                stmt->stmt_data.on_exception_data.handler_stmt, ctx);
+        case STMT_RAISE:
+            return 0;
+        case STMT_INHERITED:
+            return 0;
+        case STMT_EXIT:
+            return 0;
+        default:
+            return 0;
+    }
+}
+
 /* Codegen for a list of subprograms */
 void codegen_subprograms(ListNode_t *sub_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -7948,6 +8105,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     StackNode_t *prev_return_shortstring_slot = ctx->current_return_shortstring_slot;
     int prev_return_shortstring_capacity = ctx->current_return_shortstring_capacity;
     int prev_return_shortstring_dirty = ctx->current_return_shortstring_dirty;
+    int prev_return_shortstring_builder_enabled =
+        ctx->current_return_shortstring_builder_enabled;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -7992,9 +8151,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_shortstring_slot = NULL;
     ctx->current_return_shortstring_capacity = 0;
     ctx->current_return_shortstring_dirty = 0;
-    ctx->current_return_shortstring_slot = NULL;
-    ctx->current_return_shortstring_capacity = 0;
-    ctx->current_return_shortstring_dirty = 0;
+    ctx->current_return_shortstring_builder_enabled = 0;
     EnterScope(symtab, 0);
     codegen_register_owner_unit_scope(ctx, symtab, proc->source_unit_index);
     codegen_register_local_types(proc->type_declarations, symtab);
@@ -8223,6 +8380,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_shortstring_slot = prev_return_shortstring_slot;
     ctx->current_return_shortstring_capacity = prev_return_shortstring_capacity;
     ctx->current_return_shortstring_dirty = prev_return_shortstring_dirty;
+    ctx->current_return_shortstring_builder_enabled =
+        prev_return_shortstring_builder_enabled;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;
@@ -8286,6 +8445,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     StackNode_t *prev_return_shortstring_slot = ctx->current_return_shortstring_slot;
     int prev_return_shortstring_capacity = ctx->current_return_shortstring_capacity;
     int prev_return_shortstring_dirty = ctx->current_return_shortstring_dirty;
+    int prev_return_shortstring_builder_enabled =
+        ctx->current_return_shortstring_builder_enabled;
     int prev_callee_rbx = ctx->callee_save_rbx_offset;
     int prev_callee_r12 = ctx->callee_save_r12_offset;
     int prev_callee_r13 = ctx->callee_save_r13_offset;
@@ -8727,6 +8888,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (func_node != NULL && func_node->type != NULL &&
         func_node->type->kind == TYPE_KIND_PROCEDURE)
         ctx->current_return_type = kgpc_type_get_return_type(func_node->type);
+
+    ctx->current_return_shortstring_builder_enabled =
+        codegen_stmt_uses_result_length_byte(func->statement_list, ctx);
 
     /* For nested functions (or any function where func_node lookup failed),
      * the symbol table may not contain the function, leaving
@@ -9192,6 +9356,8 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     ctx->current_return_shortstring_slot = prev_return_shortstring_slot;
     ctx->current_return_shortstring_capacity = prev_return_shortstring_capacity;
     ctx->current_return_shortstring_dirty = prev_return_shortstring_dirty;
+    ctx->current_return_shortstring_builder_enabled =
+        prev_return_shortstring_builder_enabled;
     ctx->current_subprogram_lexical_depth = prev_depth;
     ctx->callee_save_rbx_offset = prev_callee_rbx;
     ctx->callee_save_r12_offset = prev_callee_r12;

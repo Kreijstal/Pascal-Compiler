@@ -301,6 +301,7 @@ typedef struct CodeGenContext {
     StackNode_t *current_return_shortstring_slot;
     int current_return_shortstring_capacity;
     int current_return_shortstring_dirty;
+    int current_return_shortstring_builder_enabled;
 
     /* Cached static link traversal for the current expression. */
     Register_t *static_link_reg;
