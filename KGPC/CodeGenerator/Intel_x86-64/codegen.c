@@ -2777,6 +2777,19 @@ static void codegen_register_inline_var_enum_literals(Tree_t *decl, SymTab_t *sy
         kgpc_type_release(enum_type);
 }
 
+static KgpcType *codegen_prefer_promoted_shortstring_type(KgpcType *decl_type,
+    const HashNode_t *var_node)
+{
+    if (decl_type != NULL && var_node != NULL && var_node->type != NULL &&
+        kgpc_type_is_string(decl_type) &&
+        !kgpc_type_is_shortstring(decl_type) &&
+        kgpc_type_is_shortstring(var_node->type))
+    {
+        return var_node->type;
+    }
+    return decl_type;
+}
+
 static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int is_param)
 {
     if (decls == NULL || symtab == NULL)
@@ -2801,19 +2814,13 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
 
         for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next)
         {
-            HashNode_t *var_node = NULL;
-            KgpcType *effective_decl_type = decl_type;
             if (id_node->cur == NULL)
                 continue;
-            if (FindSymbol(&var_node, symtab, id_node->cur) != 0 &&
-                var_node != NULL &&
-                effective_decl_type != NULL &&
-                kgpc_type_is_string(effective_decl_type) &&
-                !kgpc_type_is_shortstring(effective_decl_type) &&
-                kgpc_type_is_shortstring(var_node->type))
-            {
-                effective_decl_type = var_node->type;
-            }
+            HashNode_t *var_node = NULL;
+            KgpcType *effective_decl_type = decl_type;
+            if (FindSymbol(&var_node, symtab, id_node->cur) != 0)
+                effective_decl_type = codegen_prefer_promoted_shortstring_type(
+                    effective_decl_type, var_node);
             if (is_array_decl)
                 PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
             else
@@ -6978,13 +6985,7 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     param_type = effective_type_node->type;
                 if (param_type == NULL && var_info != NULL)
                     param_type = var_info->type;
-                if (param_type != NULL && var_info != NULL && var_info->type != NULL &&
-                    kgpc_type_is_string(param_type) &&
-                    !kgpc_type_is_shortstring(param_type) &&
-                    kgpc_type_is_shortstring(var_info->type))
-                {
-                    param_type = var_info->type;
-                }
+                param_type = codegen_prefer_promoted_shortstring_type(param_type, var_info);
                 KGPC_COMPILER_HARD_ASSERT(param_type != NULL,
                     "missing type metadata for local '%s' (declared type '%s')",
                     (const char *)id_list->cur,
