@@ -92,6 +92,50 @@ static int semcheck_expr_list_best_line(ListNode_t *list)
     return 0;
 }
 
+static int semcheck_expr_is_plain_zero_index(const struct Expression *expr)
+{
+    return expr != NULL && expr->type == EXPR_INUM && expr->expr_data.i_num == 0;
+}
+
+static int semcheck_type_is_promotable_plain_string(const KgpcType *type)
+{
+    if (type == NULL || !kgpc_type_is_string((KgpcType *)type) || kgpc_type_is_shortstring((KgpcType *)type))
+        return 0;
+    if (type->type_alias == NULL)
+        return 1;
+    return type->type_alias->alias_name != NULL &&
+        strcasecmp(type->type_alias->alias_name, "string") == 0;
+}
+
+static void semcheck_maybe_promote_index0_string_var_to_shortstring(
+    SymTab_t *symtab, struct Statement *stmt)
+{
+    if (symtab == NULL || stmt == NULL || stmt->type != STMT_VAR_ASSIGN)
+        return;
+
+    struct Expression *lhs = stmt->stmt_data.var_assign_data.var;
+    if (lhs == NULL || lhs->type != EXPR_ARRAY_ACCESS)
+        return;
+    if (!semcheck_expr_is_plain_zero_index(lhs->expr_data.array_access_data.index_expr))
+        return;
+
+    struct Expression *base = lhs->expr_data.array_access_data.array_expr;
+    if (base == NULL || base->type != EXPR_VAR_ID || base->expr_data.id == NULL)
+        return;
+
+    HashNode_t *var_node = NULL;
+    if (FindSymbol(&var_node, symtab, base->expr_data.id) == 0 || var_node == NULL)
+        return;
+    if (var_node->hash_type != HASHTYPE_VAR || !semcheck_type_is_promotable_plain_string(var_node->type))
+        return;
+
+    KgpcType *short_type = create_primitive_type(SHORTSTRING_TYPE);
+    if (short_type == NULL)
+        return;
+    destroy_kgpc_type(var_node->type);
+    var_node->type = short_type;
+}
+
 static HashNode_t *semcheck_find_zero_arg_method_node(SymTab_t *symtab,
     const struct RecordType *record, const char *method_name)
 {
@@ -4426,6 +4470,8 @@ int semcheck_varassign(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                     var->expr_data.record_access_data.field_id);
         }
     }
+
+    semcheck_maybe_promote_index0_string_var_to_shortstring(symtab, stmt);
 
     if (var != NULL && var->type == EXPR_TYPECAST)
     {
