@@ -2834,8 +2834,8 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
 
             if (is_param)
             {
-                HashNode_t *var_node = FindIdentInCurrentScope(symtab, id_node->cur);
-                if (var_node != NULL)
+                HashNode_t *param_node = FindIdentInCurrentScope(symtab, id_node->cur);
+                if (param_node != NULL)
                 {
                     int is_var_param = 0;
                     int is_untyped_param = 0;
@@ -2844,7 +2844,7 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
                         is_var_param = decl->tree_data.var_decl_data.is_var_param;
                         is_untyped_param = decl->tree_data.var_decl_data.is_untyped_param;
                     }
-                    var_node->is_var_parameter = (is_var_param || is_untyped_param) ? 1 : 0;
+                    param_node->is_var_parameter = (is_var_param || is_untyped_param) ? 1 : 0;
                 }
             }
         }
