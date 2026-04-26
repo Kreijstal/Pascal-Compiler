@@ -212,19 +212,19 @@ KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
     KgpcType *builtin_return = NULL;
+    int effective_return_type;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
 
-    if (subprogram->tree_data.subprogram_data.return_type == STRING_TYPE &&
+    effective_return_type = subprogram->tree_data.subprogram_data.return_type;
+
+    if (effective_return_type == STRING_TYPE &&
         subprogram->tree_data.subprogram_data.return_type_id != NULL &&
         pascal_identifier_equals(subprogram->tree_data.subprogram_data.return_type_id, "string") &&
         statement_uses_shortstring_result_slot(
             subprogram->tree_data.subprogram_data.statement_list, subprogram))
     {
-        /* Safe to canonicalize in-place here: callers use this helper as the
-         * single source of truth for the function return type, so subsequent
-         * rebuilds must see the same inferred ShortString semantics. */
-        subprogram->tree_data.subprogram_data.return_type = SHORTSTRING_TYPE;
+        effective_return_type = SHORTSTRING_TYPE;
     }
 
     /* TODO: Once the symbol table tracks placeholder types, this helper should
@@ -285,7 +285,7 @@ KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
                 /* Preserve SHORTSTRING_TYPE set during AST conversion under {$H-};
                  * semcheck_map_builtin_type_name_local maps bare "String" to
                  * STRING_TYPE, but the per-file directive already chose correctly. */
-                if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+                if (effective_return_type == SHORTSTRING_TYPE &&
                     builtin_type == STRING_TYPE)
                 {
                     builtin_return = create_primitive_type(SHORTSTRING_TYPE);
@@ -293,6 +293,7 @@ KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
                 else
                 {
                     subprogram->tree_data.subprogram_data.return_type = builtin_type;
+                    effective_return_type = builtin_type;
                     builtin_return = create_primitive_type(builtin_type);
                 }
             }
@@ -305,14 +306,14 @@ KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     KgpcType *result = kgpc_type_build_function_return(
         subprogram->tree_data.subprogram_data.inline_return_type,
         type_node,
-        subprogram->tree_data.subprogram_data.return_type,
+        effective_return_type,
         symtab);
 
     /* Under {$H-}, from_cparser sets return_type = SHORTSTRING_TYPE on
      * functions returning bare 'string'.  If the symbol table resolved
      * "String" to the system unit's AnsiString alias (STRING_TYPE),
      * override to SHORTSTRING so sret and value-type semantics apply. */
-    if (subprogram->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE &&
+    if (effective_return_type == SHORTSTRING_TYPE &&
         result != NULL && result->kind == TYPE_KIND_PRIMITIVE &&
         kgpc_type_get_primitive_tag(result) == STRING_TYPE)
     {
