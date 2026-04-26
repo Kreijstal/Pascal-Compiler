@@ -74,7 +74,10 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     return semcheck_find_type_node_with_kgpc_type_ref(symtab, NULL, type_id);
 }
 
-static int expr_is_shortstring_result_length_slot(const struct Expression *expr,
+/* Detect `Result[0]` / `FuncName[0]` accesses that write the ShortString
+ * length byte. FPC-style code uses this idiom to build a bare `string`
+ * result as a ShortString even when the declaration text says `string`. */
+static int is_result_length_byte_access(const struct Expression *expr,
     const Tree_t *subprogram)
 {
     const char *base_id = NULL;
@@ -110,6 +113,9 @@ static int expr_is_shortstring_result_length_slot(const struct Expression *expr,
 static int statement_list_uses_shortstring_result_slot(const ListNode_t *list,
     const Tree_t *subprogram);
 
+/* Walk statements looking for length-byte writes to the current function
+ * result. This lets return-type inference preserve legacy ShortString
+ * semantics without globally remapping bare `string`. */
 static int statement_uses_shortstring_result_slot(const struct Statement *stmt,
     const Tree_t *subprogram)
 {
@@ -119,7 +125,7 @@ static int statement_uses_shortstring_result_slot(const struct Statement *stmt,
     switch (stmt->type)
     {
         case STMT_VAR_ASSIGN:
-            return expr_is_shortstring_result_length_slot(
+            return is_result_length_byte_access(
                 stmt->stmt_data.var_assign_data.var, subprogram);
         case STMT_COMPOUND_STATEMENT:
             return statement_list_uses_shortstring_result_slot(
@@ -215,6 +221,9 @@ KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
         statement_uses_shortstring_result_slot(
             subprogram->tree_data.subprogram_data.statement_list, subprogram))
     {
+        /* Safe to canonicalize in-place here: callers use this helper as the
+         * single source of truth for the function return type, so subsequent
+         * rebuilds must see the same inferred ShortString semantics. */
         subprogram->tree_data.subprogram_data.return_type = SHORTSTRING_TYPE;
     }
 
