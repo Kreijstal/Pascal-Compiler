@@ -2816,11 +2816,17 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
         {
             if (id_node->cur == NULL)
                 continue;
-            HashNode_t *var_node = NULL;
+            HashNode_t *promoted_source = NULL;
             KgpcType *effective_decl_type = decl_type;
-            if (FindSymbol(&var_node, symtab, id_node->cur) != 0)
+            if (FindSymbol(&promoted_source, symtab, id_node->cur) != 0 &&
+                promoted_source != NULL &&
+                (promoted_source->hash_type == HASHTYPE_VAR ||
+                 promoted_source->hash_type == HASHTYPE_ARRAY ||
+                 promoted_source->hash_type == HASHTYPE_FUNCTION_RETURN))
+            {
                 effective_decl_type = codegen_prefer_promoted_shortstring_type(
-                    effective_decl_type, var_node);
+                    effective_decl_type, promoted_source);
+            }
             if (is_array_decl)
                 PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
             else
@@ -2828,8 +2834,7 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
 
             if (is_param)
             {
-                if (var_node == NULL)
-                    FindSymbol(&var_node, symtab, id_node->cur);
+                HashNode_t *var_node = FindIdentInCurrentScope(symtab, id_node->cur);
                 if (var_node != NULL)
                 {
                     int is_var_param = 0;
