@@ -129,8 +129,11 @@ static void semcheck_maybe_promote_index0_string_var_to_shortstring(
     if (var_node->hash_type != HASHTYPE_VAR || !semcheck_type_is_promotable_plain_string(var_node->type))
         return;
 
+    KgpcType *short_type = create_primitive_type(SHORTSTRING_TYPE);
+    if (short_type == NULL)
+        return;
     destroy_kgpc_type(var_node->type);
-    var_node->type = create_primitive_type(SHORTSTRING_TYPE);
+    var_node->type = short_type;
 }
 
 static HashNode_t *semcheck_find_zero_arg_method_node(SymTab_t *symtab,

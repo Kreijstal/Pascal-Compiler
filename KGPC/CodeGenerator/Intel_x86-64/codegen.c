@@ -2828,7 +2828,9 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
 
             if (is_param)
             {
-                if (FindSymbol(&var_node, symtab, id_node->cur) != 0 && var_node != NULL)
+                if (var_node == NULL)
+                    FindSymbol(&var_node, symtab, id_node->cur);
+                if (var_node != NULL)
                 {
                     int is_var_param = 0;
                     int is_untyped_param = 0;
