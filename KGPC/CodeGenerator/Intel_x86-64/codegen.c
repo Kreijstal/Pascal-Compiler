@@ -2801,16 +2801,26 @@ static void codegen_register_decl_list(ListNode_t *decls, SymTab_t *symtab, int 
 
         for (ListNode_t *id_node = ids; id_node != NULL; id_node = id_node->next)
         {
+            HashNode_t *var_node = NULL;
+            KgpcType *effective_decl_type = decl_type;
             if (id_node->cur == NULL)
                 continue;
+            if (FindSymbol(&var_node, symtab, id_node->cur) != 0 &&
+                var_node != NULL &&
+                effective_decl_type != NULL &&
+                kgpc_type_is_string(effective_decl_type) &&
+                !kgpc_type_is_shortstring(effective_decl_type) &&
+                kgpc_type_is_shortstring(var_node->type))
+            {
+                effective_decl_type = var_node->type;
+            }
             if (is_array_decl)
-                PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, decl_type);
+                PushArrayOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
             else
-                PushVarOntoScope_Typed(symtab, (char *)id_node->cur, decl_type);
+                PushVarOntoScope_Typed(symtab, (char *)id_node->cur, effective_decl_type);
 
             if (is_param)
             {
-                HashNode_t *var_node = NULL;
                 if (FindSymbol(&var_node, symtab, id_node->cur) != 0 && var_node != NULL)
                 {
                     int is_var_param = 0;
@@ -6968,6 +6978,13 @@ void codegen_function_locals(ListNode_t *local_decl, CodeGenContext *ctx, SymTab
                     param_type = effective_type_node->type;
                 if (param_type == NULL && var_info != NULL)
                     param_type = var_info->type;
+                if (param_type != NULL && var_info != NULL && var_info->type != NULL &&
+                    kgpc_type_is_string(param_type) &&
+                    !kgpc_type_is_shortstring(param_type) &&
+                    kgpc_type_is_shortstring(var_info->type))
+                {
+                    param_type = var_info->type;
+                }
                 KGPC_COMPILER_HARD_ASSERT(param_type != NULL,
                     "missing type metadata for local '%s' (declared type '%s')",
                     (const char *)id_list->cur,

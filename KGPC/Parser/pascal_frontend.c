@@ -147,14 +147,10 @@ static bool detect_objfpc_mode(const char *buffer, size_t length)
     return false;
 }
 
-/* Scan a buffer for directives that affect the default meaning of bare
- * "string".  We honor directives in source order so later directives win:
- *   - {$mode objfpc} => shortstring by default
- *   - {$H-}          => shortstring by default
- *   - {$H+}          => ansistring by default
- *
- * Returns 1 if any relevant directive was found, 0 otherwise. */
-static int detect_default_string_mode_in_buffer(const char *buffer, size_t length, bool *value_out)
+/* Scan a buffer for {$H+} or {$H-} directives.
+ * Returns 1 if found, 0 if not.  Updates *out_shortstring to match the
+ * LAST occurrence: true for {$H-} (shortstring default), false for {$H+}. */
+static int detect_shortstring_in_buffer(const char *buffer, size_t length, bool *value_out)
 {
     if (buffer == NULL || length == 0 || value_out == NULL)
         return 0;
@@ -162,7 +158,6 @@ static int detect_default_string_mode_in_buffer(const char *buffer, size_t lengt
     const char *pos = buffer;
     const char *end = buffer + length;
     int found = 0;
-    bool value = *value_out;
 
     while (pos < end)
     {
@@ -173,52 +168,18 @@ static int detect_default_string_mode_in_buffer(const char *buffer, size_t lengt
             while (dir_end < end && *dir_end != '}')
                 dir_end++;
 
-            const char *cur = dir_start;
-            while (cur < dir_end && isspace((unsigned char)*cur))
-                cur++;
-
-            if (cur < dir_end && (*cur == 'H' || *cur == 'h'))
+            for (const char *cur = dir_start; cur < dir_end; ++cur)
             {
-                const char *next = cur + 1;
-                while (next < dir_end && isspace((unsigned char)*next))
-                    next++;
-                if (next < dir_end && (*next == '+' || *next == '-'))
+                if (*cur == 'H' || *cur == 'h')
                 {
-                    value = (*next == '-');
-                    found = 1;
-                }
-            }
-            else if ((dir_end - cur) >= 4 &&
-                     (cur[0] == 'M' || cur[0] == 'm') &&
-                     (cur[1] == 'O' || cur[1] == 'o') &&
-                     (cur[2] == 'D' || cur[2] == 'd') &&
-                     (cur[3] == 'E' || cur[3] == 'e'))
-            {
-                cur += 4;
-                while (cur < dir_end && isspace((unsigned char)*cur))
-                    cur++;
-
-                if ((dir_end - cur) >= 6 &&
-                    (cur[0] == 'O' || cur[0] == 'o') &&
-                    (cur[1] == 'B' || cur[1] == 'b') &&
-                    (cur[2] == 'J' || cur[2] == 'j') &&
-                    (cur[3] == 'F' || cur[3] == 'f') &&
-                    (cur[4] == 'P' || cur[4] == 'p') &&
-                    (cur[5] == 'C' || cur[5] == 'c'))
-                {
-                    value = true;
-                    found = 1;
-                }
-                else if ((dir_end - cur) >= 6 &&
-                         (cur[0] == 'D' || cur[0] == 'd') &&
-                         (cur[1] == 'E' || cur[1] == 'e') &&
-                         (cur[2] == 'L' || cur[2] == 'l') &&
-                         (cur[3] == 'P' || cur[3] == 'p') &&
-                         (cur[4] == 'H' || cur[4] == 'h') &&
-                         (cur[5] == 'I' || cur[5] == 'i'))
-                {
-                    value = false;
-                    found = 1;
+                    const char *next = cur + 1;
+                    while (next < dir_end && isspace((unsigned char)*next))
+                        next++;
+                    if (next < dir_end && (*next == '+' || *next == '-'))
+                    {
+                        *value_out = (*next == '-');
+                        found = 1;
+                    }
                 }
             }
 
@@ -227,8 +188,6 @@ static int detect_default_string_mode_in_buffer(const char *buffer, size_t lengt
         pos++;
     }
 
-    if (found)
-        *value_out = value;
     return found;
 }
 
@@ -285,8 +244,7 @@ static char *resolve_include_for_h_detection(const char *source_path, const char
     return NULL;
 }
 
-/* Detect directives that control the default meaning of bare "string".
- * If not found directly, also follow
+/* Detect {$H+/-} in a source buffer.  If not found directly, also follow
  * {$i <file>} includes one level deep to detect the directive in common
  * included files like fpcdefs.inc. */
 static int detect_shortstring_default(const char *buffer, size_t length,
@@ -297,7 +255,7 @@ static int detect_shortstring_default(const char *buffer, size_t length,
         return 0;
 
     bool value = false;
-    if (detect_default_string_mode_in_buffer(buffer, length, &value))
+    if (detect_shortstring_in_buffer(buffer, length, &value))
     {
         *out_shortstring = value;
         return 1;
@@ -355,7 +313,7 @@ static int detect_shortstring_default(const char *buffer, size_t length,
                                         size_t rd = fread(inc_buf, 1, (size_t)sz, f);
                                         inc_buf[rd] = '\0';
                                         bool inc_value = false;
-                                        if (detect_default_string_mode_in_buffer(inc_buf, rd, &inc_value))
+                                        if (detect_shortstring_in_buffer(inc_buf, rd, &inc_value))
                                         {
                                             *out_shortstring = inc_value;
                                             free(inc_buf);
