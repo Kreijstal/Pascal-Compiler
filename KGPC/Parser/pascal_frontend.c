@@ -337,15 +337,6 @@ static int detect_shortstring_default(const char *buffer, size_t length,
         pos++;
     }
 
-    /* FPC objfpc mode defaults bare `string` to ShortString unless an
-     * explicit {$H+/-} directive overrides it. Mirror that default when no
-     * shortstring directive was found in the source or its common includes. */
-    if (detect_objfpc_mode(buffer, length))
-    {
-        *out_shortstring = true;
-        return 1;
-    }
-
     return 0;
 }
 

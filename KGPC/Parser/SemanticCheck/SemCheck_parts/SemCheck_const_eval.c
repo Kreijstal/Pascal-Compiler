@@ -74,12 +74,149 @@ HashNode_t *semcheck_find_type_node_with_kgpc_type(SymTab_t *symtab, const char 
     return semcheck_find_type_node_with_kgpc_type_ref(symtab, NULL, type_id);
 }
 
+static int expr_is_shortstring_result_length_slot(const struct Expression *expr,
+    const Tree_t *subprogram)
+{
+    const char *base_id = NULL;
+
+    if (expr == NULL || subprogram == NULL || expr->type != EXPR_ARRAY_ACCESS)
+        return 0;
+    if (expr->expr_data.array_access_data.array_expr == NULL ||
+        expr->expr_data.array_access_data.index_expr == NULL)
+        return 0;
+    if (expr->expr_data.array_access_data.index_expr->type != EXPR_INUM ||
+        expr->expr_data.array_access_data.index_expr->expr_data.i_num != 0)
+        return 0;
+    if (expr->expr_data.array_access_data.array_expr->type != EXPR_VAR_ID ||
+        expr->expr_data.array_access_data.array_expr->expr_data.id == NULL)
+        return 0;
+
+    base_id = expr->expr_data.array_access_data.array_expr->expr_data.id;
+    if (pascal_identifier_equals(base_id, "Result"))
+        return 1;
+    if (subprogram->tree_data.subprogram_data.id != NULL &&
+        pascal_identifier_equals(base_id, subprogram->tree_data.subprogram_data.id))
+        return 1;
+    if (subprogram->tree_data.subprogram_data.method_name != NULL &&
+        pascal_identifier_equals(base_id, subprogram->tree_data.subprogram_data.method_name))
+        return 1;
+    if (subprogram->tree_data.subprogram_data.result_var_name != NULL &&
+        pascal_identifier_equals(base_id, subprogram->tree_data.subprogram_data.result_var_name))
+        return 1;
+
+    return 0;
+}
+
+static int statement_list_uses_shortstring_result_slot(const ListNode_t *list,
+    const Tree_t *subprogram);
+
+static int statement_uses_shortstring_result_slot(const struct Statement *stmt,
+    const Tree_t *subprogram)
+{
+    if (stmt == NULL || subprogram == NULL)
+        return 0;
+
+    switch (stmt->type)
+    {
+        case STMT_VAR_ASSIGN:
+            return expr_is_shortstring_result_length_slot(
+                stmt->stmt_data.var_assign_data.var, subprogram);
+        case STMT_COMPOUND_STATEMENT:
+            return statement_list_uses_shortstring_result_slot(
+                stmt->stmt_data.compound_statement, subprogram);
+        case STMT_LABEL:
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.label_data.stmt, subprogram);
+        case STMT_IF_THEN:
+            return statement_uses_shortstring_result_slot(
+                       stmt->stmt_data.if_then_data.if_stmt, subprogram) ||
+                   statement_uses_shortstring_result_slot(
+                       stmt->stmt_data.if_then_data.else_stmt, subprogram);
+        case STMT_WHILE:
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.while_data.while_stmt, subprogram);
+        case STMT_REPEAT:
+            return statement_list_uses_shortstring_result_slot(
+                stmt->stmt_data.repeat_data.body_list, subprogram);
+        case STMT_FOR:
+        case STMT_FOR_VAR:
+        case STMT_FOR_ASSIGN_VAR:
+            if (stmt->stmt_data.for_data.for_assign_type == STMT_VAR_ASSIGN &&
+                stmt->stmt_data.for_data.for_assign_data.var_assign != NULL &&
+                statement_uses_shortstring_result_slot(
+                    stmt->stmt_data.for_data.for_assign_data.var_assign, subprogram))
+            {
+                return 1;
+            }
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.for_data.do_for, subprogram);
+        case STMT_FOR_IN:
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.for_in_data.do_stmt, subprogram);
+        case STMT_CASE:
+            if (stmt->stmt_data.case_data.branches != NULL)
+            {
+                for (const ListNode_t *cur = stmt->stmt_data.case_data.branches;
+                     cur != NULL; cur = cur->next)
+                {
+                    const struct CaseBranch *branch = (const struct CaseBranch *)cur->cur;
+                    if (branch != NULL &&
+                        statement_uses_shortstring_result_slot(branch->stmt, subprogram))
+                    {
+                        return 1;
+                    }
+                }
+            }
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.case_data.else_stmt, subprogram);
+        case STMT_WITH:
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.with_data.body_stmt, subprogram);
+        case STMT_TRY_FINALLY:
+            return statement_list_uses_shortstring_result_slot(
+                       stmt->stmt_data.try_finally_data.try_statements, subprogram) ||
+                   statement_list_uses_shortstring_result_slot(
+                       stmt->stmt_data.try_finally_data.finally_statements, subprogram);
+        case STMT_TRY_EXCEPT:
+            return statement_list_uses_shortstring_result_slot(
+                       stmt->stmt_data.try_except_data.try_statements, subprogram) ||
+                   statement_list_uses_shortstring_result_slot(
+                       stmt->stmt_data.try_except_data.except_statements, subprogram);
+        case STMT_ON_EXCEPTION:
+            return statement_uses_shortstring_result_slot(
+                stmt->stmt_data.on_exception_data.handler_stmt, subprogram);
+        default:
+            return 0;
+    }
+}
+
+static int statement_list_uses_shortstring_result_slot(const ListNode_t *list,
+    const Tree_t *subprogram)
+{
+    for (const ListNode_t *cur = list; cur != NULL; cur = cur->next)
+    {
+        if (statement_uses_shortstring_result_slot(
+                (const struct Statement *)cur->cur, subprogram))
+            return 1;
+    }
+    return 0;
+}
+
 KgpcType *build_function_return_type(Tree_t *subprogram, SymTab_t *symtab,
     int *error_count, int allow_undefined)
 {
     KgpcType *builtin_return = NULL;
     if (subprogram == NULL || symtab == NULL)
         return NULL;
+
+    if (subprogram->tree_data.subprogram_data.return_type == STRING_TYPE &&
+        subprogram->tree_data.subprogram_data.return_type_id != NULL &&
+        pascal_identifier_equals(subprogram->tree_data.subprogram_data.return_type_id, "string") &&
+        statement_uses_shortstring_result_slot(
+            subprogram->tree_data.subprogram_data.statement_list, subprogram))
+    {
+        subprogram->tree_data.subprogram_data.return_type = SHORTSTRING_TYPE;
+    }
 
     /* TODO: Once the symbol table tracks placeholder types, this helper should
      * validate that any returned KgpcType has been fully resolved. */
