@@ -4251,9 +4251,9 @@ SKIP_SELF_FIELD_REWRITE:
             }
         }
 
-        /* Check for record helpers: If no method was found on the record itself,
-         * look for a "record helper for <RecordType>" and check for methods there. */
-        if (record_info != NULL && !record_type_is_class(record_info) &&
+        /* Check for type helpers: If no method was found on the target type itself,
+         * look for a helper bound to that type and check for methods there. */
+        if (record_info != NULL &&
             record_info->type_id != NULL && !record_info->is_type_helper)
         {
             struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
@@ -4265,7 +4265,7 @@ SKIP_SELF_FIELD_REWRITE:
                 if (method_node != NULL)
                 {
                     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
-                        fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found record helper method %s on %s\n",
+                        fprintf(stderr, "[SemCheck] semcheck_recordaccess: Found type helper method %s on %s\n",
                             field_id, helper_record->type_id);
                     }
 
