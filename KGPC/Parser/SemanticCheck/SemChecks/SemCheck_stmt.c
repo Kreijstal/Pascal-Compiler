@@ -7280,6 +7280,20 @@ skip_type_receiver_rewrite:
             struct RecordType *actual_method_owner = NULL;
             HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            if (method_node == NULL && !record_info->is_type_helper)
+            {
+                struct RecordType *helper_record =
+                    semcheck_lookup_type_helper_for_record_member(symtab,
+                        record_info, method_name);
+                if (helper_record != NULL)
+                {
+                    actual_method_owner = NULL;
+                    method_node = semcheck_find_class_method(symtab, helper_record,
+                        method_name, &actual_method_owner);
+                    if (method_node != NULL)
+                        record_info = helper_record;
+                }
+            }
             /* Check the actual method owner for inherited static methods */
             if (!is_static && actual_method_owner != NULL &&
                 actual_method_owner->type_id != NULL && method_name != NULL) {
@@ -7557,8 +7571,9 @@ skip_type_receiver_rewrite:
                                 helper_name = alias->alias_name;
                         }
                     }
-                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                        helper_tag, helper_name);
+                    struct RecordType *helper_record =
+                        semcheck_lookup_type_helper_for_member(symtab,
+                            helper_tag, helper_name, method_name);
                     if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
                         first_arg->expr_data.id != NULL)
                     {
@@ -7576,8 +7591,8 @@ skip_type_receiver_rewrite:
                                     var_helper_name = var_alias->alias_name;
                             }
                             if (var_helper_name != NULL)
-                                helper_record = semcheck_lookup_type_helper(symtab,
-                                    UNKNOWN_TYPE, var_helper_name);
+                                helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                                    UNKNOWN_TYPE, var_helper_name, method_name);
                         }
                     }
                     if (helper_record != NULL)
@@ -7746,13 +7761,30 @@ skip_type_receiver_rewrite:
                         else if (alias->alias_name != NULL)
                             helper_name = alias->alias_name;
                     }
-                    struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                        helper_tag, helper_name);
+                    struct RecordType *helper_record =
+                        semcheck_lookup_type_helper_for_member(symtab,
+                            helper_tag, helper_name, method_name_part);
                     if (helper_record != NULL)
                         obj_record_type = helper_record;
                 }
                 
                 if (obj_record_type != NULL) {
+                    if (!obj_record_type->is_type_helper &&
+                        obj_record_type->type_id != NULL)
+                    {
+                        struct RecordType *helper_owner = NULL;
+                        struct RecordType *helper_record =
+                            semcheck_lookup_type_helper_for_record_member(symtab,
+                                obj_record_type, method_name_part);
+                        if (helper_record != NULL &&
+                            semcheck_find_class_method(symtab, helper_record,
+                                method_name_part, &helper_owner) != NULL)
+                        {
+                            obj_record_type = (helper_owner != NULL) ?
+                                helper_owner : helper_record;
+                        }
+                    }
+
                     /* Found the object with a record type. Now find the class name for this type.
                      * Use the type_id stored directly on the RecordType, which is the canonical
                      * type name where methods are registered. This avoids issues with type aliases
