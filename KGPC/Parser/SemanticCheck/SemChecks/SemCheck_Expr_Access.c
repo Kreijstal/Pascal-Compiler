@@ -4630,8 +4630,8 @@ int semcheck_funccall(int *type_return,
                         !record_info->is_type_helper)
                     {
                         struct RecordType *helper_record =
-                            semcheck_lookup_type_helper_for_member(symtab,
-                                UNKNOWN_TYPE, record_info->type_id, method_name);
+                            semcheck_lookup_type_helper_for_record_member(symtab,
+                                record_info, method_name);
                         if (helper_record != NULL)
                         {
                             actual_method_owner = NULL;
@@ -5864,8 +5864,17 @@ int semcheck_funccall(int *type_return,
                 }
             }
 
-            helper_record = semcheck_lookup_type_helper_for_member(symtab,
-                helper_tag, helper_name, id);
+            if (arg_type != NULL && arg_type->kind == TYPE_KIND_RECORD &&
+                arg_type->info.record_info != NULL)
+            {
+                helper_record = semcheck_lookup_type_helper_for_record_member(symtab,
+                    arg_type->info.record_info, id);
+            }
+            if (helper_record == NULL)
+            {
+                helper_record = semcheck_lookup_type_helper_for_member(symtab,
+                    helper_tag, helper_name, id);
+            }
             if (helper_record == NULL && first_arg->type == EXPR_VAR_ID &&
                 first_arg->expr_data.id != NULL)
             {

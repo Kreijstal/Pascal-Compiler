@@ -455,8 +455,8 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
         record_info->is_type_helper || record_info->type_id == NULL)
         return NULL;
 
-    struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
-        UNKNOWN_TYPE, record_info->type_id, property_name);
+    struct RecordType *helper_record = semcheck_lookup_type_helper_for_record_member(
+        symtab, record_info, property_name);
     if (helper_record == NULL)
         return NULL;
 

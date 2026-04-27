@@ -93,5 +93,7 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
     int base_type_tag, const char *type_name);
 struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
     int base_type_tag, const char *type_name, const char *member_name);
+struct RecordType *semcheck_lookup_type_helper_for_record_member(SymTab_t *symtab,
+    struct RecordType *record_info, const char *member_name);
 
 #endif

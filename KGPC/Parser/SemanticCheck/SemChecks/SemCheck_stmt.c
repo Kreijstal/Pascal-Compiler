@@ -7283,8 +7283,8 @@ skip_type_receiver_rewrite:
             if (method_node == NULL && !record_info->is_type_helper)
             {
                 struct RecordType *helper_record =
-                    semcheck_lookup_type_helper_for_member(symtab,
-                        UNKNOWN_TYPE, record_info->type_id, method_name);
+                    semcheck_lookup_type_helper_for_record_member(symtab,
+                        record_info, method_name);
                 if (helper_record != NULL)
                 {
                     actual_method_owner = NULL;
@@ -7774,9 +7774,8 @@ skip_type_receiver_rewrite:
                     {
                         struct RecordType *helper_owner = NULL;
                         struct RecordType *helper_record =
-                            semcheck_lookup_type_helper_for_member(symtab,
-                                UNKNOWN_TYPE, obj_record_type->type_id,
-                                method_name_part);
+                            semcheck_lookup_type_helper_for_record_member(symtab,
+                                obj_record_type, method_name_part);
                         if (helper_record != NULL &&
                             semcheck_find_class_method(symtab, helper_record,
                                 method_name_part, &helper_owner) != NULL)
