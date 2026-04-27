@@ -2276,6 +2276,53 @@ static void codegen_destroy_temp_call_expr(struct Expression *call_expr)
     destroy_expr(call_expr);
 }
 
+static int codegen_stmt_constructor_result_targets_self(const struct Statement *stmt)
+{
+    if (stmt == NULL || stmt->type != STMT_PROCEDURE_CALL ||
+        !stmt->stmt_data.procedure_call_data.is_constructor_call)
+        return 0;
+
+    if (stmt->stmt_data.procedure_call_data.constructor_class_name != NULL &&
+        pascal_identifier_equals(
+            stmt->stmt_data.procedure_call_data.constructor_class_name, "Self"))
+        return 1;
+
+    ListNode_t *args = stmt->stmt_data.procedure_call_data.expr_args;
+    if (args == NULL || args->type != LIST_EXPR || args->cur == NULL)
+        return 0;
+
+    struct Expression *first_arg = (struct Expression *)args->cur;
+    return first_arg != NULL &&
+        first_arg->type == EXPR_VAR_ID &&
+        first_arg->expr_data.id != NULL &&
+        pascal_identifier_equals(first_arg->expr_data.id, "Self");
+}
+
+static ListNode_t *codegen_store_constructor_result_into_current_self(
+    ListNode_t *inst_list, const struct Statement *stmt, CodeGenContext *ctx,
+    Register_t *result_reg)
+{
+    if (!codegen_stmt_constructor_result_targets_self(stmt) ||
+        ctx == NULL || result_reg == NULL)
+        return inst_list;
+
+    StackNode_t *self_var = find_label_with_depth("self", NULL);
+    char buffer[CODEGEN_MAX_INST_BUF];
+    if (self_var != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            result_reg->bit_64, self_var->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    if (ctx->current_return_slot != NULL)
+    {
+        snprintf(buffer, sizeof(buffer), "\tmovq\t%s, -%d(%%rbp)\n",
+            result_reg->bit_64, ctx->current_return_slot->offset);
+        inst_list = add_inst(inst_list, buffer);
+    }
+    return inst_list;
+}
+
 /* Code generation for a procedure call */
 ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, CodeGenContext *ctx, SymTab_t *symtab)
 {
@@ -2359,6 +2406,23 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
             }
             return inst_list;
         }
+    }
+
+    if (stmt->stmt_data.procedure_call_data.is_constructor_call)
+    {
+        struct Expression *call_expr = codegen_build_temp_call_expr_from_stmt(stmt,
+            call_hash_type, call_kgpc_type);
+        if (call_expr == NULL)
+            return inst_list;
+
+        Register_t *discard_reg = NULL;
+        inst_list = codegen_evaluate_expr(call_expr, inst_list, ctx, &discard_reg);
+        inst_list = codegen_store_constructor_result_into_current_self(inst_list,
+            stmt, ctx, discard_reg);
+        if (discard_reg != NULL)
+            free_reg(get_reg_stack(), discard_reg);
+        codegen_destroy_temp_call_expr(call_expr);
+        return inst_list;
     }
 
     if(call_hash_type == HASHTYPE_FUNCTION)
