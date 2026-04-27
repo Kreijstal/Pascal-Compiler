@@ -7280,6 +7280,20 @@ skip_type_receiver_rewrite:
             struct RecordType *actual_method_owner = NULL;
             HashNode_t *method_node = semcheck_find_class_method(symtab, record_info, method_name, &actual_method_owner);
             int is_static = from_cparser_is_method_static(record_info->type_id, method_name);
+            if (method_node == NULL && !record_info->is_type_helper)
+            {
+                struct RecordType *helper_record =
+                    semcheck_lookup_type_helper_for_member(symtab,
+                        UNKNOWN_TYPE, record_info->type_id, method_name);
+                if (helper_record != NULL)
+                {
+                    actual_method_owner = NULL;
+                    method_node = semcheck_find_class_method(symtab, helper_record,
+                        method_name, &actual_method_owner);
+                    if (method_node != NULL)
+                        record_info = helper_record;
+                }
+            }
             /* Check the actual method owner for inherited static methods */
             if (!is_static && actual_method_owner != NULL &&
                 actual_method_owner->type_id != NULL && method_name != NULL) {

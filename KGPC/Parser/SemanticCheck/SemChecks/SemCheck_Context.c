@@ -66,6 +66,45 @@ static int semcheck_helper_matches_base(TypeHelperEntry *entry,
     return 0;
 }
 
+static int semcheck_helper_matches_record_hierarchy(SymTab_t *symtab,
+    TypeHelperEntry *entry, const char *type_name)
+{
+    if (symtab == NULL || entry == NULL || type_name == NULL ||
+        entry->base_type_id == NULL)
+        return 0;
+
+    char *normalized_type_name = semcheck_normalize_helper_base_type_id(symtab, type_name);
+    if (normalized_type_name != NULL)
+    {
+        int matches = pascal_identifier_equals(entry->base_type_id, normalized_type_name);
+        free(normalized_type_name);
+        if (matches)
+            return 1;
+    }
+
+    HashNode_t *type_node = semcheck_find_preferred_type_node(symtab, type_name);
+    if (type_node == NULL)
+        return 0;
+
+    struct RecordType *current = get_record_type_from_node(type_node);
+    while (current != NULL)
+    {
+        if (current->type_id != NULL &&
+            pascal_identifier_equals(entry->base_type_id, current->type_id))
+            return 1;
+
+        HashNode_t *current_node = semcheck_find_preferred_type_node(symtab,
+            current->type_id);
+        if (current_node != NULL && current_node->id != NULL &&
+            pascal_identifier_equals(entry->base_type_id, current_node->id))
+            return 1;
+
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    return 0;
+}
+
 void semcheck_set_current_method_owner(const char *owner_id)
 {
     g_semcheck_current_method_owner = owner_id;
@@ -170,7 +209,8 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
                     entry->base_type_id != NULL ? entry->base_type_id : "<null>",
                     entry->helper_record && entry->helper_record->type_id ? entry->helper_record->type_id : "<null>");
             }
-            if (semcheck_helper_matches_base(entry, base_type_tag, type_name))
+            if (semcheck_helper_matches_base(entry, base_type_tag, type_name) ||
+                semcheck_helper_matches_record_hierarchy(symtab, entry, type_name))
                 return entry->helper_record;
         }
         cur = cur->next;
@@ -194,21 +234,24 @@ struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
     if (preferred != NULL)
     {
         if (semcheck_find_class_method(symtab, preferred, member_name, NULL) != NULL ||
-            semcheck_find_class_field_including_hidden(symtab, preferred, member_name, NULL) != NULL)
+            semcheck_find_class_field_including_hidden(symtab, preferred, member_name, NULL) != NULL ||
+            semcheck_find_class_property(symtab, preferred, member_name, NULL) != NULL)
             return preferred;
     }
 
     for (ListNode_t *cur = type_helper_entries; cur != NULL; cur = cur->next)
     {
         TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
-        if (!semcheck_helper_matches_base(entry, base_type_tag, type_name))
+        if (!semcheck_helper_matches_base(entry, base_type_tag, type_name) &&
+            !semcheck_helper_matches_record_hierarchy(symtab, entry, type_name))
             continue;
         if (entry->helper_record == NULL)
             continue;
         if (entry->helper_record == preferred)
             continue;
         if (semcheck_find_class_method(symtab, entry->helper_record, member_name, NULL) != NULL ||
-            semcheck_find_class_field_including_hidden(symtab, entry->helper_record, member_name, NULL) != NULL)
+            semcheck_find_class_field_including_hidden(symtab, entry->helper_record, member_name, NULL) != NULL ||
+            semcheck_find_class_property(symtab, entry->helper_record, member_name, NULL) != NULL)
             return entry->helper_record;
     }
 
@@ -420,6 +463,16 @@ int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
         /* Check class methods first */
         HashNode_t *method_node = semcheck_find_class_method(symtab,
             entry->record_type, method_id, NULL);
+        if (method_node == NULL && entry->record_type->type_id != NULL &&
+            !entry->record_type->is_type_helper)
+        {
+            struct RecordType *helper_record =
+                semcheck_lookup_type_helper_for_member(symtab,
+                    UNKNOWN_TYPE, entry->record_type->type_id, method_id);
+            if (helper_record != NULL)
+                method_node = semcheck_find_class_method(symtab, helper_record,
+                    method_id, NULL);
+        }
         if (method_node != NULL)
         {
             struct Expression *clone = clone_expression(entry->context_expr);

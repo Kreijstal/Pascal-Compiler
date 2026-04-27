@@ -4623,14 +4623,15 @@ int semcheck_funccall(int *type_return,
                         record_info->type_id, method_name, is_static);
                 }
                     
-                    /* If method not found on record directly, try record helper */
+                    /* If method not found on the receiver directly, try an applicable helper. */
                     struct RecordType *effective_record =
                         (actual_method_owner != NULL) ? actual_method_owner : record_info;
-                    if (method_node == NULL && !record_type_is_class(record_info) && 
-                        record_info->type_id != NULL && !record_info->is_type_helper)
+                    if (method_node == NULL && record_info->type_id != NULL &&
+                        !record_info->is_type_helper)
                     {
-                        struct RecordType *helper_record = semcheck_lookup_type_helper(symtab,
-                            UNKNOWN_TYPE, record_info->type_id);
+                        struct RecordType *helper_record =
+                            semcheck_lookup_type_helper_for_member(symtab,
+                                UNKNOWN_TYPE, record_info->type_id, method_name);
                         if (helper_record != NULL)
                         {
                             actual_method_owner = NULL;
