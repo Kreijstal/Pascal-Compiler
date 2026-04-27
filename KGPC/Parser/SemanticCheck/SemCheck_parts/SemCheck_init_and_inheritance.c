@@ -271,8 +271,10 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                     if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
                         alias_info->kgpc_type != NULL)
                     {
-                        /* Keep enum predeclare types owned by the AST so they are
-                         * released even when no scope entry ends up consuming them. */
+                        /* Transfer the freshly-created creator reference to the AST.
+                         * alias_info->kgpc_type is only a non-owning alias to the same
+                         * object; tree->...kgpc_type is what guarantees teardown if the
+                         * type never gets inserted into any scope. */
                         tree->tree_data.type_decl_data.kgpc_type = alias_info->kgpc_type;
                     }
                     if (alias_info->kgpc_type != NULL &&
@@ -1439,8 +1441,11 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             kgpc_type = create_primitive_type(ENUM_TYPE);
                             if (kgpc_type != NULL)
                             {
-                                /* alias->kgpc_type is a borrowed/shared pointer.
-                                 * Tree/scope ownership is tracked separately. */
+                                /* Keep a non-owning alias for later enum-literal lookups.
+                                 * The creator reference is consumed below by the AST and/or
+                                 * scope insertion path; alias->kgpc_type itself must not add
+                                 * another retain because clear_type_alias_fields does not
+                                 * release it during tree teardown. */
                                 alias->kgpc_type = kgpc_type;
                             }
                         }
