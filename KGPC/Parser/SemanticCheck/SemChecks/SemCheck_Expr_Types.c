@@ -3344,6 +3344,9 @@ SKIP_SELF_FIELD_REWRITE:
                     helper_record = owner_rec;
             }
         }
+        if (helper_record == NULL && record_info != NULL)
+            helper_record = semcheck_lookup_type_helper_for_record_member(symtab,
+                record_info, field_id);
         if (helper_record == NULL && record_type != UNKNOWN_TYPE)
             helper_record = semcheck_lookup_type_helper_for_member(symtab,
                 record_type, expr_type_name, field_id);
@@ -4256,8 +4259,9 @@ SKIP_SELF_FIELD_REWRITE:
         if (record_info != NULL &&
             record_info->type_id != NULL && !record_info->is_type_helper)
         {
-            struct RecordType *helper_record = semcheck_lookup_type_helper_for_member(symtab,
-                UNKNOWN_TYPE, record_info->type_id, field_id);
+            struct RecordType *helper_record =
+                semcheck_lookup_type_helper_for_record_member(symtab,
+                    record_info, field_id);
             if (helper_record != NULL)
             {
                 HashNode_t *method_node = semcheck_find_class_method(symtab,

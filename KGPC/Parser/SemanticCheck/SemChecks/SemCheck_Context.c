@@ -66,6 +66,104 @@ static int semcheck_helper_matches_base(TypeHelperEntry *entry,
     return 0;
 }
 
+static int semcheck_helper_entry_matches_record(TypeHelperEntry *entry,
+    const char *record_type_id, const char *record_canonical_id)
+{
+    if (entry == NULL || entry->base_type_id == NULL)
+        return 0;
+    if (record_type_id != NULL &&
+        pascal_identifier_equals(entry->base_type_id, record_type_id))
+        return 1;
+    if (record_canonical_id != NULL &&
+        pascal_identifier_equals(entry->base_type_id, record_canonical_id))
+        return 1;
+    return 0;
+}
+
+static int semcheck_helper_record_defines_member(SymTab_t *symtab,
+    struct RecordType *helper_record, const char *member_name)
+{
+    if (helper_record == NULL)
+        return 0;
+    if (member_name == NULL)
+        return 1;
+    if (semcheck_find_class_method(symtab, helper_record, member_name, NULL) != NULL ||
+        semcheck_find_class_field_including_hidden(symtab, helper_record, member_name, NULL) != NULL ||
+        semcheck_find_class_property(symtab, helper_record, member_name, NULL) != NULL)
+        return 1;
+    return 0;
+}
+
+static int semcheck_helper_record_matches_hierarchy(SymTab_t *symtab,
+    struct RecordType *helper_record, struct RecordType *record_info)
+{
+    if (symtab == NULL || helper_record == NULL || record_info == NULL ||
+        !helper_record->is_type_helper || helper_record->helper_base_type_id == NULL)
+        return 0;
+
+    struct RecordType *current = record_info;
+    while (current != NULL)
+    {
+        HashNode_t *current_node = NULL;
+        if (current->type_id != NULL)
+            current_node = semcheck_find_preferred_type_node(symtab, current->type_id);
+        if (current->type_id != NULL &&
+            pascal_identifier_equals(helper_record->helper_base_type_id, current->type_id))
+            return 1;
+        if (current_node != NULL && current_node->id != NULL &&
+            pascal_identifier_equals(helper_record->helper_base_type_id, current_node->id))
+            return 1;
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    return 0;
+}
+
+struct RecordType *semcheck_lookup_type_helper_for_record_member(SymTab_t *symtab,
+    struct RecordType *record_info, const char *member_name)
+{
+    if (symtab == NULL || record_info == NULL)
+        return NULL;
+
+    const char *current_owner = semcheck_get_current_method_owner();
+    if (current_owner != NULL)
+    {
+        struct RecordType *owner_record = semcheck_lookup_record_type(symtab, current_owner);
+        if (owner_record != NULL &&
+            semcheck_helper_record_matches_hierarchy(symtab, owner_record, record_info) &&
+            semcheck_helper_record_defines_member(symtab, owner_record, member_name))
+            return owner_record;
+    }
+
+    struct RecordType *current = record_info;
+    while (current != NULL)
+    {
+        HashNode_t *current_node = NULL;
+        const char *canonical_id = NULL;
+        if (current->type_id != NULL)
+        {
+            current_node = semcheck_find_preferred_type_node(symtab, current->type_id);
+            if (current_node != NULL)
+                canonical_id = current_node->id;
+        }
+
+        for (ListNode_t *cur = type_helper_entries; cur != NULL; cur = cur->next)
+        {
+            TypeHelperEntry *entry = (TypeHelperEntry *)cur->cur;
+            if (entry == NULL || entry->helper_record == NULL)
+                continue;
+            if (!semcheck_helper_entry_matches_record(entry, current->type_id, canonical_id))
+                continue;
+            if (semcheck_helper_record_defines_member(symtab, entry->helper_record, member_name))
+                return entry->helper_record;
+        }
+
+        current = semcheck_lookup_parent_record(symtab, current);
+    }
+
+    return NULL;
+}
+
 void semcheck_set_current_method_owner(const char *owner_id)
 {
     g_semcheck_current_method_owner = owner_id;
@@ -193,8 +291,7 @@ struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
     struct RecordType *preferred = semcheck_lookup_type_helper(symtab, base_type_tag, type_name);
     if (preferred != NULL)
     {
-        if (semcheck_find_class_method(symtab, preferred, member_name, NULL) != NULL ||
-            semcheck_find_class_field_including_hidden(symtab, preferred, member_name, NULL) != NULL)
+        if (semcheck_helper_record_defines_member(symtab, preferred, member_name))
             return preferred;
     }
 
@@ -207,8 +304,7 @@ struct RecordType *semcheck_lookup_type_helper_for_member(SymTab_t *symtab,
             continue;
         if (entry->helper_record == preferred)
             continue;
-        if (semcheck_find_class_method(symtab, entry->helper_record, member_name, NULL) != NULL ||
-            semcheck_find_class_field_including_hidden(symtab, entry->helper_record, member_name, NULL) != NULL)
+        if (semcheck_helper_record_defines_member(symtab, entry->helper_record, member_name))
             return entry->helper_record;
     }
 
@@ -420,6 +516,16 @@ int semcheck_with_try_resolve_method(const char *method_id, SymTab_t *symtab,
         /* Check class methods first */
         HashNode_t *method_node = semcheck_find_class_method(symtab,
             entry->record_type, method_id, NULL);
+        if (method_node == NULL && entry->record_type->type_id != NULL &&
+            !entry->record_type->is_type_helper)
+        {
+            struct RecordType *helper_record =
+                semcheck_lookup_type_helper_for_record_member(symtab,
+                    entry->record_type, method_id);
+            if (helper_record != NULL)
+                method_node = semcheck_find_class_method(symtab, helper_record,
+                    method_id, NULL);
+        }
         if (method_node != NULL)
         {
             struct Expression *clone = clone_expression(entry->context_expr);

@@ -324,8 +324,8 @@ static struct RecordField *semcheck_find_field_in_members(ListNode_t *members,
     return NULL;
 }
 
-struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
-    struct RecordType *record_info, const char *property_name,
+static struct ClassProperty *semcheck_find_class_property_in_hierarchy(
+    SymTab_t *symtab, struct RecordType *record_info, const char *property_name,
     struct RecordType **owner_out)
 {
     if (owner_out != NULL)
@@ -419,12 +419,49 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
                 fprintf(stderr, "[SemCheck]   Searched %d properties (pass %d) in this record, no match\n", prop_count, pass);
             }
         }
+        if (current->is_type_helper && current->helper_parent_id != NULL)
+        {
+            HashNode_t *parent_node = NULL;
+            if (FindSymbol(&parent_node, symtab, current->helper_parent_id) != 0 &&
+                parent_node != NULL)
+            {
+                struct RecordType *parent_helper = get_record_type_from_node(parent_node);
+                if (parent_helper != NULL && parent_helper->is_type_helper)
+                {
+                    current = parent_helper;
+                    continue;
+                }
+            }
+        }
+
         current = semcheck_lookup_parent_record(symtab, current);
     }
     if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
         fprintf(stderr, "[SemCheck]   Property '%s' NOT FOUND\n", property_name);
     }
     return NULL;
+}
+
+struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
+    struct RecordType *record_info, const char *property_name,
+    struct RecordType **owner_out)
+{
+    struct ClassProperty *property = semcheck_find_class_property_in_hierarchy(
+        symtab, record_info, property_name, owner_out);
+    if (property != NULL)
+        return property;
+
+    if (symtab == NULL || record_info == NULL || property_name == NULL ||
+        record_info->is_type_helper || record_info->type_id == NULL)
+        return NULL;
+
+    struct RecordType *helper_record = semcheck_lookup_type_helper_for_record_member(
+        symtab, record_info, property_name);
+    if (helper_record == NULL)
+        return NULL;
+
+    return semcheck_find_class_property_in_hierarchy(symtab, helper_record,
+        property_name, owner_out);
 }
 
 static struct RecordField *semcheck_find_class_field_impl(SymTab_t *symtab,
