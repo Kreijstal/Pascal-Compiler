@@ -1882,7 +1882,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                     }
 
                                     if (params != NULL)
-                                        DestroyList(params);
+                                        destroy_list(params);
                                     if (existing_list != NULL)
                                         DestroyList(existing_list);
                                     free(mangled);

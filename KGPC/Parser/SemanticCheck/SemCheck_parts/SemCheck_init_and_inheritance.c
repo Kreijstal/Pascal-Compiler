@@ -268,6 +268,13 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             ++errors;
                         }
                     }
+                    if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
+                        alias_info->kgpc_type != NULL)
+                    {
+                        /* Keep enum predeclare types owned by the AST so they are
+                         * released even when no scope entry ends up consuming them. */
+                        tree->tree_data.type_decl_data.kgpc_type = alias_info->kgpc_type;
+                    }
                     if (alias_info->kgpc_type != NULL &&
                         alias_info->kgpc_type->type_alias == NULL)
                     {
@@ -1364,7 +1371,11 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             KgpcType *inline_kgpc = create_record_type(alias->inline_record_type);
                             if (record_type_is_class(alias->inline_record_type))
-                                inline_kgpc = create_pointer_type(inline_kgpc);
+                            {
+                                KgpcType *inline_record = inline_kgpc;
+                                inline_kgpc = create_pointer_type(inline_record);
+                                kgpc_type_release(inline_record);
+                            }
 
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
@@ -1389,7 +1400,11 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Also register the alias name itself */
                         KgpcType *alias_kgpc = create_record_type(alias->inline_record_type);
                         if (record_type_is_class(alias->inline_record_type))
-                            alias_kgpc = create_pointer_type(alias_kgpc);
+                        {
+                            KgpcType *alias_record = alias_kgpc;
+                            alias_kgpc = create_pointer_type(alias_record);
+                            kgpc_type_release(alias_record);
+                        }
                         kgpc_type_set_type_alias(alias_kgpc, alias);
                         int alias_result = PushTypeOntoScope_Typed(symtab, (char *)type_id, alias_kgpc);
                         if (alias_result > 0)
@@ -1424,9 +1439,9 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             kgpc_type = create_primitive_type(ENUM_TYPE);
                             if (kgpc_type != NULL)
                             {
-                                /* Store in alias - alias now owns this reference */
+                                /* alias->kgpc_type is a borrowed/shared pointer.
+                                 * Tree/scope ownership is tracked separately. */
                                 alias->kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);  /* Alias holds reference */
                             }
                         }
                         
