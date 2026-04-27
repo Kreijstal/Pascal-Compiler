@@ -4356,6 +4356,17 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                         temp_call.stmt_data.procedure_call_data.expr_args = temp_args;
                         temp_call.stmt_data.procedure_call_data.resolved_proc = NULL;
 
+                        char *method_name_for_constructor_check =
+                            method_name != NULL ? strdup(method_name) : NULL;
+                        if (method_name != NULL && method_name_for_constructor_check == NULL)
+                        {
+                            semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
+                                stmt->source_index,
+                                "Error on line %d, out of memory while resolving inherited constructor call.\n\n",
+                                stmt->line_num);
+                            return ++return_val;
+                        }
+
                         if (parent_method_node != NULL && call_expr != NULL &&
                             call_expr->type == EXPR_FUNCTION_CALL)
                         {
@@ -4377,7 +4388,7 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
 
-                        if (parent_method_node != NULL && method_name != NULL)
+                        if (parent_method_node != NULL && method_name_for_constructor_check != NULL)
                         {
                             struct RecordType *parent_owner_record = NULL;
                             if (parent_method_node->owner_class != NULL)
@@ -4389,12 +4400,12 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                             if (parent_owner_record != NULL &&
                                 semcheck_stmt_method_is_declared_constructor(symtab,
-                                    parent_owner_record, method_name))
+                                    parent_owner_record, method_name_for_constructor_check))
                             {
                                 stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
 
                                 if (parent_owner_record->parent_class_name == NULL ||
-                                    pascal_identifier_equals(method_name, "Create"))
+                                    pascal_identifier_equals(method_name_for_constructor_check, "Create"))
                                 {
                                     free(stmt->stmt_data.procedure_call_data.constructor_class_name);
                                     stmt->stmt_data.procedure_call_data.constructor_class_name =
@@ -4410,6 +4421,8 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                                 }
                             }
                         }
+
+                        free(method_name_for_constructor_check);
 
                         if (temp_call_id_owned && temp_call.stmt_data.procedure_call_data.id != NULL)
                         {
