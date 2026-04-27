@@ -3370,7 +3370,8 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
             
             /* Constructor chaining: when a constructor calls a sibling constructor
              * on Self, it's a regular method call — do not allocate a new instance. */
-            if (ctor_type_receiver && first_arg != NULL && first_arg->cur != NULL)
+            if (ctor_type_receiver && constructor_receiver_expr == NULL &&
+                first_arg != NULL && first_arg->cur != NULL)
             {
                 struct Expression *fa = (struct Expression *)first_arg->cur;
                 if (fa != NULL && fa->type == EXPR_VAR_ID &&
@@ -3570,7 +3571,18 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                     args_to_pass != NULL)
                 {
                     struct Expression *fa = (struct Expression *)args_to_pass->cur;
-                    if (fa != NULL && fa->type != EXPR_NIL)
+                    if (fa != NULL &&
+                        constructor_receiver_expr != NULL &&
+                        fa->type == EXPR_VAR_ID &&
+                        constructor_receiver_expr->type == EXPR_VAR_ID &&
+                        fa->expr_data.id != NULL &&
+                        constructor_receiver_expr->expr_data.id != NULL &&
+                        pascal_identifier_equals(fa->expr_data.id,
+                            constructor_receiver_expr->expr_data.id))
+                    {
+                        skip_first = 1;
+                    }
+                    else if (fa != NULL && fa->type != EXPR_NIL)
                     {
                         /* First arg is not a Self placeholder — it's a real arg.
                          * The class was derived from constructor_receiver_expr

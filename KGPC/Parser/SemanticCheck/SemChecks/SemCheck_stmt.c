@@ -4352,6 +4352,36 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
 
                         return_val += semcheck_proccall(symtab, &temp_call, max_scope_lev);
 
+                        if (parent_method_node != NULL && method_name != NULL)
+                        {
+                            struct RecordType *parent_owner_record = NULL;
+                            if (parent_method_node->owner_class != NULL)
+                                parent_owner_record = semcheck_lookup_record_type(symtab,
+                                    parent_method_node->owner_class);
+
+                            if (parent_owner_record != NULL &&
+                                semcheck_method_is_declared_constructor(symtab,
+                                    parent_owner_record, method_name))
+                            {
+                                stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
+
+                                if (parent_owner_record->parent_class_name == NULL)
+                                {
+                                    free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+                                    stmt->stmt_data.procedure_call_data.constructor_class_name =
+                                        strdup("Self");
+                                    if (stmt->stmt_data.procedure_call_data.constructor_class_name == NULL)
+                                    {
+                                        semcheck_error_with_context_at(stmt->line_num, stmt->col_num,
+                                            stmt->source_index,
+                                            "Error on line %d, out of memory while resolving inherited constructor call.\n\n",
+                                            stmt->line_num);
+                                        return ++return_val;
+                                    }
+                                }
+                            }
+                        }
+
                         if (temp_call_id_owned && temp_call.stmt_data.procedure_call_data.id != NULL)
                         {
                             free(temp_call.stmt_data.procedure_call_data.id);
