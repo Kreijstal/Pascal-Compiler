@@ -36,8 +36,34 @@ void semcheck_debug_expr_brief(const struct Expression *expr, const char *label)
 struct RecordType *get_record_type_from_node(HashNode_t *node);
 static int semcheck_try_indexed_property_assignment(SymTab_t *symtab,
     struct Statement *stmt, int max_scope_lev);
+static int semcheck_stmt_method_is_declared_constructor(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name);
 #include "../../ParseTree/generic_types.h"
 #include "../../ParseTree/tree.h"
+#include "../../ParseTree/from_cparser.h"
+
+struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
+
+static int semcheck_stmt_method_is_declared_constructor(SymTab_t *symtab,
+    struct RecordType *record_info, const char *method_name)
+{
+    if (symtab == NULL || record_info == NULL || method_name == NULL)
+        return 0;
+
+    for (struct RecordType *search = record_info; search != NULL; )
+    {
+        struct MethodTemplate *tmpl = from_cparser_get_method_template(search,
+            method_name);
+        if (tmpl != NULL)
+            return tmpl->kind == METHOD_TEMPLATE_CONSTRUCTOR;
+
+        if (search->parent_class_name == NULL)
+            break;
+        search = semcheck_lookup_record_type(symtab, search->parent_class_name);
+    }
+
+    return 0;
+}
 #include "../../ParseTree/tree_types.h"
 #include "../../ParseTree/ident_ref.h"
 #include "../../ParseTree/type_tags.h"
@@ -56,7 +82,6 @@ const char *semcheck_get_current_subprogram_owner_class_outer(void);
 int semcheck_typecheck_array_literal(struct Expression *expr, SymTab_t *symtab,
     int max_scope_lev, int expected_type, const char *expected_type_id, int line_num);
 int set_type_from_hashtype(int *type, HashNode_t *hash_node);
-struct RecordType *semcheck_lookup_record_type(SymTab_t *symtab, const char *type_id);
 int semcheck_convert_set_literal_to_array_literal(struct Expression *expr);
 int semcheck_try_reinterpret_as_typecast(int *type_return,
     SymTab_t *symtab, struct Expression *expr, int max_scope_lev);
@@ -4358,14 +4383,18 @@ int semcheck_stmt_main(SymTab_t *symtab, struct Statement *stmt, int max_scope_l
                             if (parent_method_node->owner_class != NULL)
                                 parent_owner_record = semcheck_lookup_record_type(symtab,
                                     parent_method_node->owner_class);
+                            if (parent_owner_record == NULL && parent_class_name != NULL)
+                                parent_owner_record = semcheck_lookup_record_type(symtab,
+                                    parent_class_name);
 
                             if (parent_owner_record != NULL &&
-                                semcheck_method_is_declared_constructor(symtab,
+                                semcheck_stmt_method_is_declared_constructor(symtab,
                                     parent_owner_record, method_name))
                             {
                                 stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
 
-                                if (parent_owner_record->parent_class_name == NULL)
+                                if (parent_owner_record->parent_class_name == NULL ||
+                                    pascal_identifier_equals(method_name, "Create"))
                                 {
                                     free(stmt->stmt_data.procedure_call_data.constructor_class_name);
                                     stmt->stmt_data.procedure_call_data.constructor_class_name =

@@ -3197,11 +3197,11 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         
         /* Check if this is a constructor call (e.g., TMyClass.Create)
          * Constructors need special handling: allocate memory and initialize VMT */
-        int is_constructor = 0;
+        int is_constructor = expr->expr_data.function_call_data.is_constructor_call;
         Register_t *constructor_instance_reg = NULL;
         StackNode_t *constructor_instance_slot = NULL;
 
-        if (func_mangled_name != NULL)
+        if (!is_constructor && func_mangled_name != NULL)
         {
             /* Check if name contains __create (may be followed by type suffix like __create_u) */
             const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
@@ -3572,13 +3572,13 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 {
                     struct Expression *fa = (struct Expression *)args_to_pass->cur;
                     if (fa != NULL &&
-                        constructor_receiver_expr != NULL &&
+                        expr->expr_data.function_call_data.constructor_receiver_expr != NULL &&
                         fa->type == EXPR_VAR_ID &&
-                        constructor_receiver_expr->type == EXPR_VAR_ID &&
+                        expr->expr_data.function_call_data.constructor_receiver_expr->type == EXPR_VAR_ID &&
                         fa->expr_data.id != NULL &&
-                        constructor_receiver_expr->expr_data.id != NULL &&
+                        expr->expr_data.function_call_data.constructor_receiver_expr->expr_data.id != NULL &&
                         pascal_identifier_equals(fa->expr_data.id,
-                            constructor_receiver_expr->expr_data.id))
+                            expr->expr_data.function_call_data.constructor_receiver_expr->expr_data.id))
                     {
                         skip_first = 1;
                     }
