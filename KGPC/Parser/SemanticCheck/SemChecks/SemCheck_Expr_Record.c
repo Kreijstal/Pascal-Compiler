@@ -324,7 +324,7 @@ static struct RecordField *semcheck_find_field_in_members(ListNode_t *members,
     return NULL;
 }
 
-static struct ClassProperty *semcheck_find_class_property_in_record_chain(
+static struct ClassProperty *semcheck_find_class_property_in_hierarchy(
     SymTab_t *symtab, struct RecordType *record_info, const char *property_name,
     struct RecordType **owner_out)
 {
@@ -446,7 +446,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     struct RecordType *record_info, const char *property_name,
     struct RecordType **owner_out)
 {
-    struct ClassProperty *property = semcheck_find_class_property_in_record_chain(
+    struct ClassProperty *property = semcheck_find_class_property_in_hierarchy(
         symtab, record_info, property_name, owner_out);
     if (property != NULL)
         return property;
@@ -460,7 +460,7 @@ struct ClassProperty *semcheck_find_class_property(SymTab_t *symtab,
     if (helper_record == NULL)
         return NULL;
 
-    return semcheck_find_class_property_in_record_chain(symtab, helper_record,
+    return semcheck_find_class_property_in_hierarchy(symtab, helper_record,
         property_name, owner_out);
 }
 

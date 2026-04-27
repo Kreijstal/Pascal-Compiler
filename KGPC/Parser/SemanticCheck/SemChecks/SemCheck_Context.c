@@ -263,7 +263,7 @@ struct RecordType *semcheck_lookup_type_helper(SymTab_t *symtab,
             if (kgpc_getenv("KGPC_DEBUG_TYPE_HELPER") != NULL)
             {
                 fprintf(stderr,
-            "[KGPC]   helper_entry: base_type_tag=%d base_type_id=%s helper=%s\n",
+                    "[KGPC]   helper_entry: base_type_tag=%d base_type_id=%s helper=%s\n",
                     entry->base_type_tag,
                     entry->base_type_id != NULL ? entry->base_type_id : "<null>",
                     entry->helper_record && entry->helper_record->type_id ? entry->helper_record->type_id : "<null>");
