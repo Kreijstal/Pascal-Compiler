@@ -481,14 +481,11 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                         {
                             record_type_id = type_node->type->info.record_info->type_id;
                         }
-                        /* For class/interface types (pointer to record), include the
-                         * record type_id so overloads with different class params
-                         * get distinct mangled names. Skip for "Self" parameters
-                         * since methods are already distinguished by ClassName__ prefix
-                         * and including Self's class type breaks inherited calls.
-                         * For non-class pointer types (like PDirRec = ^TDirRec), do NOT
-                         * use the pointed-to record's type_id — it would collide with
-                         * parameters of the record type itself. */
+                        /* For pointer types, include a distinguishing name so overloads
+                         * with different pointer type params get distinct mangled names.
+                         * Skip for "Self" parameters since methods are already distinguished
+                         * by ClassName__ prefix and including Self's class type breaks
+                         * inherited calls. */
                         {
                             int is_self_param = 0;
                             if (ids != NULL && ids->cur != NULL)
@@ -496,14 +493,28 @@ static ListNode_t* GetFlatTypeListForMangling(ListNode_t *args, SymTab_t *symtab
                             if (!is_self_param &&
                                 resolved_type == HASHVAR_POINTER &&
                                 type_node->type != NULL &&
-                                type_node->type->kind == TYPE_KIND_POINTER &&
-                                type_node->type->info.points_to != NULL &&
-                                type_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
-                                type_node->type->info.points_to->info.record_info != NULL &&
-                                type_node->type->info.points_to->info.record_info->type_id != NULL &&
-                                record_type_is_class(type_node->type->info.points_to->info.record_info))
+                                type_node->type->kind == TYPE_KIND_POINTER)
                             {
-                                record_type_id = type_node->type->info.points_to->info.record_info->type_id;
+                                /* For class/interface pointer types, use the pointed-to
+                                 * record's type_id (e.g. TObject, IInterface). */
+                                if (type_node->type->info.points_to != NULL &&
+                                    type_node->type->info.points_to->kind == TYPE_KIND_RECORD &&
+                                    type_node->type->info.points_to->info.record_info != NULL &&
+                                    type_node->type->info.points_to->info.record_info->type_id != NULL &&
+                                    record_type_is_class(type_node->type->info.points_to->info.record_info))
+                                {
+                                    record_type_id = type_node->type->info.points_to->info.record_info->type_id;
+                                }
+                                /* For all other named pointer type aliases (e.g. PAnsi = ^AnsiString,
+                                 * PShort = ^ShortString, PDirRec = ^TDirRec), use the alias name itself.
+                                 * This ensures overloads with different pointer-type parameters get
+                                 * distinct mangled names.  Do NOT use the pointed-to type's name here
+                                 * (which was the original concern) — we use the alias name (type_id)
+                                 * instead, which is always distinct from the pointed-to type's name. */
+                                else if (record_type_id == NULL && type_id != NULL)
+                                {
+                                    record_type_id = type_id;
+                                }
                             }
                         }
                         if (resolved_type == HASHVAR_REAL &&
