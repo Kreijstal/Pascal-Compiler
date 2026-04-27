@@ -75,6 +75,13 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
     if (cursor != NULL) {
         /* Use convert_type_spec to properly handle all type forms including arrays */
         field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+        if (field_info.is_array)
+        {
+            ast_t *type_section = g_implementation_type_section_ast != NULL ?
+                g_implementation_type_section_ast : g_interface_type_section_ast;
+            resolve_array_bounds(&field_info, type_section, NULL,
+                names != NULL ? (const char *)names->cur : NULL);
+        }
     } else if (names != NULL) {
         /* Fallback: if no type spec, try to parse last name as type */
         char *candidate = pop_last_identifier(&names);
@@ -1475,6 +1482,13 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
 
     if (cursor != NULL) {
         field_type = convert_type_spec(cursor, &field_type_id, &nested_record, &field_info);
+        if (field_info.is_array)
+        {
+            ast_t *type_section = g_implementation_type_section_ast != NULL ?
+                g_implementation_type_section_ast : g_interface_type_section_ast;
+            resolve_array_bounds(&field_info, type_section, NULL,
+                names != NULL ? (const char *)names->cur : NULL);
+        }
         if (field_type == UNKNOWN_TYPE && field_info.is_range)
             field_type = select_range_primitive_tag(&field_info);
         /* Capture inline procedural type signatures for record fields */
@@ -2486,5 +2500,4 @@ int is_node_to_skip_as_initializer(ast_t *node) {
         return 0;
     return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
-
 

@@ -5450,23 +5450,49 @@ static struct RecordField *codegen_lookup_record_field_expr(struct Expression *r
 
     const char *field_id = record_access_expr->expr_data.record_access_data.field_id;
     SymTab_t *symtab = (ctx != NULL) ? ctx->symtab : NULL;
-    struct RecordType *record = codegen_expr_record_type(record_access_expr, symtab);
-    if (record == NULL && record_access_expr->expr_data.record_access_data.record_expr != NULL)
-        record = codegen_expr_record_type(record_access_expr->expr_data.record_access_data.record_expr, symtab);
-    if (record == NULL)
-        return NULL;
+    struct RecordType *records_to_try[2] = { NULL, NULL };
+    int record_count = 0;
 
-    ListNode_t *cur = record->fields;
-    while (cur != NULL)
+    if (record_access_expr->expr_data.record_access_data.record_expr != NULL)
     {
-        if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
-        {
-            struct RecordField *field = (struct RecordField *)cur->cur;
-            if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
-                return field;
-        }
-        cur = cur->next;
+        records_to_try[record_count++] = codegen_expr_record_type(
+            record_access_expr->expr_data.record_access_data.record_expr, symtab);
     }
+
+    {
+        struct RecordType *result_record =
+            codegen_expr_record_type(record_access_expr, symtab);
+        if (result_record != NULL &&
+            (record_count == 0 || result_record != records_to_try[0]))
+        {
+            records_to_try[record_count++] = result_record;
+        }
+    }
+
+    for (int i = 0; i < record_count; ++i)
+    {
+        struct RecordType *record = records_to_try[i];
+        if (record == NULL)
+            continue;
+
+        struct RecordField *field = semcheck_find_class_field_including_hidden(
+            symtab, record, field_id, NULL);
+        if (field != NULL)
+            return field;
+
+        ListNode_t *cur = record->fields;
+        while (cur != NULL)
+        {
+            if (cur->type == LIST_RECORD_FIELD && cur->cur != NULL)
+            {
+                field = (struct RecordField *)cur->cur;
+                if (field->name != NULL && pascal_identifier_equals(field->name, field_id))
+                    return field;
+            }
+            cur = cur->next;
+        }
+    }
+
     return NULL;
 }
 
@@ -8417,6 +8443,28 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
         }
     }
 
+    if (base_is_array && !record_field_lower_known &&
+        array_expr->type == EXPR_VAR_ID && array_expr->expr_data.id != NULL &&
+        ctx != NULL && ctx->symtab != NULL &&
+        ctx->current_subprogram_owner_class != NULL)
+    {
+        HashNode_t *class_node = NULL;
+        if (FindSymbol(&class_node, ctx->symtab, ctx->current_subprogram_owner_class) != 0 &&
+            class_node != NULL && class_node->type != NULL &&
+            kgpc_type_is_record(class_node->type))
+        {
+            struct RecordType *class_record = kgpc_type_get_record(class_node->type);
+            struct RecordField *field = semcheck_find_class_field_including_hidden(
+                ctx->symtab, class_record, array_expr->expr_data.id, NULL);
+            if (field != NULL && field->is_array)
+            {
+                record_field = field;
+                record_field_lower_known = 1;
+                record_field_lower = field->array_start;
+            }
+        }
+    }
+
     /* EXPR_RECORD_ACCESS with unknown sub-record: try to resolve the field's record type
      * from the symbol table and look up the accessed field within it. */
     if (!base_is_array && !base_is_string && !base_is_pointer &&
@@ -8722,7 +8770,8 @@ ListNode_t *codegen_array_element_address(struct Expression *expr, ListNode_t *i
     if (has_info)
     {
         first_index_stride = info.strides[0];
-        first_lower_bound = info.dim_lowers[0];
+        first_lower_bound = record_field_lower_known ?
+            record_field_lower : info.dim_lowers[0];
     }
     else
     {
