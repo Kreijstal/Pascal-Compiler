@@ -1813,7 +1813,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             PushFunctionOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
                                         else
                                             PushProcedureOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
-                                        destroy_kgpc_type(proc_type);
 
                                         /* Set method identity on the newly-pushed symbol */
                                         {
@@ -1834,10 +1833,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 }
                                             }
                                         }
-
-                                        if (proc_type != NULL)
-                                            destroy_kgpc_type(proc_type);
                                         free(overload_mangled);
+                                        destroy_kgpc_type(proc_type);
 
                                         if (kgpc_getenv("KGPC_DEBUG_SEMCHECK") != NULL) {
                                             fprintf(stderr, "[SemCheck] Added method forward declaration: %s -> %s\n",
@@ -2002,7 +1999,6 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             {
                                                 PushProcedureOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
                                             }
-                                            destroy_kgpc_type(proc_type);
                                             /* Set method identity on the newly-pushed symbol */
                                             {
                                                 HashNode_t *pushed_node = NULL;
@@ -2014,6 +2010,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                         pushed_node->owner_class = strdup(record_info->type_id);
                                                 }
                                             }
+                                            destroy_kgpc_type(proc_type);
                                             mangled = NULL;
                                         }
                                     }
