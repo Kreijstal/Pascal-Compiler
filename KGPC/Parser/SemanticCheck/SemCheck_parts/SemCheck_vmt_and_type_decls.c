@@ -1611,17 +1611,42 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                                 self_type_id = record_info->helper_base_type_id;
                                             self_is_var = semcheck_helper_self_is_var(symtab, self_type_id);
                                         }
-                                        ListNode_t *self_ids = CreateListNode(strdup("Self"), LIST_STRING);
+                                        char *self_name = strdup("Self");
+                                        ListNode_t *self_ids = NULL;
+                                        if (self_name != NULL)
+                                            self_ids = CreateListNode(self_name, LIST_STRING);
+                                        if (self_ids == NULL)
+                                            free(self_name);
                                         if (self_ids != NULL && self_type_id != NULL)
                                         {
-                                            Tree_t *self_param = mk_vardecl(0, self_ids, UNKNOWN_TYPE,
-                                                strdup(self_type_id), self_is_var, 0, NULL, NULL, NULL, NULL);
-                                            ListNode_t *self_node = CreateListNode(self_param, LIST_TREE);
+                                            char *self_type_id_copy = strdup(self_type_id);
+                                            Tree_t *self_param = NULL;
+                                            ListNode_t *self_node = NULL;
+                                            if (self_type_id_copy != NULL)
+                                            {
+                                                self_param = mk_vardecl(0, self_ids, UNKNOWN_TYPE,
+                                                    self_type_id_copy, self_is_var, 0, NULL, NULL, NULL, NULL);
+                                            }
+                                            else
+                                            {
+                                                destroy_list(self_ids);
+                                                self_ids = NULL;
+                                            }
+                                            if (self_param != NULL)
+                                                self_node = CreateListNode(self_param, LIST_TREE);
                                             if (self_node != NULL)
                                             {
                                                 self_node->next = params;
                                                 params = self_node;
                                             }
+                                            else if (self_param != NULL)
+                                            {
+                                                destroy_tree(self_param);
+                                            }
+                                        }
+                                        else if (self_ids != NULL)
+                                        {
+                                            destroy_list(self_ids);
                                         }
                                     }
 
