@@ -9,6 +9,16 @@ static void semcheck_set_predeclared_tree_kgpc_type(Tree_t *tree, KgpcType *kgpc
     tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 1;
 }
 
+static KgpcType *semcheck_predeclare_borrow_tree_kgpc_type(Tree_t *tree)
+{
+    if (tree == NULL || tree->type != TREE_TYPE_DECL ||
+        tree->tree_data.type_decl_data.kgpc_type == NULL)
+        return NULL;
+
+    kgpc_type_retain(tree->tree_data.type_decl_data.kgpc_type);
+    return tree->tree_data.type_decl_data.kgpc_type;
+}
+
 SymTab_t *semcheck_init_symtab(void)
 {
     double t0 = 0.0;
@@ -1084,13 +1094,18 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (record_info != NULL && record_info->type_id == NULL)
                         record_info->type_id = strdup(type_id);
                     
-                    KgpcType *kgpc_type = create_record_type(record_info);
+                    KgpcType *kgpc_type = semcheck_predeclare_borrow_tree_kgpc_type(tree);
+                    if (kgpc_type == NULL)
+                        kgpc_type = create_record_type(record_info);
                     if (record_type_is_class(record_info))
                     {
                         /* Classes are reference types - register as pointers to the record */
-                        KgpcType *ptr = create_pointer_type(kgpc_type);
-                        kgpc_type_release(kgpc_type); /* create_pointer_type retained inner */
-                        kgpc_type = ptr;
+                        if (kgpc_type != NULL && !kgpc_type_is_pointer(kgpc_type))
+                        {
+                            KgpcType *ptr = create_pointer_type(kgpc_type);
+                            kgpc_type_release(kgpc_type); /* create_pointer_type retained inner */
+                            kgpc_type = ptr;
+                        }
                     }
                     if (kgpc_type != NULL)
                     {
@@ -1315,11 +1330,14 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (alias->is_range || alias->range_known)
                     {
                         int base_tag = alias->base_type != UNKNOWN_TYPE ? alias->base_type : INT_TYPE;
-                        KgpcType *kgpc_type = NULL;
-                        if (alias->storage_size > 0)
-                            kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
-                        else
-                            kgpc_type = create_primitive_type(base_tag);
+                        KgpcType *kgpc_type = semcheck_predeclare_borrow_tree_kgpc_type(tree);
+                        if (kgpc_type == NULL)
+                        {
+                            if (alias->storage_size > 0)
+                                kgpc_type = create_primitive_type_with_size(base_tag, (int)alias->storage_size);
+                            else
+                                kgpc_type = create_primitive_type(base_tag);
+                        }
                         if (kgpc_type != NULL)
                         {
                             kgpc_type_set_type_alias(kgpc_type, alias);
@@ -1493,8 +1511,12 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Predeclare array/set/file aliases so return types can resolve early. */
                     if (alias->is_array || alias->is_set || alias->is_file)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
-                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        KgpcType *kgpc_type = semcheck_predeclare_borrow_tree_kgpc_type(tree);
+                        if (kgpc_type == NULL)
+                        {
+                            kgpc_type = create_kgpc_type_from_type_alias(
+                                alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        }
                         if (kgpc_type != NULL)
                         {
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
@@ -1521,8 +1543,12 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     /* Handle pointer aliases to already known element types */
                     if (alias->is_pointer)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
-                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        KgpcType *kgpc_type = semcheck_predeclare_borrow_tree_kgpc_type(tree);
+                        if (kgpc_type == NULL)
+                        {
+                            kgpc_type = create_kgpc_type_from_type_alias(
+                                alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        }
                         if (kgpc_type != NULL)
                         {
                             if (kgpc_getenv("KGPC_DEBUG_PREDECLARE_POINTERS") != NULL)
@@ -1560,8 +1586,12 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                     if (!alias->is_array && !alias->is_set && !alias->is_file &&
                         !alias->is_pointer && alias->base_type == UNKNOWN_TYPE)
                     {
-                        KgpcType *kgpc_type = create_kgpc_type_from_type_alias(
-                            alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        KgpcType *kgpc_type = semcheck_predeclare_borrow_tree_kgpc_type(tree);
+                        if (kgpc_type == NULL)
+                        {
+                            kgpc_type = create_kgpc_type_from_type_alias(
+                                alias, symtab, tree->tree_data.type_decl_data.defined_in_unit);
+                        }
                         if (kgpc_type == NULL)
                         {
                             kgpc_type = create_primitive_type(UNKNOWN_TYPE);
