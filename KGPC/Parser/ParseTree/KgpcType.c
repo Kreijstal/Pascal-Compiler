@@ -3902,8 +3902,11 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
     
-    /* Copy kgpc_type with proper reference counting */
-    if (src->kgpc_type != NULL) {
+    /* Copy shared KgpcType only for aliases that semcheck/codegen resolves
+     * through a canonical shared enum/set type. Other alias kinds treat
+     * kgpc_type as an AST-side borrowed cache and should not add ownership
+     * through copied alias metadata. */
+    if (src->kgpc_type != NULL && (src->is_enum || src->is_set)) {
         kgpc_type_retain(src->kgpc_type);
         dst->kgpc_type = src->kgpc_type;
     }

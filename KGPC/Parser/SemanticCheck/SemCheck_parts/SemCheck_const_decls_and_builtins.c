@@ -1293,8 +1293,6 @@ static void add_builtin_type_owned(SymTab_t *symtab, const char *name, KgpcType 
 {
     if (symtab == NULL || name == NULL || type == NULL)
         return;
-    if (type->type_alias != NULL && type->type_alias->target_type_id == NULL)
-        type->type_alias->target_type_id = strdup(name);
     AddBuiltinType_Typed(symtab, (char *)name, type);
     destroy_kgpc_type(type);  /* Release creator's ref; hash table retained its own */
 }
@@ -1307,6 +1305,7 @@ static void add_builtin_alias_type(SymTab_t *symtab, const char *name, int base_
 
     struct TypeAlias alias = {0};
     alias.alias_name = (char *)name;  /* Will be duplicated by copy_type_alias */
+    alias.target_type_id = (char *)name;  /* Will be duplicated by copy_type_alias */
     alias.base_type = base_type;
     alias.storage_size = storage_size;
 
@@ -2129,4 +2128,3 @@ void semcheck_add_builtins(SymTab_t *symtab)
 
 /* Semantic check for a program */
 #define SEMCHECK_TIMINGS_ENABLED() (kgpc_getenv("KGPC_DEBUG_TIMINGS") != NULL)
-
