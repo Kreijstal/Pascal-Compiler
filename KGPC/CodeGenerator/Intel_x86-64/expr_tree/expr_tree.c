@@ -2706,8 +2706,18 @@ static ListNode_t *promote_shortstring_operand_ex(ListNode_t *inst_list, CodeGen
         value_reg = get_free_reg(get_reg_stack(), &inst_list);
         if (value_reg == NULL)
             return inst_list;
-        inst_list = emit_move_ptr_operand_kind(inst_list, *operand_ptr, NULL, *kind_ptr,
-            value_reg->bit_64);
+        if (*kind_ptr == OPKIND_MEMORY || *kind_ptr == OPKIND_LABEL)
+        {
+            char buffer[128];
+            snprintf(buffer, sizeof(buffer), "\tleaq\t%s, %s\n",
+                *operand_ptr, value_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+        }
+        else
+        {
+            inst_list = emit_move_ptr_operand_kind(inst_list, *operand_ptr, NULL,
+                *kind_ptr, value_reg->bit_64);
+        }
         *operand_ptr = value_reg->bit_64;
         *reg_ptr = value_reg;
         *kind_ptr = OPKIND_REGISTER;
@@ -6779,13 +6789,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                      * "$46" for a single-char EXPR_STRING).  Use mutable
                      * copies so promote_char_operand_to_string_ex can update
                      * an immediate operand to a register-backed one. */
-                    int left_is_char_operand = (left_expr != NULL &&
+                    int left_is_char_operand = (!left_is_shortstring && left_expr != NULL &&
                         (left_expr->type == EXPR_CHAR_CODE ||
                          expr_get_type_tag(left_expr) == CHAR_TYPE ||
                          (left_expr->resolved_kgpc_type != NULL &&
                           kgpc_type_is_char(left_expr->resolved_kgpc_type)) ||
                          codegen_expr_is_string_char_index(left_expr)));
-                    int right_is_char_operand = (right_expr != NULL &&
+                    int right_is_char_operand = (!right_is_shortstring && right_expr != NULL &&
                         (right_expr->type == EXPR_CHAR_CODE ||
                          expr_get_type_tag(right_expr) == CHAR_TYPE ||
                          (right_expr->resolved_kgpc_type != NULL &&
