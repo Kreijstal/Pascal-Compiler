@@ -2130,6 +2130,14 @@ struct Statement *convert_assignment(ast_t *assign_node) {
 
     struct Expression *left = convert_expression(lhs);
     struct Expression *right = convert_expression(rhs);
+    if (left == NULL || right == NULL)
+    {
+        if (left != NULL)
+            destroy_expr(left);
+        if (right != NULL)
+            destroy_expr(right);
+        return NULL;
+    }
     if (kgpc_getenv("KGPC_DEBUG_SPECIALIZE_CALLS") != NULL && right == NULL)
     {
         ast_t *u_rhs = unwrap_pascal_node(rhs);

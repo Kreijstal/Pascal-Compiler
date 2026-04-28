@@ -2600,6 +2600,7 @@ static Tree_t *convert_type_decl_ex(ast_t *type_decl_node, ListNode_t **method_c
 
     if (decl == NULL) {
         free(id);
+        destroy_kgpc_type(kgpc_type);
         destroy_record_type(record_type);
     }
 
