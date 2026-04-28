@@ -4526,6 +4526,31 @@ static int codegen_formal_is_dynamic_array(Tree_t *formal, SymTab_t *symtab)
     return 0;
 }
 
+static int codegen_expr_is_open_array_descriptor_arg(const struct Expression *expr,
+    CodeGenContext *ctx)
+{
+    if (expr == NULL)
+        return 0;
+
+    if (expr->is_array_expr && expr->array_is_dynamic)
+        return 1;
+
+    KgpcType *arg_type = expr_get_kgpc_type((struct Expression *)expr);
+    if (arg_type != NULL && kgpc_type_is_dynamic_array(arg_type))
+        return 1;
+
+    if (ctx == NULL || ctx->symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *symbol = NULL;
+    if (FindSymbol(&symbol, ctx->symtab, expr->expr_data.id) == 0 ||
+        symbol == NULL || symbol->type == NULL)
+        return 0;
+
+    return kgpc_type_is_dynamic_array(symbol->type);
+}
+
 static int codegen_sizeof_hashnode(CodeGenContext *ctx, HashNode_t *node,
     long long *size_out, int depth);
 
@@ -11657,6 +11682,7 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                 else
                 {
                     struct Expression *address_expr = arg_expr;
+                    int forward_open_array_data = 0;
                     if (!codegen_expr_is_addressable(address_expr) &&
                         address_expr != NULL &&
                         address_expr->type == EXPR_FUNCTION_CALL &&
@@ -11683,6 +11709,18 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
                     }
                     inst_list = codegen_address_for_expr(address_expr, inst_list, ctx, &addr_reg);
 
+                    if (addr_reg != NULL &&
+                        formal_arg_decl != NULL &&
+                        formal_arg_decl->type == TREE_VAR_DECL &&
+                        formal_arg_decl->tree_data.var_decl_data.is_untyped_param &&
+                        codegen_expr_is_open_array_descriptor_arg(address_expr, ctx))
+                    {
+                        snprintf(buffer, sizeof(buffer), "\tmovq\t(%s), %s\n",
+                            addr_reg->bit_64, addr_reg->bit_64);
+                        inst_list = add_inst(inst_list, buffer);
+                        forward_open_array_data = 1;
+                    }
+
                     /* BUGFIX: For TRUE var parameters of class types, we pass the ADDRESS of the variable itself,
                      * not the value it contains. This allows the callee to update the variable (e.g., FreeAndNil).
                      *
@@ -11691,7 +11729,8 @@ ListNode_t *codegen_pass_arguments(ListNode_t *args, ListNode_t *inst_list,
 
                     struct RecordType *arg_record = codegen_expr_record_type(arg_expr,
                         ctx != NULL ? ctx->symtab : NULL);
-                    if (addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
+                    if (!forward_open_array_data &&
+                        addr_reg != NULL && arg_expr != NULL && arg_expr->type != EXPR_AS &&
                         arg_record != NULL && record_type_is_class(arg_record))
                     {
                         /* Check if the argument expression is itself a var parameter variable.
