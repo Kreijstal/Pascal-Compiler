@@ -15,6 +15,37 @@ static void semcheck_release_tree_decl_kgpc_type(Tree_t *tree)
 }
 
 static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+static int semcheck_alias_metadata_already_applied(const struct TypeAlias *existing_alias,
+    const struct TypeAlias *alias_info);
+
+static int semcheck_alias_metadata_already_applied(const struct TypeAlias *existing_alias,
+    const struct TypeAlias *alias_info)
+{
+    if (existing_alias == NULL || alias_info == NULL)
+        return 0;
+
+    if (!semcheck_alias_targets_match(existing_alias, alias_info))
+        return 0;
+
+    if (existing_alias->alias_name == NULL || alias_info->alias_name == NULL ||
+        !pascal_identifier_equals(existing_alias->alias_name, alias_info->alias_name))
+        return 0;
+
+    return existing_alias->base_type == alias_info->base_type &&
+           existing_alias->storage_size == alias_info->storage_size &&
+           existing_alias->is_range == alias_info->is_range &&
+           existing_alias->range_known == alias_info->range_known &&
+           existing_alias->range_start == alias_info->range_start &&
+           existing_alias->range_end == alias_info->range_end &&
+           existing_alias->is_array == alias_info->is_array &&
+           existing_alias->is_pointer == alias_info->is_pointer &&
+           existing_alias->is_set == alias_info->is_set &&
+           existing_alias->is_enum == alias_info->is_enum &&
+           existing_alias->is_file == alias_info->is_file &&
+           existing_alias->is_shortstring == alias_info->is_shortstring &&
+           existing_alias->is_wide_string == alias_info->is_wide_string;
+}
+
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
@@ -2745,7 +2776,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 if (can_override_alias)
                 {
                     inherit_alias_metadata(symtab, alias_info);
-                    kgpc_type_set_type_alias(existing_type->type, alias_info);
+                    if (!semcheck_alias_metadata_already_applied(existing_alias, alias_info))
+                        kgpc_type_set_type_alias(existing_type->type, alias_info);
                     if (existing_type->type->type_alias != NULL && alias_info->storage_size > 0)
                         existing_type->type->type_alias->storage_size = alias_info->storage_size;
                 }
@@ -2825,7 +2857,8 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                 inherit_alias_metadata(symtab, alias_info);
                 if (can_override_alias)
                 {
-                    kgpc_type_set_type_alias(kgpc_type, alias_info);
+                    if (!semcheck_alias_metadata_already_applied(existing_alias, alias_info))
+                        kgpc_type_set_type_alias(kgpc_type, alias_info);
                 }
                 if (can_override_alias &&
                     kgpc_type_get_type_alias(kgpc_type) != NULL &&
