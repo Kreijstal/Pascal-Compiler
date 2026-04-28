@@ -3729,6 +3729,64 @@ int expr_get_array_upper_bound(const struct Expression *expr)
     return expr->array_upper_bound;
 }
 
+static long long codegen_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long codegen_set_storage_size_for_set_alias(const struct TypeAlias *alias)
+{
+    if (alias == NULL || !alias->is_set)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+            return codegen_set_storage_size_for_high((long long)count - 1);
+    }
+
+    if (alias->range_known && alias->range_end >= alias->range_start)
+    {
+        long long count = (long long)alias->range_end - (long long)alias->range_start + 1;
+        if (count > 0)
+            return codegen_set_storage_size_for_high(count - 1);
+    }
+
+    return 4;
+}
+
+static int expr_is_large_set_type(KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    struct TypeAlias *alias = type->type_alias;
+    if (alias != NULL && alias->is_set)
+    {
+        if (codegen_set_storage_size_for_set_alias(alias) > 4)
+            return 1;
+    }
+
+    if (kgpc_type_is_set(type) && kgpc_type_sizeof(type) > 4)
+        return 1;
+
+    return 0;
+}
+
 /* Check if an expression represents a "large" set that requires memory-based
  * operations (> 4 bytes).  This includes char sets (32 bytes) and enum sets
  * whose element type has more than 32 members. */
@@ -3737,24 +3795,59 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
     if (expr == NULL)
         return 0;
 
+    KgpcType *expr_type = expr_get_kgpc_type(expr);
+    if (expr_type != NULL)
+    {
+        if (expr_is_large_set_type(expr_type))
+            return 1;
+    }
+
+    if (expr->type == EXPR_POINTER_DEREF && ctx != NULL && ctx->symtab != NULL)
+    {
+        const struct Expression *pointer_expr = expr->expr_data.pointer_deref_data.pointer_expr;
+        if (pointer_expr != NULL)
+        {
+            KgpcType *deref_type = NULL;
+            if (pointer_expr->resolved_kgpc_type != NULL &&
+                kgpc_type_is_pointer(pointer_expr->resolved_kgpc_type))
+            {
+                deref_type = pointer_expr->resolved_kgpc_type->info.points_to;
+            }
+            else if (pointer_expr->type == EXPR_VAR_ID && pointer_expr->expr_data.id != NULL)
+            {
+                HashNode_t *ptr_node = NULL;
+                if (FindSymbol(&ptr_node, ctx->symtab, pointer_expr->expr_data.id) != 0 &&
+                    ptr_node != NULL && ptr_node->type != NULL &&
+                    kgpc_type_is_pointer(ptr_node->type))
+                {
+                    deref_type = ptr_node->type->info.points_to;
+                }
+            }
+            else
+            {
+                KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
+                if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+                    deref_type = pointer_type->info.points_to;
+            }
+
+            if (deref_type != NULL)
+            {
+                if (expr_is_large_set_type(deref_type))
+                    return 1;
+            }
+        }
+    }
+
     /* Check if expression has a KgpcType with type_alias */
     if (expr->resolved_kgpc_type != NULL)
     {
         struct TypeAlias *alias = expr->resolved_kgpc_type->type_alias;
         if (alias != NULL && alias->is_set)
         {
-            /* Char sets are always large (32 bytes) */
-            if (alias->set_element_type == CHAR_TYPE ||
-                (alias->set_element_type_id != NULL &&
-                 (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
-                return 1;
-            /* Any set with cached storage_size > 4 needs memory-based ops */
-            if (alias->storage_size > 4)
+            if (expr_is_large_set_type(expr->resolved_kgpc_type))
                 return 1;
         }
-        if (kgpc_type_is_set(expr->resolved_kgpc_type) &&
-            kgpc_type_sizeof(expr->resolved_kgpc_type) > 4)
+        if (expr_is_large_set_type(expr->resolved_kgpc_type))
             return 1;
     }
 
@@ -3769,16 +3862,10 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 struct TypeAlias *alias = node->type->type_alias;
                 if (alias != NULL && alias->is_set)
                 {
-                    if (alias->set_element_type == CHAR_TYPE ||
-                        (alias->set_element_type_id != NULL &&
-                         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
-                        return 1;
-                    if (alias->storage_size > 4)
+                    if (expr_is_large_set_type(node->type))
                         return 1;
                 }
-                if (kgpc_type_is_set(node->type) &&
-                    kgpc_type_sizeof(node->type) > 4)
+                if (expr_is_large_set_type(node->type))
                     return 1;
             }
             if (node->hash_type == HASHTYPE_CONST &&
@@ -5384,6 +5471,16 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
             KgpcType *points_to = pointer_type->info.points_to;
             if (points_to != NULL)
             {
+                if (kgpc_type_is_set(points_to) && points_to->type_alias != NULL &&
+                    points_to->type_alias->is_set)
+                {
+                    long long set_size = codegen_set_storage_size_for_set_alias(points_to->type_alias);
+                    if (set_size > 0)
+                    {
+                        *size_out = set_size;
+                        return 0;
+                    }
+                }
                 long long pointee_size = kgpc_type_sizeof(points_to);
                 if (pointee_size > 0)
                 {
@@ -5407,6 +5504,17 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
+            if (kgpc_type_is_set(points_to) && points_to->type_alias != NULL)
+            {
+                long long set_size = 0;
+                if (points_to->type_alias->is_set)
+                    set_size = codegen_set_storage_size_for_set_alias(points_to->type_alias);
+                if (set_size > 0)
+                {
+                    *size_out = set_size;
+                    return 0;
+                }
+            }
             if (kgpc_type_is_array(points_to))
             {
                 KgpcArrayDimensionInfo info;
