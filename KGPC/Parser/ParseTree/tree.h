@@ -70,6 +70,8 @@ typedef struct Tree
             char *id;
             enum TypeDeclKind kind;
             struct KgpcType *kgpc_type;
+            /* Non-zero when kgpc_type is only a cache pointer borrowed from a
+             * scope-owned symbol-table entry, so tree teardown must not release it. */
             int kgpc_type_is_borrowed;
             int suppress_codegen;
             int defined_in_unit;

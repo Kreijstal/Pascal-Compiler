@@ -1437,6 +1437,9 @@ void destroy_tree(Tree_t *tree)
                     tree->tree_data.type_decl_data.info.alias.is_enum &&
                     tree->tree_data.type_decl_data.info.alias.kgpc_type != NULL)
                 {
+                    /* Predeclared enum aliases share their KgpcType through the
+                     * symbol table. Their tree cache may still carry an owning-looking
+                     * pointer from parse time, so prefer the alias/scope lifetime. */
                     destroy_decl_kgpc_type = 0;
                 }
                 if (destroy_decl_kgpc_type)

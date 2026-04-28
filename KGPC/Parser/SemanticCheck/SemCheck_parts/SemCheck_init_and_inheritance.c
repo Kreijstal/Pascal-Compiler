@@ -314,6 +314,10 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                 if (alias_info->kgpc_type != NULL &&
                                     alias_info->kgpc_type == node->type)
                                 {
+                                    /* PushTypeOntoScope_Typed retained the type for the hash
+                                     * table. Drop only the temporary creator ref here, then
+                                     * keep alias/tree pointers as borrowed aliases of the
+                                     * scope-owned object. */
                                     destroy_kgpc_type(alias_info->kgpc_type);
                                     alias_info->kgpc_type = node->type;
                                     semcheck_set_predeclared_tree_kgpc_type(tree, node->type);
