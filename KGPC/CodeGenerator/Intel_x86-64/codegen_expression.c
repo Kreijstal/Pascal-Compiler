@@ -2678,9 +2678,11 @@ static int formal_decl_is_char_set(Tree_t *decl, SymTab_t *symtab)
     if (alias != NULL && alias->is_set)
     {
         if (alias->set_element_type == CHAR_TYPE ||
+            alias->set_element_type == BYTE_TYPE ||
             (alias->set_element_type_id != NULL &&
              (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-              pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+              pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+              pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
             return 1;
     }
 
@@ -3745,12 +3747,14 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
         {
             /* Char sets are always large (32 bytes) */
             if (alias->set_element_type == CHAR_TYPE ||
+                alias->set_element_type == BYTE_TYPE ||
                 (alias->set_element_type_id != NULL &&
                  (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                  pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+                  pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
                 return 1;
             /* Any set with cached storage_size > 4 needs memory-based ops */
-            if (alias->storage_size > 4)
+            if (alias->storage_size > 4 || kgpc_type_sizeof(expr->resolved_kgpc_type) > 4)
                 return 1;
         }
     }
@@ -3767,9 +3771,11 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                 if (alias != NULL && alias->is_set)
                 {
                     if (alias->set_element_type == CHAR_TYPE ||
+                        alias->set_element_type == BYTE_TYPE ||
                         (alias->set_element_type_id != NULL &&
                          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+                          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+                          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
                         return 1;
                     if (alias->storage_size > 4)
                         return 1;
@@ -4749,6 +4755,66 @@ static long long codegen_sizeof_type_tag(int type_tag)
     }
 }
 
+static long long codegen_default_set_storage_size_for_high(long long high)
+{
+    if (high < 32)
+        return 4;
+    if (high < 256)
+        return 32;
+    return (high + 7) / 8;
+}
+
+static long long codegen_set_storage_size_from_alias(CodeGenContext *ctx,
+    const struct TypeAlias *alias)
+{
+    if (alias == NULL || !alias->is_set)
+        return 4;
+
+    if (alias->storage_size > 0)
+        return alias->storage_size;
+
+    if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
+        (alias->set_element_type_id != NULL &&
+         (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
+        return 32;
+
+    if (alias->is_enum_set && alias->inline_enum_values != NULL)
+    {
+        int count = ListLength(alias->inline_enum_values);
+        if (count > 0)
+            return codegen_default_set_storage_size_for_high((long long)count - 1);
+    }
+
+    if (alias->range_known)
+        return codegen_default_set_storage_size_for_high(alias->range_end);
+
+    if (alias->set_element_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *elem_node = NULL;
+        if (FindSymbol(&elem_node, ctx->symtab, alias->set_element_type_id) != 0 &&
+            elem_node != NULL)
+        {
+            struct TypeAlias *elem_alias = codegen_get_type_alias_from_node(elem_node);
+            if (elem_alias != NULL)
+            {
+                if (elem_alias->is_enum && elem_alias->enum_literals != NULL)
+                {
+                    int count = ListLength(elem_alias->enum_literals);
+                    if (count > 0)
+                        return codegen_default_set_storage_size_for_high((long long)count - 1);
+                }
+                if (elem_alias->range_known)
+                    return codegen_default_set_storage_size_for_high(elem_alias->range_end);
+            }
+        }
+    }
+
+    return 4;
+}
+
 static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *type_id,
     struct RecordType *record_type, long long *size_out, int depth)
 {
@@ -4784,6 +4850,13 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
             *size_out = 16;
             return 0;
         }
+    }
+
+    if (type_tag == SET_TYPE && type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
+            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
     }
 
     if (type_tag != UNKNOWN_TYPE)
@@ -5041,6 +5114,12 @@ static int codegen_sizeof_alias(CodeGenContext *ctx, struct TypeAlias *alias,
         }
 
         *size_out = element_size * count;
+        return 0;
+    }
+
+    if (alias->is_set)
+    {
+        *size_out = codegen_set_storage_size_from_alias(ctx, alias);
         return 0;
     }
 
@@ -5349,6 +5428,30 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
     if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
     {
+        struct TypeAlias *pointer_alias = kgpc_type_get_type_alias(pointer_type);
+        if (pointer_alias != NULL && pointer_alias->is_pointer)
+        {
+            if (pointer_alias->pointer_type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+            {
+                HashNode_t *target_node = NULL;
+                if (FindSymbol(&target_node, ctx->symtab, pointer_alias->pointer_type_id) != 0 &&
+                    target_node != NULL &&
+                    codegen_sizeof_hashnode(ctx, target_node, size_out, 0) == 0 &&
+                    *size_out > 0)
+                {
+                    return 0;
+                }
+            }
+
+            if (pointer_alias->pointer_type != UNKNOWN_TYPE &&
+                codegen_sizeof_type(ctx, pointer_alias->pointer_type,
+                    pointer_alias->pointer_type_id, NULL, size_out, 0) == 0 &&
+                *size_out > 0)
+            {
+                return 0;
+            }
+        }
+
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
@@ -5387,8 +5490,12 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
             long long pointee_size = kgpc_type_sizeof(points_to);
             if (pointee_size > 0)
             {
-                *size_out = pointee_size;
-                return 0;
+                if (!(kgpc_type_is_set(points_to) && pointee_size <= 4 &&
+                      pointer_expr->pointer_subtype_id != NULL))
+                {
+                    *size_out = pointee_size;
+                    return 0;
+                }
             }
         }
     }

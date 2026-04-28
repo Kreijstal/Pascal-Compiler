@@ -2913,9 +2913,11 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
         return alias->storage_size;
 
     if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
         return 32;
 
     if (alias->is_enum_set && alias->inline_enum_values != NULL)
@@ -2924,6 +2926,9 @@ static long long kgpc_set_storage_size(const struct TypeAlias *alias)
         if (count > 0)
             return kgpc_default_set_storage_size_for_high((long long)count - 1);
     }
+
+    if (alias->range_known)
+        return kgpc_default_set_storage_size_for_high(alias->range_end);
 
     return 4;
 }

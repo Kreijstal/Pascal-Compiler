@@ -167,9 +167,11 @@ static long long fpc_set_storage_size_from_alias(SymTab_t *symtab, struct TypeAl
     long long result = 4;
 
     if (alias->set_element_type == CHAR_TYPE ||
+        alias->set_element_type == BYTE_TYPE ||
         (alias->set_element_type_id != NULL &&
          (pascal_identifier_equals(alias->set_element_type_id, "Char") ||
-          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar"))))
+          pascal_identifier_equals(alias->set_element_type_id, "AnsiChar") ||
+          pascal_identifier_equals(alias->set_element_type_id, "Byte"))))
     {
         result = 32;
     }

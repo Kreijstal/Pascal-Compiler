@@ -1,7 +1,7 @@
 program new_set_pointer_storage;
 
 type
-  TConstSet = set of 0..255;
+  TConstSet = set of byte;
   PConstSet = ^TConstSet;
   TByteArray32 = array[0..31] of byte;
 
@@ -10,7 +10,7 @@ var
   i: integer;
 begin
   for i := Low(arr) to High(arr) do
-    arr[i] := i + 1;
+    arr[i] := $ff;
 end;
 
 var
