@@ -70,6 +70,7 @@ typedef struct Tree
             char *id;
             enum TypeDeclKind kind;
             struct KgpcType *kgpc_type;
+            int kgpc_type_is_borrowed;
             int suppress_codegen;
             int defined_in_unit;
             int unit_is_public;

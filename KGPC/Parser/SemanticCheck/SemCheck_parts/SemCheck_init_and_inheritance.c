@@ -1,5 +1,14 @@
 #include "../SemCheck_internal.h"
 
+static void semcheck_set_predeclared_tree_kgpc_type(Tree_t *tree, KgpcType *kgpc_type)
+{
+    if (tree == NULL || tree->type != TREE_TYPE_DECL)
+        return;
+
+    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
+    tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 1;
+}
+
 SymTab_t *semcheck_init_symtab(void)
 {
     double t0 = 0.0;
@@ -271,11 +280,7 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                     if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
                         alias_info->kgpc_type != NULL)
                     {
-                        /* Transfer the freshly-created creator reference to the AST.
-                         * alias_info->kgpc_type is only a non-owning alias to the same
-                         * object; tree->...kgpc_type is what guarantees teardown if the
-                         * type never gets inserted into any scope. */
-                        tree->tree_data.type_decl_data.kgpc_type = alias_info->kgpc_type;
+                        semcheck_set_predeclared_tree_kgpc_type(tree, alias_info->kgpc_type);
                     }
                     if (alias_info->kgpc_type != NULL &&
                         alias_info->kgpc_type->type_alias == NULL)
@@ -307,7 +312,21 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                                     tree->tree_data.type_decl_data.unit_is_public);
                                 mark_hashnode_source_unit(node,
                                     tree->tree_data.type_decl_data.source_unit_index);
+                                if (alias_info->kgpc_type != NULL &&
+                                    alias_info->kgpc_type == node->type)
+                                {
+                                    destroy_kgpc_type(alias_info->kgpc_type);
+                                    alias_info->kgpc_type = node->type;
+                                    semcheck_set_predeclared_tree_kgpc_type(tree, node->type);
+                                }
                             }
+                        }
+                        else if (alias_info->kgpc_type != NULL &&
+                                 existing_type->type != alias_info->kgpc_type)
+                        {
+                            destroy_kgpc_type(alias_info->kgpc_type);
+                            alias_info->kgpc_type = existing_type->type;
+                            semcheck_set_predeclared_tree_kgpc_type(tree, existing_type->type);
                         }
                     }
 
@@ -658,8 +677,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
 
                             if (existing->type != NULL)
@@ -714,8 +732,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 kgpc_type_set_type_alias(kgpc_type, alias);
                                 if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                                 {
-                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                    kgpc_type_retain(kgpc_type);
+                                    semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                                 }
                                 if (existing->type != NULL)
                                     destroy_kgpc_type(existing->type);
@@ -754,8 +771,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             {
                                 if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                                 {
-                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                    kgpc_type_retain(kgpc_type);
+                                    semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                                 }
                                 if (existing->type != NULL)
                                     destroy_kgpc_type(existing->type);
@@ -929,8 +945,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 kgpc_type_set_type_alias(kgpc_type, alias);
                                 if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                                 {
-                                    tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                    kgpc_type_retain(kgpc_type);
+                                    semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                                 }
                                 if (existing->type != NULL)
                                     destroy_kgpc_type(existing->type);
@@ -1041,8 +1056,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                                 /* Store kgpc_type in tree for later reuse */
                                 if (tree->tree_data.type_decl_data.kgpc_type == NULL && existing->type != NULL)
                                 {
-                                    tree->tree_data.type_decl_data.kgpc_type = existing->type;
-                                    kgpc_type_retain(existing->type);
+                                    semcheck_set_predeclared_tree_kgpc_type(tree, existing->type);
                                 }
                                 mark_hashnode_unit_info(symtab, existing,
                                     tree->tree_data.type_decl_data.defined_in_unit,
@@ -1080,8 +1094,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Store in tree for later reuse by semcheck_type_decls */
                         if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                         {
-                            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                            kgpc_type_retain(kgpc_type);
+                            semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                         }
 
                         int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
@@ -1264,8 +1277,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             kgpc_type_set_type_alias(kgpc_type, alias);
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
@@ -1310,8 +1322,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             kgpc_type_set_type_alias(kgpc_type, alias);
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
@@ -1381,8 +1392,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
 
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = inline_kgpc;
-                                kgpc_type_retain(inline_kgpc);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, inline_kgpc);
                             }
 
                             int result = PushTypeOntoScope_Typed(symtab, (char *)record_name, inline_kgpc);
@@ -1457,8 +1467,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);  /* Tree holds reference */
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             
                             /* PushTypeOntoScope_Typed will retain kgpc_type when adding to symbol table */
@@ -1487,8 +1496,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
@@ -1524,8 +1532,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             }
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
@@ -1562,8 +1569,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         {
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
                             if (result > 0)
@@ -1626,8 +1632,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                             kgpc_type_set_type_alias(kgpc_type, alias);
                             if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                             {
-                                tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                                kgpc_type_retain(kgpc_type);
+                                semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                             }
 
                             int result = PushTypeOntoScope_Typed(symtab, (char *)type_id, kgpc_type);
@@ -1844,8 +1849,7 @@ int predeclare_types(SymTab_t *symtab, ListNode_t *type_decls)
                         /* Store in tree for later use by semcheck_type_decls */
                         if (tree->tree_data.type_decl_data.kgpc_type == NULL)
                         {
-                            tree->tree_data.type_decl_data.kgpc_type = kgpc_type;
-                            kgpc_type_retain(kgpc_type);  /* Tree owns a reference */
+                            semcheck_set_predeclared_tree_kgpc_type(tree, kgpc_type);
                         }
                         
                         /* Push onto symbol table */
@@ -1889,8 +1893,7 @@ predeclare_types_next:
                             canon_node->hash_type == HASHTYPE_TYPE &&
                             canon_node->type != NULL)
                         {
-                            tree->tree_data.type_decl_data.kgpc_type = canon_node->type;
-                            kgpc_type_retain(canon_node->type);
+                            semcheck_set_predeclared_tree_kgpc_type(tree, canon_node->type);
                         }
                     }
                 }

@@ -1427,10 +1427,14 @@ void destroy_tree(Tree_t *tree)
         case TREE_TYPE_DECL:
             free(tree->tree_data.type_decl_data.id);
             KgpcType *decl_kgpc_type = tree->tree_data.type_decl_data.kgpc_type;
+            int decl_kgpc_type_is_borrowed =
+                tree->tree_data.type_decl_data.kgpc_type_is_borrowed;
             if (decl_kgpc_type != NULL)
             {
-                destroy_kgpc_type(decl_kgpc_type);
+                if (!decl_kgpc_type_is_borrowed)
+                    destroy_kgpc_type(decl_kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
+                tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
             }
             if (tree->tree_data.type_decl_data.kind == TYPE_DECL_RECORD)
                 destroy_record_type(tree->tree_data.type_decl_data.info.record);
