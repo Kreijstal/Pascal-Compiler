@@ -6730,6 +6730,27 @@ int semcheck_addressof(int *type_return,
                          kgpc_type_is_record(rt->info.points_to))
                     rec_info = kgpc_type_get_record(rt->info.points_to);
             }
+            if (rec_info == NULL &&
+                record_expr != NULL &&
+                record_expr->type == EXPR_VAR_ID &&
+                record_expr->expr_data.id != NULL)
+            {
+                HashNode_t *type_node = NULL;
+                if (FindSymbol(&type_node, symtab, record_expr->expr_data.id) != 0 &&
+                    type_node != NULL && type_node->hash_type == HASHTYPE_TYPE)
+                {
+                    rec_info = get_record_type_from_node(type_node);
+                    if (rec_info == NULL && type_node->type != NULL)
+                    {
+                        if (kgpc_type_is_record(type_node->type))
+                            rec_info = kgpc_type_get_record(type_node->type);
+                        else if (kgpc_type_is_pointer(type_node->type) &&
+                                 type_node->type->info.points_to != NULL &&
+                                 kgpc_type_is_record(type_node->type->info.points_to))
+                            rec_info = kgpc_type_get_record(type_node->type->info.points_to);
+                    }
+                }
+            }
 
             if (rec_info != NULL)
             {
@@ -6745,6 +6766,12 @@ int semcheck_addressof(int *type_return,
                     struct Expression *saved_receiver =
                         inner->expr_data.record_access_data.record_expr;
                     inner->expr_data.record_access_data.record_expr = NULL;
+                    if (rec_info != NULL && rec_info->type_id != NULL &&
+                        from_cparser_is_method_static(rec_info->type_id, field_id))
+                    {
+                        destroy_expr(saved_receiver);
+                        saved_receiver = NULL;
+                    }
 
                     expr->expr_data.addr_data.expr = NULL;
                     destroy_expr(inner);

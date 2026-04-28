@@ -2226,6 +2226,8 @@ struct RecordField *find_record_field_by_name(const struct RecordType *record,
     return NULL;
 }
 
+static KgpcType *create_set_kgpc_type_from_type_info(const TypeInfo *info);
+
 int convert_type_spec(ast_t *type_spec, char **type_id_out,
                              struct RecordType **record_out, TypeInfo *type_info) {
     if (type_id_out != NULL)
@@ -2252,6 +2254,7 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
         type_info->is_enum = 0;
         type_info->enum_has_explicit_values = 0;
         type_info->enum_literals = NULL;
+        type_info->enum_values = NULL;
         type_info->is_file = 0;
         type_info->file_type = UNKNOWN_TYPE;
         type_info->file_type_id = NULL;
@@ -2778,6 +2781,13 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->element_type = INT_TYPE;
                         if (nested_id != NULL)
                             free(nested_id);
+                    } else if (nested_info.is_set && mapped == SET_TYPE) {
+                        type_info->element_type = SET_TYPE;
+                        if (type_info->element_kgpc_type == NULL)
+                            type_info->element_kgpc_type =
+                                create_set_kgpc_type_from_type_info(&nested_info);
+                        if (nested_id != NULL)
+                            free(nested_id);
                     } else {
                         type_info->element_type = mapped;
                         if (type_info->element_type_id == NULL)
@@ -2826,6 +2836,16 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                                 type_info->element_kgpc_type->info.array_info.element_type_id =
                                     strdup(nested_info.element_type_id);
                         }
+                    }
+                    destroy_type_info_contents(&nested_info);
+                } else if (element_node->typ == PASCAL_T_SET) {
+                    TypeInfo nested_info = {0};
+                    int mapped = convert_type_spec(element_node, NULL, NULL, &nested_info);
+                    if (mapped == SET_TYPE && nested_info.is_set) {
+                        type_info->element_type = SET_TYPE;
+                        if (type_info->element_kgpc_type == NULL)
+                            type_info->element_kgpc_type =
+                                create_set_kgpc_type_from_type_info(&nested_info);
                     }
                     destroy_type_info_contents(&nested_info);
                 }
@@ -2917,6 +2937,11 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
                         type_info->range_start = start_value;
                         type_info->range_end = end_value;
                     }
+                    type_info->is_range = 1;
+                    type_info->range_start = start_value;
+                    type_info->range_end = end_value;
+                    type_info->range_start_str = serialize_expr_to_string(lower);
+                    type_info->range_end_str = serialize_expr_to_string(upper);
                     type_info->set_element_type = INT_TYPE;
                 }
                 /* Handle anonymous enum as set element type: set of (val1, val2, ...) */
@@ -2962,19 +2987,32 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
             type_info->is_enum = 1;
             type_info->enum_is_scoped = from_cparser_scopedenums_enabled_at_line(spec_node->line);
             ListBuilder enum_builder;
+            ListBuilder enum_value_builder;
             list_builder_init(&enum_builder);
+            list_builder_init(&enum_value_builder);
             ast_t *value = spec_node->child;
+            int ordinal = 0;
             while (value != NULL) {
+                int literal_value = ordinal;
                 if (value->typ == PASCAL_T_IDENTIFIER)
                     list_builder_append(&enum_builder, dup_symbol(value), LIST_STRING);
                 else if (value->typ == PASCAL_T_ASSIGNMENT &&
                          value->child != NULL && value->child->typ == PASCAL_T_IDENTIFIER) {
+                    ast_t *rhs = value->child->next;
+                    if (rhs != NULL &&
+                        evaluate_const_int_expr(rhs, &literal_value, 0) == 0)
+                        ordinal = literal_value;
                     list_builder_append(&enum_builder, dup_symbol(value->child), LIST_STRING);
                     type_info->enum_has_explicit_values = 1;
                 }
+                char ordinal_buf[64];
+                snprintf(ordinal_buf, sizeof(ordinal_buf), "%d", literal_value);
+                list_builder_append(&enum_value_builder, strdup(ordinal_buf), LIST_STRING);
+                ordinal = literal_value + 1;
                 value = value->next;
             }
             type_info->enum_literals = list_builder_finish(&enum_builder);
+            type_info->enum_values = list_builder_finish(&enum_value_builder);
         }
         return ENUM_TYPE;
     }
@@ -3090,6 +3128,33 @@ int convert_type_spec(ast_t *type_spec, char **type_id_out,
     }
 
     return UNKNOWN_TYPE;
+}
+
+static KgpcType *create_set_kgpc_type_from_type_info(const TypeInfo *info)
+{
+    if (info == NULL || !info->is_set)
+        return create_primitive_type(SET_TYPE);
+
+    KgpcType *type = create_primitive_type(SET_TYPE);
+    if (type == NULL)
+        return NULL;
+
+    struct TypeAlias alias = {0};
+    alias.is_set = 1;
+    alias.base_type = SET_TYPE;
+    alias.set_element_type = info->set_element_type;
+    alias.set_element_type_id = info->set_element_type_id;
+    alias.set_element_type_ref = info->set_element_type_ref;
+    alias.is_range = info->is_range;
+    alias.range_known = info->range_known;
+    alias.range_start = info->range_start;
+    alias.range_end = info->range_end;
+    alias.range_start_str = info->range_start_str;
+    alias.range_end_str = info->range_end_str;
+    alias.is_enum_set = info->is_enum_set;
+    alias.inline_enum_values = info->inline_enum_values;
+    kgpc_type_set_type_alias(type, &alias);
+    return type;
 }
 
 /* Forward declare functions we need */
@@ -3536,9 +3601,13 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
 
     /* Handle set types */
     if (spec_node->typ == PASCAL_T_SET) {
-        /* For sets, we currently just return a primitive SET_TYPE */
-        /* In the future, we could extend KgpcType to include set element type info */
-        return create_primitive_type(SET_TYPE);
+        TypeInfo info = (TypeInfo){0};
+        int mapped = convert_type_spec(spec_node, NULL, NULL, &info);
+        KgpcType *type = (mapped == SET_TYPE && info.is_set)
+            ? create_set_kgpc_type_from_type_info(&info)
+            : create_primitive_type(SET_TYPE);
+        destroy_type_info_contents(&info);
+        return type;
     }
 
     /* Handle enum types */
@@ -3566,4 +3635,3 @@ KgpcType *convert_type_spec_to_kgpctype(ast_t *type_spec, struct SymTab *symtab)
 
     return NULL;
 }
-

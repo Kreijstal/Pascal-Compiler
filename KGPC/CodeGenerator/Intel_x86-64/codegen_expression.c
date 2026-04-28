@@ -6820,6 +6820,16 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
         ctx != NULL ? ctx->symtab : NULL);
     int is_class_field = (record_expr_record != NULL &&
                           record_type_is_class(record_expr_record));
+    KgpcType *record_expr_value_type = expr_get_kgpc_type(record_expr);
+    int record_expr_value_is_class =
+        is_class_field ||
+        (record_expr_value_type != NULL &&
+         ((kgpc_type_is_record(record_expr_value_type) &&
+           record_type_is_class(kgpc_type_get_record(record_expr_value_type))) ||
+          (kgpc_type_is_pointer(record_expr_value_type) &&
+           record_expr_value_type->info.points_to != NULL &&
+           kgpc_type_is_record(record_expr_value_type->info.points_to) &&
+           record_type_is_class(kgpc_type_get_record(record_expr_value_type->info.points_to)))));
 
     int is_type_ref = 0;
     const char *type_label = NULL;
@@ -6926,7 +6936,7 @@ ListNode_t *codegen_record_field_address(struct Expression *expr, ListNode_t *in
      * instance pointer, so load the pointer value before applying the field offset.
      * Non-addressable expressions (for example function calls) already materialise
      * the instance pointer directly. */
-    int needs_class_deref = (is_class_field && !is_type_ref &&
+    int needs_class_deref = (record_expr_value_is_class && !is_type_ref &&
                              codegen_expr_is_addressable(record_expr));
     if (needs_class_deref)
     {

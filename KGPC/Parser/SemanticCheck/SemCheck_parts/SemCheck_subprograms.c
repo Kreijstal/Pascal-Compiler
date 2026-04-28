@@ -63,9 +63,7 @@ int semcheck_subprogram(SymTab_t *symtab, Tree_t *subprogram, int max_scope_lev)
     subprogram->tree_data.subprogram_data.is_nested =
         (subprogram->tree_data.subprogram_data.owner_class == NULL &&
          subprogram->tree_data.subprogram_data.nesting_level > 1);
-    int default_requires = (subprogram->tree_data.subprogram_data.nesting_level > 1 &&
-        !subprogram->tree_data.subprogram_data.defined_in_unit);
-    subprogram->tree_data.subprogram_data.requires_static_link = default_requires ? 1 : 0;
+    subprogram->tree_data.subprogram_data.requires_static_link = 0;
 
     /* Nested local functions inside methods still need the enclosing method's
      * owner metadata so semcheck/codegen can resolve implicit class fields via

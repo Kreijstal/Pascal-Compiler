@@ -7441,6 +7441,23 @@ skip_type_receiver_rewrite:
                     }
                 }
 
+                {
+                    struct RecordType *constructor_owner =
+                        (actual_method_owner != NULL) ? actual_method_owner : record_info;
+                    if (constructor_owner != NULL &&
+                        semcheck_stmt_method_is_declared_constructor(symtab,
+                            constructor_owner, method_name))
+                    {
+                        stmt->stmt_data.procedure_call_data.is_constructor_call = 1;
+                        if (receiver_is_type_ident)
+                        {
+                            free(stmt->stmt_data.procedure_call_data.constructor_class_name);
+                            stmt->stmt_data.procedure_call_data.constructor_class_name =
+                                strdup(record_info->type_id);
+                        }
+                    }
+                }
+
                 if (is_nonstatic_class_method && receiver_is_type_ident)
                 {
                     stmt->stmt_data.procedure_call_data.is_class_method_call = 1;

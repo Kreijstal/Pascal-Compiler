@@ -133,6 +133,10 @@ static ListNode_t *convert_class_field_decl(ast_t *field_decl_node) {
             field_desc->is_array = field_info.is_array;
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
+            field_desc->array_dim_start_str =
+                field_info.array_dim_start_str ? strdup(field_info.array_dim_start_str) : NULL;
+            field_desc->array_dim_end_str =
+                field_info.array_dim_end_str ? strdup(field_info.array_dim_end_str) : NULL;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
@@ -1558,6 +1562,10 @@ static ListNode_t *convert_field_decl(ast_t *field_decl_node) {
             field_desc->is_array = field_info.is_array;
             field_desc->array_start = field_info.start;
             field_desc->array_end = field_info.end;
+            field_desc->array_dim_start_str =
+                field_info.array_dim_start_str ? strdup(field_info.array_dim_start_str) : NULL;
+            field_desc->array_dim_end_str =
+                field_info.array_dim_end_str ? strdup(field_info.array_dim_end_str) : NULL;
             field_desc->array_element_type = field_info.element_type;
             field_desc->array_element_type_ref =
                 type_ref_from_element_info(&field_info, field_info.element_type_id);
@@ -2500,4 +2508,3 @@ int is_node_to_skip_as_initializer(ast_t *node) {
         return 0;
     return (node->typ == PASCAL_T_IDENTIFIER || node->typ == PASCAL_T_ABSOLUTE_CLAUSE);
 }
-

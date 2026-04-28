@@ -160,6 +160,10 @@ static void print_record_field(struct RecordField *field, FILE *f, int num_inden
         print_indent(f, num_indent + 1);
         fprintf(f, "[ARRAY_FIELD start=%d end=%d open=%d]", field->array_start,
             field->array_end, field->array_is_open);
+        if (field->array_dim_start_str != NULL || field->array_dim_end_str != NULL)
+            fprintf(f, " bounds=%s..%s",
+                field->array_dim_start_str != NULL ? field->array_dim_start_str : "",
+                field->array_dim_end_str != NULL ? field->array_dim_end_str : "");
         if (field->array_element_type_id != NULL)
             fprintf(f, " element_type=%s", field->array_element_type_id);
         else
@@ -421,6 +425,10 @@ static void destroy_record_field(struct RecordField *field)
         type_ref_free(field->type_ref);
     if (field->array_element_type_id != NULL)
         free(field->array_element_type_id);
+    if (field->array_dim_start_str != NULL)
+        free(field->array_dim_start_str);
+    if (field->array_dim_end_str != NULL)
+        free(field->array_dim_end_str);
     if (field->array_element_type_ref != NULL)
         type_ref_free(field->array_element_type_ref);
     if (field->pointer_type_id != NULL)
@@ -2175,6 +2183,10 @@ static struct RecordField *clone_record_field(const struct RecordField *field)
     clone->is_array = field->is_array;
     clone->array_start = field->array_start;
     clone->array_end = field->array_end;
+    clone->array_dim_start_str = field->array_dim_start_str != NULL ?
+        strdup(field->array_dim_start_str) : NULL;
+    clone->array_dim_end_str = field->array_dim_end_str != NULL ?
+        strdup(field->array_dim_end_str) : NULL;
     clone->array_element_type = field->array_element_type;
     clone->array_element_type_id = field->array_element_type_id != NULL ?
         strdup(field->array_element_type_id) : NULL;
@@ -2564,6 +2576,7 @@ Tree_t *mk_typealiasdecl(int line_num, char *id, int is_array, int actual_type, 
     alias->enum_is_scoped = 0;
     alias->enum_has_explicit_values = 0;
     alias->enum_literals = NULL;
+    alias->enum_values = NULL;
     alias->is_file = 0;
     alias->file_type = UNKNOWN_TYPE;
     alias->kgpc_type = NULL;  /* Initialize shared KgpcType for enums/sets */
@@ -3607,6 +3620,11 @@ static void clear_type_alias_fields(struct TypeAlias *alias)
     {
         destroy_list(alias->enum_literals);
         alias->enum_literals = NULL;
+    }
+    if (alias->enum_values != NULL)
+    {
+        destroy_list(alias->enum_values);
+        alias->enum_values = NULL;
     }
     if (alias->file_type_id != NULL)
     {

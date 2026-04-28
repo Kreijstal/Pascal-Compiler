@@ -688,6 +688,7 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
                 alias->is_enum = 1;
                 alias->enum_is_scoped = type_info->enum_is_scoped;
                 alias->enum_literals = type_info->enum_literals;
+                alias->enum_values = type_info->enum_values;
             }
             if (type_info->is_file) {
                 alias->is_file = 1;
@@ -700,6 +701,7 @@ static struct TypeAlias *build_inline_return_alias(TypeInfo *type_info, int retu
             type_info->pointer_type_id = NULL;
             type_info->set_element_type_id = NULL;
             type_info->enum_literals = NULL;
+            type_info->enum_values = NULL;
             type_info->file_type_id = NULL;
         }
     }

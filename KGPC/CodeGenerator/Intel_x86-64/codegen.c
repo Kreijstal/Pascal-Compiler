@@ -476,6 +476,69 @@ const char *codegen_resolve_function_call_target(CodeGenContext *ctx,
     return call_target;
 }
 
+static int codegen_call_type_method_param_count(KgpcType *call_type)
+{
+    if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
+        return -1;
+
+    ListNode_t *params = call_type->info.proc_info.params;
+    int count = ListLength(params);
+    if (count <= 0)
+        return count;
+
+    Tree_t *first_param = (Tree_t *)params->cur;
+    if (first_param != NULL && first_param->type == TREE_VAR_DECL &&
+        first_param->tree_data.var_decl_data.ids != NULL)
+    {
+        const char *first_name =
+            (const char *)first_param->tree_data.var_decl_data.ids->cur;
+        if (first_name != NULL && pascal_identifier_equals(first_name, "Self"))
+            count--;
+    }
+
+    return count;
+}
+
+int codegen_resolve_virtual_vmt_index(CodeGenContext *ctx,
+    const char *owner_class_name, const char *method_name,
+    KgpcType *call_type, int fallback_vmt_index)
+{
+    if (ctx == NULL || ctx->symtab == NULL ||
+        owner_class_name == NULL || method_name == NULL)
+        return fallback_vmt_index;
+
+    const char *lookup_method_name = method_name;
+    const char *qualified_sep = strstr(method_name, "__");
+    if (qualified_sep != NULL && qualified_sep[2] != '\0')
+        lookup_method_name = qualified_sep + 2;
+
+    struct RecordType *record = semcheck_lookup_record_type(ctx->symtab,
+        owner_class_name);
+    if (record == NULL || record->methods == NULL)
+        return fallback_vmt_index;
+
+    int wanted_param_count = codegen_call_type_method_param_count(call_type);
+    struct MethodInfo *name_match = NULL;
+    for (ListNode_t *node = record->methods; node != NULL; node = node->next)
+    {
+        struct MethodInfo *method = (struct MethodInfo *)node->cur;
+        if (method == NULL || method->name == NULL ||
+            !(method->is_virtual || method->is_override) ||
+            !pascal_identifier_equals(method->name, lookup_method_name))
+            continue;
+
+        if (name_match == NULL)
+            name_match = method;
+        if (wanted_param_count >= 0 && method->param_count >= 0 &&
+            wanted_param_count != method->param_count)
+            continue;
+
+        return method->vmt_index;
+    }
+
+    return name_match != NULL ? name_match->vmt_index : fallback_vmt_index;
+}
+
 KgpcType *codegen_resolve_function_call_type(CodeGenContext *ctx,
     const struct Expression *expr, HashNode_t **resolved_node_out)
 {
@@ -5171,6 +5234,75 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
     /* Slot 11: vMsgStrPtr */
     fprintf(ctx->output_file, "\t.quad\t0\n");
 
+    struct RecordType *parent_record_for_vmt = NULL;
+    int parent_max_vmt_index = 11;
+    if (record_info->parent_class_name != NULL) {
+        parent_record_for_vmt = codegen_lookup_record_type_by_name(
+            symtab, record_info->parent_class_name, 0);
+        for (struct RecordType *cur_parent = parent_record_for_vmt;
+             cur_parent != NULL; ) {
+            for (ListNode_t *method_node = cur_parent->methods;
+                 method_node != NULL; method_node = method_node->next) {
+                struct MethodInfo *parent_method = (struct MethodInfo *)method_node->cur;
+                if (parent_method != NULL &&
+                    parent_method->vmt_index > parent_max_vmt_index)
+                    parent_max_vmt_index = parent_method->vmt_index;
+            }
+
+            if (cur_parent->parent_class_name == NULL)
+                break;
+            cur_parent = codegen_lookup_record_type_by_name(
+                symtab, cur_parent->parent_class_name, 0);
+        }
+    }
+
+    if (parent_record_for_vmt != NULL && record_info->methods != NULL) {
+        for (ListNode_t *method_node = record_info->methods;
+             method_node != NULL; method_node = method_node->next) {
+            struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
+            if (method == NULL || method->name == NULL)
+                continue;
+
+            struct MethodInfo *parent_match = NULL;
+            for (struct RecordType *cur_parent = parent_record_for_vmt;
+                 cur_parent != NULL && parent_match == NULL; ) {
+                for (ListNode_t *parent_node = cur_parent->methods;
+                     parent_node != NULL; parent_node = parent_node->next) {
+                    struct MethodInfo *candidate = (struct MethodInfo *)parent_node->cur;
+                    if (candidate == NULL || candidate->name == NULL ||
+                        strcasecmp(candidate->name, method->name) != 0)
+                        continue;
+                    int signature_matches = 0;
+                    if (method->param_sig != NULL && candidate->param_sig != NULL)
+                        signature_matches =
+                            (strcmp(method->param_sig, candidate->param_sig) == 0);
+                    else if (method->param_count >= 0 && candidate->param_count >= 0)
+                        signature_matches =
+                            (method->param_count == candidate->param_count);
+                    else
+                        signature_matches = 1;
+                    if (signature_matches) {
+                        parent_match = candidate;
+                        break;
+                    }
+                }
+
+                if (parent_match != NULL || cur_parent->parent_class_name == NULL)
+                    break;
+                cur_parent = codegen_lookup_record_type_by_name(
+                    symtab, cur_parent->parent_class_name, 0);
+            }
+
+            if (parent_match != NULL) {
+                method->vmt_index = parent_match->vmt_index;
+            } else if (method->vmt_index <= parent_max_vmt_index) {
+                method->vmt_index = ++parent_max_vmt_index;
+            } else if (method->vmt_index > parent_max_vmt_index) {
+                parent_max_vmt_index = method->vmt_index;
+            }
+        }
+    }
+
     /* Generic specializations can carry a cloned VMT from semcheck while the
      * actual specialized methods are only visible here by their emitted
      * symbols. Refresh matching virtual slots by method name before emitting
@@ -5239,45 +5371,77 @@ static void codegen_emit_class_vmt(CodeGenContext *ctx, SymTab_t *symtab,
         }
     }
 
-    /* Slots 12+: virtual methods (vmt_index * 8 gives correct offset) */
-    if (record_info->methods != NULL) {
-        ListNode_t *method_node = record_info->methods;
-        while (method_node != NULL) {
+    /* Slots 12+: virtual methods.  Emit by vmt_index, not list order: imported
+     * parents can contribute sparse inherited slots while subclasses add new
+     * virtuals after the highest inherited index. */
+    int max_vmt_index = 11;
+    for (struct RecordType *cur_record = record_info; cur_record != NULL; ) {
+        for (ListNode_t *method_node = cur_record->methods;
+             method_node != NULL; method_node = method_node->next) {
             struct MethodInfo *method = (struct MethodInfo *)method_node->cur;
-            if (method != NULL && method->mangled_name != NULL) {
-                const char *full_mangled = method->resolved_mangled_id;
-                const char *fallback_mangled = method->mangled_name;
-                const char *slot_label = NULL;
-                if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
-                    codegen_set_contains(&g_available_subprograms_set,full_mangled))
-                    slot_label = full_mangled;
-                if (slot_label == NULL && fallback_mangled != NULL &&
-                    g_codegen_available_subprograms != NULL &&
-                    codegen_set_contains(&g_available_subprograms_set,fallback_mangled))
-                    slot_label = fallback_mangled;
-                if (slot_label != NULL) {
-                    fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
-                } else if (full_mangled != NULL) {
-                    /* Not in available subprograms — check symtab for a real
-                     * implementation (has statement_list).  This handles
-                     * cross-unit methods while keeping abstract methods as
-                     * error handlers. */
-                    HashNode_t *sym = NULL;
-                    int has_impl = 0;
-                    if (FindSymbol(&sym, symtab, full_mangled) != 0 && sym != NULL &&
-                        sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
-                        sym->type->info.proc_info.definition != NULL &&
-                        sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
-                        has_impl = 1;
-                    if (has_impl)
-                        fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
-                    else
-                        fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
-                } else {
-                    fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+            if (method != NULL && method->vmt_index > max_vmt_index)
+                max_vmt_index = method->vmt_index;
+        }
+
+        if (cur_record->parent_class_name == NULL)
+            break;
+        cur_record = codegen_lookup_record_type_by_name(
+            symtab, cur_record->parent_class_name, 0);
+    }
+
+    for (int slot = 12; slot <= max_vmt_index; slot++) {
+        struct MethodInfo *method = NULL;
+        for (struct RecordType *cur_record = record_info;
+             cur_record != NULL && method == NULL; ) {
+            for (ListNode_t *method_node = cur_record->methods;
+                 method_node != NULL; method_node = method_node->next) {
+                struct MethodInfo *candidate = (struct MethodInfo *)method_node->cur;
+                if (candidate != NULL && candidate->vmt_index == slot) {
+                    method = candidate;
+                    break;
                 }
             }
-            method_node = method_node->next;
+
+            if (method != NULL || cur_record->parent_class_name == NULL)
+                break;
+            cur_record = codegen_lookup_record_type_by_name(
+                symtab, cur_record->parent_class_name, 0);
+        }
+
+        if (method == NULL || method->mangled_name == NULL) {
+            fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+            continue;
+        }
+
+        const char *full_mangled = method->resolved_mangled_id;
+        const char *fallback_mangled = method->mangled_name;
+        const char *slot_label = NULL;
+        if (full_mangled != NULL && g_codegen_available_subprograms != NULL &&
+            codegen_set_contains(&g_available_subprograms_set, full_mangled))
+            slot_label = full_mangled;
+        if (slot_label == NULL && fallback_mangled != NULL &&
+            g_codegen_available_subprograms != NULL &&
+            codegen_set_contains(&g_available_subprograms_set, fallback_mangled))
+            slot_label = fallback_mangled;
+        if (slot_label != NULL) {
+            fprintf(ctx->output_file, "\t.quad\t%s\n", slot_label);
+        } else if (full_mangled != NULL) {
+            /* Not in available subprograms — check symtab for a real
+             * implementation (has statement_list).  This handles cross-unit
+             * methods while keeping abstract methods as error handlers. */
+            HashNode_t *sym = NULL;
+            int has_impl = 0;
+            if (FindSymbol(&sym, symtab, full_mangled) != 0 && sym != NULL &&
+                sym->type != NULL && sym->type->kind == TYPE_KIND_PROCEDURE &&
+                sym->type->info.proc_info.definition != NULL &&
+                sym->type->info.proc_info.definition->tree_data.subprogram_data.statement_list != NULL)
+                has_impl = 1;
+            if (has_impl)
+                fprintf(ctx->output_file, "\t.quad\t%s\n", full_mangled);
+            else
+                fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
+        } else {
+            fprintf(ctx->output_file, "\t.quad\t__kgpc_abstract_method_error\n");
         }
     }
 
@@ -8038,12 +8202,12 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         codegen_add_class_vars_for_method(ctx->current_subprogram_owner_class,
             ctx->current_subprogram_method_name, symtab, ctx);
 
-    /* Process arguments first to allocate their stack space */
-    /* Nested procedures always receive a static link so they can forward it to callees,
-     * even if they don't themselves capture any outer scope state. Class methods still
-     * use the implicit `self` parameter instead. Top-level procedures do not receive
-     * a static link. */
-    int will_need_static_link = (!is_class_method && is_nested_function);
+    /* Process arguments first to allocate their stack space. Nested procedures
+     * receive a static link only when they access an outer frame themselves or
+     * must forward an outer frame to a nested child. */
+    int will_need_static_link = (!is_class_method && is_nested_function &&
+        (proc_tree->tree_data.subprogram_data.requires_static_link ||
+         proc_tree->tree_data.subprogram_data.has_nested_requiring_link));
     
     /* If there are arguments and we'll need a static link, shift argument registers by 1 */
     int arg_start_index = (will_need_static_link && num_args > 0) ? 1 : 0;
@@ -8168,7 +8332,8 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
         /* Constructors must return Self. Prefer a materialized receiver label
          * in the rebuilt scope, then the first explicit argument label, and
          * finally the hidden receiver slot at -8(%rbp). */
-        StackNode_t *self_var = find_label_with_depth("self", 0);
+        int self_depth = 0;
+        StackNode_t *self_var = find_label_with_depth("self", &self_depth);
         if (self_var == NULL)
         {
             ListNode_t *first_arg = proc->args_var;
@@ -8181,7 +8346,7 @@ void codegen_procedure(Tree_t *proc_tree, CodeGenContext *ctx, SymTab_t *symtab)
                     if (param_var->ids != NULL && param_var->ids->cur != NULL)
                     {
                         char *param_id = (char *)param_var->ids->cur;
-                        self_var = find_label_with_depth(param_id, 0);
+                        self_var = find_label_with_depth(param_id, &self_depth);
                     }
                 }
             }
@@ -8748,8 +8913,9 @@ void codegen_function(Tree_t *func_tree, CodeGenContext *ctx, SymTab_t *symtab)
     if (ctx->current_return_type == NULL && func->return_type == SHORTSTRING_TYPE)
         ctx->current_return_type = codegen_canonical_shortstring_type();
 
-    /* Only nested functions receive static links (excluding class methods). */
-    int will_need_static_link = (!is_class_method && is_nested_function);
+    int will_need_static_link = (!is_class_method && is_nested_function &&
+        (func_tree->tree_data.subprogram_data.requires_static_link ||
+         func_tree->tree_data.subprogram_data.has_nested_requiring_link));
     
     /* Calculate argument start index:
      * - If function returns record: use index 1 (record pointer in first arg)

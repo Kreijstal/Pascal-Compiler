@@ -3909,6 +3909,7 @@ static struct TypeAlias* copy_type_alias(const struct TypeAlias *src)
     /* Deep copy lists */
     dst->array_dimensions = copy_string_list(src->array_dimensions);
     dst->enum_literals = copy_string_list(src->enum_literals);
+    dst->enum_values = copy_string_list(src->enum_values);
     
     /* Copy inline_record_type - reference only for now (owned by AST) */
     dst->inline_record_type = src->inline_record_type;
@@ -3954,6 +3955,8 @@ static void free_copied_type_alias(struct TypeAlias *alias)
         destroy_list(alias->array_dimensions);
     if (alias->enum_literals != NULL)
         destroy_list(alias->enum_literals);
+    if (alias->enum_values != NULL)
+        destroy_list(alias->enum_values);
     
     /* Note: We don't free inline_record_type as it's owned by AST */
     

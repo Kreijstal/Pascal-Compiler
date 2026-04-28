@@ -2325,6 +2325,14 @@ static struct Expression *codegen_build_temp_call_expr_from_stmt(
             call_expr->expr_data.function_call_data.constructor_receiver_expr = receiver;
         }
     }
+    else if (stmt->stmt_data.procedure_call_data.is_constructor_call &&
+             stmt->stmt_data.procedure_call_data.expr_args != NULL &&
+             stmt->stmt_data.procedure_call_data.expr_args->cur != NULL)
+    {
+        call_expr->expr_data.function_call_data.constructor_receiver_expr =
+            clone_expression((struct Expression *)
+                stmt->stmt_data.procedure_call_data.expr_args->cur);
+    }
     return call_expr;
 }
 
@@ -2369,7 +2377,8 @@ static ListNode_t *codegen_store_constructor_result_into_current_self(
         ctx == NULL || result_reg == NULL)
         return inst_list;
 
-    StackNode_t *self_var = find_label_with_depth("self", NULL);
+    int self_depth = 0;
+    StackNode_t *self_var = find_label_with_depth("self", &self_depth);
     char buffer[CODEGEN_MAX_INST_BUF];
     if (self_var != NULL)
     {
@@ -3005,12 +3014,60 @@ ListNode_t *codegen_proc_call(struct Statement *stmt, ListNode_t *inst_list, Cod
         {
             /* Virtual method call through VMT for procedure (void return type).
              * Self is the first argument register after the optional static link slot. */
-            int vmt_index = stmt->stmt_data.procedure_call_data.vmt_index;
+            const char *virtual_owner =
+                stmt->stmt_data.procedure_call_data.self_class_name;
+            if (virtual_owner == NULL)
+                virtual_owner = stmt->stmt_data.procedure_call_data.cached_owner_class;
+            const char *virtual_method =
+                stmt->stmt_data.procedure_call_data.cached_method_name;
+            if (virtual_method == NULL)
+                virtual_method =
+                    stmt->stmt_data.procedure_call_data.placeholder_method_name;
+            if (virtual_method == NULL)
+                virtual_method = stmt->stmt_data.procedure_call_data.id;
+            int vmt_index = codegen_resolve_virtual_vmt_index(ctx,
+                virtual_owner, virtual_method,
+                stmt->stmt_data.procedure_call_data.call_kgpc_type,
+                stmt->stmt_data.procedure_call_data.vmt_index);
             int self_arg_index = should_pass_static_link ? 1 : 0;
             const char *self_reg = current_arg_reg64(self_arg_index);
             int self_is_vmt =
                 (!stmt->stmt_data.procedure_call_data.is_constructor_call) &&
                 codegen_stmt_first_arg_is_class_vmt_value(args_expr, ctx);
+            if (stmt->stmt_data.procedure_call_data.is_constructor_call &&
+                !self_is_vmt)
+            {
+                const char *ctor_owner = virtual_owner;
+                char owner_from_call[256];
+                if (ctor_owner == NULL)
+                {
+                    const char *call_id =
+                        stmt->stmt_data.procedure_call_data.mangled_id != NULL ?
+                        stmt->stmt_data.procedure_call_data.mangled_id :
+                        stmt->stmt_data.procedure_call_data.id;
+                    if (call_id == NULL)
+                        call_id = proc_name;
+                    const char *sep = call_id != NULL ? strstr(call_id, "__") : NULL;
+                    if (sep != NULL && sep > call_id)
+                    {
+                        size_t n = (size_t)(sep - call_id);
+                        if (n >= sizeof(owner_from_call))
+                            n = sizeof(owner_from_call) - 1;
+                        memcpy(owner_from_call, call_id, n);
+                        owner_from_call[n] = '\0';
+                        ctor_owner = owner_from_call;
+                    }
+                }
+                if (ctor_owner != NULL)
+                {
+                    snprintf(buffer, sizeof(buffer), "\tleaq\t%s_VMT(%%rip), %%r11\n",
+                        ctor_owner);
+                    inst_list = add_inst(inst_list, buffer);
+                    snprintf(buffer, sizeof(buffer), "\tmovq\t%%r11, (%s)\n",
+                        self_reg);
+                    inst_list = add_inst(inst_list, buffer);
+                }
+            }
             snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%r11\n", self_reg);
             inst_list = add_inst(inst_list, buffer);
             if (!self_is_vmt)

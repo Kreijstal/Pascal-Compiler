@@ -1574,6 +1574,39 @@ ListNode_t *semcheck_clone_current_subprogram_actual_args(int include_self)
     return result;
 }
 
+static int semcheck_subprogram_declares_name(ListNode_t *decls, const char *name)
+{
+    if (decls == NULL || name == NULL)
+        return 0;
+
+    for (ListNode_t *cur = decls; cur != NULL; cur = cur->next)
+    {
+        if (cur->type != LIST_TREE || cur->cur == NULL)
+            continue;
+
+        Tree_t *decl = (Tree_t *)cur->cur;
+        ListNode_t *ids = NULL;
+        if (decl->type == TREE_VAR_DECL)
+            ids = decl->tree_data.var_decl_data.ids;
+        else if (decl->type == TREE_ARR_DECL)
+            ids = decl->tree_data.arr_decl_data.ids;
+        else if (decl->type == TREE_CONST_DECL)
+        {
+            if (pascal_identifier_equals(name, decl->tree_data.const_decl_data.id))
+                return 1;
+            continue;
+        }
+
+        for (ListNode_t *id = ids; id != NULL; id = id->next)
+        {
+            if (id->cur != NULL && pascal_identifier_equals(name, (const char *)id->cur))
+                return 1;
+        }
+    }
+
+    return 0;
+}
+
 void semcheck_mark_static_link_needed(HashNode_t *node)
 {
     if (g_semcheck_current_subprogram == NULL || node == NULL)
@@ -1588,6 +1621,17 @@ void semcheck_mark_static_link_needed(HashNode_t *node)
      * callers would fail trying to pass a static link. */
     int nesting_level = g_semcheck_current_subprogram->tree_data.subprogram_data.nesting_level;
     if (nesting_level <= 1)
+        return;
+
+    if (semcheck_subprogram_declares_name(
+            g_semcheck_current_subprogram->tree_data.subprogram_data.args_var,
+            node->id) ||
+        semcheck_subprogram_declares_name(
+            g_semcheck_current_subprogram->tree_data.subprogram_data.declarations,
+            node->id) ||
+        semcheck_subprogram_declares_name(
+            g_semcheck_current_subprogram->tree_data.subprogram_data.const_declarations,
+            node->id))
         return;
 
     switch (node->hash_type)

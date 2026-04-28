@@ -65,6 +65,7 @@ struct TypeAlias
     int enum_is_scoped;        /* 1 if declared under {$SCOPEDENUMS ON} */
     int enum_has_explicit_values; /* 1 if any literal had an explicit assigned value */
     ListNode_t *enum_literals;
+    ListNode_t *enum_values;   /* Stringified ordinal for each enum literal */
     int is_file;
     int file_type;
     char *file_type_id;
@@ -103,6 +104,8 @@ struct RecordField
     int is_array;
     int array_start;
     int array_end;
+    char *array_dim_start_str;
+    char *array_dim_end_str;
     int array_element_type;
     char *array_element_type_id;
     struct TypeRef *array_element_type_ref;

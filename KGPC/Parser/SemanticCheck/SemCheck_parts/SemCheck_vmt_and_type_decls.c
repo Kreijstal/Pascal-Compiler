@@ -1,6 +1,24 @@
 #include "../SemCheck_internal.h"
 
 static char *semcheck_param_sig_from_params(ListNode_t *params, int skip_first_param);
+static int semcheck_vmt_method_is_tobject_slot(const char *name)
+{
+    return name != NULL &&
+        (strcasecmp(name, "Destroy") == 0 ||
+         strcasecmp(name, "NewInstance") == 0 ||
+         strcasecmp(name, "FreeInstance") == 0 ||
+         strcasecmp(name, "SafeCallException") == 0 ||
+         strcasecmp(name, "DefaultHandler") == 0 ||
+         strcasecmp(name, "AfterConstruction") == 0 ||
+         strcasecmp(name, "BeforeDestruction") == 0 ||
+         strcasecmp(name, "DefaultHandlerStr") == 0 ||
+         strcasecmp(name, "Dispatch") == 0 ||
+         strcasecmp(name, "DispatchStr") == 0 ||
+         strcasecmp(name, "Equals") == 0 ||
+         strcasecmp(name, "GetHashCode") == 0 ||
+         strcasecmp(name, "ToString") == 0);
+}
+
 static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info, 
                             const char *class_name, int line_num) {
     if (record_info == NULL || class_name == NULL)
@@ -21,6 +39,7 @@ static int build_class_vmt(SymTab_t *symtab, struct RecordType *record_info,
     /* Start with parent's VMT if this class has a parent */
     ListNode_t *vmt = NULL;
     int vmt_size = 0;
+    int max_vmt_index = (record_info->parent_class_name != NULL) ? 24 : 11;
 
 if (record_info->parent_class_name != NULL) {
         /* Look up parent class */
@@ -55,9 +74,15 @@ if (record_info->parent_class_name != NULL) {
                             cloned->name = parent_method->name ? strdup(parent_method->name) : NULL;
                             cloned->mangled_name = parent_method->mangled_name ? strdup(parent_method->mangled_name) : NULL;
                             cloned->is_virtual = parent_method->is_virtual;
-                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
-                            cloned->vmt_index = parent_method->vmt_index;
-                            cloned->param_count = parent_method->param_count;
+	                            cloned->is_override = 0;  /* Parent's methods aren't overrides in child */
+	                            cloned->vmt_index = parent_method->vmt_index;
+	                            if (parent_record->parent_class_name != NULL &&
+	                                cloned->vmt_index < 25 &&
+	                                !semcheck_vmt_method_is_tobject_slot(cloned->name))
+	                                cloned->vmt_index += 13;
+	                            if (cloned->vmt_index > max_vmt_index)
+	                                max_vmt_index = cloned->vmt_index;
+	                            cloned->param_count = parent_method->param_count;
                             cloned->param_sig = parent_method->param_sig ? strdup(parent_method->param_sig) : NULL;
                             cloned->resolved_mangled_id = parent_method->resolved_mangled_id ? strdup(parent_method->resolved_mangled_id) : NULL;
 
@@ -235,7 +260,7 @@ if (record_info->parent_class_name != NULL) {
                      * vDynamicTable, vMethodTable, vFieldTable, vTypeInfo,
                      * vInitTable, vAutoTable, vIntfTable, vMsgStrPtr.
                      * Virtual methods start at offset 96 (slot 12). */
-                    new_method->vmt_index = vmt_size + 12;
+	                    new_method->vmt_index = max_vmt_index + 1;
 
                     ListNode_t *node = (ListNode_t *)malloc(sizeof(ListNode_t));
                     if (node != NULL) {
@@ -244,15 +269,16 @@ if (record_info->parent_class_name != NULL) {
                         node->next = NULL;
                         
                         /* Append to end */
-                        if (vmt == NULL) {
-                            vmt = node;
-                        } else {
+	                        if (vmt == NULL) {
+	                            vmt = node;
+	                        } else {
                             ListNode_t *last = vmt;
                             while (last->next != NULL)
                                 last = last->next;
                             last->next = node;
-                        }
-                        vmt_size++;
+	                        }
+	                        vmt_size++;
+	                        max_vmt_index = new_method->vmt_index;
                     } else {
                         free(new_method->name);
                         free(new_method->mangled_name);
