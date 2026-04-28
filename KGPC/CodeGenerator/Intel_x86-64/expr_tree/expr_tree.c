@@ -30,6 +30,7 @@
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_stmt.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_sizeof.h"
+#include "../../../../cparser/parser.h"
 
 int codegen_array_access_targets_shortstring(const struct Expression *expr, CodeGenContext *ctx);
 static int expr_get_char_array_length_expr(const struct Expression *expr, CodeGenContext *ctx,
@@ -146,6 +147,99 @@ static int expr_tree_symbol_matches_expr_type(const HashNode_t *node,
         return 1;
 
     return expr_tag == node_tag;
+}
+
+static struct RecordType *expr_tree_lookup_record_type(SymTab_t *symtab,
+    const char *type_name)
+{
+    if (symtab == NULL || type_name == NULL)
+        return NULL;
+
+    struct RecordType *record = semcheck_lookup_record_type(symtab, type_name);
+    if (record != NULL)
+        return record;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, type_name) != 0 && node != NULL)
+        return hashnode_get_record_type(node);
+    return NULL;
+}
+
+static const char *expr_tree_first_ast_symbol_name(const ast_t *node)
+{
+    if (node == NULL)
+        return NULL;
+    if (node->sym != NULL && node->sym->name != NULL)
+        return node->sym->name;
+    const char *child_name = expr_tree_first_ast_symbol_name(node->child);
+    if (child_name != NULL)
+        return child_name;
+    return expr_tree_first_ast_symbol_name(node->next);
+}
+
+static int expr_tree_method_template_returns_shortstring(CodeGenContext *ctx,
+    const struct MethodTemplate *tmpl)
+{
+    if (tmpl == NULL || tmpl->kind != METHOD_TEMPLATE_FUNCTION)
+        return 0;
+    if (tmpl->method_tree != NULL &&
+        tmpl->method_tree->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+    {
+        return 1;
+    }
+    if (ctx != NULL && tmpl->return_type_ast != NULL)
+    {
+        KgpcType *ret_type = convert_type_spec_to_kgpctype(tmpl->return_type_ast,
+            ctx->symtab);
+        if (ret_type != NULL &&
+            (kgpc_type_is_shortstring(ret_type) ||
+             (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring)))
+        {
+            return 1;
+        }
+    }
+    const char *ret_name = expr_tree_first_ast_symbol_name(tmpl->return_type_ast);
+    if (ret_name != NULL)
+    {
+        if (pascal_identifier_equals(ret_name, "ShortString"))
+            return 1;
+        if (tmpl->default_shortstring && pascal_identifier_equals(ret_name, "String"))
+            return 1;
+    }
+    return 0;
+}
+
+static int expr_tree_virtual_call_returns_shortstring(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL ||
+        !expr->expr_data.function_call_data.is_virtual_call)
+    {
+        return 0;
+    }
+
+    const char *owner_name = expr->expr_data.function_call_data.self_class_name;
+    if (owner_name == NULL)
+        owner_name = expr->expr_data.function_call_data.cached_owner_class;
+    const char *method_name = expr->expr_data.function_call_data.cached_method_name;
+    if (method_name == NULL)
+        method_name = expr->expr_data.function_call_data.id;
+
+    struct RecordType *record = expr_tree_lookup_record_type(ctx->symtab, owner_name);
+    if (record == NULL || method_name == NULL)
+        return 0;
+
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            expr_tree_method_template_returns_shortstring(ctx, tmpl))
+        {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 static int expr_tree_symbol_preference_score(const HashNode_t *node,
@@ -2592,6 +2686,54 @@ static ListNode_t *promote_shortstring_reg_operand(ListNode_t *inst_list, CodeGe
 }
 
 static ListNode_t *spill_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
+    StackNode_t **spill_slot, const char *temp_name);
+static ListNode_t *restore_spilled_reg64_operand(ListNode_t *inst_list,
+    const char *reg_operand, StackNode_t *spill_slot);
+static ListNode_t *emit_move_ptr_operand_kind(ListNode_t *inst_list, const char *src,
+    const Register_t *src_reg, OperandKind kind, const char *dst);
+
+static ListNode_t *promote_shortstring_operand_ex(ListNode_t *inst_list, CodeGenContext *ctx,
+    const char **operand_ptr, Register_t **reg_ptr, OperandKind *kind_ptr,
+    const char *other_operand, const Register_t *other_reg)
+{
+    if (inst_list == NULL || ctx == NULL || operand_ptr == NULL || *operand_ptr == NULL ||
+        reg_ptr == NULL || kind_ptr == NULL)
+        return inst_list;
+
+    Register_t *value_reg = *reg_ptr;
+    if (value_reg == NULL)
+    {
+        value_reg = get_free_reg(get_reg_stack(), &inst_list);
+        if (value_reg == NULL)
+            return inst_list;
+        inst_list = emit_move_ptr_operand_kind(inst_list, *operand_ptr, NULL, *kind_ptr,
+            value_reg->bit_64);
+        *operand_ptr = value_reg->bit_64;
+        *reg_ptr = value_reg;
+        *kind_ptr = OPKIND_REGISTER;
+    }
+
+    StackNode_t *other_save = NULL;
+    if (other_reg != NULL)
+        inst_list = spill_reg64_operand(inst_list, other_reg->bit_64, &other_save,
+            "relop_shortstring_other");
+    else if (other_operand != NULL && other_operand[0] == '%')
+        inst_list = spill_reg64_operand(inst_list, other_operand, &other_save,
+            "relop_shortstring_other");
+
+    inst_list = promote_shortstring_reg_operand(inst_list, ctx, *operand_ptr, value_reg);
+    *operand_ptr = value_reg->bit_64;
+    *reg_ptr = value_reg;
+    *kind_ptr = OPKIND_REGISTER;
+
+    if (other_reg != NULL)
+        inst_list = restore_spilled_reg64_operand(inst_list, other_reg->bit_64, other_save);
+    else if (other_operand != NULL && other_operand[0] == '%')
+        inst_list = restore_spilled_reg64_operand(inst_list, other_operand, other_save);
+    return inst_list;
+}
+
+static ListNode_t *spill_reg64_operand(ListNode_t *inst_list, const char *reg_operand,
     StackNode_t **spill_slot, const char *temp_name)
 {
     if (spill_slot != NULL)
@@ -3253,6 +3395,33 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
         int has_record_return = expr_returns_sret(expr);
+        if (!has_record_return && func_type != NULL &&
+            func_type->kind == TYPE_KIND_PROCEDURE)
+        {
+            KgpcType *ret_type = kgpc_type_get_return_type(func_type);
+            if (ret_type != NULL &&
+                (kgpc_type_is_shortstring(ret_type) ||
+                 (ret_type->type_alias != NULL &&
+                  ret_type->type_alias->is_shortstring)))
+            {
+                has_record_return = 1;
+            }
+            else if (func_type->info.proc_info.definition != NULL &&
+                     func_type->info.proc_info.definition
+                         ->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+            {
+                has_record_return = 1;
+            }
+            else if (expr_tree_virtual_call_returns_shortstring(ctx, expr))
+            {
+                has_record_return = 1;
+            }
+        }
+        else if (!has_record_return &&
+                 expr_tree_virtual_call_returns_shortstring(ctx, expr))
+        {
+            has_record_return = 1;
+        }
         int ctor_has_record_return = (is_constructor && has_record_return);
         StackNode_t *sret_slot = NULL;
         if (has_record_return && !is_constructor)
@@ -6413,6 +6582,15 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     expr_is_shortstring_storage_ctx(left_expr, ctx));
                 int right_is_shortstring = (right_expr != NULL &&
                     expr_is_shortstring_storage_ctx(right_expr, ctx));
+                if (left_is_shortstring || right_is_shortstring)
+                {
+                    if (!left_is_shortstring && left_expr != NULL &&
+                        expr_has_type_tag(left_expr, STRING_TYPE))
+                        left_is_shortstring = 1;
+                    if (!right_is_shortstring && right_expr != NULL &&
+                        expr_has_type_tag(right_expr, STRING_TYPE))
+                        right_is_shortstring = 1;
+                }
                 int left_is_char_array = (left_expr != NULL && expr_is_char_array_expr(left_expr) &&
                     !left_is_shortstring);
                 int right_is_char_array = (right_expr != NULL && expr_is_char_array_expr(right_expr) &&
@@ -6591,35 +6769,6 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                 }
                 if (left_is_string && right_is_string)
                 {
-                    /* Spill the other operand before shortstring promotion calls,
-                     * since function calls clobber caller-saved registers (r10, r11, etc.).
-                     * Check both right_reg and whether the operand is a volatile register. */
-                    int right_needs_spill = (right_reg != NULL) || (right != NULL && right[0] == '%');
-                    int left_needs_spill = (left_reg != NULL) || (left != NULL && left[0] == '%');
-                    StackNode_t *spill_other = NULL;
-                    if (left_is_shortstring && right_needs_spill)
-                    {
-                        inst_list = spill_reg64_operand(inst_list,
-                            right_reg != NULL ? right_reg->bit_64 : right, &spill_other,
-                            "relop_rhs_preserve");
-                    }
-                    if (left_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, left, left_reg);
-                    inst_list = restore_spilled_reg64_operand(inst_list,
-                        right_reg != NULL ? right_reg->bit_64 : right, spill_other);
-
-                    spill_other = NULL;
-                    if (right_is_shortstring && left_needs_spill)
-                    {
-                        inst_list = spill_reg64_operand(inst_list,
-                            left_reg != NULL ? left_reg->bit_64 : left, &spill_other,
-                            "relop_lhs_preserve");
-                    }
-                    if (right_is_shortstring)
-                        inst_list = promote_shortstring_reg_operand(inst_list, ctx, right, right_reg);
-                    inst_list = restore_spilled_reg64_operand(inst_list,
-                        left_reg != NULL ? left_reg->bit_64 : left, spill_other);
-
                     /* Promote char-typed operands to string pointers before
                      * kgpc_string_compare.  Detect chars by expression type
                      * (EXPR_CHAR_CODE), legacy type tag (CHAR_TYPE), or
@@ -6651,6 +6800,13 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     const char *r_op = right;
                     Register_t *r_reg = (Register_t *)right_reg;
                     OperandKind r_kind = right_kind;
+
+                    if (left_is_shortstring)
+                        inst_list = promote_shortstring_operand_ex(inst_list, ctx,
+                            &l_op, &l_reg, &l_kind, r_op, r_reg);
+                    if (right_is_shortstring)
+                        inst_list = promote_shortstring_operand_ex(inst_list, ctx,
+                            &r_op, &r_reg, &r_kind, l_op, l_reg);
 
                     if (left_is_char_operand)
                         inst_list = promote_char_operand_to_string_ex(inst_list,

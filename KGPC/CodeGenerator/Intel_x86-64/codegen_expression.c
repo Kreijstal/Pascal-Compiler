@@ -34,6 +34,7 @@
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
 #include "../../Parser/SemanticCheck/SemCheck.h"
+#include "../../Parser/pascal_frontend.h"
 #include "../../identifier_utils.h"
 #include "../../format_arg.h"
 #include "../../unit_registry.h"
@@ -552,6 +553,18 @@ static KgpcType *codegen_function_call_return_type_from_expr(
 
     if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
         return NULL;
+
+    /* In {$H-} / compiler bootstrap code, the callee declaration may still
+     * carry return_type_id = "String", while the semchecked call expression has
+     * already resolved that to fixed ShortString storage.  Prefer the resolved
+     * expression type so callers emit the hidden result buffer before Self. */
+    if (expr->resolved_kgpc_type != NULL &&
+        (kgpc_type_is_shortstring(expr->resolved_kgpc_type) ||
+         (expr->resolved_kgpc_type->type_alias != NULL &&
+          expr->resolved_kgpc_type->type_alias->is_shortstring)))
+    {
+        return expr->resolved_kgpc_type;
+    }
 
     /* If the callee's Tree_t has return_type == SHORTSTRING_TYPE (set during AST
      * conversion under {$H-}), honour that even though the KgpcType from
@@ -1209,8 +1222,12 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
                 !kgpc_type_is_shortstring(node->type))
             {
                 struct TypeAlias *alias = kgpc_type_get_type_alias(node->type);
-                if (alias == NULL || !alias->is_shortstring)
+                if (alias != NULL && !alias->is_shortstring)
                     return 0;
+                if (alias == NULL && !pascal_frontend_default_shortstring())
+                    return 0;
+                if (alias == NULL)
+                    return 1;
             }
             if (kgpc_type_is_shortstring(node->type))
                 return 1;
@@ -9755,10 +9772,15 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
     if (left_reg == NULL || right_reg == NULL)
         return inst_list;
 
-    int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx) &&
-        !expr_has_type_tag(left_expr, STRING_TYPE));
-    int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx) &&
-        !expr_has_type_tag(right_expr, STRING_TYPE));
+    int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx));
+    int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx));
+    if (left_is_shortstring || right_is_shortstring)
+    {
+        if (!left_is_shortstring && left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE))
+            left_is_shortstring = 1;
+        if (!right_is_shortstring && right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE))
+            right_is_shortstring = 1;
+    }
     int left_is_char_array = (left_expr != NULL && codegen_expr_is_char_array_like_ctx(left_expr, ctx) &&
         !left_is_shortstring);
     int right_is_char_array = (right_expr != NULL && codegen_expr_is_char_array_like_ctx(right_expr, ctx) &&
