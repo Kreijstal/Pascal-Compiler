@@ -3753,6 +3753,9 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
             if (alias->storage_size > 4)
                 return 1;
         }
+        if (kgpc_type_is_set(expr->resolved_kgpc_type) &&
+            kgpc_type_sizeof(expr->resolved_kgpc_type) > 4)
+            return 1;
     }
 
     /* For variable references, look up the type in the symbol table */
@@ -3774,6 +3777,9 @@ int expr_is_char_set_ctx(const struct Expression *expr, CodeGenContext *ctx)
                     if (alias->storage_size > 4)
                         return 1;
                 }
+                if (kgpc_type_is_set(node->type) &&
+                    kgpc_type_sizeof(node->type) > 4)
+                    return 1;
             }
             if (node->hash_type == HASHTYPE_CONST &&
                 node->const_set_value != NULL &&
@@ -4786,6 +4792,13 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         }
     }
 
+    if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    {
+        HashNode_t *node = NULL;
+        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
+            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
+    }
+
     if (type_tag != UNKNOWN_TYPE)
     {
         long long base = codegen_sizeof_type_tag(type_tag);
@@ -4798,10 +4811,6 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
 
     if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
     {
-        HashNode_t *node = NULL;
-        if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
-            return codegen_sizeof_hashnode(ctx, node, size_out, depth + 1);
-
         codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
         return 1;
     }
@@ -5346,52 +5355,6 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
     if (pointer_expr == NULL || size_out == NULL)
         return 1;
 
-    KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
-    if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
-    {
-        KgpcType *points_to = pointer_type->info.points_to;
-        if (points_to != NULL)
-        {
-            if (kgpc_type_is_array(points_to))
-            {
-                KgpcArrayDimensionInfo info;
-                int dimension_status = kgpc_type_get_array_dimension_info(points_to,
-                    ctx != NULL ? ctx->symtab : NULL, &info);
-                assert(dimension_status == 0 && info.dim_count > 0);
-
-                long long element_size = info.element_size;
-                KgpcType *element_type = kgpc_type_get_array_element_type(points_to);
-                if (element_type != NULL && element_type->kind == TYPE_KIND_RECORD)
-                {
-                    assert(element_type->info.record_info != NULL);
-                    assert(codegen_sizeof_record(ctx, element_type->info.record_info,
-                        &element_size, 0) == 0 && element_size > 0);
-                }
-                else if (element_size <= 0 && element_type != NULL)
-                {
-                    element_size = kgpc_type_sizeof(element_type);
-                }
-                assert(element_size > 0);
-
-                long long total_size = element_size;
-                for (int i = info.dim_count - 1; i >= 0; i--)
-                {
-                    assert(info.dim_sizes[i] > 0);
-                    assert(total_size <= LLONG_MAX / info.dim_sizes[i]);
-                    total_size *= info.dim_sizes[i];
-                }
-                assert(total_size > 0);
-                *size_out = total_size;
-                return 0;
-            }
-            long long pointee_size = kgpc_type_sizeof(points_to);
-            if (pointee_size > 0)
-            {
-                *size_out = pointee_size;
-                return 0;
-            }
-        }
-    }
     int subtype = pointer_expr->pointer_subtype;
     const char *type_id = pointer_expr->pointer_subtype_id;
     struct RecordType *record_type = codegen_expr_record_type(pointer_expr,
@@ -5437,12 +5400,44 @@ int codegen_sizeof_pointer_target(CodeGenContext *ctx, struct Expression *pointe
         return 0;
     }
 
-    pointer_type = expr_get_kgpc_type(pointer_expr);
+    KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
     if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
     {
         KgpcType *points_to = pointer_type->info.points_to;
         if (points_to != NULL)
         {
+            if (kgpc_type_is_array(points_to))
+            {
+                KgpcArrayDimensionInfo info;
+                int dimension_status = kgpc_type_get_array_dimension_info(points_to,
+                    ctx != NULL ? ctx->symtab : NULL, &info);
+                assert(dimension_status == 0 && info.dim_count > 0);
+
+                long long element_size = info.element_size;
+                KgpcType *element_type = kgpc_type_get_array_element_type(points_to);
+                if (element_type != NULL && element_type->kind == TYPE_KIND_RECORD)
+                {
+                    assert(element_type->info.record_info != NULL);
+                    assert(codegen_sizeof_record(ctx, element_type->info.record_info,
+                        &element_size, 0) == 0 && element_size > 0);
+                }
+                else if (element_size <= 0 && element_type != NULL)
+                {
+                    element_size = kgpc_type_sizeof(element_type);
+                }
+                assert(element_size > 0);
+
+                long long total_size = element_size;
+                for (int i = info.dim_count - 1; i >= 0; i--)
+                {
+                    assert(info.dim_sizes[i] > 0);
+                    assert(total_size <= LLONG_MAX / info.dim_sizes[i]);
+                    total_size *= info.dim_sizes[i];
+                }
+                assert(total_size > 0);
+                *size_out = total_size;
+                return 0;
+            }
             long long pointee_size = kgpc_type_sizeof(points_to);
             if (pointee_size > 0)
             {
