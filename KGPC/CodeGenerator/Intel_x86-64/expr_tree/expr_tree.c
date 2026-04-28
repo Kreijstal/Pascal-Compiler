@@ -3470,8 +3470,14 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
 
         /* Constructors for classes return the constructed instance by value,
          * which uses a hidden sret pointer in the first argument slot. */
+        int force_scalar_string_return =
+            func_mangled_name != NULL &&
+            (strcmp(func_mangled_name, "kgpc_strpas_string") == 0 ||
+             strcmp(func_mangled_name, "kgpc_strpas_len_string") == 0);
         int has_record_return = expr_returns_sret(expr);
-        if (!has_record_return && func_type != NULL &&
+        if (force_scalar_string_return)
+            has_record_return = 0;
+        if (!force_scalar_string_return && !has_record_return && func_type != NULL &&
             func_type->kind == TYPE_KIND_PROCEDURE)
         {
             KgpcType *ret_type = kgpc_type_get_return_type(func_type);
@@ -3493,7 +3499,7 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
                 has_record_return = 1;
             }
         }
-        else if (!has_record_return &&
+        else if (!force_scalar_string_return && !has_record_return &&
                  expr_tree_virtual_call_returns_shortstring(ctx, expr))
         {
             has_record_return = 1;

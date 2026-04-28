@@ -4715,6 +4715,15 @@ long long codegen_expr_sret_size(const struct Expression *expr)
 
 int expr_returns_sret(const struct Expression *expr)
 {
+    if (expr != NULL && expr->type == EXPR_FUNCTION_CALL)
+    {
+        const char *mangled = expr->expr_data.function_call_data.mangled_id;
+        if (mangled != NULL &&
+            (strcmp(mangled, "kgpc_strpas_string") == 0 ||
+             strcmp(mangled, "kgpc_strpas_len_string") == 0))
+            return 0;
+    }
+
     long long sret_size = codegen_expr_sret_size(expr);
     if (sret_size <= 0)
         return 0;

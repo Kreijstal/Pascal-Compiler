@@ -1258,7 +1258,7 @@ int semcheck_builtin_strpas(int *type_return, SymTab_t *symtab,
             free(expr->expr_data.function_call_data.mangled_id);
             expr->expr_data.function_call_data.mangled_id = NULL;
         }
-        expr->expr_data.function_call_data.mangled_id = strdup(arg_count == 2 ? "kgpc_strpas_len" : "kgpc_strpas");
+        expr->expr_data.function_call_data.mangled_id = strdup(arg_count == 2 ? "kgpc_strpas_len_string" : "kgpc_strpas_string");
         if (expr->expr_data.function_call_data.mangled_id == NULL)
         {
             fprintf(stderr, "Error: failed to allocate mangled name for StrPas.\n");

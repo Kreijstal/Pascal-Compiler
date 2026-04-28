@@ -5422,20 +5422,38 @@ void kgpc_unicodestring_assign(uint16_t **target, const uint16_t *value)
     *target = (uint16_t *)value;
 }
 
-char *kgpc_strpas(const char *p)
+char *kgpc_strpas_string(const char *p)
 {
     if (p == NULL)
         return kgpc_alloc_empty_string();
     return kgpc_string_duplicate(p);
 }
 
-char *kgpc_strpas_len(const char *p, int64_t length)
+char *kgpc_strpas_len_string(const char *p, int64_t length)
 {
     if (p == NULL || length <= 0)
         return kgpc_alloc_empty_string();
     /* Truncate at first NUL, like a C-string — StrPas copies until NUL */
     size_t actual = strnlen(p, (size_t)length);
     return kgpc_string_duplicate_length(p, actual);
+}
+
+void kgpc_strpas(char *dest, const char *p)
+{
+    kgpc_string_to_shortstring(dest, p != NULL ? p : "", 256);
+}
+
+void kgpc_strpas_len(char *dest, const char *p, int64_t length)
+{
+    if (p == NULL || length <= 0)
+    {
+        kgpc_string_to_shortstring(dest, "", 256);
+        return;
+    }
+    size_t actual = strnlen(p, (size_t)length);
+    char *tmp = kgpc_string_duplicate_length(p, actual);
+    kgpc_string_to_shortstring(dest, tmp, 256);
+    kgpc_string_release(tmp);
 }
 
 static int64_t kgpc_pos_internal(const char *hay, size_t hay_len, const char *needle, size_t needle_len, int64_t start_index)
