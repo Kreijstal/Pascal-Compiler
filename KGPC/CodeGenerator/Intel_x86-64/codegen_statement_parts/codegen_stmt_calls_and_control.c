@@ -136,6 +136,12 @@ static int codegen_stmt_first_arg_is_class_vmt_value(const ListNode_t *args_expr
 
     if (self_expr->type == EXPR_VAR_ID && self_expr->expr_data.id != NULL)
     {
+        if (ctx->current_subprogram_is_nonstatic_class_method &&
+            pascal_identifier_equals(self_expr->expr_data.id, "Self"))
+        {
+            return 1;
+        }
+
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, self_expr->expr_data.id) != 0 &&
             node != NULL && codegen_stmt_type_is_class_vmt_value(node->type))
@@ -805,7 +811,10 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  * also guards against invalid (<= 1) values internally. */
                 int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
 
-                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
+                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx) ||
+                    (assign_expr != NULL &&
+                     assign_expr->type == EXPR_FUNCTION_CALL &&
+                     assign_expr->expr_data.function_call_data.vmt_index >= 0))
                 {
                     /* Both sides are ShortString — copy preserving the length byte */
                     inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);

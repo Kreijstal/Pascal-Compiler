@@ -350,7 +350,7 @@ int codegen_get_current_return_shortstring_capacity(CodeGenContext *ctx, SymTab_
     if (return_type != NULL)
     {
         int capacity = codegen_shortstring_capacity_from_type_local(return_type);
-        if (capacity > 0)
+        if (capacity > 1)
             return capacity;
     }
 
@@ -1240,4 +1240,3 @@ ListNode_t *codegen_stmt(struct Statement *stmt, ListNode_t *inst_list, CodeGenC
     #endif
     return inst_list;
 }
-

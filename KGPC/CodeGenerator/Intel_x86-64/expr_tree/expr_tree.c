@@ -358,6 +358,12 @@ static int expr_tree_first_arg_is_class_vmt_value(const struct Expression *expr,
 
     if (self_expr->type == EXPR_VAR_ID && self_expr->expr_data.id != NULL)
     {
+        if (ctx->current_subprogram_is_nonstatic_class_method &&
+            pascal_identifier_equals(self_expr->expr_data.id, "Self"))
+        {
+            return 1;
+        }
+
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, self_expr->expr_data.id) != 0 &&
             node != NULL && expr_tree_type_is_class_vmt_value(node->type))
@@ -3423,16 +3429,6 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         Register_t *constructor_instance_reg = NULL;
         StackNode_t *constructor_instance_slot = NULL;
 
-        if (!is_constructor && func_mangled_name != NULL)
-        {
-            /* Check if name contains __create (may be followed by type suffix like __create_u) */
-            const char *create_pos = pascal_strcasestr(func_mangled_name, "__create");
-            if (create_pos != NULL)
-                is_constructor = 1;
-            else if (pascal_identifier_equals(func_mangled_name, "Create"))
-                is_constructor = 1;
-        }
-
         /* Record static factories (e.g., TGUID.Create) can also be named Create
          * but they are not class constructors and must not use constructor
          * calling paths.  Without this guard the SRET buffer for large record
@@ -3507,6 +3503,9 @@ ListNode_t *gencode_case0(expr_node_t *node, ListNode_t *inst_list, CodeGenConte
         if (has_record_return && !is_constructor)
         {
             long long sret_size = codegen_expr_sret_size(expr);
+            if (sret_size <= 0 &&
+                expr_tree_virtual_call_returns_shortstring(ctx, expr))
+                sret_size = 256;
             if (sret_size <= 0 || sret_size > INT_MAX)
                 sret_size = CODEGEN_POINTER_SIZE_BYTES;
             sret_slot = add_l_t_bytes("__record_return_tmp__", (int)sret_size);

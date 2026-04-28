@@ -595,6 +595,13 @@ static KgpcType *codegen_function_call_return_type_from_expr(
             cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
         return cached_shortstring;
     }
+    if (pascal_identifier_equals(ret_id, "String") &&
+        pascal_frontend_default_shortstring())
+    {
+        if (cached_shortstring == NULL)
+            cached_shortstring = create_primitive_type(SHORTSTRING_TYPE);
+        return cached_shortstring;
+    }
     if (pascal_identifier_equals(ret_id, "AnsiString") ||
         pascal_identifier_equals(ret_id, "String"))
     {
@@ -603,6 +610,135 @@ static KgpcType *codegen_function_call_return_type_from_expr(
         return cached_ansistring;
     }
     return NULL;
+}
+
+static const char *codegen_function_call_return_type_id_from_expr(
+    const struct Expression *expr)
+{
+    KgpcType *call_type = NULL;
+
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return NULL;
+
+    call_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (call_type == NULL &&
+        expr->expr_data.function_call_data.resolved_func != NULL)
+    {
+        call_type = expr->expr_data.function_call_data.resolved_func->type;
+    }
+    if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
+        return NULL;
+
+    if (call_type->info.proc_info.return_type_id != NULL)
+        return call_type->info.proc_info.return_type_id;
+    if (call_type->info.proc_info.definition != NULL)
+        return call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
+    return NULL;
+}
+
+static int codegen_return_type_is_shortstring_value(KgpcType *ret_type,
+    const char *ret_id)
+{
+    if (ret_type != NULL)
+    {
+        struct TypeAlias *alias = kgpc_type_get_type_alias(ret_type);
+        if (kgpc_type_is_shortstring(ret_type) ||
+            (alias != NULL && alias->is_shortstring))
+            return 1;
+        if (kgpc_type_equals_tag(ret_type, STRING_TYPE) &&
+            !kgpc_type_is_shortstring(ret_type))
+        {
+            if (alias != NULL)
+                return alias->is_shortstring;
+            if (ret_id != NULL &&
+                (pascal_identifier_equals(ret_id, "AnsiString") ||
+                 pascal_identifier_equals(ret_id, "UnicodeString") ||
+                 pascal_identifier_equals(ret_id, "WideString")))
+                return 0;
+            if (pascal_frontend_default_shortstring())
+                return 1;
+        }
+    }
+    if (ret_id != NULL &&
+        pascal_identifier_equals(ret_id, "String") &&
+        pascal_frontend_default_shortstring())
+        return 1;
+    if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+        return 1;
+    return 0;
+}
+
+static int codegen_method_template_returns_shortstring(CodeGenContext *ctx,
+    const struct MethodTemplate *tmpl)
+{
+    if (tmpl == NULL || tmpl->kind != METHOD_TEMPLATE_FUNCTION)
+        return 0;
+    if (tmpl->method_tree != NULL &&
+        tmpl->method_tree->tree_data.subprogram_data.return_type == SHORTSTRING_TYPE)
+        return 1;
+    if (ctx != NULL && tmpl->return_type_ast != NULL)
+    {
+        KgpcType *ret_type = convert_type_spec_to_kgpctype(tmpl->return_type_ast,
+            ctx->symtab);
+        if (codegen_return_type_is_shortstring_value(ret_type, NULL))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_virtual_call_returns_shortstring(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL ||
+        !expr->expr_data.function_call_data.is_virtual_call)
+        return 0;
+
+    const char *owner_name = expr->expr_data.function_call_data.self_class_name;
+    if (owner_name == NULL)
+        owner_name = expr->expr_data.function_call_data.cached_owner_class;
+    const char *method_name = expr->expr_data.function_call_data.cached_method_name;
+    if (method_name == NULL)
+        method_name = expr->expr_data.function_call_data.id;
+    if (owner_name == NULL || method_name == NULL)
+        return 0;
+
+    struct RecordType *record = semcheck_lookup_record_type(ctx->symtab, owner_name);
+    if (record == NULL)
+        return 0;
+
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            codegen_method_template_returns_shortstring(ctx, tmpl))
+            return 1;
+    }
+    return 0;
+}
+
+static int codegen_bare_method_returns_shortstring(CodeGenContext *ctx,
+    const char *method_name)
+{
+    if (ctx == NULL || method_name == NULL)
+        return 0;
+    const char *owner_name = ctx->current_subprogram_owner_class;
+    if (owner_name == NULL)
+        owner_name = ctx->current_subprogram_owner_class_full;
+    if (owner_name == NULL)
+        return 0;
+    struct RecordType *record = semcheck_lookup_record_type(ctx->symtab, owner_name);
+    if (record == NULL)
+        return 0;
+    for (ListNode_t *cur = record->method_templates; cur != NULL; cur = cur->next)
+    {
+        struct MethodTemplate *tmpl = (struct MethodTemplate *)cur->cur;
+        if (tmpl != NULL && tmpl->name != NULL &&
+            pascal_identifier_equals(tmpl->name, method_name) &&
+            codegen_method_template_returns_shortstring(ctx, tmpl))
+            return 1;
+    }
+    return 0;
 }
 
 static long long codegen_sizeof_type_tag(int type_tag);
@@ -868,6 +1004,12 @@ static int codegen_expr_is_class_vmt_value(const struct Expression *expr, CodeGe
 
     if (expr->type == EXPR_VAR_ID && expr->expr_data.id != NULL)
     {
+        if (ctx->current_subprogram_is_nonstatic_class_method &&
+            pascal_identifier_equals(expr->expr_data.id, "Self"))
+        {
+            return 1;
+        }
+
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL)
         {
@@ -1129,13 +1271,12 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
         KgpcType *ret_type = NULL;
         const char *ret_id = NULL;
 
+        ret_id = codegen_function_call_return_type_id_from_expr(expr);
         ret_type = codegen_function_call_return_type_from_expr(expr);
-        if (ret_type != NULL)
-        {
-            if (kgpc_type_is_shortstring(ret_type) ||
-                (ret_type->type_alias != NULL && ret_type->type_alias->is_shortstring))
-                return 1;
-        }
+        if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
+            return 1;
+        if (codegen_virtual_call_returns_shortstring(ctx, expr))
+            return 1;
 
         if (ret_type == NULL)
         {
@@ -1144,25 +1285,21 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
             if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
             {
                 ret_type = kgpc_type_get_return_type(call_type);
-                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                    return 1;
                 ret_id = call_type->info.proc_info.return_type_id;
                 if (ret_id == NULL && call_type->info.proc_info.definition != NULL)
                     ret_id = call_type->info.proc_info.definition->tree_data.subprogram_data.return_type_id;
-                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
                     return 1;
             }
             if (call_node != NULL && call_node->type != NULL &&
                 call_node->type->kind == TYPE_KIND_PROCEDURE)
             {
                 ret_type = kgpc_type_get_return_type(call_node->type);
-                if (ret_type != NULL && kgpc_type_is_shortstring(ret_type))
-                    return 1;
                 ret_id = call_node->type->info.proc_info.return_type_id;
                 if (ret_id == NULL && call_node->type->info.proc_info.definition != NULL)
                     ret_id = call_node->type->info.proc_info.definition
                         ->tree_data.subprogram_data.return_type_id;
-                if (ret_id != NULL && pascal_identifier_equals(ret_id, "ShortString"))
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
                     return 1;
             }
         }
@@ -1215,9 +1352,21 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
     }
     if (expr != NULL && expr->type == EXPR_VAR_ID && ctx != NULL && ctx->symtab != NULL)
     {
+        if (codegen_bare_method_returns_shortstring(ctx, expr->expr_data.id))
+            return 1;
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, expr->expr_data.id) != 0 && node != NULL && node->type != NULL)
         {
+            if (node->type->kind == TYPE_KIND_PROCEDURE)
+            {
+                KgpcType *ret_type = kgpc_type_get_return_type(node->type);
+                const char *ret_id = node->type->info.proc_info.return_type_id;
+                if (ret_id == NULL && node->type->info.proc_info.definition != NULL)
+                    ret_id = node->type->info.proc_info.definition
+                        ->tree_data.subprogram_data.return_type_id;
+                if (codegen_return_type_is_shortstring_value(ret_type, ret_id))
+                    return 1;
+            }
             if (kgpc_type_equals_tag(node->type, STRING_TYPE) &&
                 !kgpc_type_is_shortstring(node->type))
             {

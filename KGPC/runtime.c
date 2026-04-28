@@ -4069,6 +4069,21 @@ void kgpc_string_to_shortstring(char *dest, const char *src, size_t dest_size)
     if (dest == NULL || src == NULL || dest_size < 2)
         return;
 
+    if (!kgpc_string_is_managed(src))
+    {
+        unsigned char short_len = (unsigned char)src[0];
+        size_t c_len = strlen(src);
+        if (short_len > 0 && c_len == (size_t)short_len + 1)
+        {
+            size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
+            size_t copy_len = (short_len < max_chars) ? short_len : max_chars;
+            dest[0] = (char)copy_len;
+            if (copy_len > 0)
+                memmove(dest + 1, src + 1, copy_len);
+            return;
+        }
+    }
+
     size_t src_len = kgpc_string_known_length(src);
     /* ShortString max capacity is 255 chars (indices 1..255) */
     size_t max_chars = (dest_size - 1 < 255) ? (dest_size - 1) : 255;
