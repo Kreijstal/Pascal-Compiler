@@ -12,6 +12,28 @@ static KgpcType *codegen_expr_lookup_symtab_type(const struct Expression *expr, 
     return node->type;
 }
 
+static int codegen_expr_is_const_symbol(const struct Expression *expr, SymTab_t *symtab)
+{
+    if (expr == NULL || symtab == NULL ||
+        expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    HashNode_t *node = NULL;
+    if (FindSymbol(&node, symtab, expr->expr_data.id) == 0 || node == NULL)
+        return 0;
+
+    return node->is_constant || node->hash_type == HASHTYPE_CONST;
+}
+
+static int codegen_expr_is_generated_const_storage(const struct Expression *expr)
+{
+    if (expr == NULL || expr->type != EXPR_VAR_ID || expr->expr_data.id == NULL)
+        return 0;
+
+    return strncmp(expr->expr_data.id, "__kgpc_tconst", 12) == 0;
+}
+
+
 static int codegen_expr_is_unsigned_with_symtab(const struct Expression *expr, SymTab_t *symtab)
 {
     KgpcType *type = codegen_expr_lookup_symtab_type(expr, symtab);
@@ -1427,6 +1449,42 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
     }
     else if (var_expr->type == EXPR_ARRAY_ACCESS)
     {
+        struct Expression *array_expr = var_expr->expr_data.array_access_data.array_expr;
+        int base_lower = 0, base_upper = -1, base_is_shortstring = 0;
+        int base_is_char_array = codegen_get_char_array_bounds(array_expr, ctx,
+            &base_lower, &base_upper, &base_is_shortstring);
+        long long base_element_size = array_expr != NULL ?
+            expr_get_array_element_size(array_expr, ctx) : -1;
+        if (array_expr != NULL &&
+            expr_get_type_tag(array_expr) == STRING_TYPE &&
+            expr_get_type_tag(assign_expr) == CHAR_TYPE &&
+            base_element_size <= 1 &&
+            !base_is_char_array &&
+            !codegen_expr_is_const_symbol(array_expr, ctx != NULL ? ctx->symtab : NULL) &&
+            !codegen_expr_is_generated_const_storage(array_expr) &&
+            !codegen_expr_is_shortstring_value_ctx(array_expr, ctx) &&
+            !codegen_expr_is_shortstring_array(array_expr))
+        {
+            Register_t *base_addr_reg = NULL;
+            inst_list = codegen_address_for_expr(array_expr, inst_list, ctx, &base_addr_reg);
+            if (codegen_had_error(ctx) || base_addr_reg == NULL)
+            {
+                if (base_addr_reg != NULL)
+                    free_reg(get_reg_stack(), base_addr_reg);
+                return inst_list;
+            }
+
+            if (codegen_target_is_windows())
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rcx\n", base_addr_reg->bit_64);
+            else
+                snprintf(buffer, sizeof(buffer), "\tmovq\t%s, %%rdi\n", base_addr_reg->bit_64);
+            inst_list = add_inst(inst_list, buffer);
+            inst_list = codegen_vect_reg(inst_list, 0);
+            inst_list = codegen_call_with_shadow_space(inst_list, "kgpc_string_unique");
+            free_arg_regs();
+            free_reg(get_reg_stack(), base_addr_reg);
+        }
+
         Register_t *addr_reg = NULL;
         inst_list = codegen_array_element_address(var_expr, inst_list, ctx, &addr_reg);
         if (codegen_had_error(ctx) || addr_reg == NULL)
@@ -1463,7 +1521,6 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
             value_reg, inst_list, &coerced_to_real);
         int use_qword = codegen_type_uses_qword(var_type);
         /* Get element size from the base array expression, not the access expression */
-        struct Expression *array_expr = var_expr->expr_data.array_access_data.array_expr;
         long long element_size = array_expr != NULL ? expr_get_array_element_size(array_expr, ctx) : -1;
         if (var_expr->array_element_size > element_size)
             element_size = var_expr->array_element_size;

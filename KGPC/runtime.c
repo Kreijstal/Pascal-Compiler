@@ -3581,6 +3581,36 @@ void kgpc_string_assign(char **target, const char *value)
     *target = kgpc_string_duplicate(value);
 }
 
+char *kgpc_string_unique(char **target)
+{
+    if (target == NULL)
+        return kgpc_alloc_empty_string();
+
+    char *value = *target;
+    if (value == NULL)
+    {
+        value = kgpc_alloc_empty_string();
+        *target = value;
+        return value;
+    }
+
+    KgpcStringHeader *hdr = kgpc_string_header(value);
+    if (hdr == NULL)
+    {
+        value = kgpc_string_duplicate(value);
+        *target = value;
+        return value;
+    }
+
+    if (hdr->refcount <= 1)
+        return value;
+
+    char *copy = kgpc_string_duplicate_length(value, hdr->length);
+    kgpc_string_release(value);
+    *target = copy;
+    return copy;
+}
+
 void kgpc_string_assign_take(char **target, char *value)
 {
     if (target == NULL)
