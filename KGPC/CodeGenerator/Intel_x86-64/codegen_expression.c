@@ -4792,7 +4792,8 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         }
     }
 
-    if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    int can_resolve_type_id = (type_id != NULL && ctx != NULL && ctx->symtab != NULL);
+    if (can_resolve_type_id)
     {
         HashNode_t *node = NULL;
         if (FindSymbol(&node, ctx->symtab, type_id) != 0 && node != NULL)
@@ -4809,7 +4810,7 @@ static int codegen_sizeof_type(CodeGenContext *ctx, int type_tag, const char *ty
         }
     }
 
-    if (type_id != NULL && ctx != NULL && ctx->symtab != NULL)
+    if (can_resolve_type_id)
     {
         codegen_report_error(ctx, "ERROR: Unable to resolve type %s for size computation.", type_id);
         return 1;
