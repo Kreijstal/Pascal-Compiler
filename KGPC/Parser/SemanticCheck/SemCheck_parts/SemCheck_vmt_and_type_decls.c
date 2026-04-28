@@ -1813,6 +1813,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             PushFunctionOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
                                         else
                                             PushProcedureOntoScope_Typed(symtab, mangled, overload_mangled, proc_type);
+                                        destroy_kgpc_type(proc_type);
 
                                         /* Set method identity on the newly-pushed symbol */
                                         {
@@ -2001,6 +2002,7 @@ int semcheck_type_decls(SymTab_t *symtab, ListNode_t *type_decls)
                                             {
                                                 PushProcedureOntoScope_Typed(symtab, mangled, mangled_dup, proc_type);
                                             }
+                                            destroy_kgpc_type(proc_type);
                                             /* Set method identity on the newly-pushed symbol */
                                             {
                                                 HashNode_t *pushed_node = NULL;
