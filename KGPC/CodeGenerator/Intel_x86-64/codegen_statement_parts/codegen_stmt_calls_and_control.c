@@ -811,10 +811,7 @@ ListNode_t *codegen_var_assignment(struct Statement *stmt, ListNode_t *inst_list
                  * also guards against invalid (<= 1) values internally. */
                 int array_size = codegen_get_shortstring_capacity(var_expr, ctx);
 
-                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx) ||
-                    (assign_expr != NULL &&
-                     assign_expr->type == EXPR_FUNCTION_CALL &&
-                     assign_expr->expr_data.function_call_data.vmt_index >= 0))
+                if (codegen_expr_is_shortstring_rhs(assign_expr, ctx))
                 {
                     /* Both sides are ShortString — copy preserving the length byte */
                     inst_list = codegen_call_shortstring_copy(inst_list, ctx, addr_reg, array_size, value_reg);

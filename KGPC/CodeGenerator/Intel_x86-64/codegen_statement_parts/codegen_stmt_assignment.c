@@ -827,9 +827,6 @@ int codegen_expr_is_shortstring_rhs(const struct Expression *expr, CodeGenContex
         return 0;
     if (codegen_expr_is_shortstring_value_ctx(expr, ctx))
         return 1;
-    if (expr->type == EXPR_FUNCTION_CALL &&
-        expr->expr_data.function_call_data.is_virtual_call)
-        return 1;
     if (codegen_expr_is_shortstring_value_local(expr))
         return 1;
     if (expr_get_type_tag(expr) == SHORTSTRING_TYPE)
@@ -1181,7 +1178,9 @@ ListNode_t *codegen_assign_static_array(struct Expression *dest_expr,
         return inst_list;
     }
 
-    if ((dest_is_shortstring || dest_is_shortstring_value) && src_is_char_array && !src_is_shortstring)
+    if ((dest_is_shortstring || dest_is_shortstring_value) &&
+        src_is_char_array && !src_is_shortstring &&
+        src_expr->type != EXPR_ARRAY_LITERAL)
     {
         Register_t *dest_reg = NULL;
         Register_t *src_reg = NULL;
@@ -1839,9 +1838,7 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
                 char buffer[128];
                 int src_returns_shortstring_sret =
                     expr_returns_sret(src_expr) ||
-                    codegen_expr_is_shortstring_value_ctx(src_expr, ctx) ||
-                    (src_expr->type == EXPR_FUNCTION_CALL &&
-                     src_expr->expr_data.function_call_data.is_virtual_call);
+                    codegen_expr_is_shortstring_value_ctx(src_expr, ctx);
                 
                 /* Save dest address to stack before calling function (function call may clobber registers) */
                 StackNode_t *dest_save_slot = add_l_x("__shortstring_dest__", CODEGEN_POINTER_SIZE_BYTES);
