@@ -24,6 +24,7 @@
 #include "../../../Parser/ParseTree/tree_types.h"
 #include "../../../Parser/ParseTree/KgpcType.h"
 #include "../../../Parser/ParseTree/from_cparser.h"
+#include "../../../Parser/pascal_frontend.h"
 #include "../../../Parser/SemanticCheck/SemCheck.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_Expr_Internal.h"
 #include "../../../Parser/SemanticCheck/SemChecks/SemCheck_expr.h"
@@ -1894,6 +1895,23 @@ static const char *reg64_to_reg32(const char *reg_name, const Register_t *reg)
  */
 static const char *reg_to_reg32(const char *reg_name, const Register_t *reg)
 {
+    if (reg == NULL && reg_name != NULL)
+    {
+        if (strcmp(reg_name, "%rax") == 0) return "%eax";
+        if (strcmp(reg_name, "%rbx") == 0) return "%ebx";
+        if (strcmp(reg_name, "%rcx") == 0) return "%ecx";
+        if (strcmp(reg_name, "%rdx") == 0) return "%edx";
+        if (strcmp(reg_name, "%rsi") == 0) return "%esi";
+        if (strcmp(reg_name, "%rdi") == 0) return "%edi";
+        if (strcmp(reg_name, "%r8") == 0) return "%r8d";
+        if (strcmp(reg_name, "%r9") == 0) return "%r9d";
+        if (strcmp(reg_name, "%r10") == 0) return "%r10d";
+        if (strcmp(reg_name, "%r11") == 0) return "%r11d";
+        if (strcmp(reg_name, "%r12") == 0) return "%r12d";
+        if (strcmp(reg_name, "%r13") == 0) return "%r13d";
+        if (strcmp(reg_name, "%r14") == 0) return "%r14d";
+        if (strcmp(reg_name, "%r15") == 0) return "%r15d";
+    }
     return operand_as_reg32(reg_name, reg);
 }
 
@@ -1910,7 +1928,23 @@ static const char *reg_to_reg64(const char *reg_name, const Register_t *reg)
  */
 static const char *reg32_to_reg8(const char *reg_name, const Register_t *reg)
 {
-    (void)reg_name;
+    if (reg == NULL && reg_name != NULL)
+    {
+        if (strcmp(reg_name, "%eax") == 0 || strcmp(reg_name, "%rax") == 0) return "%al";
+        if (strcmp(reg_name, "%ebx") == 0 || strcmp(reg_name, "%rbx") == 0) return "%bl";
+        if (strcmp(reg_name, "%ecx") == 0 || strcmp(reg_name, "%rcx") == 0) return "%cl";
+        if (strcmp(reg_name, "%edx") == 0 || strcmp(reg_name, "%rdx") == 0) return "%dl";
+        if (strcmp(reg_name, "%esi") == 0 || strcmp(reg_name, "%rsi") == 0) return "%sil";
+        if (strcmp(reg_name, "%edi") == 0 || strcmp(reg_name, "%rdi") == 0) return "%dil";
+        if (strcmp(reg_name, "%r8d") == 0 || strcmp(reg_name, "%r8") == 0) return "%r8b";
+        if (strcmp(reg_name, "%r9d") == 0 || strcmp(reg_name, "%r9") == 0) return "%r9b";
+        if (strcmp(reg_name, "%r10d") == 0 || strcmp(reg_name, "%r10") == 0) return "%r10b";
+        if (strcmp(reg_name, "%r11d") == 0 || strcmp(reg_name, "%r11") == 0) return "%r11b";
+        if (strcmp(reg_name, "%r12d") == 0 || strcmp(reg_name, "%r12") == 0) return "%r12b";
+        if (strcmp(reg_name, "%r13d") == 0 || strcmp(reg_name, "%r13") == 0) return "%r13b";
+        if (strcmp(reg_name, "%r14d") == 0 || strcmp(reg_name, "%r14") == 0) return "%r14b";
+        if (strcmp(reg_name, "%r15d") == 0 || strcmp(reg_name, "%r15") == 0) return "%r15b";
+    }
     return operand_as_reg8(reg);
 }
 
@@ -2406,13 +2440,49 @@ static int expr_is_shortstring_storage(const struct Expression *expr)
     return 0;
 }
 
+static int expr_function_call_returns_ansistring(const struct Expression *expr, CodeGenContext *ctx)
+{
+    if (expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (call_type == NULL && ctx != NULL)
+        call_type = codegen_resolve_function_call_type(ctx, (struct Expression *)expr, NULL);
+    if (call_type != NULL && call_type->kind == TYPE_KIND_PROCEDURE)
+    {
+        KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+        const char *ret_id = call_type->info.proc_info.return_type_id;
+        if (ret_type != NULL &&
+            ret_type->kind == TYPE_KIND_PRIMITIVE &&
+            kgpc_type_get_primitive_tag(ret_type) == STRING_TYPE &&
+            !kgpc_type_is_shortstring(ret_type))
+        {
+            return 1;
+        }
+        if (ret_id != NULL && pascal_identifier_equals(ret_id, "AnsiString"))
+            return 1;
+    }
+
+    return 0;
+}
+
 /* Context-aware version: also checks the symbol table for variables whose
  * expression type tag is STRING_TYPE but whose symtab entry is actually a
  * ShortString (happens under {$H-} mode). */
 static int expr_is_shortstring_storage_ctx(const struct Expression *expr, CodeGenContext *ctx)
 {
+    if (expr_function_call_returns_ansistring(expr, ctx))
+        return 0;
+
     if (expr_is_shortstring_storage(expr))
         return 1;
+
+    if (expr != NULL && expr->type == EXPR_FUNCTION_CALL &&
+        expr_has_type_tag(expr, STRING_TYPE) &&
+        !pascal_frontend_default_shortstring())
+    {
+        return 0;
+    }
 
     if (ctx != NULL && codegen_expr_is_shortstring_value_ctx(expr, ctx))
         return 1;
@@ -6592,7 +6662,12 @@ ListNode_t *gencode_op(struct Expression *expr, const char *left, const Register
                     expr_is_shortstring_storage_ctx(left_expr, ctx));
                 int right_is_shortstring = (right_expr != NULL &&
                     expr_is_shortstring_storage_ctx(right_expr, ctx));
-                if (left_is_shortstring || right_is_shortstring)
+                if (expr_function_call_returns_ansistring(left_expr, ctx))
+                    left_is_shortstring = 0;
+                if (expr_function_call_returns_ansistring(right_expr, ctx))
+                    right_is_shortstring = 0;
+                if ((left_is_shortstring || right_is_shortstring) &&
+                    pascal_frontend_default_shortstring())
                 {
                     if (!left_is_shortstring && left_expr != NULL &&
                         expr_has_type_tag(left_expr, STRING_TYPE))

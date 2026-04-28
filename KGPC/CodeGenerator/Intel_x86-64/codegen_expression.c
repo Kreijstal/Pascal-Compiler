@@ -1254,6 +1254,34 @@ int codegen_expr_is_shortstring_value_ctx(const struct Expression *expr, CodeGen
     return 0;
 }
 
+static int codegen_expr_function_call_returns_ansistring(CodeGenContext *ctx,
+    const struct Expression *expr)
+{
+    if (ctx == NULL || expr == NULL || expr->type != EXPR_FUNCTION_CALL)
+        return 0;
+
+    KgpcType *call_type = expr->expr_data.function_call_data.call_kgpc_type;
+    if (call_type == NULL)
+        call_type = codegen_resolve_function_call_type(ctx, (struct Expression *)expr, NULL);
+    if (call_type == NULL || call_type->kind != TYPE_KIND_PROCEDURE)
+        return 0;
+
+    const char *ret_id = call_type->info.proc_info.return_type_id;
+    if (ret_id != NULL && pascal_identifier_equals(ret_id, "AnsiString"))
+        return 1;
+
+    KgpcType *ret_type = kgpc_type_get_return_type(call_type);
+    if (ret_type != NULL &&
+        ret_type->kind == TYPE_KIND_PRIMITIVE &&
+        kgpc_type_get_primitive_tag(ret_type) == STRING_TYPE &&
+        !kgpc_type_is_shortstring(ret_type))
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
 static int codegen_current_param_is_ansistring(const struct Expression *expr,
     CodeGenContext *ctx)
 {
@@ -6232,6 +6260,20 @@ ListNode_t *codegen_pointer_deref_leaf(struct Expression *expr, ListNode_t *inst
     free_expr_tree(pointer_tree);
 
     KgpcType *deref_type = expr_get_kgpc_type(expr);
+    if (deref_type == NULL)
+    {
+        KgpcType *pointer_type = expr_get_kgpc_type(pointer_expr);
+        if (pointer_type == NULL && pointer_expr->type == EXPR_VAR_ID &&
+            ctx->symtab != NULL && pointer_expr->expr_data.id != NULL)
+        {
+            HashNode_t *pointer_node = NULL;
+            if (FindSymbol(&pointer_node, ctx->symtab, pointer_expr->expr_data.id) != 0 &&
+                pointer_node != NULL)
+                pointer_type = pointer_node->type;
+        }
+        if (pointer_type != NULL && kgpc_type_is_pointer(pointer_type))
+            deref_type = pointer_type->info.points_to;
+    }
     if (deref_type != NULL)
     {
         struct TypeAlias *alias = kgpc_type_get_type_alias(deref_type);
@@ -9774,11 +9816,20 @@ ListNode_t *codegen_simple_relop(struct Expression *expr, ListNode_t *inst_list,
 
     int left_is_shortstring = (left_expr != NULL && codegen_expr_is_shortstring_value_ctx(left_expr, ctx));
     int right_is_shortstring = (right_expr != NULL && codegen_expr_is_shortstring_value_ctx(right_expr, ctx));
-    if (left_is_shortstring || right_is_shortstring)
+    if (codegen_expr_function_call_returns_ansistring(ctx, left_expr))
+        left_is_shortstring = 0;
+    if (codegen_expr_function_call_returns_ansistring(ctx, right_expr))
+        right_is_shortstring = 0;
+    if ((left_is_shortstring || right_is_shortstring) &&
+        pascal_frontend_default_shortstring())
     {
-        if (!left_is_shortstring && left_expr != NULL && expr_has_type_tag(left_expr, STRING_TYPE))
+        if (!left_is_shortstring && left_expr != NULL &&
+            !codegen_expr_function_call_returns_ansistring(ctx, left_expr) &&
+            expr_has_type_tag(left_expr, STRING_TYPE))
             left_is_shortstring = 1;
-        if (!right_is_shortstring && right_expr != NULL && expr_has_type_tag(right_expr, STRING_TYPE))
+        if (!right_is_shortstring && right_expr != NULL &&
+            !codegen_expr_function_call_returns_ansistring(ctx, right_expr) &&
+            expr_has_type_tag(right_expr, STRING_TYPE))
             right_is_shortstring = 1;
     }
     int left_is_char_array = (left_expr != NULL && codegen_expr_is_char_array_like_ctx(left_expr, ctx) &&
