@@ -18,7 +18,7 @@ var
 begin
   New(ps);
   FillBytes(TByteArray32(ps^));
-  if (0 in ps^) and (253 in ps^) then
+  if (0 in ps^) and (255 in ps^) then
     writeln('edges set')
   else
     writeln('missing edge');
