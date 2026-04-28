@@ -2442,6 +2442,7 @@ Tree_t *tree_from_pascal_ast(ast_t *program_ast) {
                 break;
             case PASCAL_T_TYPE_SECTION:
                 type_section_ast = section;  /* Save for enum resolution */
+                g_implementation_type_section_ast = section;
                 append_type_decls_from_section(section, &type_decls, &subprograms,
                     &const_decls, &var_decls_builder, NULL);
                 break;

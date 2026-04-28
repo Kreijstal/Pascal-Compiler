@@ -152,7 +152,15 @@ void enum_registry_scan_type_section(ast_t *type_section) {
         if (spec != NULL && spec->typ == PASCAL_T_ENUMERATED_TYPE) {
             int count = 0;
             for (ast_t *lit = spec->child; lit != NULL; lit = lit->next) {
-                if (lit->typ == PASCAL_T_IDENTIFIER) count++;
+                ast_t *lit_id = lit;
+                if (lit_id != NULL && lit_id->typ == PASCAL_T_ASSIGNMENT)
+                    lit_id = lit_id->child;
+                if (lit_id != NULL && lit_id->typ == PASCAL_T_IDENTIFIER)
+                {
+                    if (lit_id->sym != NULL && lit_id->sym->name != NULL)
+                        register_const_int(lit_id->sym->name, count);
+                    count++;
+                }
             }
             if (count > 0)
                 enum_registry_add(id_node->sym->name, 0, count - 1);
