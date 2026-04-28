@@ -66,6 +66,17 @@ static int unsetenv(const char *name)
 #include "file_lock.h"
 #include "file_time.h"
 #include "identifier_utils.h"
+
+#if defined(__SANITIZE_ADDRESS__)
+#define KGPC_BUILT_WITH_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define KGPC_BUILT_WITH_ASAN 1
+#endif
+#endif
+#ifndef KGPC_BUILT_WITH_ASAN
+#define KGPC_BUILT_WITH_ASAN 0
+#endif
 #include "compilation_context.h"
 
 #ifdef _WIN32
@@ -2845,6 +2856,12 @@ static void emit_link_args(void)
     if (g_requires_gmp)
     {
         used += (size_t)snprintf(buffer + used, sizeof(buffer) - used, " -lgmp");
+    }
+
+    if (KGPC_BUILT_WITH_ASAN)
+    {
+        used += (size_t)snprintf(buffer + used, sizeof(buffer) - used,
+                                 " -fsanitize=address");
     }
 
     if (used > 0)

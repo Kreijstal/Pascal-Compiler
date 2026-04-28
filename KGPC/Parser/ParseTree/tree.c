@@ -1431,7 +1431,15 @@ void destroy_tree(Tree_t *tree)
                 tree->tree_data.type_decl_data.kgpc_type_is_borrowed;
             if (decl_kgpc_type != NULL)
             {
-                if (!decl_kgpc_type_is_borrowed)
+                int destroy_decl_kgpc_type = !decl_kgpc_type_is_borrowed;
+                if (destroy_decl_kgpc_type &&
+                    tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS &&
+                    tree->tree_data.type_decl_data.info.alias.is_enum &&
+                    tree->tree_data.type_decl_data.info.alias.kgpc_type != NULL)
+                {
+                    destroy_decl_kgpc_type = 0;
+                }
+                if (destroy_decl_kgpc_type)
                     destroy_kgpc_type(decl_kgpc_type);
                 tree->tree_data.type_decl_data.kgpc_type = NULL;
                 tree->tree_data.type_decl_data.kgpc_type_is_borrowed = 0;
@@ -1441,11 +1449,7 @@ void destroy_tree(Tree_t *tree)
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_ALIAS)
             {
                 struct TypeAlias *alias = &tree->tree_data.type_decl_data.info.alias;
-                if (alias->kgpc_type != NULL && alias->kgpc_type != decl_kgpc_type)
-                {
-                    destroy_kgpc_type(alias->kgpc_type);
-                    alias->kgpc_type = NULL;
-                }
+                alias->kgpc_type = NULL;
                 clear_type_alias_fields(alias);
             }
             else if (tree->tree_data.type_decl_data.kind == TYPE_DECL_GENERIC)

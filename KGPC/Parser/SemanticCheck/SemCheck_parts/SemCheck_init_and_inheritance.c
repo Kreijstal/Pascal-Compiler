@@ -277,8 +277,7 @@ int predeclare_enum_literals(SymTab_t *symtab, ListNode_t *type_decls)
                             ++errors;
                         }
                     }
-                    if (tree->tree_data.type_decl_data.kgpc_type == NULL &&
-                        alias_info->kgpc_type != NULL)
+                    if (alias_info->kgpc_type != NULL)
                     {
                         semcheck_set_predeclared_tree_kgpc_type(tree, alias_info->kgpc_type);
                     }
