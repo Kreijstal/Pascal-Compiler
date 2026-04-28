@@ -2092,7 +2092,10 @@ static struct Expression *convert_member_access_chain(int line,
         struct Expression *next_base = convert_member_access_chain(node_line, base_expr, inner_base);
         if (next_base == NULL)
             return NULL;
-        return convert_member_access_chain(node_line, next_base, inner_field);
+        struct Expression *result = convert_member_access_chain(node_line, next_base, inner_field);
+        if (result == NULL)
+            destroy_expr(next_base);
+        return result;
     }
     case PASCAL_T_DEREF: {
         ast_t *inner = unwrapped->child;

@@ -1848,11 +1848,17 @@ static int semcheck_stmt_try_set_method_mangled_id(SymTab_t *symtab,
         !semcheck_stmt_has_single_overload(symtab, proc_id))
         return 0;
 
-    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL &&
-        stmt->stmt_data.procedure_call_data.mangled_id != mangled_id)
-        free(stmt->stmt_data.procedure_call_data.mangled_id);
-    stmt->stmt_data.procedure_call_data.mangled_id = strdup(mangled_id);
-    return stmt->stmt_data.procedure_call_data.mangled_id != NULL;
+    if (stmt->stmt_data.procedure_call_data.mangled_id != NULL)
+    {
+        return pascal_identifier_equals(
+            stmt->stmt_data.procedure_call_data.mangled_id, mangled_id);
+    }
+
+    /* Avoid eagerly duplicating a concrete method target here. The normal call
+     * resolution path below will install an owned mangled_id when it actually
+     * needs one, and some transient statement paths never survive long enough
+     * for this early duplicate to be reclaimed. */
+    return 1;
 }
 
 static int semcheck_call_with_proc_var(SymTab_t *symtab, struct Statement *stmt, HashNode_t *proc_node,
