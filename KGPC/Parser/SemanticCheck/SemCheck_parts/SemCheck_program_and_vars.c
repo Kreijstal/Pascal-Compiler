@@ -2247,6 +2247,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                                  pascal_identifier_equals(type_id, "UnicodeChar")))
                             {
                                 element_type = create_primitive_type_with_size(CHAR_TYPE, 2);
+                                element_type_borrowed = 0;
                             }
                             else if (builtin_type == SHORTSTRING_TYPE &&
                                      tree->tree_data.arr_decl_data.element_kgpc_type != NULL)
@@ -2260,6 +2261,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                             else
                             {
                                 element_type = create_primitive_type(builtin_type);
+                                element_type_borrowed = 0;
                             }
                         }
                         else
@@ -2346,6 +2348,7 @@ int semcheck_decls(SymTab_t *symtab, ListNode_t *decls)
                     }
                     
                     element_type = kgpc_type_from_var_type(var_type);
+                    element_type_borrowed = 0;
                     assert(element_type != NULL && "Array element type must be createable from VarType");
                 }
 
