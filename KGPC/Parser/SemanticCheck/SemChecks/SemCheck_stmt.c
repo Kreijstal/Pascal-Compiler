@@ -7558,6 +7558,7 @@ skip_type_receiver_rewrite:
                 }
 
                 if (!is_static && !is_nonstatic_class_method &&
+                    !stmt->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call &&
                     !receiver_is_type_ident)
                 {
                     semcheck_stmt_set_receiver_virtual_dispatch(stmt,
@@ -9871,6 +9872,7 @@ static struct Statement *transform_two_arg_new_dispose(struct Statement *stmt, i
     {
         method_call->stmt_data.procedure_call_data.is_method_call_placeholder = 1;
         method_call->stmt_data.procedure_call_data.placeholder_method_name = method_name;
+        method_call->stmt_data.procedure_call_data.is_tp_new_dispose_helper_call = 1;
     }
     else
     {

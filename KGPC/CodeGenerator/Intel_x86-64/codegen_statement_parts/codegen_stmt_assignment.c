@@ -1,6 +1,24 @@
 #include "../codegen_stmt_internal.h"
 #include "../../../Parser/pascal_frontend.h"
 
+static int codegen_assignment_type_is_class_vmt_value(const KgpcType *type)
+{
+    if (type == NULL)
+        return 0;
+
+    if (type->type_alias != NULL && type->type_alias->is_class_reference)
+        return 1;
+
+    if (type->kind == TYPE_KIND_POINTER && type->info.points_to != NULL &&
+        type->info.points_to->type_alias != NULL &&
+        type->info.points_to->type_alias->is_class_reference)
+    {
+        return 1;
+    }
+
+    return 0;
+}
+
 int record_type_is_mp_integer(const struct RecordType *record_type)
 {
     if (record_type == NULL)
@@ -1650,6 +1668,9 @@ ListNode_t *codegen_assign_record_value(struct Expression *dest_expr,
     if (dest_expr->record_type != NULL && record_type_is_class(dest_expr->record_type))
         is_class_assignment = 1;
     else if (src_expr->record_type != NULL && record_type_is_class(src_expr->record_type))
+        is_class_assignment = 1;
+    else if (codegen_assignment_type_is_class_vmt_value(expr_get_kgpc_type(dest_expr)) ||
+             codegen_assignment_type_is_class_vmt_value(expr_get_kgpc_type(src_expr)))
         is_class_assignment = 1;
 
     if (is_class_assignment)

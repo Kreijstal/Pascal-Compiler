@@ -311,6 +311,7 @@ struct Statement
             struct Expression *procedural_var_expr; /* Expression yielding procedure pointer */
             int is_method_call_placeholder;  /* 1 if created from member access and needs method resolution */
             char *placeholder_method_name;   /* Bare method name when is_method_call_placeholder=1 (e.g. "Create") */
+            int is_tp_new_dispose_helper_call; /* 1 if synthesized from TP-style New/Dispose helper lowering */
             int arg0_is_dynarray_descriptor; /* 1 if arg0 should be passed as dynarray descriptor */
             int is_virtual_call;             /* 1 if this is a virtual method call (needs VMT dispatch) */
             int is_interface_call;           /* 1 if this is an interface method call (needs interface vtable dispatch) */
